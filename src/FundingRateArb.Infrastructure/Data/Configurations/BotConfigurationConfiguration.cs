@@ -1,0 +1,21 @@
+using FundingRateArb.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace FundingRateArb.Infrastructure.Data.Configurations;
+
+public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfiguration>
+{
+    public void Configure(EntityTypeBuilder<BotConfiguration> builder)
+    {
+        builder.HasKey(b => b.Id);
+
+        builder.Property(b => b.OpenThreshold).HasColumnType("decimal(18,10)");
+        builder.Property(b => b.AlertThreshold).HasColumnType("decimal(18,10)");
+        builder.Property(b => b.CloseThreshold).HasColumnType("decimal(18,10)");
+        builder.Property(b => b.StopLossPct).HasColumnType("decimal(18,4)");
+        builder.Property(b => b.VolumeFraction).HasColumnType("decimal(18,6)");
+        builder.Property(b => b.MaxCapitalPerPosition).HasColumnType("decimal(18,4)");
+        builder.Property(b => b.TotalCapitalUsdc).HasColumnType("decimal(18,2)");
+    }
+}

@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "FundingRateArb.Application/1.0.0": {
+        "dependencies": {
+          "FundingRateArb.Domain": "1.0.0"
+        },
+        "runtime": {
+          "FundingRateArb.Application.dll": {}
+        }
+      },
+      "FundingRateArb.Domain/1.0.0": {
+        "runtime": {
+          "FundingRateArb.Domain.dll": {
+            "assemblyVersion": "1.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "FundingRateArb.Application/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "FundingRateArb.Domain/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "FundingRateArb.Application, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "\/home\/bruce\/bad\/eindproject\/src\/FundingRateArb.Application",
+  "FundingRateArb.Domain, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "\/home\/bruce\/bad\/eindproject\/src\/FundingRateArb.Domain",
+  "FundingRateArb.Infrastructure, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "\/home\/bruce\/bad\/eindproject\/src\/FundingRateArb.Infrastructure",
+  "FundingRateArb.Web, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null": "\/home\/bruce\/bad\/eindproject\/src\/FundingRateArb.Web"
+}

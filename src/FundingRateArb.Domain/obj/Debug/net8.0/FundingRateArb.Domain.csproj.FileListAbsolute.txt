@@ -1,0 +1,12 @@
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/bin/Debug/net8.0/FundingRateArb.Domain.deps.json
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/bin/Debug/net8.0/FundingRateArb.Domain.dll
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/bin/Debug/net8.0/FundingRateArb.Domain.pdb
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.GeneratedMSBuildEditorConfig.editorconfig
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.AssemblyInfoInputs.cache
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.AssemblyInfo.cs
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.csproj.CoreCompileInputs.cache
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.sourcelink.json
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.dll
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/refint/FundingRateArb.Domain.dll
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/FundingRateArb.Domain.pdb
+/home/bruce/bad/eindproject/src/FundingRateArb.Domain/obj/Debug/net8.0/ref/FundingRateArb.Domain.dll
