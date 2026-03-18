@@ -1,0 +1,48 @@
+## .NET
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## User Secrets (NEVER commit)
+secrets.json
+appsettings.secrets.json
+
+## Log files
+logs/
+*.log
+
+## appsettings overrides (keep only base + Development)
+appsettings.Production.json
+appsettings.Staging.json
+
+## EF Core migrations bundle
+efbundle
+
+## NuGet
+*.nupkg
+*.snupkg
+.nuget/
+
+## Rider
+.idea/
+*.DotSettings.user
+
+## VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+## Windows Zone.Identifier
+*:Zone.Identifier
+
+## Build artifacts
+*.dll
+*.exe
+*.pdb
+publish/
