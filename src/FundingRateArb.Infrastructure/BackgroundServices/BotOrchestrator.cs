@@ -1,0 +1,264 @@
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
+using FundingRateArb.Infrastructure.Hubs;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace FundingRateArb.Infrastructure.BackgroundServices;
+
+public class BotOrchestrator : BackgroundService
+{
+    // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
+    private readonly SemaphoreSlim _cycleLock = new(1, 1);
+
+    // M4: Extract magic polling intervals to named constants
+    private const int CycleIntervalSeconds = 60;
+    private const int StartupDelaySeconds = 90;
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
+    private readonly ILogger<BotOrchestrator> _logger;
+
+    public BotOrchestrator(
+        IServiceScopeFactory scopeFactory,
+        IHubContext<DashboardHub, IDashboardClient> hubContext,
+        ILogger<BotOrchestrator> logger)
+    {
+        _scopeFactory = scopeFactory;
+        _hubContext   = hubContext;
+        _logger       = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken ct)
+    {
+        // Wait for first FundingRateFetcher cycle to complete
+        await Task.Delay(TimeSpan.FromSeconds(StartupDelaySeconds), ct);
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
+
+        while (await timer.WaitForNextTickAsync(ct))
+        {
+            // Belt-and-suspenders: skip if previous cycle still running
+            if (!await _cycleLock.WaitAsync(0, ct))
+            {
+                _logger.LogWarning("Previous bot cycle still running — skipping this tick");
+                continue;
+            }
+
+            try
+            {
+                await RunCycleAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Bot cycle failed unexpectedly");
+            }
+            finally
+            {
+                _cycleLock.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// One bot cycle: health-monitor open positions → find & open one new opportunity.
+    /// Exposed as internal for unit testing.
+    /// </summary>
+    internal async Task RunCycleAsync(CancellationToken ct)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var uow         = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var config      = await uow.BotConfig.GetActiveAsync();
+
+        if (!config.IsEnabled)
+        {
+            _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
+            // Still push dashboard update so UI shows disabled state
+            var disabledPositions = await uow.Positions.GetOpenAsync();
+            await PushDashboardUpdateAsync(disabledPositions, config.IsEnabled);
+            return;
+        }
+
+        var healthMonitor   = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
+        var signalEngine    = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
+        var positionSizer   = scope.ServiceProvider.GetRequiredService<IPositionSizer>();
+        var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+
+        // Step 1: Monitor and auto-close stale/unhealthy positions
+        await healthMonitor.CheckAndActAsync();
+
+        // H3: Fetch open positions ONCE after health monitor (may have closed some)
+        var openPositions = await uow.Positions.GetOpenAsync();
+
+        // Push position updates + alerts created by health monitor
+        await PushPositionUpdatesAsync(openPositions);
+        await PushNewAlertsAsync(uow);
+
+        // Step 2: Check how many positions are open
+        if (openPositions.Count >= config.MaxConcurrentPositions)
+        {
+            _logger.LogDebug(
+                "Max concurrent positions reached ({Count}/{Max}). No new positions this cycle.",
+                openPositions.Count, config.MaxConcurrentPositions);
+            await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
+            return;
+        }
+
+        // Step 3: Find new opportunities — skip pairs already open
+        var openKeys = openPositions
+            .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+            .ToHashSet();
+
+        var opportunities = await signalEngine.GetOpportunitiesAsync();
+
+        foreach (var opp in opportunities)
+        {
+            var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+            if (openKeys.Contains(key)) continue;
+
+            var size = await positionSizer.CalculateOptimalSizeAsync(opp);
+            if (size <= 0) continue;
+
+            _logger.LogInformation(
+                "Opening position: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
+                opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
+
+            var (success, error) = await executionEngine.OpenPositionAsync(opp, size);
+
+            if (success)
+            {
+                await _hubContext.Clients.All.ReceiveNotification(
+                    $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}");
+
+                // H3: Re-fetch after opening to include new position
+                openPositions = await uow.Positions.GetOpenAsync();
+                await PushPositionUpdatesAsync(openPositions);
+                await PushNewAlertsAsync(uow);
+            }
+            else
+            {
+                _logger.LogError("Failed to open position: {Error}", error);
+                // Push alerts for emergency close failures
+                await PushNewAlertsAsync(uow);
+            }
+
+            break; // One position per cycle for safety
+        }
+
+        // Step 4: Push dashboard KPI update at end of every cycle
+        // H3: Use already-fetched openPositions (or re-fetched after open)
+        await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
+    }
+
+    /// <summary>
+    /// Pushes a ReceiveDashboardUpdate to ALL connected clients with current KPI values.
+    /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
+    /// </summary>
+    private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
+    {
+        try
+        {
+            var totalPnl = openPositions.Sum(p => p.AccumulatedFunding);
+            var bestSpread = openPositions.Count > 0
+                ? openPositions.Max(p => p.CurrentSpreadPerHour)
+                : 0m;
+
+            var dto = new DashboardDto
+            {
+                BotEnabled        = botEnabled,
+                OpenPositionCount = openPositions.Count,
+                TotalPnl          = totalPnl,
+                BestSpread        = bestSpread,
+            };
+
+            await _hubContext.Clients.All.ReceiveDashboardUpdate(dto);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push dashboard update via SignalR");
+        }
+    }
+
+    /// <summary>
+    /// Pushes a ReceivePositionUpdate for each open position to ALL connected clients.
+    /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
+    /// TODO: Future improvement — target per-user groups for position updates
+    /// </summary>
+    private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
+    {
+        try
+        {
+            foreach (var pos in openPositions)
+            {
+                var dto = MapPositionToDto(pos);
+                await _hubContext.Clients.All.ReceivePositionUpdate(dto);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push position updates via SignalR");
+        }
+    }
+
+    /// <summary>
+    /// Pushes a ReceiveAlert for recent unread alerts to per-user SignalR groups.
+    /// M12: Uses GetRecentUnreadAsync instead of GetAllAsync + in-memory filter.
+    /// C4: Targets per-user groups instead of Clients.All.
+    /// </summary>
+    private async Task PushNewAlertsAsync(IUnitOfWork uow)
+    {
+        try
+        {
+            // M12: Query only recent unread alerts at the database level
+            var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(TimeSpan.FromMinutes(2));
+
+            foreach (var alert in recentAlerts)
+            {
+                var dto = new AlertDto
+                {
+                    Id                  = alert.Id,
+                    UserId              = alert.UserId,
+                    ArbitragePositionId = alert.ArbitragePositionId,
+                    Type                = alert.Type,
+                    Severity            = alert.Severity,
+                    Message             = alert.Message,
+                    IsRead              = alert.IsRead,
+                    CreatedAt           = alert.CreatedAt,
+                };
+
+                // C4: Send alerts only to the user they belong to
+                await _hubContext.Clients.Group($"user-{alert.UserId}").ReceiveAlert(dto);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push alert updates via SignalR");
+        }
+    }
+
+    private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)
+    {
+        return new PositionSummaryDto
+        {
+            Id                  = pos.Id,
+            AssetSymbol         = pos.Asset?.Symbol ?? "?",
+            LongExchangeName    = pos.LongExchange?.Name ?? "?",
+            ShortExchangeName   = pos.ShortExchange?.Name ?? "?",
+            SizeUsdc            = pos.SizeUsdc,
+            MarginUsdc          = pos.MarginUsdc,
+            EntrySpreadPerHour  = pos.EntrySpreadPerHour,
+            CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
+            AccumulatedFunding  = pos.AccumulatedFunding,
+            UnrealizedPnl       = pos.AccumulatedFunding, // best estimate until live mark-to-market
+            RealizedPnl         = pos.RealizedPnl,
+            Status              = pos.Status,
+            OpenedAt            = pos.OpenedAt,
+            ClosedAt            = pos.ClosedAt,
+        };
+    }
+}

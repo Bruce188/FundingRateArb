@@ -1,0 +1,118 @@
+@model FundingRateArb.Web.ViewModels.PositionDetailsViewModel
+@using FundingRateArb.Domain.Enums
+
+@{
+    ViewData["Title"] = $"Position #{Model.Position.Id}";
+    var pos = Model.Position;
+}
+
+<h2>Position #@pos.Id Details</h2>
+<a asp-action="Index" class="btn btn-outline-secondary mb-3">Back to Positions</a>
+
+<div class="row">
+    <div class="col-md-6">
+        <h5>Position Info</h5>
+        <dl class="row">
+            <dt class="col-sm-5">Asset</dt>
+            <dd class="col-sm-7">@(pos.Asset?.Symbol ?? $"Asset #{pos.AssetId}")</dd>
+
+            <dt class="col-sm-5">Status</dt>
+            <dd class="col-sm-7">
+                @{
+                    var badgeClass = pos.Status switch
+                    {
+                        PositionStatus.Open    => "bg-success",
+                        PositionStatus.Opening => "bg-info",
+                        PositionStatus.Closing => "bg-warning text-dark",
+                        _                      => "bg-secondary",
+                    };
+                }
+                <span class="badge @badgeClass">@pos.Status</span>
+            </dd>
+
+            <dt class="col-sm-5">Long Exchange</dt>
+            <dd class="col-sm-7">@(pos.LongExchange?.Name ?? $"Exchange #{pos.LongExchangeId}")</dd>
+
+            <dt class="col-sm-5">Short Exchange</dt>
+            <dd class="col-sm-7">@(pos.ShortExchange?.Name ?? $"Exchange #{pos.ShortExchangeId}")</dd>
+
+            <dt class="col-sm-5">Size (USDC)</dt>
+            <dd class="col-sm-7">@pos.SizeUsdc.ToString("F2")</dd>
+
+            <dt class="col-sm-5">Margin (USDC)</dt>
+            <dd class="col-sm-7">@pos.MarginUsdc.ToString("F2")</dd>
+
+            <dt class="col-sm-5">Leverage</dt>
+            <dd class="col-sm-7">@pos.Leverage x</dd>
+
+            <dt class="col-sm-5">Opened At</dt>
+            <dd class="col-sm-7">@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
+
+            @if (pos.ClosedAt.HasValue)
+            {
+                <dt class="col-sm-5">Closed At</dt>
+                <dd class="col-sm-7">@pos.ClosedAt.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
+            }
+
+            <dt class="col-sm-5">Duration</dt>
+            <dd class="col-sm-7">@Model.DurationHours.ToString("F1") hours</dd>
+
+            @if (pos.CloseReason.HasValue)
+            {
+                <dt class="col-sm-5">Close Reason</dt>
+                <dd class="col-sm-7">@pos.CloseReason</dd>
+            }
+        </dl>
+    </div>
+
+    <div class="col-md-6">
+        <h5>Pricing & PnL</h5>
+        <dl class="row">
+            <dt class="col-sm-5">Long Entry Price</dt>
+            <dd class="col-sm-7">@pos.LongEntryPrice.ToString("F4")</dd>
+
+            <dt class="col-sm-5">Short Entry Price</dt>
+            <dd class="col-sm-7">@pos.ShortEntryPrice.ToString("F4")</dd>
+
+            <dt class="col-sm-5">Entry Spread/hr</dt>
+            <dd class="col-sm-7">@pos.EntrySpreadPerHour.ToString("P4")</dd>
+
+            <dt class="col-sm-5">Current Spread/hr</dt>
+            <dd class="col-sm-7">@pos.CurrentSpreadPerHour.ToString("P4")</dd>
+
+            <dt class="col-sm-5">Accumulated Funding</dt>
+            <dd class="col-sm-7 @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
+                @pos.AccumulatedFunding.ToString("F4") USDC
+            </dd>
+
+            <dt class="col-sm-5">Unrealized PnL</dt>
+            <dd class="col-sm-7 @(Model.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">
+                @Model.UnrealizedPnl.ToString("F4") USDC
+            </dd>
+
+            @if (pos.RealizedPnl.HasValue)
+            {
+                <dt class="col-sm-5">Realized PnL</dt>
+                <dd class="col-sm-7 @(pos.RealizedPnl >= 0 ? "text-success" : "text-danger")">
+                    @pos.RealizedPnl.Value.ToString("F4") USDC
+                </dd>
+            }
+        </dl>
+
+        @if (!string.IsNullOrEmpty(pos.Notes))
+        {
+            <h5 class="mt-3">Notes</h5>
+            <p>@pos.Notes</p>
+        }
+    </div>
+</div>
+
+@if (pos.Status == PositionStatus.Open)
+{
+    <hr />
+    <form asp-action="Close" asp-route-id="@pos.Id" method="post"
+          onsubmit="return confirm('Are you sure you want to close this position?')">
+        @Html.AntiForgeryToken()
+        <button type="submit" class="btn btn-danger">Close Position</button>
+    </form>
+}

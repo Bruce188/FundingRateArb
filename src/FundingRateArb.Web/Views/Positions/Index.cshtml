@@ -1,0 +1,80 @@
+@model FundingRateArb.Web.ViewModels.PositionIndexViewModel
+@using FundingRateArb.Domain.Enums
+
+@{
+    ViewData["Title"] = "Positions";
+}
+
+<h2>Positions</h2>
+
+@if (TempData["Success"] is string successMsg)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @successMsg
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+}
+
+@if (!Model.Positions.Any())
+{
+    <div class="alert alert-info">No positions found.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Asset</th>
+                    <th>Long Exchange</th>
+                    <th>Short Exchange</th>
+                    <th>Status</th>
+                    <th class="text-end">Size (USDC)</th>
+                    <th class="text-end">Spread/hr</th>
+                    <th class="text-end">Accumulated Funding</th>
+                    <th>Opened</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var pos in Model.Positions)
+                {
+                    <tr>
+                        <td>@(pos.Asset?.Symbol ?? $"Asset #{pos.AssetId}")</td>
+                        <td>@(pos.LongExchange?.Name ?? $"Exchange #{pos.LongExchangeId}")</td>
+                        <td>@(pos.ShortExchange?.Name ?? $"Exchange #{pos.ShortExchangeId}")</td>
+                        <td>
+                            @{
+                                var badgeClass = pos.Status switch
+                                {
+                                    PositionStatus.Open    => "bg-success",
+                                    PositionStatus.Opening => "bg-info",
+                                    PositionStatus.Closing => "bg-warning text-dark",
+                                    _                      => "bg-secondary",
+                                };
+                            }
+                            <span class="badge @badgeClass">@pos.Status</span>
+                        </td>
+                        <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
+                        <td class="text-end">@pos.CurrentSpreadPerHour.ToString("P4")</td>
+                        <td class="text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
+                            @pos.AccumulatedFunding.ToString("F4")
+                        </td>
+                        <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            <a asp-action="Details" asp-route-id="@pos.Id" class="btn btn-sm btn-outline-primary me-1">Details</a>
+                            @if (pos.Status == PositionStatus.Open)
+                            {
+                                <form asp-action="Close" asp-route-id="@pos.Id" method="post" class="d-inline"
+                                      onsubmit="return confirm('Close this position?')">
+                                    @Html.AntiForgeryToken()
+                                    <button type="submit" class="btn btn-sm btn-outline-danger">Close</button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

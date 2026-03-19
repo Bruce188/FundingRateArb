@@ -1,22 +1,124 @@
+/* ======================================================
+   FundingRateArb — Site CSS
+   Bootstrap 5 base + trading dashboard polish
+   ====================================================== */
+
 html {
-  font-size: 14px;
+    font-size: 14px;
+    position: relative;
+    min-height: 100%;
 }
 
 @media (min-width: 768px) {
-  html {
-    font-size: 16px;
-  }
-}
-
-.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
-}
-
-html {
-  position: relative;
-  min-height: 100%;
+    html { font-size: 16px; }
 }
 
 body {
-  margin-bottom: 60px;
+    margin-bottom: 60px;
+    background-color: #f8f9fa;
+}
+
+/* Focus rings */
+.btn:focus, .btn:active:focus, .btn-link.nav-link:focus,
+.form-control:focus, .form-check-input:focus {
+    box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #0d6efd;
+}
+
+/* ── KPI cards ────────────────────────────────────────── */
+.kpi-card {
+    border: none;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,.12);
+    transition: box-shadow .15s;
+}
+.kpi-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,.18);
+}
+.kpi-value {
+    font-size: 2rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+.kpi-label {
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: #6c757d;
+}
+
+/* ── Funding rate table ───────────────────────────────── */
+.rate-positive { color: #198754; font-weight: 600; }
+.rate-negative { color: #dc3545; font-weight: 600; }
+
+/* ── APY coloring for opportunity table ──────────────── */
+.apy-high   { color: #198754; font-weight: 700; }
+.apy-medium { color: #fd7e14; font-weight: 600; }
+.apy-low    { color: #6c757d; }
+
+/* ── Position status badges ──────────────────────────── */
+.badge.status-open    { background-color: #198754; }
+.badge.status-closing { background-color: #ffc107; color: #000; }
+.badge.status-closed  { background-color: #6c757d; }
+
+/* ── Bot status large badge ──────────────────────────── */
+#bot-status {
+    font-size: 1rem;
+    padding: .5em 1em;
+    border-radius: .4rem;
+}
+
+/* ── Connection status badge (navbar) ────────────────── */
+#connection-status {
+    font-size: .75rem;
+    letter-spacing: .04em;
+    min-width: 80px;
+    text-align: center;
+}
+
+/* ── Admin area ───────────────────────────────────────── */
+.admin-section-header {
+    border-left: 4px solid #0d6efd;
+    padding-left: .75rem;
+    margin-bottom: 1.25rem;
+}
+
+/* ── Tables ───────────────────────────────────────────── */
+.table th {
+    font-size: .82rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: #495057;
+    background-color: #f1f3f5;
+    white-space: nowrap;
+}
+.table td { vertical-align: middle; }
+
+/* ── Kill-switch toggle ───────────────────────────────── */
+.kill-switch-panel {
+    border: 2px solid #dc3545;
+    border-radius: .5rem;
+    background: #fff5f5;
+    padding: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+.kill-switch-panel.enabled {
+    border-color: #198754;
+    background: #f0fff4;
+}
+
+/* ── Responsive tweaks ────────────────────────────────── */
+@media (max-width: 576px) {
+    .kpi-value { font-size: 1.4rem; }
+    .navbar-brand { font-size: 1rem; }
+}
+
+/* ── Footer ───────────────────────────────────────────── */
+.footer {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    height: 40px;
+    line-height: 40px;
+    background-color: #f8f9fa;
+    font-size: .8rem;
 }

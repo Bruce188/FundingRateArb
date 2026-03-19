@@ -3,12 +3,15 @@ using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FundingRateArb.Infrastructure.Seed;
 
 public static class DbSeeder
 {
+    private const string AdminEmail = "admin@fundingratearb.com";
+
     public static async Task SeedAsync(IServiceProvider services)
     {
         var context = services.GetRequiredService<AppDbContext>();
@@ -17,8 +20,9 @@ public static class DbSeeder
 
         await context.Database.MigrateAsync();
 
+        var config = services.GetRequiredService<IConfiguration>();
         await SeedRolesAsync(roleMgr);
-        await SeedAdminUserAsync(userMgr);
+        await SeedAdminUserAsync(userMgr, config);
         await SeedExchangesAsync(context);
         await SeedAssetsAsync(context);
         await SeedBotConfigAsync(context, userMgr);
@@ -33,22 +37,27 @@ public static class DbSeeder
         }
     }
 
-    private static async Task SeedAdminUserAsync(UserManager<ApplicationUser> userMgr)
+    private static async Task SeedAdminUserAsync(
+        UserManager<ApplicationUser> userMgr, IConfiguration config)
     {
-        const string adminEmail = "admin@fundingratearb.com";
-        if (await userMgr.FindByEmailAsync(adminEmail) is null)
+        if (await userMgr.FindByEmailAsync(AdminEmail) is not null) return;
+
+        var adminPassword = config["Seed:AdminPassword"]
+            ?? Environment.GetEnvironmentVariable("SEED_ADMIN_PASSWORD")
+            ?? throw new InvalidOperationException(
+                "Admin seed password must be set via 'Seed:AdminPassword' in User Secrets " +
+                "or the SEED_ADMIN_PASSWORD environment variable.");
+
+        var admin = new ApplicationUser
         {
-            var admin = new ApplicationUser
-            {
-                UserName = adminEmail,
-                Email = adminEmail,
-                DisplayName = "Admin",
-                EmailConfirmed = true
-            };
-            var result = await userMgr.CreateAsync(admin, "Admin123!");
-            if (result.Succeeded)
-                await userMgr.AddToRoleAsync(admin, "Admin");
-        }
+            UserName       = AdminEmail,
+            Email          = AdminEmail,
+            DisplayName    = "Admin",
+            EmailConfirmed = true,
+        };
+        var result = await userMgr.CreateAsync(admin, adminPassword);
+        if (result.Succeeded)
+            await userMgr.AddToRoleAsync(admin, "Admin");
     }
 
     private static async Task SeedExchangesAsync(AppDbContext context)
@@ -97,13 +106,99 @@ public static class DbSeeder
     {
         if (await context.Assets.AnyAsync()) return;
 
-        context.Assets.AddRange(
-            new Asset { Symbol = "BTC",  Name = "Bitcoin",   IsActive = true },
-            new Asset { Symbol = "ETH",  Name = "Ethereum",  IsActive = true },
-            new Asset { Symbol = "SOL",  Name = "Solana",    IsActive = true },
-            new Asset { Symbol = "ARB",  Name = "Arbitrum",  IsActive = true },
-            new Asset { Symbol = "AVAX", Name = "Avalanche", IsActive = true }
-        );
+        // All 86 assets commonly listed on Hyperliquid, Lighter and Aster DEX
+        var assets = new (string Symbol, string Name)[]
+        {
+            ("BTC",       "Bitcoin"),
+            ("ETH",       "Ethereum"),
+            ("SOL",       "Solana"),
+            ("ARB",       "Arbitrum"),
+            ("AVAX",      "Avalanche"),
+            ("0G",        "0G"),
+            ("AAVE",      "Aave"),
+            ("ADA",       "Cardano"),
+            ("APT",       "Aptos"),
+            ("ASTER",     "Aster"),
+            ("AVNT",      "Aventus"),
+            ("AXS",       "Axie Infinity"),
+            ("AZTEC",     "Aztec"),
+            ("BCH",       "Bitcoin Cash"),
+            ("BERA",      "Berachain"),
+            ("BNB",       "BNB"),
+            ("CC",        "Cloudcoin"),
+            ("CRV",       "Curve"),
+            ("DASH",      "Dash"),
+            ("DOGE",      "Dogecoin"),
+            ("DOT",       "Polkadot"),
+            ("DYDX",      "dYdX"),
+            ("EIGEN",     "EigenLayer"),
+            ("ENA",       "Ethena"),
+            ("ETHFI",     "Ether.fi"),
+            ("FARTCOIN",  "Fartcoin"),
+            ("FIL",       "Filecoin"),
+            ("FOGO",      "Fogo"),
+            ("GRASS",     "Grass"),
+            ("HBAR",      "Hedera"),
+            ("HYPE",      "Hyperliquid"),
+            ("ICP",       "Internet Computer"),
+            ("IP",        "Story Protocol"),
+            ("JTO",       "Jito"),
+            ("JUP",       "Jupiter"),
+            ("KAITO",     "Kaito"),
+            ("LDO",       "Lido"),
+            ("LINEA",     "Linea"),
+            ("LINK",      "Chainlink"),
+            ("LIT",       "Litentry"),
+            ("LTC",       "Litecoin"),
+            ("MEGA",      "MegaETH"),
+            ("MET",       "Metis"),
+            ("MNT",       "Mantle"),
+            ("MON",       "Monad"),
+            ("MORPHO",    "Morpho"),
+            ("NEAR",      "Near Protocol"),
+            ("ONDO",      "Ondo Finance"),
+            ("OP",        "Optimism"),
+            ("PAXG",      "Pax Gold"),
+            ("PENDLE",    "Pendle"),
+            ("PENGU",     "Pudgy Penguins"),
+            ("POL",       "Polygon"),
+            ("POPCAT",    "Popcat"),
+            ("PROVE",     "Prove"),
+            ("PUMP",      "PumpBTC"),
+            ("PYTH",      "Pyth Network"),
+            ("RESOLV",    "Resolv"),
+            ("S",         "Sonic"),
+            ("SEI",       "Sei"),
+            ("SKR",       "Sakura"),
+            ("SKY",       "Sky"),
+            ("SPX",       "SPX6900"),
+            ("STABLE",    "Stable"),
+            ("STBL",      "Stablecomp"),
+            ("STRK",      "Starknet"),
+            ("SUI",       "Sui"),
+            ("TAO",       "Bittensor"),
+            ("TIA",       "Celestia"),
+            ("TON",       "Toncoin"),
+            ("TRUMP",     "Trump"),
+            ("TRX",       "Tron"),
+            ("UNI",       "Uniswap"),
+            ("VIRTUAL",   "Virtuals Protocol"),
+            ("VVV",       "Venice"),
+            ("WIF",       "Dogwifhat"),
+            ("WLD",       "Worldcoin"),
+            ("WLFI",      "World Liberty Financial"),
+            ("XLM",       "Stellar"),
+            ("XMR",       "Monero"),
+            ("XPL",       "XPL"),
+            ("XRP",       "Ripple"),
+            ("ZEC",       "Zcash"),
+            ("ZK",        "ZKsync"),
+            ("ZORA",      "Zora"),
+            ("ZRO",       "LayerZero"),
+        };
+
+        context.Assets.AddRange(assets.Select(a =>
+            new Asset { Symbol = a.Symbol, Name = a.Name, IsActive = true }));
         await context.SaveChangesAsync();
     }
 
@@ -111,7 +206,7 @@ public static class DbSeeder
     {
         if (await context.BotConfigurations.AnyAsync()) return;
 
-        var admin = await userMgr.FindByEmailAsync("admin@fundingratearb.com");
+        var admin = await userMgr.FindByEmailAsync(AdminEmail);
         if (admin is null) return;
 
         context.BotConfigurations.Add(new BotConfiguration

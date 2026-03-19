@@ -12,6 +12,16 @@ public class AlertRepository : IAlertRepository
 
     public AlertRepository(AppDbContext context) => _context = context;
 
+    public Task<List<Alert>> GetAllAsync(bool unreadOnly = false) =>
+        _context.Alerts
+            .Where(a => !unreadOnly || !a.IsRead)
+            .OrderByDescending(a => a.CreatedAt)
+            .Take(500)
+            .ToListAsync();
+
+    public Task<Alert?> GetByIdAsync(int id) =>
+        _context.Alerts.FirstOrDefaultAsync(a => a.Id == id);
+
     public Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false) =>
         _context.Alerts
             .Where(a => a.UserId == userId && (!unreadOnly || !a.IsRead))
@@ -34,6 +44,15 @@ public class AlertRepository : IAlertRepository
                         && a.CreatedAt >= cutoff)
             .OrderByDescending(a => a.CreatedAt)
             .FirstOrDefaultAsync();
+    }
+
+    public async Task<List<Alert>> GetRecentUnreadAsync(TimeSpan within)
+    {
+        var cutoff = DateTime.UtcNow - within;
+        return await _context.Alerts
+            .Where(a => !a.IsRead && a.CreatedAt >= cutoff)
+            .OrderByDescending(a => a.CreatedAt)
+            .ToListAsync();
     }
 
     public void Add(Alert alert) => _context.Alerts.Add(alert);

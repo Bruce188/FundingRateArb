@@ -16,9 +16,13 @@ appsettings.secrets.json
 logs/
 *.log
 
-## appsettings overrides (keep only base + Development)
+## appsettings overrides (keep only base template)
+appsettings.Development.json
 appsettings.Production.json
 appsettings.Staging.json
+
+## Data Protection keys (machine-specific)
+DataProtection-Keys/
 
 ## EF Core migrations bundle
 efbundle

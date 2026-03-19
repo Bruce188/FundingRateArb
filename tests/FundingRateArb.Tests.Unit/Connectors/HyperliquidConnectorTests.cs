@@ -1,0 +1,429 @@
+using CryptoExchange.Net.Objects;
+using CryptoExchange.Net.Objects.Errors;
+using FluentAssertions;
+using HyperLiquid.Net.Interfaces.Clients;
+using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
+using HyperLiquid.Net.Objects.Models;
+using Moq;
+using Polly;
+using Polly.Registry;
+using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.ExchangeConnectors;
+
+namespace FundingRateArb.Tests.Unit.Connectors;
+
+public class HyperliquidConnectorTests
+{
+    private readonly Mock<IHyperLiquidRestClient> _mockRestClient;
+    private readonly Mock<IHyperLiquidRestClientFuturesApi> _mockFuturesApi;
+    private readonly Mock<IHyperLiquidRestClientFuturesApiExchangeData> _mockExchangeData;
+    private readonly Mock<IHyperLiquidRestClientFuturesApiAccount> _mockAccount;
+    private readonly Mock<IHyperLiquidRestClientFuturesApiTrading> _mockTrading;
+    private readonly Mock<ResiliencePipelineProvider<string>> _mockPipelineProvider;
+    private readonly HyperliquidConnector _sut;
+
+    public HyperliquidConnectorTests()
+    {
+        _mockRestClient = new Mock<IHyperLiquidRestClient>();
+        _mockFuturesApi = new Mock<IHyperLiquidRestClientFuturesApi>();
+        _mockExchangeData = new Mock<IHyperLiquidRestClientFuturesApiExchangeData>();
+        _mockAccount = new Mock<IHyperLiquidRestClientFuturesApiAccount>();
+        _mockTrading = new Mock<IHyperLiquidRestClientFuturesApiTrading>();
+
+        _mockRestClient.Setup(c => c.FuturesApi).Returns(_mockFuturesApi.Object);
+        _mockFuturesApi.Setup(f => f.ExchangeData).Returns(_mockExchangeData.Object);
+        _mockFuturesApi.Setup(f => f.Account).Returns(_mockAccount.Object);
+        _mockFuturesApi.Setup(f => f.Trading).Returns(_mockTrading.Object);
+
+        _mockPipelineProvider = new Mock<ResiliencePipelineProvider<string>>();
+        _mockPipelineProvider.Setup(p => p.GetPipeline(It.IsAny<string>()))
+            .Returns(ResiliencePipeline.Empty);
+
+        _sut = new HyperliquidConnector(_mockRestClient.Object, _mockPipelineProvider.Object);
+    }
+
+    // ── Exchange Name ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ExchangeName_IsHyperliquid()
+    {
+        _sut.ExchangeName.Should().Be("Hyperliquid");
+    }
+
+    // ── GetFundingRatesAsync ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetFundingRates_ParsesResponseCorrectly()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("ETH", fundingRate: 0.0001m, markPrice: 3000m, notionalVolume: 5_000_000m, oraclePrice: 2999m),
+            CreateTicker("BTC", fundingRate: 0.0002m, markPrice: 65000m, notionalVolume: 10_000_000m, oraclePrice: 64999m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act
+        var result = await _sut.GetFundingRatesAsync();
+
+        // Assert
+        result.Should().HaveCount(2);
+
+        var eth = result.First(r => r.Symbol == "ETH");
+        eth.ExchangeName.Should().Be("Hyperliquid");
+        eth.RatePerHour.Should().Be(0.0001m);
+        eth.MarkPrice.Should().Be(3000m);
+        eth.Volume24hUsd.Should().Be(5_000_000m);
+
+        var btc = result.First(r => r.Symbol == "BTC");
+        btc.ExchangeName.Should().Be("Hyperliquid");
+        btc.RatePerHour.Should().Be(0.0002m);
+        btc.MarkPrice.Should().Be(65000m);
+    }
+
+    [Fact]
+    public async Task GetFundingRates_RateIsAlreadyHourly_NoConversion()
+    {
+        // Arrange — Hyperliquid publishes 1-hour rates; RatePerHour must equal RawRate
+        const decimal rawRate = 0.000125m;
+        var tickers = new[]
+        {
+            CreateTicker("ETH", fundingRate: rawRate, markPrice: 3000m, notionalVolume: 1m, oraclePrice: 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act
+        var result = await _sut.GetFundingRatesAsync();
+
+        // Assert
+        result.Should().HaveCount(1);
+        result[0].RawRate.Should().Be(rawRate);
+        result[0].RatePerHour.Should().Be(rawRate, "Hyperliquid funding rate is already per-hour — no division needed");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_SymbolFormat_IsJustBaseAsset()
+    {
+        // Arrange — SDK returns futures symbols without quote suffix
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
+            CreateTicker("SOL", 0.0002m, 150m, 1m, 150m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act
+        var result = await _sut.GetFundingRatesAsync();
+
+        // Assert — symbols must be exactly "ETH" and "SOL", not "ETHUSDC", "ETH-PERP", etc.
+        result.Select(r => r.Symbol).Should().BeEquivalentTo(new[] { "ETH", "SOL" });
+    }
+
+    [Fact]
+    public async Task GetFundingRates_WhenApiFails_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var errorInfo = new ErrorInfo(ErrorType.Unknown, "Exchange API unavailable");
+        var failedResult = new WebCallResult<HyperLiquidFuturesExchangeInfoAndTickers>(
+            new ServerError(errorInfo, null));
+
+        _mockExchangeData
+            .Setup(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(failedResult);
+
+        // Act & Assert
+        await _sut.Invoking(c => c.GetFundingRatesAsync())
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Exchange API unavailable*");
+    }
+
+    // ── PlaceMarketOrderAsync ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_ReturnsSuccessResult_WhenSdkSucceeds()
+    {
+        // Arrange — mark price is fetched before placing the order
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        var orderResult = new HyperLiquidOrderResult
+        {
+            OrderId = 123456L,
+            FilledQuantity = 0.03m,
+            AveragePrice = 3010m,
+            Status = HyperLiquid.Net.Enums.OrderStatus.Filled,
+        };
+        SetupTradingSuccess(orderResult);
+
+        // Act
+        var result = await _sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert
+        result.Success.Should().BeTrue();
+        result.OrderId.Should().Be("123456");
+        result.FilledQuantity.Should().Be(0.03m);
+        result.FilledPrice.Should().Be(3010m);
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_WhenSdkFails_ReturnsFailureResult()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        var errorInfo = new ErrorInfo(ErrorType.Unknown, "Insufficient margin");
+        var failedOrderResult = new WebCallResult<HyperLiquidOrderResult>(
+            new ServerError(errorInfo, null));
+
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(failedOrderResult);
+
+        // Act
+        var result = await _sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Insufficient margin");
+    }
+
+    // ── ClosePositionAsync ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_UsesReduceOnly()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        var orderResult = new HyperLiquidOrderResult
+        {
+            OrderId = 789L,
+            FilledQuantity = 0.03m,
+            AveragePrice = 3000m,
+            Status = HyperLiquid.Net.Enums.OrderStatus.Filled,
+        };
+
+        bool? capturedReduceOnly = null;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, HyperLiquid.Net.Enums.OrderSide, HyperLiquid.Net.Enums.OrderType,
+                      decimal, decimal, HyperLiquid.Net.Enums.TimeInForce?, bool?, string?,
+                      decimal?, HyperLiquid.Net.Enums.TpSlType?, HyperLiquid.Net.Enums.TpSlGrouping?,
+                      string?, DateTime?, CancellationToken>(
+                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
+                {
+                    capturedReduceOnly = ro;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(orderResult));
+
+        // Act
+        await _sut.ClosePositionAsync("ETH", Side.Long);
+
+        // Assert
+        capturedReduceOnly.Should().BeTrue("ClosePosition must set reduceOnly=true");
+    }
+
+    [Fact]
+    public async Task ClosePosition_ForLong_PlacesSell()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        var orderResult = new HyperLiquidOrderResult { OrderId = 1L, FilledQuantity = 0.01m, AveragePrice = 3000m };
+
+        HyperLiquid.Net.Enums.OrderSide capturedSide = default;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, HyperLiquid.Net.Enums.OrderSide, HyperLiquid.Net.Enums.OrderType,
+                      decimal, decimal, HyperLiquid.Net.Enums.TimeInForce?, bool?, string?,
+                      decimal?, HyperLiquid.Net.Enums.TpSlType?, HyperLiquid.Net.Enums.TpSlGrouping?,
+                      string?, DateTime?, CancellationToken>(
+                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
+                {
+                    capturedSide = side;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(orderResult));
+
+        // Act — close a Long position, should place a Sell
+        await _sut.ClosePositionAsync("ETH", Side.Long);
+
+        // Assert
+        capturedSide.Should().Be(HyperLiquid.Net.Enums.OrderSide.Sell);
+    }
+
+    // ── GetMarkPriceAsync ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_ReturnsCorrectPrice()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("BTC", 0.0001m, 65000m, 1m, 64999m),
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 2999m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act
+        var price = await _sut.GetMarkPriceAsync("ETH");
+
+        // Assert
+        price.Should().Be(3000m);
+    }
+
+    // ── GetAvailableBalanceAsync ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetAvailableBalance_ReturnsWithdrawableAmount()
+    {
+        // Arrange
+        var accountInfo = new HyperLiquidFuturesAccount
+        {
+            Withdrawable = 250.50m,
+        };
+        var successResult = new WebCallResult<HyperLiquidFuturesAccount>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            accountInfo,
+            null);
+
+        _mockAccount
+            .Setup(a => a.GetAccountInfoAsync(
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(successResult);
+
+        // Act
+        var balance = await _sut.GetAvailableBalanceAsync();
+
+        // Assert
+        balance.Should().Be(250.50m);
+    }
+
+    // ── Private Helpers ───────────────────────────────────────────────────────
+
+    private static HyperLiquidFuturesTicker CreateTicker(
+        string symbol,
+        decimal fundingRate,
+        decimal markPrice,
+        decimal notionalVolume,
+        decimal oraclePrice)
+    {
+        return new HyperLiquidFuturesTicker
+        {
+            Symbol = symbol,
+            FundingRate = fundingRate,
+            MarkPrice = markPrice,
+            NotionalVolume = notionalVolume,
+            OraclePrice = oraclePrice,
+        };
+    }
+
+    private void SetupExchangeInfoSuccess(HyperLiquidFuturesTicker[] tickers)
+    {
+        var data = new HyperLiquidFuturesExchangeInfoAndTickers
+        {
+            Tickers = tickers,
+        };
+        var webResult = new WebCallResult<HyperLiquidFuturesExchangeInfoAndTickers>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            data,
+            null);
+
+        _mockExchangeData
+            .Setup(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(webResult);
+    }
+
+    private void SetupTradingSuccess(HyperLiquidOrderResult orderResult)
+    {
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateOrderWebCallResult(orderResult));
+    }
+
+    private static WebCallResult<HyperLiquidOrderResult> CreateOrderWebCallResult(HyperLiquidOrderResult orderResult)
+    {
+        return new WebCallResult<HyperLiquidOrderResult>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            orderResult,
+            null);
+    }
+}

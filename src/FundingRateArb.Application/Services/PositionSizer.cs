@@ -6,14 +6,46 @@ namespace FundingRateArb.Application.Services;
 public class PositionSizer : IPositionSizer
 {
     private readonly IUnitOfWork _uow;
+    private readonly IYieldCalculator _yieldCalculator;
 
-    public PositionSizer(IUnitOfWork uow) => _uow = uow;
+    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator)
+    {
+        _uow = uow;
+        _yieldCalculator = yieldCalculator;
+    }
 
-    public Task<decimal> CalculateOptimalSizeAsync(ArbitrageOpportunityDto opp)
-        => throw new NotImplementedException();
+    public async Task<decimal> CalculateOptimalSizeAsync(ArbitrageOpportunityDto opp)
+    {
+        if (opp.NetYieldPerHour <= 0)
+            return 0m;
 
-    public Task<int> CalculateMaxPositionsAsync(decimal sizePerPosition)
-        => throw new NotImplementedException();
+        var config = await _uow.BotConfig.GetActiveAsync();
+
+        // Break-even limit: fee rate = gross spread minus net yield (fees subtracted by SignalEngine)
+        var entryFeeRate   = opp.SpreadPerHour - opp.NetYieldPerHour;
+        var breakEvenHours = _yieldCalculator.BreakEvenHours(0m, entryFeeRate, opp.NetYieldPerHour);
+        if (breakEvenHours > config.BreakevenHoursMax)
+            return 0m;
+
+        var capitalLimit = config.TotalCapitalUsdc
+                           * config.MaxCapitalPerPosition
+                           * config.DefaultLeverage;
+
+        var minVolume = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
+        var liquidityLimit = minVolume * config.VolumeFraction;
+
+        return Math.Min(capitalLimit, liquidityLimit);
+    }
+
+    public async Task<int> CalculateMaxPositionsAsync(decimal sizePerPosition)
+    {
+        if (sizePerPosition <= 0)
+            return 0;
+
+        var config = await _uow.BotConfig.GetActiveAsync();
+        var rawMax = (int)(config.TotalCapitalUsdc / sizePerPosition);
+        return Math.Min(rawMax, config.MaxConcurrentPositions);
+    }
 
     public static decimal RoundToStepSize(decimal quantity, decimal stepSize, int decimals)
     {
