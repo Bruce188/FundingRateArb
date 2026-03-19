@@ -204,10 +204,25 @@ public static class DbSeeder
 
     private static async Task SeedBotConfigAsync(AppDbContext context, UserManager<ApplicationUser> userMgr)
     {
-        if (await context.BotConfigurations.AnyAsync()) return;
-
         var admin = await userMgr.FindByEmailAsync(AdminEmail);
         if (admin is null) return;
+
+        var existing = await context.BotConfigurations.FirstOrDefaultAsync();
+        if (existing is not null)
+        {
+            // Backfill new fields if they have zero defaults from old migration
+            if (existing.FeeAmortizationHours == 0)
+            {
+                existing.FeeAmortizationHours = 24;
+                existing.MinPositionSizeUsdc = 10m;
+                existing.MinVolume24hUsdc = 50_000m;
+                existing.RateStalenessMinutes = 15;
+                existing.DailyDrawdownPausePct = 0.05m;
+                existing.ConsecutiveLossPause = 3;
+                await context.SaveChangesAsync();
+            }
+            return;
+        }
 
         context.BotConfigurations.Add(new BotConfiguration
         {
@@ -223,6 +238,12 @@ public static class DbSeeder
             VolumeFraction = 0.001m,
             MaxCapitalPerPosition = 0.80m,
             BreakevenHoursMax = 6,
+            FeeAmortizationHours = 24,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50_000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
             LastUpdatedAt = DateTime.UtcNow,
             UpdatedByUserId = admin.Id
         });

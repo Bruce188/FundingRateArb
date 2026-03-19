@@ -131,6 +131,53 @@
                 </div>
             </div>
 
+            <h5 class="card-title mb-3">Advanced Risk Controls</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="FeeAmortizationHours" class="form-label"></label>
+                    <input asp-for="FeeAmortizationHours" class="form-control" type="number" min="1" max="168" />
+                    <div class="form-text">Hours over which to amortize entry/exit fees (decoupled from hold time)</div>
+                    <span asp-validation-for="FeeAmortizationHours" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MinPositionSizeUsdc" class="form-label"></label>
+                    <input asp-for="MinPositionSizeUsdc" class="form-control" type="number" step="1" min="1" />
+                    <div class="form-text">Minimum margin per position (exchange minimums)</div>
+                    <span asp-validation-for="MinPositionSizeUsdc" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MinVolume24hUsdc" class="form-label"></label>
+                    <input asp-for="MinVolume24hUsdc" class="form-control" type="number" step="1000" min="0" />
+                    <div class="form-text">Minimum 24h volume to consider an asset</div>
+                    <span asp-validation-for="MinVolume24hUsdc" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="RateStalenessMinutes" class="form-label"></label>
+                    <input asp-for="RateStalenessMinutes" class="form-control" type="number" min="1" max="120" />
+                    <div class="form-text">Max age for funding rates before they are considered stale</div>
+                    <span asp-validation-for="RateStalenessMinutes" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="DailyDrawdownPausePct" class="form-label"></label>
+                    <input asp-for="DailyDrawdownPausePct" class="form-control" type="number" step="0.01" min="0.01" max="1" />
+                    <div class="form-text">Fraction of capital (e.g. 0.05 = 5%) — pauses new opens when hit</div>
+                    <span asp-validation-for="DailyDrawdownPausePct" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="ConsecutiveLossPause" class="form-label"></label>
+                    <input asp-for="ConsecutiveLossPause" class="form-control" type="number" min="1" max="20" />
+                    <div class="form-text">Pause after N consecutive losing positions</div>
+                    <span asp-validation-for="ConsecutiveLossPause" class="text-danger"></span>
+                </div>
+            </div>
+
             <div class="mt-2">
                 <button type="submit" class="btn btn-primary">Save Configuration</button>
             </div>

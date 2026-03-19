@@ -158,6 +158,35 @@ connection.on("ReceiveAlert", (alert) => {
         badge.textContent = current + 1;
         badge.classList.remove("d-none");
     }
+
+    const container = document.getElementById("notification-toast-container");
+    if (!container || !alert.message) return;
+
+    const severityClass = alert.severity === 1 ? "text-bg-danger"
+        : alert.severity === 2 ? "text-bg-warning"
+        : "text-bg-info";
+
+    const toast = document.createElement("div");
+    toast.className = "toast align-items-center " + severityClass + " border-0 show";
+    toast.setAttribute("role", "alert");
+
+    const dFlex = document.createElement("div");
+    dFlex.className = "d-flex";
+
+    const toastBody = document.createElement("div");
+    toastBody.className = "toast-body";
+    toastBody.textContent = alert.message;
+    dFlex.appendChild(toastBody);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "btn-close btn-close-white me-2 m-auto";
+    closeBtn.setAttribute("data-bs-dismiss", "toast");
+    dFlex.appendChild(closeBtn);
+
+    toast.appendChild(dFlex);
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 8000);
 });
 
 connection.onreconnecting(() => {
@@ -183,6 +212,32 @@ connection.onclose(() => {
         status.textContent = "Disconnected";
     }
 });
+
+const retryBtn = document.getElementById("retry-now-btn");
+if (retryBtn) {
+    retryBtn.addEventListener("click", async () => {
+        retryBtn.disabled = true;
+        retryBtn.textContent = "Triggering...";
+        try {
+            const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+            const resp = await fetch("/Dashboard/RetryNow", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "RequestVerificationToken": token
+                }
+            });
+            const data = await resp.json();
+            if (data.success) {
+                retryBtn.textContent = "Triggered!";
+                setTimeout(() => { retryBtn.textContent = "Retry Now"; retryBtn.disabled = false; }, 3000);
+            }
+        } catch (e) {
+            retryBtn.textContent = "Retry Now";
+            retryBtn.disabled = false;
+        }
+    });
+}
 
 // L1 fix: exponential backoff on initial connection failure
 async function start() {

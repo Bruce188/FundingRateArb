@@ -1,4 +1,5 @@
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels.Admin;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -10,8 +11,13 @@ namespace FundingRateArb.Web.Areas.Admin.Controllers;
 public class BotConfigController : Controller
 {
     private readonly IUnitOfWork _uow;
+    private readonly IConfigValidator _configValidator;
 
-    public BotConfigController(IUnitOfWork uow) => _uow = uow;
+    public BotConfigController(IUnitOfWork uow, IConfigValidator configValidator)
+    {
+        _uow = uow;
+        _configValidator = configValidator;
+    }
 
     public async Task<IActionResult> Index()
     {
@@ -32,7 +38,13 @@ public class BotConfigController : Controller
             VolumeFraction = config.VolumeFraction,
             BreakevenHoursMax = config.BreakevenHoursMax,
             AllocationStrategy = config.AllocationStrategy,
-            AllocationTopN = config.AllocationTopN
+            AllocationTopN = config.AllocationTopN,
+            FeeAmortizationHours = config.FeeAmortizationHours,
+            MinPositionSizeUsdc = config.MinPositionSizeUsdc,
+            MinVolume24hUsdc = config.MinVolume24hUsdc,
+            RateStalenessMinutes = config.RateStalenessMinutes,
+            DailyDrawdownPausePct = config.DailyDrawdownPausePct,
+            ConsecutiveLossPause = config.ConsecutiveLossPause
         };
 
         return View(model);
@@ -60,6 +72,21 @@ public class BotConfigController : Controller
         config.BreakevenHoursMax = model.BreakevenHoursMax!.Value;
         config.AllocationStrategy = model.AllocationStrategy!.Value;
         config.AllocationTopN = model.AllocationTopN!.Value;
+        config.FeeAmortizationHours = model.FeeAmortizationHours!.Value;
+        config.MinPositionSizeUsdc = model.MinPositionSizeUsdc!.Value;
+        config.MinVolume24hUsdc = model.MinVolume24hUsdc!.Value;
+        config.RateStalenessMinutes = model.RateStalenessMinutes!.Value;
+        config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
+        config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
+
+        var validation = _configValidator.Validate(config);
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors)
+                ModelState.AddModelError(string.Empty, error);
+            return View(model);
+        }
+
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
 

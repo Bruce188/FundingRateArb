@@ -72,6 +72,10 @@ public class BotOrchestratorTests
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync(new List<Alert>());
 
+        // H7: Default mock for GetClosedSinceAsync (returns empty list — no drawdown)
+        _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
         // Wire hub — Clients.All for dashboard/position/notification broadcasts
         _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
         _mockHubClients.Setup(c => c.All).Returns(_mockDashboardClient.Object);
@@ -96,7 +100,7 @@ public class BotOrchestratorTests
     // ── Kill switch ────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task RunCycle_WhenKillSwitchOff_ReturnsImmediately()
+    public async Task RunCycle_WhenKillSwitchOff_StillRunsHealthMonitor()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
@@ -106,8 +110,8 @@ public class BotOrchestratorTests
 
         // Opportunities are always computed even when disabled
         _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Once);
-        // Health monitor only runs when enabled
-        _mockHealthMonitor.Verify(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()), Times.Never);
+        // H1: Health monitor ALWAYS runs — even when kill switch is off
+        _mockHealthMonitor.Verify(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── Health monitor called first ────────────────────────────────────────────
@@ -580,12 +584,14 @@ public class BotOrchestratorTests
         cooldown1.Failures.Should().Be(1);
 
         // Expire and fail again
+        _sut.ConsecutiveLosses = 0; // Reset to avoid M6 circuit breaker interference
         _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown1.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
         var cooldown2 = _sut.FailedOpCooldowns[key];
         cooldown2.Failures.Should().Be(2);
 
         // Expire and fail a third time
+        _sut.ConsecutiveLosses = 0; // Reset to avoid M6 circuit breaker interference
         _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown2.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
         var cooldown3 = _sut.FailedOpCooldowns[key];
@@ -597,5 +603,228 @@ public class BotOrchestratorTests
         var duration3 = TimeSpan.FromTicks(
             Math.Min(BotOrchestrator.BaseCooldown.Ticks * (1L << 2), BotOrchestrator.MaxCooldown.Ticks)); // 20 min
         duration3.Should().BeGreaterThan(duration1, "exponential backoff must increase cooldown with consecutive failures");
+    }
+
+    // ── H1: Health monitor always runs ──────────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_WhenDisabled_StillCallsHealthMonitor()
+    {
+        // H1: Health monitor must always run, even when the kill switch is off
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockHealthMonitor.Verify(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()), Times.Once,
+            "Health monitor must run even when bot is disabled to prevent stale/unliquidated positions");
+    }
+
+    // ── H6: Alert dedup ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_AlertDedup_DoesNotPushSameAlertTwice()
+    {
+        // H6: Same alert pushed in two cycles must only be sent once
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var alert = new Alert
+        {
+            Id = 42,
+            UserId = "test-user",
+            Message = "Test alert",
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
+            .ReturnsAsync([alert]);
+
+        var alertPushCount = 0;
+        _mockGroupClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>()))
+            .Callback(() => alertPushCount++)
+            .Returns(Task.CompletedTask);
+
+        // Two cycles with the same alert returned
+        await _sut.RunCycleAsync(CancellationToken.None);
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        alertPushCount.Should().Be(1, "same alert must not be pushed twice due to dedup");
+    }
+
+    // ── H7: Daily drawdown circuit breaker ──────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_WhenDailyDrawdownExceeded_DoesNotOpenPositions()
+    {
+        // H7: If daily PnL loss exceeds threshold, no new positions should be opened
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            DailyDrawdownPausePct = 0.05m, // 5% = $50 limit
+            UpdatedByUserId = "admin-user-id",
+            AllocationStrategy = Domain.Enums.AllocationStrategy.Concentrated,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        // Closed positions today with -$60 realized loss (exceeds $50 limit)
+        var closedPosition = new ArbitragePosition
+        {
+            RealizedPnl = -60m,
+            Status = Domain.Enums.PositionStatus.Closed,
+        };
+        _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
+            .ReturnsAsync([closedPosition]);
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Execution engine must NOT be called
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "Drawdown limit exceeded — no new positions should be opened");
+    }
+
+    [Fact]
+    public async Task RunCycle_WhenDailyDrawdownWithinLimit_AllowsPositionOpens()
+    {
+        // H7: If daily PnL loss is within threshold, positions should still be opened normally
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        // Closed position today with -$10 loss (within $50 limit for TotalCapitalUsdc=1000 * 0.05)
+        var closedPosition = new ArbitragePosition
+        {
+            RealizedPnl = -10m,
+            Status = Domain.Enums.PositionStatus.Closed,
+        };
+        _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
+            .ReturnsAsync([closedPosition]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Drawdown within limit — position open should proceed");
+    }
+
+    // ── M6: Consecutive loss tracking ───────────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_AfterConsecutiveLosses_PausesPositionOpens()
+    {
+        // M6: After ConsecutiveLossPause consecutive failures, should pause
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            ConsecutiveLossPause = 2,
+            UpdatedByUserId = "admin-user-id",
+            AllocationStrategy = Domain.Enums.AllocationStrategy.EqualSpread,
+            AllocationTopN = 3,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp1 = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+        var opp2 = new ArbitrageOpportunityDto { AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+        var opp3 = new ArbitrageOpportunityDto { AssetId = 3, AssetSymbol = "SOL", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp1, opp2, opp3]);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m, 100m, 100m]);
+
+        // All fail
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Exchange error"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // After 2 consecutive failures (ConsecutiveLossPause=2), should break — third not attempted
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Should stop attempting after ConsecutiveLossPause failures");
+    }
+
+    [Fact]
+    public async Task RunCycle_SuccessResetsConsecutiveLosses()
+    {
+        // M6: A successful open should reset the consecutive loss counter
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        // Pre-set consecutive losses
+        _sut.ConsecutiveLosses = 2;
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.ConsecutiveLosses.Should().Be(0, "successful open must reset consecutive loss counter");
+    }
+
+    [Fact]
+    public async Task RunCycle_ConsecutiveLossPausePreventsNextCycle()
+    {
+        // M6: Once consecutive loss limit is reached, next cycle should also skip position opens
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            ConsecutiveLossPause = 2,
+            UpdatedByUserId = "admin-user-id",
+            AllocationStrategy = Domain.Enums.AllocationStrategy.Concentrated,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        // Pre-set consecutive losses at limit
+        _sut.ConsecutiveLosses = 2;
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "Position opens must be paused when consecutive loss limit is reached");
     }
 }

@@ -17,5 +17,8 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.VolumeFraction).HasColumnType("decimal(18,6)");
         builder.Property(b => b.MaxCapitalPerPosition).HasColumnType("decimal(18,4)");
         builder.Property(b => b.TotalCapitalUsdc).HasColumnType("decimal(18,2)");
+        builder.Property(b => b.MinPositionSizeUsdc).HasColumnType("decimal(18,2)");
+        builder.Property(b => b.MinVolume24hUsdc).HasColumnType("decimal(18,2)");
+        builder.Property(b => b.DailyDrawdownPausePct).HasColumnType("decimal(18,4)");
     }
 }

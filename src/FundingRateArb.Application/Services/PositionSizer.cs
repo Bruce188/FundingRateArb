@@ -15,33 +15,6 @@ public class PositionSizer : IPositionSizer
         _yieldCalculator = yieldCalculator;
     }
 
-    public async Task<decimal> CalculateOptimalSizeAsync(ArbitrageOpportunityDto opp)
-    {
-        if (opp.NetYieldPerHour <= 0)
-            return 0m;
-
-        var config = await _uow.BotConfig.GetActiveAsync();
-
-        // Break-even limit: fee rate = gross spread minus net yield (fees subtracted by SignalEngine)
-        var entryFeeRate = opp.SpreadPerHour - opp.NetYieldPerHour;
-        // H4: Negative entryFeeRate means spread < net yield — invalid opportunity, reject
-        if (entryFeeRate < 0)
-            return 0m;
-        var breakEvenHours = _yieldCalculator.BreakEvenHours(entryFeeRate, opp.NetYieldPerHour);
-        if (breakEvenHours > config.BreakevenHoursMax)
-            return 0m;
-
-        // Capital limit is the max collateral (margin) per leg.
-        // Connectors multiply by leverage to get notional.
-        var capitalLimit = config.TotalCapitalUsdc
-                           * config.MaxCapitalPerPosition;
-
-        var minVolume = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
-        var liquidityLimit = minVolume * config.VolumeFraction;
-
-        return Math.Min(capitalLimit, liquidityLimit);
-    }
-
     public async Task<decimal[]> CalculateBatchSizesAsync(
         IReadOnlyList<ArbitrageOpportunityDto> opportunities,
         AllocationStrategy strategy)
@@ -88,12 +61,33 @@ public class PositionSizer : IPositionSizer
             }
         }
 
-        // Cap each position by its liquidity limit
+        // C2: Cap each position by its liquidity limit (compare notional, not margin)
         for (int i = 0; i < sizes.Length; i++)
         {
             var minVol = Math.Min(opportunities[i].LongVolume24h, opportunities[i].ShortVolume24h);
             var liquidityLimit = minVol * config.VolumeFraction;
-            sizes[i] = Math.Min(sizes[i], liquidityLimit);
+            var notional = sizes[i] * config.DefaultLeverage;
+            if (notional > liquidityLimit)
+                sizes[i] = liquidityLimit / config.DefaultLeverage;
+        }
+
+        // C1: Breakeven gate — reject positions that can't break even in time
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            if (sizes[i] <= 0) continue;
+            var opp = opportunities[i];
+            var entryFeeRate = opp.SpreadPerHour - opp.NetYieldPerHour;
+            if (entryFeeRate < 0) { sizes[i] = 0; continue; }
+            var breakEvenHours = _yieldCalculator.BreakEvenHours(entryFeeRate, opp.NetYieldPerHour);
+            if (breakEvenHours > config.BreakevenHoursMax)
+                sizes[i] = 0;
+        }
+
+        // H2: Enforce minimum position size (exchange minimums)
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            if (sizes[i] > 0 && sizes[i] < config.MinPositionSizeUsdc)
+                sizes[i] = 0;
         }
 
         return sizes;

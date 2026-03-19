@@ -50,6 +50,10 @@ public class BotOrchestratorTests
         _mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync([]);
 
+        // H7: Default mock for GetClosedSinceAsync (returns empty list — no drawdown)
+        _mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
         // Stub SignalR hub context
         var mockClients = new Mock<IHubClients<IDashboardClient>>();
         var mockClient = new Mock<IDashboardClient>();

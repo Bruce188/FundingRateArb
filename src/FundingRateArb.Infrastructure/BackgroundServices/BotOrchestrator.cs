@@ -19,7 +19,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
     private bool _disposed;
-    private volatile bool _immediateRunRequested;
+
+    // C6: CancellationTokenSource replaces _immediateRunRequested bool — cancels the timer wait immediately
+    private CancellationTokenSource _immediateCts = new();
+
+    // H6: Track pushed alert IDs to prevent duplicate pushes across cycles
+    private readonly HashSet<int> _pushedAlertIds = new();
+
+    // M6: Track consecutive money-losing position closes for circuit breaker
+    private int _consecutiveLosses;
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
@@ -57,13 +65,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         while (!ct.IsCancellationRequested)
         {
-            if (_immediateRunRequested)
+            // C6: Use linked CTS so TriggerImmediateCycle() cancels the timer wait instantly
+            try
             {
-                _immediateRunRequested = false;
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _immediateCts.Token);
+                if (!await timer.WaitForNextTickAsync(linkedCts.Token)) break;
             }
-            else
+            catch (OperationCanceledException) when (_immediateCts.IsCancellationRequested)
             {
-                if (!await timer.WaitForNextTickAsync(ct)) break;
+                // Immediate cycle requested — reset the CTS for next use
+                _immediateCts.Dispose();
+                _immediateCts = new CancellationTokenSource();
             }
             // Belt-and-suspenders: skip if previous cycle still running
             if (!await _cycleLock.WaitAsync(0, ct))
@@ -90,10 +102,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     // IBotControl implementation
     public void ClearCooldowns() => _failedOpCooldowns.Clear();
-    public void TriggerImmediateCycle() => _immediateRunRequested = true;
+    // C6: Cancel the timer wait to trigger an immediate cycle
+    public void TriggerImmediateCycle() => _immediateCts.Cancel();
 
     /// <summary>Exposes cooldown state for unit testing.</summary>
     internal ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> FailedOpCooldowns => _failedOpCooldowns;
+
+    /// <summary>Exposes consecutive loss count for unit testing.</summary>
+    internal int ConsecutiveLosses { get => _consecutiveLosses; set => _consecutiveLosses = value; }
+
+    /// <summary>Exposes pushed alert IDs for unit testing.</summary>
+    internal HashSet<int> PushedAlertIds => _pushedAlertIds;
 
     /// <summary>
     /// One bot cycle: health-monitor open positions → find & open one new opportunity.
@@ -105,14 +124,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var uow         = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var config      = await uow.BotConfig.GetActiveAsync();
 
+        // H4: TODO: config.UpdatedByUserId is used as position owner in ExecutionEngine, which means
+        // whoever last saved config "owns" all bot-created positions. This should be replaced with a
+        // dedicated system user ID from UserManager or seeder data. Requires ExecutionEngine changes.
+
         var healthMonitor   = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
         var signalEngine    = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
         var positionSizer   = scope.ServiceProvider.GetRequiredService<IPositionSizer>();
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
 
-        // Step 1: Monitor and auto-close stale/unhealthy positions (only when enabled)
-        if (config.IsEnabled)
-            await healthMonitor.CheckAndActAsync(ct);
+        // H1: Always run health monitor — positions must be monitored even when kill switch is off
+        await healthMonitor.CheckAndActAsync(ct);
 
         // M6: Fetch open positions AFTER health monitor so closed positions are excluded
         var openPositions = await uow.Positions.GetOpenAsync();
@@ -141,6 +163,27 @@ public class BotOrchestrator : BackgroundService, IBotControl
         if (!config.IsEnabled)
         {
             _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
+            return;
+        }
+
+        // H7: Daily drawdown circuit breaker — pause position opens if daily loss exceeds threshold
+        var closedToday = await uow.Positions.GetClosedSinceAsync(DateTime.UtcNow.Date);
+        var dailyPnl = closedToday.Sum(p => p.RealizedPnl ?? 0m) + openPositions.Sum(p => p.AccumulatedFunding);
+        var drawdownLimit = config.TotalCapitalUsdc * config.DailyDrawdownPausePct;
+        if (dailyPnl < -drawdownLimit)
+        {
+            _logger.LogWarning(
+                "Daily drawdown limit hit: {DailyPnl:F2} USDC (limit: -{Limit:F2}). Pausing position opens for this cycle.",
+                dailyPnl, drawdownLimit);
+            return;
+        }
+
+        // M6: Consecutive loss circuit breaker — pause after N consecutive losing closes
+        if (_consecutiveLosses >= config.ConsecutiveLossPause)
+        {
+            _logger.LogWarning(
+                "Consecutive loss limit reached ({Count}/{Max}). Pausing position opens.",
+                _consecutiveLosses, config.ConsecutiveLossPause);
             return;
         }
 
@@ -199,6 +242,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 slotsAvailable--;
                 _failedOpCooldowns.TryRemove(key, out _);
+                _consecutiveLosses = 0; // M6: Reset on successful open
 
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
@@ -216,6 +260,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
             else
             {
+                // M6: Track consecutive failures for circuit breaker
+                _consecutiveLosses++;
+                if (_consecutiveLosses >= config.ConsecutiveLossPause)
+                {
+                    _logger.LogWarning("Consecutive loss limit reached ({Count}). Pausing.", _consecutiveLosses);
+                    break;
+                }
+
                 // Register exponential cooldown and continue to next opportunity
                 var failures = _failedOpCooldowns.GetValueOrDefault(key).Failures + 1;
                 var delay = TimeSpan.FromTicks(
@@ -303,8 +355,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
             var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(window);
             _lastAlertPushUtc = now;
 
+            // H6: Prune old IDs periodically to prevent unbounded growth
+            if (_pushedAlertIds.Count > 1000)
+                _pushedAlertIds.Clear();
+
             foreach (var alert in recentAlerts)
             {
+                // H6: Skip already-pushed alerts to prevent duplicate pushes
+                if (!_pushedAlertIds.Add(alert.Id)) continue;
+
                 var dto = new AlertDto
                 {
                     Id                  = alert.Id,
@@ -327,12 +386,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
     }
 
-    // M-BO2: Dispose SemaphoreSlim to release kernel resources
+    // M-BO2: Dispose SemaphoreSlim and CTS to release kernel resources
     public override void Dispose()
     {
         if (!_disposed)
         {
             _cycleLock.Dispose();
+            _immediateCts.Dispose();
             _disposed = true;
         }
         base.Dispose();

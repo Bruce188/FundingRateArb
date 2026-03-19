@@ -60,134 +60,15 @@ public class PositionSizerTests
     };
 
     // -----------------------------------------------------------------------
-    // CalculateOptimalSizeAsync
+    // CalculateOptimalSizeAsync removed (dead code)
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task CalculateOptimalSize_ReturnsCapitalLimit_WhenSmallestOfThree()
+    public void CalculateOptimalSizeAsync_RemovedFromInterface()
     {
-        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
-        // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
-        // capital (85.6) < liquidity (100_000)  →  expect 85.6
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
-                             longVolume24h: 100_000_000m,
-                             shortVolume24h: 100_000_000m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(85.6m);
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_ReturnsLiquidityLimit_WhenSmallestOfThree()
-    {
-        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
-        // liquidityLimit = min(10_000, 10_000) * 0.001 = 10
-        // liquidity (10) < capital (85.6)  →  expect 10
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
-                             longVolume24h: 10_000m,
-                             shortVolume24h: 10_000m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(10m);
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_ReturnsZero_WhenZeroNetYield()
-    {
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var opp = DefaultOpp(netYieldPerHour: 0m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(0m);
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_ReturnsZero_WhenNegativeNetYield()
-    {
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var opp = DefaultOpp(netYieldPerHour: -0.0001m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(0m);
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_ReturnsZero_WhenEntryFeeRateIsNegative()
-    {
-        // H4: SpreadPerHour < NetYieldPerHour produces negative entryFeeRate
-        // This is an invalid/corrupted opportunity and must be rejected
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        // SpreadPerHour defaults to LongRatePerHour - ShortRatePerHour = 0.0008 - 0.0003 = 0.0005
-        // But we override NetYieldPerHour to be HIGHER than SpreadPerHour
-        // entryFeeRate = SpreadPerHour(0.0005) - NetYieldPerHour(0.0008) = -0.0003 → guard triggers
-        var opp = new ArbitrageOpportunityDto
-        {
-            AssetId = 1,
-            LongExchangeId = 1,
-            ShortExchangeId = 2,
-            SpreadPerHour = 0.0005m,
-            NetYieldPerHour = 0.0008m,   // net yield > gross spread: impossible/corrupted
-            LongVolume24h = 100_000_000m,
-            ShortVolume24h = 100_000_000m,
-            LongMarkPrice = 100m,
-            ShortMarkPrice = 100m,
-        };
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(0m, "negative entryFeeRate signals a corrupted opportunity and must be rejected");
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_DoesNotApplyLeverage_ToCapitalLimit()
-    {
-        // capitalLimit = 107 * 0.80 = 85.6 (leverage is NOT applied here — connectors handle it)
-        // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
-        // capital (85.6) < liquidity (100_000)  →  expect 85.6
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig(leverage: 10));
-
-        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
-                             longVolume24h: 100_000_000m,
-                             shortVolume24h: 100_000_000m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(85.6m);
-    }
-
-    [Fact]
-    public async Task CalculateOptimalSize_UsesMinVolume_ForLiquidityLimit()
-    {
-        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
-        // liquidityLimit = min(10_000, 500_000) * 0.001 = 10
-        // liquidity (10) < capital (85.6)  →  expect 10
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
-                             longVolume24h: 10_000m,
-                             shortVolume24h: 500_000m);
-
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
-
-        result.Should().Be(10m);
+        var methods = typeof(IPositionSizer).GetMethods();
+        methods.Should().NotContain(m => m.Name == "CalculateOptimalSizeAsync",
+            "CalculateOptimalSizeAsync is dead code and should be removed");
     }
 
     // -----------------------------------------------------------------------
@@ -295,5 +176,143 @@ public class PositionSizerTests
 
         // Low volume opp should get less capital
         sizes[0].Should().BeLessThan(sizes[1]);
+    }
+
+    // -----------------------------------------------------------------------
+    // C2: Notional liquidity check (margin * leverage vs volume limit)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_CapsMarginByNotionalLiquidity()
+    {
+        // margin $100, leverage 5x → notional $500
+        // volume limit = 400 * 0.001 = 0.4 → notional 500 > 0.4 → cap margin to 0.4/5 = 0.08
+        // But with real numbers: volume = 2000, volumeFraction = 0.001 → liquidityLimit = 2
+        // notional = margin * 5. If margin = 85.6, notional = 428 > 2 → capped to 2/5 = 0.4
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m, leverage: 5, volumeFraction: 0.001m);
+        config.MinPositionSizeUsdc = 0m; // don't filter by min size for this test
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Volume = 400 → liquidityLimit = 400 * 0.001 = 0.4
+        // margin = 100, notional = 500 > 0.4 → capped to 0.4 / 5 = 0.08
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.001m,
+                LongVolume24h = 400m, ShortVolume24h = 400m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        // liquidityLimit = 400 * 0.001 = 0.4, margin = 0.4 / 5 = 0.08
+        sizes[0].Should().Be(0.08m);
+    }
+
+    // -----------------------------------------------------------------------
+    // C1: Breakeven rejection in batch path
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_ZeroesOutPositionsThatCantBreakEven()
+    {
+        // SpreadPerHour = 0.002, NetYieldPerHour = 0.0001
+        // entryFeeRate = 0.002 - 0.0001 = 0.0019
+        // breakEvenHours = 0.0019 / 0.0001 = 19 hours
+        // BreakevenHoursMax = 6 → rejected
+        var config = DefaultConfig();
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.002m, NetYieldPerHour = 0.0001m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().Be(0m, "breakeven hours (19) exceeds BreakevenHoursMax (6)");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_KeepsPositionsThatBreakEvenInTime()
+    {
+        // SpreadPerHour = 0.001, NetYieldPerHour = 0.001 (zero fee scenario)
+        // entryFeeRate = 0, breakEvenHours = 0 → passes
+        var config = DefaultConfig();
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().BeGreaterThan(0m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_RejectsNegativeEntryFeeRate()
+    {
+        // Corrupted: NetYieldPerHour > SpreadPerHour → negative entryFeeRate
+        var config = DefaultConfig();
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.0005m, NetYieldPerHour = 0.0008m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().Be(0m, "negative entryFeeRate means corrupted opportunity");
+    }
+
+    // -----------------------------------------------------------------------
+    // H2: Minimum position size enforcement
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_ZeroesOutPositionsBelowMinSize()
+    {
+        // totalCapital = 10 * 0.80 = 8, MinPositionSizeUsdc = 10 → 8 < 10 → zeroed
+        var config = DefaultConfig(totalCapital: 10m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 10m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().Be(0m, "position size 8 < MinPositionSizeUsdc 10");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_KeepsPositionsAboveMinSize()
+    {
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 10m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().Be(80m, "position size 80 >= MinPositionSizeUsdc 10");
     }
 }
