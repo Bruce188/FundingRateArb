@@ -13,12 +13,15 @@ public class FundingRateRepository : IFundingRateRepository
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
-        // Group by exchange-asset pair, return only the most recent snapshot per pair
+        // Correlated subquery: fetch the row whose RecordedAt matches the max per (Exchange, Asset).
+        // More efficient than GroupBy + First() which can cause client-side evaluation on large tables.
         return await _context.FundingRateSnapshots
             .Include(f => f.Exchange)
             .Include(f => f.Asset)
-            .GroupBy(f => new { f.ExchangeId, f.AssetId })
-            .Select(g => g.OrderByDescending(f => f.RecordedAt).First())
+            .AsNoTracking()
+            .Where(f => f.RecordedAt == _context.FundingRateSnapshots
+                .Where(x => x.ExchangeId == f.ExchangeId && x.AssetId == f.AssetId)
+                .Max(x => (DateTime?)x.RecordedAt))
             .ToListAsync();
     }
 
@@ -34,4 +37,11 @@ public class FundingRateRepository : IFundingRateRepository
 
     public void AddRange(IEnumerable<FundingRateSnapshot> snapshots) =>
         _context.FundingRateSnapshots.AddRange(snapshots);
+
+    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        return await _context.FundingRateSnapshots
+            .Where(s => s.RecordedAt < cutoff)
+            .ExecuteDeleteAsync(ct);
+    }
 }

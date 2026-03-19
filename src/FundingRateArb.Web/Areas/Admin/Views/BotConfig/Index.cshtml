@@ -1,0 +1,120 @@
+@model BotConfigViewModel
+@{
+    ViewData["Title"] = "Bot Configuration";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Bot Configuration</h1>
+    <div class="d-flex align-items-center gap-2">
+        @if (Model.IsEnabled)
+        {
+            <span class="badge bg-success fs-6 px-3 py-2">RUNNING</span>
+        }
+        else
+        {
+            <span class="badge bg-danger fs-6 px-3 py-2">STOPPED</span>
+        }
+        <form asp-action="Toggle" method="post" class="d-inline">
+            @if (Model.IsEnabled)
+            {
+                <button type="submit" class="btn btn-danger">Kill Switch (Stop Bot)</button>
+            }
+            else
+            {
+                <button type="submit" class="btn btn-success">Enable Bot</button>
+            }
+        </form>
+    </div>
+</div>
+
+@if (TempData["Success"] is string msg)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @msg
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form asp-action="Index" method="post">
+            <div asp-validation-summary="ModelOnly" class="alert alert-danger" role="alert"></div>
+
+            <h5 class="card-title mb-3">Thresholds</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="OpenThreshold" class="form-label"></label>
+                    <input asp-for="OpenThreshold" class="form-control" type="number" step="0.0001" />
+                    <div class="form-text">Minimum rate difference to open position</div>
+                    <span asp-validation-for="OpenThreshold" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="CloseThreshold" class="form-label"></label>
+                    <input asp-for="CloseThreshold" class="form-control" type="number" step="0.00001" />
+                    <div class="form-text">Rate at which to close position</div>
+                    <span asp-validation-for="CloseThreshold" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="AlertThreshold" class="form-label"></label>
+                    <input asp-for="AlertThreshold" class="form-control" type="number" step="0.0001" />
+                    <div class="form-text">Rate at which to trigger alerts</div>
+                    <span asp-validation-for="AlertThreshold" class="text-danger"></span>
+                </div>
+            </div>
+
+            <h5 class="card-title mb-3">Capital & Leverage</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="TotalCapitalUsdc" class="form-label"></label>
+                    <input asp-for="TotalCapitalUsdc" class="form-control" type="number" step="0.01" />
+                    <span asp-validation-for="TotalCapitalUsdc" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="DefaultLeverage" class="form-label"></label>
+                    <input asp-for="DefaultLeverage" class="form-control" type="number" min="1" max="50" />
+                    <span asp-validation-for="DefaultLeverage" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MaxCapitalPerPosition" class="form-label"></label>
+                    <input asp-for="MaxCapitalPerPosition" class="form-control" type="number" step="0.01" />
+                    <div class="form-text">Fraction of total capital (0.01 - 1.0)</div>
+                    <span asp-validation-for="MaxCapitalPerPosition" class="text-danger"></span>
+                </div>
+            </div>
+
+            <h5 class="card-title mb-3">Risk Management</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="MaxConcurrentPositions" class="form-label"></label>
+                    <input asp-for="MaxConcurrentPositions" class="form-control" type="number" min="1" max="10" />
+                    <span asp-validation-for="MaxConcurrentPositions" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="StopLossPct" class="form-label"></label>
+                    <input asp-for="StopLossPct" class="form-control" type="number" step="0.01" />
+                    <div class="form-text">Fraction (e.g. 0.15 = 15%)</div>
+                    <span asp-validation-for="StopLossPct" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MaxHoldTimeHours" class="form-label"></label>
+                    <input asp-for="MaxHoldTimeHours" class="form-control" type="number" min="1" max="168" />
+                    <span asp-validation-for="MaxHoldTimeHours" class="text-danger"></span>
+                </div>
+            </div>
+
+            <div class="mt-2">
+                <button type="submit" class="btn btn-primary">Save Configuration</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

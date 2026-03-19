@@ -13,6 +13,7 @@ public class PositionSummaryDto
     public decimal EntrySpreadPerHour { get; set; }
     public decimal CurrentSpreadPerHour { get; set; }
     public decimal AccumulatedFunding { get; set; }
+    public decimal UnrealizedPnl { get; set; }
     public decimal? RealizedPnl { get; set; }
     public PositionStatus Status { get; set; }
     public DateTime OpenedAt { get; set; }

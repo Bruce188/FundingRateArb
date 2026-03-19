@@ -22,11 +22,11 @@ public class SignalEngine : ISignalEngine
         var rates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
 
         var opportunities = new List<ArbitrageOpportunityDto>();
-        var assets = rates.Select(r => r.Asset.Symbol).Distinct();
 
-        foreach (var symbol in assets)
+        foreach (var group in rates.GroupBy(r => r.Asset.Symbol))
         {
-            var assetRates = rates.Where(r => r.Asset.Symbol == symbol).ToList();
+            var symbol    = group.Key;
+            var assetRates = group.ToList();
 
             for (int i = 0; i < assetRates.Count; i++)
             for (int j = i + 1; j < assetRates.Count; j++)

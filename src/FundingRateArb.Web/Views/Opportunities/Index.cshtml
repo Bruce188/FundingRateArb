@@ -1,0 +1,66 @@
+@model FundingRateArb.Web.ViewModels.OpportunityListViewModel
+@{
+    ViewData["Title"] = "Opportunities";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Arbitrage Opportunities</h1>
+    <span class="badge bg-primary">@Model.Opportunities.Count found</span>
+</div>
+
+<div class="card border-0 shadow-sm">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Asset</th>
+                        <th>Long Exchange</th>
+                        <th>Short Exchange</th>
+                        <th>Spread/hr</th>
+                        <th>Net Yield/hr</th>
+                        <th>APR</th>
+                    </tr>
+                </thead>
+                <tbody id="opportunities-table-body">
+                    @if (Model.Opportunities.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-5">
+                                No arbitrage opportunities detected at this time.
+                                <br />
+                                <small>Rates are fetched every minute. Check back shortly.</small>
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var opp in Model.Opportunities)
+                        {
+                            var apyClass = opp.AnnualizedYield > 0.50m
+                                ? "text-success fw-bold"
+                                : opp.AnnualizedYield >= 0.20m
+                                    ? "text-warning fw-bold"
+                                    : "";
+                            var constrained = Model.IsVolumeConstrained(opp);
+                            <tr class="@(constrained ? "table-warning" : "")">
+                                <td><strong>@opp.AssetSymbol</strong></td>
+                                <td>@opp.LongExchangeName</td>
+                                <td>@opp.ShortExchangeName</td>
+                                <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
+                                <td>@((opp.NetYieldPerHour * 100).ToString("F4"))%</td>
+                                <td class="@apyClass">
+                                    @((opp.AnnualizedYield * 100).ToString("F1"))%
+                                    @if (constrained)
+                                    {
+                                        <span class="ms-1" title="Position size limited by liquidity">&#9888;</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>

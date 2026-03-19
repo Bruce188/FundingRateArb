@@ -1,0 +1,191 @@
+@model FundingRateArb.Web.ViewModels.DashboardViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3 mb-0">Dashboard</h1>
+</div>
+
+<!-- KPI Cards -->
+<div class="row mb-4">
+    <!-- Bot Status -->
+    <div class="col-sm-6 col-xl-3 mb-3">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Bot Status</p>
+                        <span id="bot-status" class="badge @(Model.BotEnabled ? "bg-success" : "bg-danger") fs-6">
+                            @(Model.BotEnabled ? "RUNNING" : "STOPPED")
+                        </span>
+                    </div>
+                    <div class="text-muted">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-robot" viewBox="0 0 16 16">
+                            <path d="M6 12.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5M3 8.062C3 6.76 4.235 5.765 5.53 5.886a26.6 26.6 0 0 0 4.94 0C11.765 5.765 13 6.76 13 8.062v1.157a.93.93 0 0 1-.765.935c-.845.147-2.34.346-4.235.346s-3.39-.2-4.235-.346A.93.93 0 0 1 3 9.219zm4.542-.827a.25.25 0 0 0-.217.068l-.92.9a25 25 0 0 1-1.871-.183.25.25 0 0 0-.068.495c.55.076 1.232.149 2.02.193a.25.25 0 0 0 .189-.071l.754-.736.847 1.71a.25.25 0 0 0 .404.062l.932-.97a25 25 0 0 0 1.922-.188.25.25 0 0 0-.068-.495c-.538.074-1.232.149-2.012.196a.25.25 0 0 0-.18.083l-.67.696-.727-1.466a.25.25 0 0 0-.186-.138"/>
+                            <path d="M6.5 2h3A1.5 1.5 0 0 1 11 3.5V4h-1v-.5a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5V4H5v-.5A1.5 1.5 0 0 1 6.5 2M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v8A1.5 1.5 0 0 1 11.5 14h-7A1.5 1.5 0 0 1 3 12.5z"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Open Positions -->
+    <div class="col-sm-6 col-xl-3 mb-3">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Open Positions</p>
+                        <h4 class="mb-0"><span id="open-positions">@Model.OpenPositionCount</span></h4>
+                    </div>
+                    <div class="text-muted">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-bar-chart" viewBox="0 0 16 16">
+                            <path d="M4 11H2v3h2zm5-4H7v7h2zm5-5v12h-2V2zm-2-1a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM6 7a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zm-5 4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1z"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Total PnL -->
+    <div class="col-sm-6 col-xl-3 mb-3">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Total PnL (est.)</p>
+                        <h4 class="mb-0 @(Model.TotalPnl >= 0 ? "text-success" : "text-danger")">
+                            $<span id="total-pnl">@Model.TotalPnl.ToString("F4")</span>
+                        </h4>
+                    </div>
+                    <div class="text-muted">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-currency-dollar" viewBox="0 0 16 16">
+                            <path d="M4 10.781c.148 1.667 1.513 2.85 3.591 3.003V15h1.043v-1.216c2.27-.179 3.678-1.438 3.678-3.3 0-1.59-.947-2.51-2.956-3.028l-.722-.187V3.467c1.122.11 1.879.714 2.07 1.616h1.47c-.166-1.6-1.54-2.748-3.54-2.875V1H7.591v1.233c-1.939.23-3.27 1.472-3.27 3.156 0 1.454.966 2.483 2.661 2.917l.61.162v4.031c-1.149-.17-1.94-.8-2.131-1.718zm3.391-3.836c-1.043-.263-1.6-.825-1.6-1.616 0-.944.704-1.641 1.8-1.828v3.495l-.2-.051zm1.591 1.872c1.287.323 1.852.859 1.852 1.769 0 1.097-.826 1.828-2.2 1.939V8.73z"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Best Spread -->
+    <div class="col-sm-6 col-xl-3 mb-3">
+        <div class="card h-100 border-0 shadow-sm">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <p class="text-muted small mb-1">Best Spread/hr</p>
+                        <h4 class="mb-0 text-info">
+                            <span id="best-spread">@((Model.BestSpread * 100).ToString("F4"))</span>%
+                        </h4>
+                    </div>
+                    <div class="text-muted">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-arrow-left-right" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M1 11.5a.5.5 0 0 0 .5.5h11.793l-3.147 3.146a.5.5 0 0 0 .708.708l4-4a.5.5 0 0 0 0-.708l-4-4a.5.5 0 0 0-.708.708L13.293 11H1.5a.5.5 0 0 0-.5.5m14-7a.5.5 0 0 1-.5.5H2.707l3.147 3.146a.5.5 0 1 1-.708.708l-4-4a.5.5 0 0 1 0-.708l4-4a.5.5 0 1 1 .708.708L2.707 4H14.5a.5.5 0 0 1 .5.5"/>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Funding Rates Table -->
+<div class="row">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Live Funding Rates</h5>
+                <small class="text-muted">Updates every minute</small>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Exchange</th>
+                                <th>Symbol</th>
+                                <th>Rate/hr</th>
+                                <th>Mark Price</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rates-table-body">
+                            @if (Model.LatestRates.Count == 0)
+                            {
+                                <tr>
+                                    <td colspan="4" class="text-center text-muted py-4">No funding rate data available yet.</td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var rate in Model.LatestRates.OrderByDescending(r => Math.Abs(r.RatePerHour)))
+                                {
+                                    <tr>
+                                        <td>@rate.ExchangeName</td>
+                                        <td><strong>@rate.Symbol</strong></td>
+                                        <td class="@(rate.RatePerHour >= 0 ? "text-success" : "text-danger")">
+                                            @((rate.RatePerHour * 100).ToString("F4"))%
+                                        </td>
+                                        <td>$@rate.MarkPrice.ToString("F2")</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (Model.OpenPositions.Count > 0)
+{
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white">
+                    <h5 class="mb-0">Open Positions</h5>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Asset</th>
+                                    <th>Long</th>
+                                    <th>Short</th>
+                                    <th>Size (USDC)</th>
+                                    <th>Entry Spread/hr</th>
+                                    <th>Current Spread/hr</th>
+                                    <th>Accumulated Funding</th>
+                                    <th>Opened At</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pos in Model.OpenPositions)
+                                {
+                                    <tr>
+                                        <td><strong>@pos.AssetSymbol</strong></td>
+                                        <td>@pos.LongExchangeName</td>
+                                        <td>@pos.ShortExchangeName</td>
+                                        <td>$@pos.SizeUsdc.ToString("F2")</td>
+                                        <td>@((pos.EntrySpreadPerHour * 100).ToString("F4"))%</td>
+                                        <td class="@(pos.CurrentSpreadPerHour >= 0 ? "text-success" : "text-danger")">
+                                            @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%
+                                        </td>
+                                        <td class="text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+

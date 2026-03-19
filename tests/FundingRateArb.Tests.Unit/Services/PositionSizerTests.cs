@@ -1,0 +1,223 @@
+using Moq;
+using FluentAssertions;
+using FundingRateArb.Application.Services;
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
+
+namespace FundingRateArb.Tests.Unit.Services;
+
+public class PositionSizerTests
+{
+    private readonly Mock<IUnitOfWork> _mockUow = new();
+    private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
+    private readonly PositionSizer _sut;
+
+    public PositionSizerTests()
+    {
+        _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
+        // Use real YieldCalculator — no external dependencies
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator());
+    }
+
+    private static ArbitrageOpportunityDto DefaultOpp(
+        decimal netYieldPerHour = 0.0005m,
+        decimal longVolume24h = 100_000_000m,
+        decimal shortVolume24h = 100_000_000m) => new()
+    {
+        AssetId = 1,
+        LongExchangeId = 1,
+        ShortExchangeId = 2,
+        LongRatePerHour = 0.0008m,
+        ShortRatePerHour = 0.0003m,
+        NetYieldPerHour = netYieldPerHour,
+        LongVolume24h = longVolume24h,
+        ShortVolume24h = shortVolume24h,
+        LongMarkPrice = 100m,
+        ShortMarkPrice = 100m
+    };
+
+    private static BotConfiguration DefaultConfig(
+        decimal totalCapital = 107m,
+        decimal maxCapitalPerPos = 0.80m,
+        int leverage = 5,
+        decimal volumeFraction = 0.001m,
+        int maxConcurrentPositions = 1) => new()
+    {
+        TotalCapitalUsdc = totalCapital,
+        MaxCapitalPerPosition = maxCapitalPerPos,
+        DefaultLeverage = leverage,
+        VolumeFraction = volumeFraction,
+        MaxConcurrentPositions = maxConcurrentPositions,
+        IsEnabled = true,
+        OpenThreshold = 0.0003m,
+        BreakevenHoursMax = 6
+    };
+
+    // -----------------------------------------------------------------------
+    // CalculateOptimalSizeAsync
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateOptimalSize_ReturnsCapitalLimit_WhenSmallestOfThree()
+    {
+        // capitalLimit = 107 * 0.80 * 5 = 428
+        // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
+        // capital (428) < liquidity (100_000)  →  expect 428
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
+                             longVolume24h: 100_000_000m,
+                             shortVolume24h: 100_000_000m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(428m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_ReturnsLiquidityLimit_WhenSmallestOfThree()
+    {
+        // capitalLimit = 107 * 0.80 * 5 = 428
+        // liquidityLimit = min(10_000, 10_000) * 0.001 = 10
+        // liquidity (10) < capital (428)  →  expect 10
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
+                             longVolume24h: 10_000m,
+                             shortVolume24h: 10_000m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(10m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_ReturnsZero_WhenZeroNetYield()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var opp = DefaultOpp(netYieldPerHour: 0m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_ReturnsZero_WhenNegativeNetYield()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var opp = DefaultOpp(netYieldPerHour: -0.0001m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_AppliesLeverage_ToCapitalLimit()
+    {
+        // capitalLimit = 107 * 0.80 * 10 = 856
+        // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
+        // capital (856) < liquidity (100_000)  →  expect 856
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig(leverage: 10));
+
+        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
+                             longVolume24h: 100_000_000m,
+                             shortVolume24h: 100_000_000m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(856m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_UsesMinVolume_ForLiquidityLimit()
+    {
+        // capitalLimit = 107 * 0.80 * 5 = 428
+        // liquidityLimit = min(10_000, 500_000) * 0.001 = 10
+        // liquidity (10) < capital (428)  →  expect 10
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var opp = DefaultOpp(netYieldPerHour: 0.0005m,
+                             longVolume24h: 10_000m,
+                             shortVolume24h: 500_000m);
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(10m);
+    }
+
+    // -----------------------------------------------------------------------
+    // CalculateMaxPositionsAsync
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateMaxPositions_ReturnsCorrectCount_CappedAtMaxConcurrent()
+    {
+        // total=107, sizePerPos=50 → floor(107/50)=2, capped at MaxConcurrentPositions=1
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig(totalCapital: 107m, maxConcurrentPositions: 1));
+
+        var result = await _sut.CalculateMaxPositionsAsync(50m);
+
+        result.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task CalculateMaxPositions_ReturnsRawCount_WhenBelowCap()
+    {
+        // total=107, sizePerPos=50 → floor(107/50)=2, maxConcurrent=5 → result=2
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig(totalCapital: 107m, maxConcurrentPositions: 5));
+
+        var result = await _sut.CalculateMaxPositionsAsync(50m);
+
+        result.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CalculateMaxPositions_ReturnsZero_WhenZeroSize()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        var result = await _sut.CalculateMaxPositionsAsync(0m);
+
+        result.Should().Be(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // RoundToStepSize (static — no mock needed)
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(1.23456, 0.01, 2, 1.23)]
+    [InlineData(1.239,   0.01, 2, 1.23)]
+    [InlineData(100.0,   0.1,  1, 100.0)]
+    [InlineData(0.0056,  0.001, 3, 0.005)]
+    [InlineData(10.0,    0.25, 2, 10.0)]
+    [InlineData(10.1,    0.25, 2, 10.0)]
+    [InlineData(0.0,     0.01, 2, 0.0)]
+    public void RoundToStepSize_ReturnsCorrectValue(
+        decimal quantity, decimal stepSize, int decimals, decimal expected)
+    {
+        var result = PositionSizer.RoundToStepSize(quantity, stepSize, decimals);
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void RoundToStepSize_FallsBackToRounding_WhenStepSizeIsZero()
+    {
+        var result = PositionSizer.RoundToStepSize(1.2345m, 0m, 2);
+        result.Should().Be(1.23m);
+    }
+}

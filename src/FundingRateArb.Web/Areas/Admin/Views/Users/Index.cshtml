@@ -1,0 +1,59 @@
+@model IEnumerable<UserRoleViewModel>
+@{
+    ViewData["Title"] = "Users";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Users</h1>
+</div>
+
+@if (TempData["Success"] is string msg)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @msg
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+
+<div class="card shadow-sm">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0">
+            <thead class="table-dark">
+                <tr>
+                    <th>Email</th>
+                    <th>Display Name</th>
+                    <th>Roles</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var user in Model)
+                {
+                    <tr>
+                        <td>@user.Email</td>
+                        <td>@user.DisplayName</td>
+                        <td>
+                            @foreach (var role in user.Roles)
+                            {
+                                <span class="badge @(role == "Admin" ? "bg-danger" : "bg-primary") me-1">@role</span>
+                            }
+                            @if (!user.Roles.Any())
+                            {
+                                <span class="text-muted">No roles</span>
+                            }
+                        </td>
+                        <td>
+                            <a asp-action="EditRole" asp-route-userId="@user.UserId" class="btn btn-sm btn-outline-primary">Edit Role</a>
+                        </td>
+                    </tr>
+                }
+                @if (!Model.Any())
+                {
+                    <tr>
+                        <td colspan="4" class="text-center text-muted py-4">No users found.</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>

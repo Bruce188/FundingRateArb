@@ -1,49 +1,151 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>@ViewData["Title"] - FundingRateArb.Web</title>
+    <title>@ViewData["Title"] - FundingRateArb</title>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
-    <link rel="stylesheet" href="~/FundingRateArb.Web.styles.css" asp-append-version="true" />
 </head>
 <body>
     <header>
-        <nav class="navbar navbar-expand-sm navbar-toggleable-sm navbar-light bg-white border-bottom box-shadow mb-3">
+        <nav class="navbar navbar-expand-sm navbar-dark bg-dark border-bottom mb-3">
             <div class="container-fluid">
-                <a class="navbar-brand" asp-area="" asp-controller="Home" asp-action="Index">FundingRateArb.Web</a>
-                <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target=".navbar-collapse" aria-controls="navbarSupportedContent"
+                <a class="navbar-brand fw-bold text-warning" asp-area="" asp-controller="Dashboard" asp-action="Index">
+                    &#9654; FundingRateArb
+                </a>
+                <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+                        data-bs-target="#navbarMain" aria-controls="navbarMain"
                         aria-expanded="false" aria-label="Toggle navigation">
                     <span class="navbar-toggler-icon"></span>
                 </button>
-                <div class="navbar-collapse collapse d-sm-inline-flex justify-content-between">
-                    <ul class="navbar-nav flex-grow-1">
+
+                <div class="navbar-collapse collapse" id="navbarMain">
+                    <ul class="navbar-nav me-auto">
                         <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Index">Home</a>
+                            <a class="nav-link" asp-area="" asp-controller="Dashboard" asp-action="Index">Dashboard</a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link text-dark" asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
+                            <a class="nav-link" asp-area="" asp-controller="Opportunities" asp-action="Index">Opportunities</a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-controller="Positions" asp-action="Index">Positions</a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" asp-area="" asp-controller="Alerts" asp-action="Index">
+                                Alerts
+                                <span id="alert-badge" class="badge bg-danger d-none ms-1"></span>
+                            </a>
+                        </li>
+                        @if (User.IsInRole("Admin"))
+                        {
+                            <li class="nav-item dropdown">
+                                <a class="nav-link dropdown-toggle" href="#" role="button"
+                                   data-bs-toggle="dropdown" aria-expanded="false">
+                                    Admin
+                                </a>
+                                <ul class="dropdown-menu dropdown-menu-dark">
+                                    <li>
+                                        <a class="dropdown-item" asp-area="Admin"
+                                           asp-controller="BotConfig" asp-action="Index">
+                                            Bot Configuration
+                                        </a>
+                                    </li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li>
+                                        <a class="dropdown-item" asp-area="Admin"
+                                           asp-controller="Exchange" asp-action="Index">
+                                            Exchanges
+                                        </a>
+                                    </li>
+                                    <li>
+                                        <a class="dropdown-item" asp-area="Admin"
+                                           asp-controller="Asset" asp-action="Index">
+                                            Assets
+                                        </a>
+                                    </li>
+                                    <li><hr class="dropdown-divider" /></li>
+                                    <li>
+                                        <a class="dropdown-item" asp-area="Admin"
+                                           asp-controller="Users" asp-action="Index">
+                                            User Management
+                                        </a>
+                                    </li>
+                                </ul>
+                            </li>
+                        }
+                    </ul>
+
+                    <ul class="navbar-nav ms-auto align-items-center">
+                        <li class="nav-item me-3">
+                            <span id="connection-status" class="badge bg-secondary">Connecting...</span>
+                        </li>
+                        @if (User.Identity?.IsAuthenticated == true)
+                        {
+                            <li class="nav-item">
+                                <span class="navbar-text text-light me-2">@User.Identity.Name</span>
+                            </li>
+                            <li class="nav-item">
+                                <form asp-area="Identity" asp-page="/Account/Logout"
+                                      asp-route-returnUrl="@Url.Action("Index", "Dashboard")"
+                                      method="post">
+                                    <button type="submit" class="btn btn-sm btn-outline-light">Logout</button>
+                                </form>
+                            </li>
+                        }
+                        else
+                        {
+                            <li class="nav-item">
+                                <a class="btn btn-sm btn-outline-light" asp-area="Identity"
+                                   asp-page="/Account/Login">Login</a>
+                            </li>
+                        }
                     </ul>
                 </div>
             </div>
         </nav>
     </header>
-    <div class="container">
-        <main role="main" class="pb-3">
+
+    <div class="container-fluid px-4">
+        @if (TempData["Success"] is string successMsg)
+        {
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                @successMsg
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+        @if (TempData["Error"] is string errorMsg)
+        {
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                @errorMsg
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        }
+
+        <main role="main" class="pb-4">
             @RenderBody()
         </main>
     </div>
 
-    <footer class="border-top footer text-muted">
-        <div class="container">
-            &copy; 2026 - FundingRateArb.Web - <a asp-area="" asp-controller="Home" asp-action="Privacy">Privacy</a>
+    <!-- Toast container for SignalR notifications -->
+    <div id="notification-toast-container"
+         class="toast-container position-fixed top-0 end-0 p-3"
+         style="z-index: 1100">
+    </div>
+
+    <footer class="border-top footer text-muted py-2 mt-3">
+        <div class="container-fluid px-4">
+            <small>&copy; 2026 FundingRateArb &mdash; Delta-neutral funding rate arbitrage</small>
         </div>
     </footer>
+
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
     <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"
+            integrity="sha512-dBTvvRXd7lMPRfv6L3BNNJJCIFhTBHjJWaFHSmtWKaqHBLtInBkXcjRvJNFgbzpMjy/1FKVhegxXr9J9ZpZw=="
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="~/js/site.js" asp-append-version="true"></script>
+    <script src="~/js/dashboard.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>
