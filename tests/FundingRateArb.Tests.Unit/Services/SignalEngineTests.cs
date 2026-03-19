@@ -26,7 +26,8 @@ public class SignalEngineTests
         decimal ratePerHour,
         decimal markPrice = 3000m,
         decimal volume = 1_000_000m,
-        decimal? takerFeeRate = null) =>
+        decimal? takerFeeRate = null,
+        DateTime? recordedAt = null) =>
         new FundingRateSnapshot
         {
             ExchangeId = exchangeId,
@@ -34,6 +35,7 @@ public class SignalEngineTests
             RatePerHour = ratePerHour,
             MarkPrice = markPrice,
             Volume24hUsd = volume,
+            RecordedAt = recordedAt ?? DateTime.UtcNow,
             Exchange = new Exchange { Id = exchangeId, Name = exchangeName, TakerFeeRate = takerFeeRate },
             Asset = new Asset { Id = assetId, Symbol = symbol },
         };
@@ -129,13 +131,13 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
         var expectedSpread = 0.0010m - 0.0001m;                       // 0.0009
-        var expectedFeePerHour = (0.00090m + 0.00000m) / 72m;
-        var expectedNet = expectedSpread - expectedFeePerHour;         // 0.0008625
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         // Act
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
@@ -261,8 +263,8 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 72m;  // 0.000025
-        var expectedNet       = expectedSpread - expectedFeePerHour;   // 0.000875
+        var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 24m;
+        var expectedNet       = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
@@ -285,12 +287,12 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.00090m + 0.00000m) / 72m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
         var expectedNet       = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
@@ -315,12 +317,12 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 72m;
+        var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 24m;
         var expectedNet       = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
@@ -390,12 +392,12 @@ public class SignalEngineTests
         result.Should().HaveCountLessOrEqualTo(26);
     }
 
-    // ── M1: Fee amortization uses MaxHoldTimeHours ──────────────────────────────
+    // ── C3+C4: Fee amortization uses FeeAmortizationHours ──────────────────────
 
     [Fact]
-    public async Task GetOpportunities_FeeAmortization_UsesMaxHoldTimeHours_NotHardcoded24()
+    public async Task GetOpportunities_FeeAmortization_UsesFeeAmortizationHours()
     {
-        // MaxHoldTimeHours=48 → fees amortized over 48 hours instead of default 72
+        // FeeAmortizationHours=48 → fees amortized over 48 hours (decoupled from MaxHoldTimeHours)
         var rates = new List<FundingRateSnapshot>
         {
             MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
@@ -403,7 +405,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MaxHoldTimeHours = 48 });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 48 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -415,5 +417,116 @@ public class SignalEngineTests
 
         result.Should().HaveCount(1);
         result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_FeeAmortization_IndependentOfMaxHoldTimeHours()
+    {
+        // Verify that changing MaxHoldTimeHours does NOT affect fee calculation
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        // FeeAmortizationHours=24, MaxHoldTimeHours=72 — fee should use 24, not 72
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24, MaxHoldTimeHours = 72 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread     = 0.0009m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
+        var expectedNet        = expectedSpread - expectedFeePerHour;
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
+    }
+
+    // ── H3: Rate staleness filter ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_FiltersOutStaleRates()
+    {
+        // One rate is 30 minutes old, staleness cutoff is 15 minutes → filtered out
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, recordedAt: DateTime.UtcNow.AddMinutes(-5)),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, recordedAt: DateTime.UtcNow.AddMinutes(-30)),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Only 1 fresh rate remains — no pair can be formed
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_KeepsFreshRates()
+    {
+        // Both rates are recent → should form opportunity
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, recordedAt: DateTime.UtcNow.AddMinutes(-2)),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, recordedAt: DateTime.UtcNow.AddMinutes(-3)),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+    }
+
+    // ── M2: Minimum volume filter ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_FiltersOutLowVolumeLegs()
+    {
+        // Long leg volume 10k, config min 50k → should be filtered out
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 10_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 1_000_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_AllowsLegsAboveMinVolume()
+    {
+        // Both legs above 50k → should form opportunity
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 200_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
     }
 }

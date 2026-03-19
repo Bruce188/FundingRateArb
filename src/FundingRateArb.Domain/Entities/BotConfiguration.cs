@@ -37,6 +37,25 @@ public class BotConfiguration
     [Range(1, 20)]
     public int AllocationTopN { get; set; } = 3;
 
+    // Risk management (decoupled from MaxHoldTimeHours)
+    [Range(1, 168)]
+    public int FeeAmortizationHours { get; set; } = 24;
+
+    [Range(1, (double)decimal.MaxValue)]
+    public decimal MinPositionSizeUsdc { get; set; } = 10m;
+
+    [Range(0, (double)decimal.MaxValue)]
+    public decimal MinVolume24hUsdc { get; set; } = 50_000m;
+
+    [Range(1, 120)]
+    public int RateStalenessMinutes { get; set; } = 15;
+
+    [Range(0.01, 1.0)]
+    public decimal DailyDrawdownPausePct { get; set; } = 0.05m;
+
+    [Range(1, 20)]
+    public int ConsecutiveLossPause { get; set; } = 3;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

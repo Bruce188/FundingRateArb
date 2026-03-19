@@ -59,6 +59,12 @@ public class PositionRepository : IPositionRepository
             .Take(take)
             .ToListAsync();
 
+    public Task<List<ArbitragePosition>> GetClosedSinceAsync(DateTime since) =>
+        _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since)
+            .ToListAsync();
+
     public Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)

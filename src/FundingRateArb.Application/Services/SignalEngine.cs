@@ -25,6 +25,11 @@ public class SignalEngine : ISignalEngine
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
 
+        // H3: Filter out stale rates (guard against zero — would filter everything)
+        var stalenessMinutes = Math.Max(config.RateStalenessMinutes, 1);
+        var cutoff = DateTime.UtcNow.AddMinutes(-stalenessMinutes);
+        rates = rates.Where(r => r.RecordedAt >= cutoff).ToList();
+
         var opportunities = new List<ArbitrageOpportunityDto>();
 
         foreach (var group in rates.GroupBy(r => r.Asset.Symbol))
@@ -40,8 +45,8 @@ public class SignalEngine : ISignalEngine
 
                 var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
 
-                // TD1: Skip opportunities where either leg has zero volume
-                if (longR.Volume24hUsd <= 0 || shortR.Volume24hUsd <= 0) continue;
+                // M2: Skip opportunities where either leg has insufficient volume
+                if (longR.Volume24hUsd < config.MinVolume24hUsdc || shortR.Volume24hUsd < config.MinVolume24hUsdc) continue;
 
                 var diff = shortR.RatePerHour - longR.RatePerHour;
 
@@ -50,7 +55,8 @@ public class SignalEngine : ISignalEngine
                                ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
                 var shortFee = shortR.Exchange.TakerFeeRate * 2
                                ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
-                var feePerHour = (longFee + shortFee) / config.MaxHoldTimeHours;
+                var amortHours = Math.Max(config.FeeAmortizationHours, 1);
+                var feePerHour = (longFee + shortFee) / amortHours;
                 var net = diff - feePerHour;
 
                 if (net >= config.OpenThreshold)

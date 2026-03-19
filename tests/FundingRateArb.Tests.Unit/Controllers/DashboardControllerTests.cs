@@ -119,4 +119,53 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.BotEnabled.Should().BeTrue();
     }
+
+    [Fact]
+    public void RetryNow_ReturnsJsonResult_NotRedirect()
+    {
+        // Arrange — give the controller an Admin role
+        var adminUser = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, "admin-user"),
+            new Claim(ClaimTypes.Role, "Admin"),
+        }, "mock"));
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = adminUser }
+        };
+
+        // Act
+        var result = _controller.RetryNow();
+
+        // Assert
+        var jsonResult = result.Should().BeOfType<JsonResult>().Subject;
+        var value = jsonResult.Value;
+        value.Should().NotBeNull();
+
+        var successProp = value!.GetType().GetProperty("success");
+        successProp.Should().NotBeNull();
+        successProp!.GetValue(value).Should().Be(true);
+    }
+
+    [Fact]
+    public void RetryNow_CallsClearCooldownsAndTriggerImmediateCycle()
+    {
+        // Arrange
+        var adminUser = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, "admin-user"),
+            new Claim(ClaimTypes.Role, "Admin"),
+        }, "mock"));
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = adminUser }
+        };
+
+        // Act
+        _controller.RetryNow();
+
+        // Assert
+        _mockBotControl.Verify(b => b.ClearCooldowns(), Times.Once);
+        _mockBotControl.Verify(b => b.TriggerImmediateCycle(), Times.Once);
+    }
 }

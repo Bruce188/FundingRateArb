@@ -3,6 +3,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
@@ -38,60 +39,60 @@ public class PositionSizerEdgeCaseTests
         UpdatedByUserId = "admin-user-id",
     };
 
-    // ── Test 5: Break-even exceeds max → return 0 ─────────────────────────────
+    // ── Test 5: Break-even exceeds max → size zeroed in batch path ──────────
 
     [Fact]
-    public async Task CalculateOptimalSize_ReturnsZero_WhenBreakevenExceedsMax()
+    public async Task BatchSizes_ReturnsZero_WhenBreakevenExceedsMax()
     {
         // entryFeeRate = 0.001 - 0.0001 = 0.0009
         // breakEvenHours = 0.0009 / 0.0001 = 9 > BreakevenHoursMax=2 → 0
+        var config = MakeConfig(breakevenHoursMax: 2);
+        config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(MakeConfig(breakevenHoursMax: 2));
+            .ReturnsAsync(config);
 
-        var opp = new ArbitrageOpportunityDto
+        var opps = new List<ArbitrageOpportunityDto>
         {
-            AssetId = 1,
-            LongExchangeId = 1,
-            ShortExchangeId = 2,
-            SpreadPerHour = 0.001m,
-            NetYieldPerHour = 0.0001m,
-            LongVolume24h = 100_000_000m,
-            ShortVolume24h = 100_000_000m,
-            LongMarkPrice = 100m,
-            ShortMarkPrice = 100m,
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.0001m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
         };
 
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
 
-        result.Should().Be(0m);
+        sizes[0].Should().Be(0m);
     }
 
     // ── Test 6: Low fees → break-even passes → non-zero result ────────────────
 
     [Fact]
-    public async Task CalculateOptimalSize_PassesBreakeven_WhenFeesLow()
+    public async Task BatchSizes_PassesBreakeven_WhenFeesLow()
     {
         // entryFeeRate = 0.001 - 0.0009 = 0.0001
         // breakEvenHours = 0.0001 / 0.0009 ≈ 0.11 < BreakevenHoursMax=6 → non-zero
+        var config = MakeConfig(breakevenHoursMax: 6);
+        config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(MakeConfig(breakevenHoursMax: 6));
+            .ReturnsAsync(config);
 
-        var opp = new ArbitrageOpportunityDto
+        var opps = new List<ArbitrageOpportunityDto>
         {
-            AssetId = 1,
-            LongExchangeId = 1,
-            ShortExchangeId = 2,
-            SpreadPerHour = 0.001m,
-            NetYieldPerHour = 0.0009m,
-            LongVolume24h = 100_000_000m,
-            ShortVolume24h = 100_000_000m,
-            LongMarkPrice = 100m,
-            ShortMarkPrice = 100m,
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.0009m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
         };
 
-        var result = await _sut.CalculateOptimalSizeAsync(opp);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
 
-        result.Should().BeGreaterThan(0m);
+        sizes[0].Should().BeGreaterThan(0m);
     }
 
     // ── Test 7: stepSize=0 falls back to decimal rounding ─────────────────────

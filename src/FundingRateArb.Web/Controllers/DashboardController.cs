@@ -91,7 +91,6 @@ public class DashboardController : Controller
     {
         _botControl.ClearCooldowns();
         _botControl.TriggerImmediateCycle();
-        TempData["Success"] = "Cooldowns cleared — next cycle triggered.";
-        return RedirectToAction(nameof(Index));
+        return Json(new { success = true, message = "Cooldowns cleared — next cycle triggered." });
     }
 }

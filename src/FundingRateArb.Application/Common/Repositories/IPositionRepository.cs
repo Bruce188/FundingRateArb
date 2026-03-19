@@ -16,6 +16,7 @@ public interface IPositionRepository
     Task<List<ArbitragePosition>> GetByUserAsync(string userId, int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status);
+    Task<List<ArbitragePosition>> GetClosedSinceAsync(DateTime since);
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }
