@@ -637,6 +637,64 @@ public class LighterConnectorTests
         rates.Should().AllSatisfy(r => r.Volume24hUsd.Should().Be(0m,
             "volume must be zero when stats endpoint fails"));
     }
+
+    // ── H4: Integer overflow protection ──────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_RejectsZeroOrNegativePrice_ReturnsError()
+    {
+        // H4 test: When last_trade_price <= 0, the order should fail with an error.
+        // The connector rejects zero/negative prices before attempting to sign.
+        var zeroPriceJson = """
+            {
+                "code": 200,
+                "order_book_details": [
+                    {
+                        "market_id": 0,
+                        "symbol": "ETH",
+                        "size_decimals": 4,
+                        "price_decimals": 2,
+                        "last_trade_price": 0.0,
+                        "default_initial_margin_fraction": 1000,
+                        "min_initial_margin_fraction": 500,
+                        "maintenance_margin_fraction": 300
+                    }
+                ]
+            }
+            """;
+
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns("0xabc123");
+        _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", zeroPriceJson);
+        });
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty("zero/negative price must produce an error");
+    }
+
+    // ── M8: Leverage cache tests ─────────────────────────────────────────────
+
+    [Fact]
+    public void LighterConnector_HasLeverageCacheField()
+    {
+        // M8 structural test: Verify the leverage cache field exists on the connector.
+        // The PlaceMarketOrderAsync method checks _leverageCache before calling TryUpdateLeverageAsync.
+        // Full integration testing of the cache requires the native signer; this test verifies the field.
+        var sut = CreateConnector("{}");
+
+        var field = typeof(LighterConnector)
+            .GetField("_leverageCache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        field.Should().NotBeNull("LighterConnector must have a _leverageCache field for M8 leverage caching");
+        field!.FieldType.Should().Be(typeof(System.Collections.Concurrent.ConcurrentDictionary<int, int>),
+            "leverage cache must be ConcurrentDictionary<int, int> keyed by marketId");
+    }
 }
 
 /// <summary>

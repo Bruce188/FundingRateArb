@@ -31,6 +31,38 @@ public class ExecutionEngine : IExecutionEngine
         var longConnector  = _connectorFactory.GetConnector(opp.LongExchangeName);
         var shortConnector = _connectorFactory.GetConnector(opp.ShortExchangeName);
 
+        // Pre-flight margin check: verify both exchanges have sufficient balance
+        // before opening any legs. Prevents the costly open→fail→emergency-close cycle
+        // where one leg succeeds, the other fails on margin, and emergency close burns fees.
+        var requiredMargin = sizeUsdc;
+        try
+        {
+            var longBalanceTask  = longConnector.GetAvailableBalanceAsync(ct);
+            var shortBalanceTask = shortConnector.GetAvailableBalanceAsync(ct);
+            await Task.WhenAll(longBalanceTask, shortBalanceTask);
+
+            if (longBalanceTask.Result < requiredMargin)
+            {
+                _logger.LogWarning(
+                    "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
+                    opp.LongExchangeName, longBalanceTask.Result, requiredMargin, opp.AssetSymbol);
+                return (false, $"Insufficient margin on {opp.LongExchangeName}: available={longBalanceTask.Result:F4}, required={requiredMargin:F4}");
+            }
+
+            if (shortBalanceTask.Result < requiredMargin)
+            {
+                _logger.LogWarning(
+                    "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
+                    opp.ShortExchangeName, shortBalanceTask.Result, requiredMargin, opp.AssetSymbol);
+                return (false, $"Insufficient margin on {opp.ShortExchangeName}: available={shortBalanceTask.Result:F4}, required={requiredMargin:F4}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Pre-flight balance check failed for {Asset}, skipping trade", opp.AssetSymbol);
+            return (false, $"Pre-flight balance check failed: {ex.Message}");
+        }
+
         _logger.LogInformation(
             "Opening position: {Asset} Long={LongExchange} Short={ShortExchange} Size={Size} USDC",
             opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
@@ -44,7 +76,7 @@ public class ExecutionEngine : IExecutionEngine
             LongExchangeId       = opp.LongExchangeId,
             ShortExchangeId      = opp.ShortExchangeId,
             SizeUsdc             = sizeUsdc,
-            MarginUsdc           = sizeUsdc / config.DefaultLeverage,
+            MarginUsdc           = sizeUsdc,
             Leverage             = config.DefaultLeverage,
             EntrySpreadPerHour   = opp.SpreadPerHour,
             CurrentSpreadPerHour = opp.SpreadPerHour,
@@ -130,37 +162,15 @@ public class ExecutionEngine : IExecutionEngine
             longSuccess  ? "OK" : $"FAILED: {longError}",
             shortSuccess ? "OK" : $"FAILED: {shortError}");
 
-        // Emergency close any leg that succeeded, independently fault-tolerant
+        // Emergency close any leg that succeeded — run both legs in parallel (M2)
+        var emergencyTasks = new List<Task>();
         if (longSuccess)
-        {
-            try { await longConnector.ClosePositionAsync(opp.AssetSymbol, Side.Long, ct); }
-            catch (Exception ex)
-            {
-                _logger.LogCritical(ex, "EMERGENCY CLOSE FAILED for long leg: {Asset}", opp.AssetSymbol);
-                _uow.Alerts.Add(new Alert
-                {
-                    UserId   = config.UpdatedByUserId,
-                    Type     = AlertType.LegFailed,
-                    Severity = AlertSeverity.Critical,
-                    Message  = $"EMERGENCY CLOSE FAILED — long leg {opp.AssetSymbol} could not be closed. Manual intervention required.",
-                });
-            }
-        }
+            emergencyTasks.Add(TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, config.UpdatedByUserId, ct));
         if (shortSuccess)
-        {
-            try { await shortConnector.ClosePositionAsync(opp.AssetSymbol, Side.Short, ct); }
-            catch (Exception ex)
-            {
-                _logger.LogCritical(ex, "EMERGENCY CLOSE FAILED for short leg: {Asset}", opp.AssetSymbol);
-                _uow.Alerts.Add(new Alert
-                {
-                    UserId   = config.UpdatedByUserId,
-                    Type     = AlertType.LegFailed,
-                    Severity = AlertSeverity.Critical,
-                    Message  = $"EMERGENCY CLOSE FAILED — short leg {opp.AssetSymbol} could not be closed. Manual intervention required.",
-                });
-            }
-        }
+            emergencyTasks.Add(TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, config.UpdatedByUserId, ct));
+
+        if (emergencyTasks.Count > 0)
+            await Task.WhenAll(emergencyTasks);
 
         _uow.Alerts.Add(new Alert
         {
@@ -359,5 +369,56 @@ public class ExecutionEngine : IExecutionEngine
         });
 
         await _uow.SaveAsync(ct);
+    }
+
+    private async Task TryEmergencyCloseWithRetryAsync(
+        IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)
+    {
+        const int maxAttempts = 3;
+        int[] backoffMs = [2000, 4000, 8000];
+        var legName = side == Side.Long ? "long" : "short";
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            try
+            {
+                var closeResult = await connector.ClosePositionAsync(asset, side, ct);
+                if (closeResult.Success)
+                    return;
+
+                if (attempt < maxAttempts - 1
+                    && closeResult.Error?.Contains("No open position") == true)
+                {
+                    _logger.LogWarning(
+                        "Emergency close attempt {Attempt}/{Max} failed (position not settled yet), retrying in {Delay}ms: {Asset}",
+                        attempt + 1, maxAttempts, backoffMs[attempt], asset);
+                    await Task.Delay(backoffMs[attempt], ct);
+                    continue;
+                }
+
+                _logger.LogCritical("EMERGENCY CLOSE FAILED after {Attempts} attempts: {Asset} {Leg} Error={Error}",
+                    attempt + 1, asset, legName, closeResult.Error);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId   = userId,
+                    Type     = AlertType.LegFailed,
+                    Severity = AlertSeverity.Critical,
+                    Message  = $"EMERGENCY CLOSE FAILED — {legName} leg {asset}: {closeResult.Error}. Manual intervention required.",
+                });
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogCritical(ex, "EMERGENCY CLOSE THREW for {Leg} leg: {Asset}", legName, asset);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId   = userId,
+                    Type     = AlertType.LegFailed,
+                    Severity = AlertSeverity.Critical,
+                    Message  = $"EMERGENCY CLOSE FAILED — {legName} leg {asset} threw: {ex.Message}. Manual intervention required.",
+                });
+                return;
+            }
+        }
     }
 }

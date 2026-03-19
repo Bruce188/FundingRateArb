@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Aster.Net.Enums;
 using Aster.Net.Interfaces.Clients;
 using FundingRateArb.Application.Common.Exchanges;
@@ -19,6 +20,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly ILogger<AsterConnector> _logger;
     private readonly MarkPriceCacheHelper _markPriceCache = new();
+    private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
 
     public AsterConnector(
         IAsterRestClient restClient,
@@ -55,7 +57,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var tickers    = await tickersTask;
 
         if (!markPrices.Success)
-            throw new InvalidOperationException(markPrices.Error!.ToString());
+            throw new InvalidOperationException(markPrices.Error?.Message ?? "Unknown error");
 
         var volumeBySymbol = tickers.Success && tickers.Data is not null
             ? tickers.Data.ToDictionary(t => t.Symbol, t => t.QuoteVolume)
@@ -88,7 +90,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
         // Fetch mark price to compute quantity from the USDC notional size with leverage
         var markPrice = await GetMarkPriceAsync(asset, ct);
-        var quantity = sizeUsdc * leverage / markPrice;
+        var qtyPrecision = await GetQuantityPrecisionAsync(symbol, ct);
+        var quantity = Math.Round(sizeUsdc * leverage / markPrice, qtyPrecision, MidpointRounding.ToZero);
 
         // Set leverage before placing the order (best-effort; log failure but do not throw)
         var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
@@ -96,7 +99,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
         {
             _logger.LogWarning(
                 "Failed to set leverage for {Symbol} to {Leverage}x: {Error}. Order will proceed with current leverage.",
-                symbol, leverage, leverageResult.Error?.ToString() ?? "unknown");
+                symbol, leverage, leverageResult.Error?.Message ?? "unknown");
         }
 
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
@@ -127,7 +130,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto
             {
                 Success = false,
-                Error   = result.Error!.ToString(),
+                Error   = result.Error?.Message ?? "Unknown error",
             };
         }
 
@@ -153,14 +156,26 @@ public class AsterConnector : IExchangeConnector, IDisposable
         // To close a Long we sell; to close a Short we buy.
         var closeSide = side == Side.Long ? OrderSide.Sell : OrderSide.Buy;
 
-        var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
+        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
-        var result = await pipeline.ExecuteAsync(
+        // Fetch current position to get explicit quantity (Aster API requires it)
+        var posResult = await pipeline.ExecuteAsync(
+            async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+        if (!posResult.Success)
+            return new OrderResultDto { Success = false, Error = $"Failed to fetch position: {posResult.Error?.Message ?? "Unknown error"}" };
+        var pos = posResult.Data?.FirstOrDefault(p => p.Symbol == symbol && p.PositionAmount != 0);
+        if (pos == null)
+            return new OrderResultDto { Success = false, Error = $"No open position for {symbol}" };
+        var quantity = Math.Abs(pos.PositionAmount);
+
+        var orderPipeline = _pipelineProvider.GetPipeline("OrderExecution");
+
+        var result = await orderPipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 closeSide,
                 OrderType.Market,
-                quantity: null,
+                quantity: quantity,
                 price: null,
                 positionSide: null,
                 timeInForce: null,
@@ -181,7 +196,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto
             {
                 Success = false,
-                Error   = result.Error!.ToString(),
+                Error   = result.Error?.Message ?? "Unknown error",
             };
         }
 
@@ -206,7 +221,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t),
                 token);
             if (!result.Success)
-                throw new InvalidOperationException(result.Error!.ToString());
+                throw new InvalidOperationException(result.Error?.Message ?? "Unknown error");
 
             var cache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             foreach (var mp in result.Data!)
@@ -230,8 +245,35 @@ public class AsterConnector : IExchangeConnector, IDisposable
             ct);
 
         if (!result.Success)
-            throw new InvalidOperationException(result.Error!.ToString());
+            throw new InvalidOperationException(result.Error?.Message ?? "Unknown error");
 
-        return result.Data!.Sum(b => b.AvailableBalance);
+        return result.Data!
+            .Where(b => b.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase))
+            .Sum(b => b.AvailableBalance);
+    }
+
+    private async Task<int> GetQuantityPrecisionAsync(string symbol, CancellationToken ct)
+    {
+        if (_quantityPrecisionCache.TryGetValue(symbol, out var cached))
+            return cached;
+
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
+
+            if (result.Success && result.Data?.Symbols != null)
+            {
+                foreach (var s in result.Data.Symbols)
+                    _quantityPrecisionCache[s.Name] = s.QuantityPrecision;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Failed to fetch exchange info for precision lookup: {Error}", ex.Message);
+        }
+
+        return _quantityPrecisionCache.GetValueOrDefault(symbol, 3);
     }
 }

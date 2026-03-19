@@ -298,8 +298,18 @@ public sealed class LighterSigner : IDisposable
         if (File.Exists(appSoPath))
             return appDir;
 
-        // Fallback: common locations for the lighter Python package signer.
-        // WARNING: These are user-writable paths. In production, copy the .so to the app directory.
+        // In production, only load from the application directory to mitigate supply-chain risk
+        var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        if (!string.Equals(env, "Development", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning(
+                "Lighter signer native library not found in application directory '{Path}'. " +
+                "User-writable fallback paths are disabled in non-Development environments.",
+                appDir);
+            return null;
+        }
+
+        // Fallback: common locations for the lighter Python package signer (Development only).
         var candidates = new[]
         {
             // pip install --user

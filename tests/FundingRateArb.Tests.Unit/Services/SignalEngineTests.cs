@@ -134,7 +134,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         var expectedSpread = 0.0010m - 0.0001m;                       // 0.0009
-        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;         // 0.0000375
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 72m;
         var expectedNet = expectedSpread - expectedFeePerHour;         // 0.0008625
 
         // Act
@@ -261,7 +261,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 24m;  // 0.000025
+        var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 72m;  // 0.000025
         var expectedNet       = expectedSpread - expectedFeePerHour;   // 0.000875
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
@@ -290,7 +290,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 72m;
         var expectedNet       = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
@@ -320,8 +320,35 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         var expectedSpread    = 0.0009m;
-        var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 24m;
+        var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 72m;
         var expectedNet       = expectedSpread - expectedFeePerHour;
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
+    }
+
+    // ── M1: Fee amortization uses MaxHoldTimeHours ──────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_FeeAmortization_UsesMaxHoldTimeHours_NotHardcoded24()
+    {
+        // MaxHoldTimeHours=48 → fees amortized over 48 hours instead of default 72
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MaxHoldTimeHours = 48 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread     = 0.0009m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 48m;
+        var expectedNet        = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 

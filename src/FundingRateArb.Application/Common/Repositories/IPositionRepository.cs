@@ -1,4 +1,5 @@
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Application.Common.Repositories;
 
@@ -14,6 +15,7 @@ public interface IPositionRepository
 
     Task<List<ArbitragePosition>> GetByUserAsync(string userId, int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500);
+    Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status);
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }

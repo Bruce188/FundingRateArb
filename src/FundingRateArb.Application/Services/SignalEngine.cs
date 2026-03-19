@@ -46,7 +46,7 @@ public class SignalEngine : ISignalEngine
                                ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
                 var shortFee = shortR.Exchange.TakerFeeRate * 2
                                ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
-                var feePerHour = (longFee + shortFee) / 24m;
+                var feePerHour = (longFee + shortFee) / config.MaxHoldTimeHours;
                 var net = diff - feePerHour;
 
                 if (net >= config.OpenThreshold)
