@@ -56,67 +56,74 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             pos.CurrentSpreadPerHour = spread;
             _uow.Positions.Update(pos);
 
-            // Compute price move for stop-loss check
-            var longConnector = _connectorFactory.GetConnector(longExchangeName);
-            var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
-
-            // H9: Fetch mark prices in parallel instead of sequentially
-            var longTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
-            var shortTask = shortConnector.GetMarkPriceAsync(assetSymbol, ct);
-            await Task.WhenAll(longTask, shortTask);
-            var currentLongMark = await longTask;
-            var currentShortMark = await shortTask;
-
-            var avgEntryPrice   = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
-            var avgCurrentPrice = (currentLongMark + currentShortMark) / 2m;
-            var priceMove = avgEntryPrice > 0
-                ? Math.Abs(avgCurrentPrice - avgEntryPrice) / avgEntryPrice
-                : 0m;
-
-            var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
-
-            // Determine close reason (priority: stop-loss > max hold > spread collapsed)
-            CloseReason? reason = null;
-
-            if (priceMove >= config.StopLossPct)
-                reason = CloseReason.StopLoss;
-            else if (hoursOpen >= config.MaxHoldTimeHours)
-                reason = CloseReason.MaxHoldTimeReached;
-            else if (spread < config.CloseThreshold)
-                reason = CloseReason.SpreadCollapsed;
-
-            if (reason.HasValue)
+            try
             {
-                _logger.LogWarning(
-                    "Auto-closing position #{PositionId}: {Asset} " +
-                    "reason={CloseReason}, spread={Spread}/hour, " +
-                    "hoursOpen={HoursOpen:F1}, priceMove={PriceMove:P2}",
-                    pos.Id, assetSymbol, reason.Value,
-                    spread, hoursOpen, priceMove);
+                // Compute price move for stop-loss check
+                var longConnector = _connectorFactory.GetConnector(longExchangeName);
+                var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
-                toClose.Add((pos, reason.Value));
-                continue; // skip alert check — position will be closed
-            }
+                // H9: Fetch mark prices in parallel instead of sequentially
+                var longTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
+                var shortTask = shortConnector.GetMarkPriceAsync(assetSymbol, ct);
+                await Task.WhenAll(longTask, shortTask);
+                var currentLongMark = await longTask;
+                var currentShortMark = await shortTask;
 
-            // Alert if spread below alert threshold (but above close threshold)
-            if (spread < config.AlertThreshold)
-            {
-                var recentAlert = await _uow.Alerts.GetRecentAsync(
-                    pos.UserId, pos.Id, AlertType.SpreadWarning, TimeSpan.FromHours(1));
+                var avgEntryPrice   = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+                var avgCurrentPrice = (currentLongMark + currentShortMark) / 2m;
+                var priceMove = avgEntryPrice > 0
+                    ? Math.Abs(avgCurrentPrice - avgEntryPrice) / avgEntryPrice
+                    : 0m;
 
-                if (recentAlert is null)
+                var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
+
+                // Determine close reason (priority: stop-loss > max hold > spread collapsed)
+                CloseReason? reason = null;
+
+                if (priceMove >= config.StopLossPct)
+                    reason = CloseReason.StopLoss;
+                else if (hoursOpen >= config.MaxHoldTimeHours)
+                    reason = CloseReason.MaxHoldTimeReached;
+                else if (spread < config.CloseThreshold)
+                    reason = CloseReason.SpreadCollapsed;
+
+                if (reason.HasValue)
                 {
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId              = pos.UserId,
-                        ArbitragePositionId = pos.Id,
-                        Type                = AlertType.SpreadWarning,
-                        Severity            = AlertSeverity.Warning,
-                        Message             = $"Spread warning: {assetSymbol} " +
-                                              $"{longExchangeName}/{shortExchangeName} " +
-                                              $"spread={spread:F6}/hour (threshold={config.AlertThreshold:F6})",
-                    });
+                    _logger.LogWarning(
+                        "Auto-closing position #{PositionId}: {Asset} " +
+                        "reason={CloseReason}, spread={Spread}/hour, " +
+                        "hoursOpen={HoursOpen:F1}, priceMove={PriceMove:P2}",
+                        pos.Id, assetSymbol, reason.Value,
+                        spread, hoursOpen, priceMove);
+
+                    toClose.Add((pos, reason.Value));
+                    continue; // skip alert check — position will be closed
                 }
+
+                // Alert if spread below alert threshold (but above close threshold)
+                if (spread < config.AlertThreshold)
+                {
+                    var recentAlert = await _uow.Alerts.GetRecentAsync(
+                        pos.UserId, pos.Id, AlertType.SpreadWarning, TimeSpan.FromHours(1));
+
+                    if (recentAlert is null)
+                    {
+                        _uow.Alerts.Add(new Alert
+                        {
+                            UserId              = pos.UserId,
+                            ArbitragePositionId = pos.Id,
+                            Type                = AlertType.SpreadWarning,
+                            Severity            = AlertSeverity.Warning,
+                            Message             = $"Spread warning: {assetSymbol} " +
+                                                  $"{longExchangeName}/{shortExchangeName} " +
+                                                  $"spread={spread:F6}/hour (threshold={config.AlertThreshold:F6})",
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to check health for position #{Id}: {Message}", pos.Id, ex.Message);
             }
         }
 

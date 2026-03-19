@@ -9,6 +9,7 @@ using Polly;
 using Polly.Registry;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using HyperLiquid.Net.Enums;
 
 namespace FundingRateArb.Tests.Unit.Connectors;
 
@@ -508,11 +509,16 @@ public class HyperliquidConnectorTests
         };
     }
 
-    private void SetupExchangeInfoSuccess(HyperLiquidFuturesTicker[] tickers)
+    private void SetupExchangeInfoSuccess(HyperLiquidFuturesTicker[] tickers,
+        HyperLiquidFuturesSymbol[]? symbols = null)
     {
         var data = new HyperLiquidFuturesExchangeInfoAndTickers
         {
             Tickers = tickers,
+            ExchangeInfo = new HyperLiquidFuturesExchangeInfo
+            {
+                Symbols = symbols ?? Array.Empty<HyperLiquidFuturesSymbol>(),
+            },
         };
         var webResult = new WebCallResult<HyperLiquidFuturesExchangeInfoAndTickers>(
             System.Net.HttpStatusCode.OK,
@@ -555,5 +561,120 @@ public class HyperliquidConnectorTests
             ResultDataSource.Server,
             orderResult,
             null);
+    }
+
+    // ── B-W7: szDecimals per-asset rounding ──────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_UsesSymbolSpecificSzDecimals_WhenAvailable()
+    {
+        // Arrange — symbol with QuantityDecimals=3, markPrice=150
+        // Expected quantity = 100 * 5 / 150 = 3.333... → rounded to 3 decimals → 3.333
+        const decimal markPrice = 150m;
+        var tickers = new[]
+        {
+            CreateTicker("SOL", 0.0001m, markPrice, 1m, markPrice),
+        };
+        var symbols = new[]
+        {
+            new HyperLiquidFuturesSymbol { Name = "SOL", QuantityDecimals = 3 },
+        };
+        SetupExchangeInfoSuccess(tickers, symbols);
+
+        decimal? capturedQuantity = null;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<OrderSide>(),
+                It.IsAny<OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<TpSlType?>(),
+                It.IsAny<TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, OrderSide, OrderType, decimal, decimal, TimeInForce?,
+                      bool?, string?, decimal?, TpSlType?, TpSlGrouping?, string?, DateTime?, CancellationToken>(
+                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
+                {
+                    capturedQuantity = qty;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
+            {
+                OrderId = 1L,
+                FilledQuantity = 3.333m,
+                AveragePrice = markPrice,
+                Status = OrderStatus.Filled,
+            }));
+
+        // Act
+        var result = await _sut.PlaceMarketOrderAsync("SOL", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert — quantity must be rounded to 3 decimal places
+        result.Success.Should().BeTrue();
+        capturedQuantity.Should().NotBeNull();
+
+        // 100 * 5 / 150 = 3.33333... → floor to 3 decimals → 3.333
+        capturedQuantity.Should().Be(3.333m,
+            "quantity must be rounded DOWN (ToZero) to QuantityDecimals=3 for SOL");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_FallsBackTo6Decimals_WhenSymbolNotInCache()
+    {
+        // Arrange — no symbols in ExchangeInfo, falls back to 6 decimals
+        // markPrice=3000, quantity = 100*5/3000 = 0.166666... → floor to 6 → 0.166666
+        const decimal markPrice = 3000m;
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, markPrice, 1m, markPrice),
+        };
+        SetupExchangeInfoSuccess(tickers);  // no symbols passed → empty array
+
+        decimal? capturedQuantity = null;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<OrderSide>(),
+                It.IsAny<OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<TpSlType?>(),
+                It.IsAny<TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, OrderSide, OrderType, decimal, decimal, TimeInForce?,
+                      bool?, string?, decimal?, TpSlType?, TpSlGrouping?, string?, DateTime?, CancellationToken>(
+                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
+                {
+                    capturedQuantity = qty;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
+            {
+                OrderId = 2L,
+                FilledQuantity = 0.166666m,
+                AveragePrice = markPrice,
+                Status = OrderStatus.Filled,
+            }));
+
+        // Act
+        var result = await _sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert — falls back to 6 decimal places
+        result.Success.Should().BeTrue();
+        capturedQuantity.Should().NotBeNull();
+        // 100 * 5 / 3000 = 0.16666666... → floor to 6 → 0.166666
+        capturedQuantity.Should().Be(0.166666m,
+            "falls back to 6 decimals when symbol not found in szDecimals cache");
     }
 }

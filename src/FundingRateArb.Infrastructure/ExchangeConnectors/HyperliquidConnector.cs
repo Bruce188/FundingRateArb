@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
@@ -12,6 +13,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly MarkPriceCacheHelper _markPriceCache = new();
+    private readonly ConcurrentDictionary<string, int> _szDecimalsCache = new(StringComparer.OrdinalIgnoreCase);
 
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
@@ -65,7 +67,8 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             ct);
 
         var sdkSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
-        var quantity = Math.Round(sizeUsdc * leverage / markPrice, 6, MidpointRounding.ToZero);
+        var szDecimals = _szDecimalsCache.TryGetValue(asset, out var cached) ? cached : 6;
+        var quantity = Math.Round(sizeUsdc * leverage / markPrice, szDecimals, MidpointRounding.ToZero);
 
         var orderResult = await pipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
@@ -171,6 +174,12 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 token);
             if (!result.Success)
                 throw new InvalidOperationException(result.Error!.ToString());
+
+            if (result.Data.ExchangeInfo?.Symbols != null)
+            {
+                foreach (var s in result.Data.ExchangeInfo.Symbols)
+                    _szDecimalsCache[s.Name] = s.QuantityDecimals;
+            }
 
             var cache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             foreach (var t in result.Data.Tickers)

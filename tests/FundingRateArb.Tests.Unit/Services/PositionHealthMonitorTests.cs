@@ -326,4 +326,63 @@ public class PositionHealthMonitorTests
             e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    // ── B2-R: Mark price fetch failure is isolated — other positions still processed ──
+
+    [Fact]
+    public async Task CheckAndAct_WhenMarkPriceFetchFails_ContinuesToProcessRemainingPositions()
+    {
+        // Two positions: pos1's connectors throw, pos2's connectors succeed
+        var pos1 = MakeOpenPosition();
+        var pos2 = new ArbitragePosition
+        {
+            Id = 2,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos1, pos2]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread for both
+
+        // First call throws (pos1), second call succeeds (pos2)
+        var callCount = 0;
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    throw new HttpRequestException("Simulated timeout");
+                return 3000m;
+            });
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3001m);
+
+        // Act — must not throw
+        var act = async () => await _sut.CheckAndActAsync();
+        await act.Should().NotThrowAsync();
+
+        // pos1's spread is updated (happens before the try/catch)
+        pos1.CurrentSpreadPerHour.Should().Be(0.0005m); // shortRate - longRate = 0.0006 - 0.0001
+        // pos2 was fully processed — no close triggered (spread is healthy)
+        _mockExecEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        // SaveAsync still called once
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

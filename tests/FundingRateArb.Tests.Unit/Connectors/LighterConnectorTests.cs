@@ -599,6 +599,44 @@ public class LighterConnectorTests
         handler.CallCount.Should().BeLessThanOrEqualTo(2,
             "concurrent callers on a cold cache should share the in-flight fetch task");
     }
+
+    // ── B-W6: GetFundingRatesAsync EnsureSuccessStatusCode ────────────────────
+
+    [Fact]
+    public async Task GetFundingRates_WhenRatesEndpointReturns500_ThrowsHttpRequestException()
+    {
+        // Arrange — rates endpoint returns 500; should throw
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", "Internal Server Error", HttpStatusCode.InternalServerError);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+        });
+
+        // Act & Assert
+        var act = () => sut.GetFundingRatesAsync();
+
+        await act.Should().ThrowAsync<HttpRequestException>(
+            "a 500 from the rates endpoint must propagate as an exception, not silently return zero rates");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_WhenStatsEndpointReturns500_StillReturnsRatesWithZeroVolume()
+    {
+        // Arrange — stats endpoint returns 500; rates must still succeed with zero volume
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", FundingRatesJson);
+            h.AddRoute("exchangeStats", "Internal Server Error", HttpStatusCode.InternalServerError);
+        });
+
+        // Act
+        var rates = await sut.GetFundingRatesAsync();
+
+        // Assert — rates are still returned (stats failure is non-critical)
+        rates.Should().HaveCount(2, "rates must be returned even when the stats endpoint fails");
+        rates.Should().AllSatisfy(r => r.Volume24hUsd.Should().Be(0m,
+            "volume must be zero when stats endpoint fails"));
+    }
 }
 
 /// <summary>
@@ -638,7 +676,8 @@ public class ExchangeConnectorFactoryTests
             var mockRestClient = new Mock<Aster.Net.Interfaces.Clients.IAsterRestClient>();
             var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
             mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
-            return new AsterConnector(mockRestClient.Object, mockProvider.Object);
+            var logger = Mock.Of<ILogger<AsterConnector>>();
+            return new AsterConnector(mockRestClient.Object, mockProvider.Object, logger);
         });
         services.AddSingleton<LighterConnector>(_ =>
         {
