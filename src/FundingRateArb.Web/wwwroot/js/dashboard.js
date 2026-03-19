@@ -110,13 +110,21 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
         return;
     }
 
+    const notionalPerLeg = parseFloat(tbody.dataset.notionalPerLeg) || 0;
+    const volumeFraction = parseFloat(tbody.dataset.volumeFraction) || 0;
+
     opportunities.forEach(opp => {
         const aprClass = opp.annualizedYield > 0.50
             ? "text-success fw-bold"
             : opp.annualizedYield >= 0.20
                 ? "text-warning fw-bold"
                 : "";
+
+        const constrained = volumeFraction > 0
+            && Math.min(opp.longVolume24h, opp.shortVolume24h) * volumeFraction < notionalPerLeg;
+
         const row = document.createElement("tr");
+        if (constrained) row.className = "table-warning";
 
         const tdAsset = document.createElement("td");
         const strong = document.createElement("strong");
@@ -143,7 +151,17 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
 
         const tdApr = document.createElement("td");
         tdApr.className = aprClass;
-        tdApr.textContent = (opp.annualizedYield * 100).toFixed(1) + "%";
+        const aprText = (opp.annualizedYield * 100).toFixed(1) + "%";
+        if (constrained) {
+            tdApr.textContent = aprText + " ";
+            const warn = document.createElement("span");
+            warn.className = "ms-1";
+            warn.title = "Position size limited by liquidity";
+            warn.textContent = "\u26A0";
+            tdApr.appendChild(warn);
+        } else {
+            tdApr.textContent = aprText;
+        }
         row.appendChild(tdApr);
 
         tbody.appendChild(row);

@@ -104,7 +104,9 @@ try
     // --- Cookie security ---
     builder.Services.ConfigureApplicationCookie(options =>
     {
-        options.Cookie.SecurePolicy = Microsoft.AspNetCore.Http.CookieSecurePolicy.Always;
+        options.Cookie.SecurePolicy = isDevelopment
+            ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
+            : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always;
         options.Cookie.SameSite     = Microsoft.AspNetCore.Http.SameSiteMode.Strict;
         options.Cookie.HttpOnly     = true;
         options.ExpireTimeSpan      = TimeSpan.FromHours(8);
@@ -230,8 +232,8 @@ try
         options.AddFixedWindowLimiter("signalr", opt =>
         {
             opt.Window = TimeSpan.FromSeconds(10);
-            opt.PermitLimit = 5;
-            opt.QueueLimit = 2;
+            opt.PermitLimit = 20;
+            opt.QueueLimit = 5;
         });
     });
 
@@ -253,6 +255,7 @@ try
     {
         app.UseExceptionHandler("/Home/Error");
         app.UseHsts();
+        app.UseHttpsRedirection();
     }
 
     // --- Security response headers ---
@@ -264,7 +267,7 @@ try
         ctx.Response.Headers["Permissions-Policy"]      = "geolocation=(), microphone=(), camera=()";
         ctx.Response.Headers["Content-Security-Policy"] =
             "default-src 'self'; " +
-            "script-src 'self' https://cdnjs.cloudflare.com; " +
+            "script-src 'self'; " +
             "style-src 'self' 'unsafe-inline'; " +
             "connect-src 'self' wss: ws:; " +
             "img-src 'self' data:; " +
@@ -273,7 +276,6 @@ try
     });
 
     app.UseSerilogRequestLogging();  // Structured HTTP request logs
-    app.UseHttpsRedirection();
     app.UseStaticFiles();
     app.UseRouting();
     app.UseAuthentication();
