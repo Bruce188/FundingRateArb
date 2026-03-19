@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels;
 
 namespace FundingRateArb.Web.Controllers;
@@ -12,11 +14,19 @@ public class DashboardController : Controller
 {
     private readonly IUnitOfWork _uow;
     private readonly ILogger<DashboardController> _logger;
+    private readonly ISignalEngine _signalEngine;
+    private readonly IBotControl _botControl;
 
-    public DashboardController(IUnitOfWork uow, ILogger<DashboardController> logger)
+    public DashboardController(
+        IUnitOfWork uow,
+        ILogger<DashboardController> logger,
+        ISignalEngine signalEngine,
+        IBotControl botControl)
     {
         _uow = uow;
         _logger = logger;
+        _signalEngine = signalEngine;
+        _botControl = botControl;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct = default)
@@ -29,8 +39,8 @@ public class DashboardController : Controller
         var openPositions = User.IsInRole("Admin")
             ? allOpenPositions
             : allOpenPositions.Where(p => p.UserId == userId).ToList();
-        var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
         var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId, unreadOnly: true);
+        var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
 
         var positionSummaries = openPositions.Select(p => new PositionSummaryDto
         {
@@ -49,21 +59,10 @@ public class DashboardController : Controller
             ClosedAt = p.ClosedAt
         }).ToList();
 
-        var rateDtos = latestRates.Select(r => new FundingRateDto
-        {
-            ExchangeName = r.Exchange?.Name ?? string.Empty,
-            Symbol = r.Asset?.Symbol ?? string.Empty,
-            RatePerHour = r.RatePerHour,
-            RawRate = r.RawRate,
-            MarkPrice = r.MarkPrice,
-            IndexPrice = r.IndexPrice,
-            Volume24hUsd = r.Volume24hUsd
-        }).ToList();
-
         var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
         var bestSpread = positionSummaries.Count > 0
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
-            : (rateDtos.Count > 0 ? rateDtos.Max(r => r.RatePerHour) : 0m);
+            : (opportunities.Count > 0 ? opportunities.Max(o => o.SpreadPerHour) : 0m);
 
         var vm = new DashboardViewModel
         {
@@ -72,10 +71,27 @@ public class DashboardController : Controller
             TotalPnl = totalPnl,
             BestSpread = bestSpread,
             TotalUnreadAlerts = unreadAlerts.Count,
-            LatestRates = rateDtos,
-            OpenPositions = positionSummaries
+            OpenPositions = positionSummaries,
+            Opportunities = opportunities,
         };
 
+        if (User.IsInRole("Admin") && botConfig is not null)
+        {
+            vm.NotionalPerLeg = botConfig.TotalCapitalUsdc * botConfig.MaxCapitalPerPosition * botConfig.DefaultLeverage;
+            vm.VolumeFraction = botConfig.VolumeFraction;
+        }
+
         return View(vm);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Authorize(Roles = "Admin")]
+    public IActionResult RetryNow()
+    {
+        _botControl.ClearCooldowns();
+        _botControl.TriggerImmediateCycle();
+        TempData["Success"] = "Cooldowns cleared — next cycle triggered.";
+        return RedirectToAction(nameof(Index));
     }
 }

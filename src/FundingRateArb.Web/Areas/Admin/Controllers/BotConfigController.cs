@@ -30,7 +30,9 @@ public class BotConfigController : Controller
             StopLossPct = config.StopLossPct,
             MaxHoldTimeHours = config.MaxHoldTimeHours,
             VolumeFraction = config.VolumeFraction,
-            BreakevenHoursMax = config.BreakevenHoursMax
+            BreakevenHoursMax = config.BreakevenHoursMax,
+            AllocationStrategy = config.AllocationStrategy,
+            AllocationTopN = config.AllocationTopN
         };
 
         return View(model);
@@ -56,6 +58,8 @@ public class BotConfigController : Controller
         config.MaxHoldTimeHours = model.MaxHoldTimeHours!.Value;
         config.VolumeFraction = model.VolumeFraction!.Value;
         config.BreakevenHoursMax = model.BreakevenHoursMax!.Value;
+        config.AllocationStrategy = model.AllocationStrategy!.Value;
+        config.AllocationTopN = model.AllocationTopN!.Value;
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
 

@@ -39,6 +39,10 @@ public class SignalEngine : ISignalEngine
                 var b = assetRates[j];
 
                 var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
+
+                // TD1: Skip opportunities where either leg has zero volume
+                if (longR.Volume24hUsd <= 0 || shortR.Volume24hUsd <= 0) continue;
+
                 var diff = shortR.RatePerHour - longR.RatePerHour;
 
                 // Use DB-stored TakerFeeRate when available; fall back to built-in constants.
@@ -73,6 +77,6 @@ public class SignalEngine : ISignalEngine
             }
         }
 
-        return [.. opportunities.OrderByDescending(o => o.NetYieldPerHour)];
+        return [.. opportunities.OrderByDescending(o => o.NetYieldPerHour).Take(26)];
     }
 }

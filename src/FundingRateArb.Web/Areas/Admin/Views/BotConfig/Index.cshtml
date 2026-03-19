@@ -1,4 +1,5 @@
 @model BotConfigViewModel
+@using FundingRateArb.Domain.Enums
 @{
     ViewData["Title"] = "Bot Configuration";
 }
@@ -83,6 +84,28 @@
                     <input asp-for="MaxCapitalPerPosition" class="form-control" type="number" step="0.01" />
                     <div class="form-text">Fraction of total capital (0.01 - 1.0)</div>
                     <span asp-validation-for="MaxCapitalPerPosition" class="text-danger"></span>
+                </div>
+            </div>
+
+            <h5 class="card-title mb-3">Capital Allocation</h5>
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <label asp-for="AllocationStrategy" class="form-label"></label>
+                    <select asp-for="AllocationStrategy" class="form-select"
+                            asp-items="Html.GetEnumSelectList<AllocationStrategy>()"></select>
+                    <div class="form-text">
+                        Concentrated = all capital on best APR.
+                        Spread modes distribute across top N opportunities.
+                    </div>
+                    <span asp-validation-for="AllocationStrategy" class="text-danger"></span>
+                </div>
+                <div class="col-md-6">
+                    <label asp-for="AllocationTopN" class="form-label"></label>
+                    <input asp-for="AllocationTopN" class="form-control" type="number" min="1" max="20" />
+                    <div class="form-text">
+                        Number of opportunities to spread capital across (ignored for Concentrated).
+                    </div>
+                    <span asp-validation-for="AllocationTopN" class="text-danger"></span>
                 </div>
             </div>
 

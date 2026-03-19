@@ -39,6 +39,11 @@ public class BotOrchestratorTests
         MaxConcurrentPositions = 1,
         DefaultLeverage = 5,
         UpdatedByUserId = "admin-user-id",
+        AllocationStrategy = Domain.Enums.AllocationStrategy.Concentrated,
+        AllocationTopN = 3,
+        TotalCapitalUsdc = 1000m,
+        MaxCapitalPerPosition = 0.5m,
+        VolumeFraction = 0.001m,
     };
 
     private static readonly BotConfiguration DisabledConfig = new()
@@ -151,6 +156,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_OpensAtMostOnePositionPerCycle()
     {
+        // Concentrated strategy takes only 1 candidate
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -158,14 +164,14 @@ public class BotOrchestratorTests
         var opp2 = new ArbitrageOpportunityDto { AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.0005m };
 
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp1, opp2]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(It.IsAny<ArbitrageOpportunityDto>()))
-            .ReturnsAsync(100m);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Only 1 position opened even with 2 opportunities
+        // Only 1 position opened even with 2 opportunities (Concentrated takes 1)
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once);
@@ -211,7 +217,8 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.001m };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(0m);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([0m]);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -309,8 +316,9 @@ public class BotOrchestratorTests
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         var notificationSentToAll = false;
@@ -344,9 +352,11 @@ public class BotOrchestratorTests
 
         var opportunities = new List<ArbitrageOpportunityDto>
         {
-            new() { AssetId = 1, AssetSymbol = "ETH", NetYieldPerHour = 0.001m },
+            new() { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.001m },
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(opportunities);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([0m]);
 
         var opportunityUpdateSent = false;
         _mockGroupClient
@@ -454,13 +464,14 @@ public class BotOrchestratorTests
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange error"));
 
         // Cycle 1: fails
         await _sut.RunCycleAsync(CancellationToken.None);
-        // Cycle 2: same opportunity should be skipped due to cooldown
+        // Cycle 2: same opportunity should be skipped due to cooldown (no candidates → no batch call)
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockExecEngine.Verify(
@@ -483,8 +494,9 @@ public class BotOrchestratorTests
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange error"));
 
         // Cycle 1: fails — registers cooldown
@@ -518,10 +530,11 @@ public class BotOrchestratorTests
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
 
         // First call fails, second succeeds
-        _mockExecEngine.SetupSequence(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+        _mockExecEngine.SetupSequence(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange error"))
             .ReturnsAsync((true, (string?)null));
 
@@ -554,8 +567,9 @@ public class BotOrchestratorTests
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
-        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange error"));
 
         var key = "1_1_2";

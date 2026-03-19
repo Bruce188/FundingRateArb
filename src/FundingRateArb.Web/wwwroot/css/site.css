@@ -93,6 +93,7 @@ body {
 }
 .table td { vertical-align: middle; }
 
+
 /* ── Kill-switch toggle ───────────────────────────────── */
 .kill-switch-panel {
     border: 2px solid #dc3545;

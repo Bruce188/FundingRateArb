@@ -2,8 +2,10 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,11 +14,12 @@ using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.BackgroundServices;
 
-public class BotOrchestrator : BackgroundService
+public class BotOrchestrator : BackgroundService, IBotControl
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
     private bool _disposed;
+    private volatile bool _immediateRunRequested;
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
@@ -52,8 +55,16 @@ public class BotOrchestrator : BackgroundService
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
 
-        while (await timer.WaitForNextTickAsync(ct))
+        while (!ct.IsCancellationRequested)
         {
+            if (_immediateRunRequested)
+            {
+                _immediateRunRequested = false;
+            }
+            else
+            {
+                if (!await timer.WaitForNextTickAsync(ct)) break;
+            }
             // Belt-and-suspenders: skip if previous cycle still running
             if (!await _cycleLock.WaitAsync(0, ct))
             {
@@ -76,6 +87,10 @@ public class BotOrchestrator : BackgroundService
             }
         }
     }
+
+    // IBotControl implementation
+    public void ClearCooldowns() => _failedOpCooldowns.Clear();
+    public void TriggerImmediateCycle() => _immediateRunRequested = true;
 
     /// <summary>Exposes cooldown state for unit testing.</summary>
     internal ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> FailedOpCooldowns => _failedOpCooldowns;
@@ -138,27 +153,41 @@ public class BotOrchestrator : BackgroundService
             return;
         }
 
-        // Step 6: Find new opportunities — skip pairs already open
+        // Step 6: Strategy-aware dispatch — filter candidates, batch-size, iterate
         var openKeys = openPositions
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
 
-        foreach (var opp in opportunities)
-        {
-            var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
-            if (openKeys.Contains(key)) continue;
-
-            // C3: Skip if this opportunity is on cooldown from a recent failure
-            if (_failedOpCooldowns.TryGetValue(key, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+        var candidates = opportunities
+            .Where(opp =>
             {
-                _logger.LogDebug(
-                    "Skipping {Asset} {Long}/{Short} — on cooldown until {Until} (failures={Failures})",
-                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, cd.CooldownUntil, cd.Failures);
-                continue;
-            }
+                var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                if (openKeys.Contains(key)) return false;
+                if (_failedOpCooldowns.TryGetValue(key, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+                {
+                    _logger.LogDebug(
+                        "Skipping {Asset} {Long}/{Short} — on cooldown until {Until} (failures={Failures})",
+                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, cd.CooldownUntil, cd.Failures);
+                    return false;
+                }
+                return true;
+            })
+            .Take(config.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : config.AllocationTopN)
+            .ToList();
 
-            var size = await positionSizer.CalculateOptimalSizeAsync(opp);
+        if (candidates.Count == 0) return;
+
+        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, config.AllocationStrategy);
+        var slotsAvailable = config.MaxConcurrentPositions - openPositions.Count;
+
+        for (int idx = 0; idx < candidates.Count; idx++)
+        {
+            var opp = candidates[idx];
+            var size = sizes[idx];
             if (size <= 0) continue;
+            if (slotsAvailable <= 0) break;
+
+            var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
 
             _logger.LogInformation(
                 "Opening position: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
@@ -168,22 +197,26 @@ public class BotOrchestrator : BackgroundService
 
             if (success)
             {
-                // C3: Clear cooldown on success
+                slotsAvailable--;
                 _failedOpCooldowns.TryRemove(key, out _);
 
-                // H7: Route to owning user + admins only (Clients.All would reveal trading to all users)
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
-                // H3: Re-fetch after opening to include new position
                 openPositions = await uow.Positions.GetOpenAsync();
                 await PushPositionUpdatesAsync(openPositions);
                 await PushNewAlertsAsync(uow);
             }
+            else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
+                                       || error.Contains("balance", StringComparison.OrdinalIgnoreCase)))
+            {
+                _logger.LogWarning("Balance exhausted: {Error}", error);
+                break;
+            }
             else
             {
-                // C3: Register exponential cooldown
+                // Register exponential cooldown and continue to next opportunity
                 var failures = _failedOpCooldowns.GetValueOrDefault(key).Failures + 1;
                 var delay = TimeSpan.FromTicks(
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
@@ -192,13 +225,9 @@ public class BotOrchestrator : BackgroundService
                 _logger.LogWarning(
                     "Opportunity {Asset} {Long}/{Short} failed ({Failures} consecutive). Cooldown until {Until}",
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, failures, DateTime.UtcNow + delay);
-
                 _logger.LogError("Failed to open position: {Error}", error);
-                // Push alerts for emergency close failures
                 await PushNewAlertsAsync(uow);
             }
-
-            break; // One position per cycle for safety
         }
     }
 

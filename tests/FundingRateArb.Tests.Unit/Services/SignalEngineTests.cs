@@ -329,6 +329,67 @@ public class SignalEngineTests
         result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
     }
 
+    // ── TD1: Zero-volume filter ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_ExcludesZeroVolumeLeg()
+    {
+        // Long leg has 0 volume → should be excluded
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 0m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 1_000_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_ExcludesZeroVolumeOnShortLeg()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 1_000_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 0m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    // ── TD3: Limit to 20 ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_ReturnsAtMost26()
+    {
+        // Create 11 exchanges × 1 asset = C(11,2) = 55 pairs, all above threshold
+        var rates = Enumerable.Range(1, 11).Select(i =>
+            MakeRate(i, $"Exchange{i}", 1, "ETH", 0.0001m * i, volume: 1_000_000m))
+            .ToList();
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0000001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCountLessOrEqualTo(26);
+    }
+
     // ── M1: Fee amortization uses MaxHoldTimeHours ──────────────────────────────
 
     [Fact]

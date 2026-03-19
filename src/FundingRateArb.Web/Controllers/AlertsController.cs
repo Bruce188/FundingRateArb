@@ -49,6 +49,16 @@ public class AlertsController : Controller
     }
 
     [HttpPost, ValidateAntiForgeryToken]
+    public async Task<IActionResult> MarkAllRead()
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await _uow.Alerts.MarkAllReadAsync(userId);
+        await _uow.SaveAsync();
+        TempData["Success"] = "All alerts marked as read.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> MarkAsRead(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);

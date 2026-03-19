@@ -13,6 +13,13 @@
             <span class="badge bg-danger ms-2">@Model.UnreadCount unread</span>
         }
     </h2>
+    @if (Model.UnreadCount > 0)
+    {
+        <form asp-action="MarkAllRead" method="post" class="d-inline ms-2">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-secondary btn-sm">Mark All as Read</button>
+        </form>
+    }
 </div>
 
 @if (!Model.Alerts.Any())

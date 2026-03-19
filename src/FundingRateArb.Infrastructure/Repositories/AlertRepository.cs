@@ -62,4 +62,9 @@ public class AlertRepository : IAlertRepository
     public void Add(Alert alert) => _context.Alerts.Add(alert);
 
     public void Update(Alert alert) => _context.Alerts.Update(alert);
+
+    public Task MarkAllReadAsync(string userId) =>
+        _context.Alerts
+            .Where(a => a.UserId == userId && !a.IsRead)
+            .ExecuteUpdateAsync(s => s.SetProperty(a => a.IsRead, true));
 }
