@@ -22,12 +22,23 @@ public class OpportunitiesController : Controller
     {
         var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
         var config = await _uow.BotConfig.GetActiveAsync();
+
+        // M9: guard against missing BotConfig (empty DB / test environment)
+        if (config is null)
+            return View(new OpportunityListViewModel { Opportunities = new() });
+
         var vm = new OpportunityListViewModel
         {
-            Opportunities   = opportunities,
-            NotionalPerLeg  = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * config.DefaultLeverage,
-            VolumeFraction  = config.VolumeFraction,
+            Opportunities = opportunities,
         };
+
+        // L5: only expose operator capital/leverage parameters to Admins
+        if (User.IsInRole("Admin"))
+        {
+            vm.NotionalPerLeg = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * config.DefaultLeverage;
+            vm.VolumeFraction = config.VolumeFraction;
+        }
+
         return View(vm);
     }
 }

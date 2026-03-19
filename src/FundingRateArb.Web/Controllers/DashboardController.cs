@@ -59,7 +59,7 @@ public class DashboardController : Controller
             Volume24hUsd = r.Volume24hUsd
         }).ToList();
 
-        var totalPnl = positionSummaries.Sum(p => p.CurrentSpreadPerHour * p.SizeUsdc);
+        var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
         var bestSpread = positionSummaries.Count > 0
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
             : (rateDtos.Count > 0 ? rateDtos.Max(r => r.RatePerHour) : 0m);

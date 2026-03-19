@@ -68,9 +68,34 @@ public class PositionsController : Controller
         if (!User.IsInRole("Admin") && position.UserId != userId)
             return Forbid();
 
+        var positionDto = new PositionDetailsDto
+        {
+            Id = position.Id,
+            AssetSymbol = position.Asset?.Symbol ?? $"Asset #{position.AssetId}",
+            AssetId = position.AssetId,
+            LongExchangeName = position.LongExchange?.Name ?? $"Exchange #{position.LongExchangeId}",
+            LongExchangeId = position.LongExchangeId,
+            ShortExchangeName = position.ShortExchange?.Name ?? $"Exchange #{position.ShortExchangeId}",
+            ShortExchangeId = position.ShortExchangeId,
+            SizeUsdc = position.SizeUsdc,
+            MarginUsdc = position.MarginUsdc,
+            Leverage = position.Leverage,
+            LongEntryPrice = position.LongEntryPrice,
+            ShortEntryPrice = position.ShortEntryPrice,
+            EntrySpreadPerHour = position.EntrySpreadPerHour,
+            CurrentSpreadPerHour = position.CurrentSpreadPerHour,
+            AccumulatedFunding = position.AccumulatedFunding,
+            RealizedPnl = position.RealizedPnl,
+            Status = position.Status,
+            CloseReason = position.CloseReason,
+            OpenedAt = position.OpenedAt,
+            ClosedAt = position.ClosedAt,
+            Notes = position.Notes,
+        };
+
         var vm = new PositionDetailsViewModel
         {
-            Position = position,
+            Position = positionDto,
             UnrealizedPnl = position.AccumulatedFunding,
             DurationHours = (decimal)(DateTime.UtcNow - position.OpenedAt).TotalHours,
         };

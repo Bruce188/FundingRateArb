@@ -25,7 +25,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         _logger = logger;
     }
 
-    public async Task CheckAndActAsync()
+    public async Task CheckAndActAsync(CancellationToken ct = default)
     {
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
@@ -33,6 +33,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+
+        // H3: Build a dictionary for O(1) lookup instead of O(N*M) linear scan
+        var rateMap = latestRates.ToDictionary(r => (r.ExchangeId, r.AssetId));
 
         // C-PH1: Collect positions that need closing; call SaveAsync ONCE after the loop
         var toClose = new List<(ArbitragePosition Position, CloseReason Reason)>();
@@ -43,11 +46,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             var longExchangeName = pos.LongExchange?.Name ?? "?";
             var shortExchangeName = pos.ShortExchange?.Name ?? "?";
 
-            // Compute current spread from latest funding rate snapshots
-            var longRate = latestRates
-                .FirstOrDefault(r => r.ExchangeId == pos.LongExchangeId && r.AssetId == pos.AssetId);
-            var shortRate = latestRates
-                .FirstOrDefault(r => r.ExchangeId == pos.ShortExchangeId && r.AssetId == pos.AssetId);
+            // Compute current spread from latest funding rate snapshots (O(1) dictionary lookup)
+            rateMap.TryGetValue((pos.LongExchangeId, pos.AssetId), out var longRate);
+            rateMap.TryGetValue((pos.ShortExchangeId, pos.AssetId), out var shortRate);
 
             var spread = (shortRate?.RatePerHour ?? 0m) - (longRate?.RatePerHour ?? 0m);
 
@@ -60,8 +61,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
             // H9: Fetch mark prices in parallel instead of sequentially
-            var longTask = longConnector.GetMarkPriceAsync(assetSymbol);
-            var shortTask = shortConnector.GetMarkPriceAsync(assetSymbol);
+            var longTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
+            var shortTask = shortConnector.GetMarkPriceAsync(assetSymbol, ct);
             await Task.WhenAll(longTask, shortTask);
             var currentLongMark = await longTask;
             var currentShortMark = await shortTask;
@@ -120,12 +121,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         }
 
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
-        await _uow.SaveAsync();
+        await _uow.SaveAsync(ct);
 
         // Execute closes after the batch save (spread update is persisted before close)
         foreach (var (pos, reason) in toClose)
         {
-            await _executionEngine.ClosePositionAsync(pos, reason);
+            await _executionEngine.ClosePositionAsync(pos, reason, ct);
         }
     }
 }

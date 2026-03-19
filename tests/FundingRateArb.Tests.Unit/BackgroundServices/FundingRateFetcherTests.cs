@@ -3,7 +3,6 @@ using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
-using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Hubs;
@@ -30,7 +29,6 @@ public class FundingRateFetcherTests
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
-    private readonly Mock<ISignalEngine> _mockSignalEngine = new();
     private readonly FundingRateFetcher _sut;
 
     private static readonly List<Exchange> Exchanges =
@@ -48,13 +46,11 @@ public class FundingRateFetcherTests
 
     public FundingRateFetcherTests()
     {
-        // Wire scope factory
+        // Wire scope factory — no ISignalEngine (H8: removed from fetcher)
         _mockScopeFactory.Setup(f => f.CreateScope()).Returns(_mockScope.Object);
         _mockScope.Setup(s => s.ServiceProvider).Returns(_mockScopeProvider.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(_mockUow.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(_mockFactory.Object);
-        _mockScopeProvider.Setup(p => p.GetService(typeof(ISignalEngine))).Returns(_mockSignalEngine.Object);
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<ArbitrageOpportunityDto>());
 
         // Wire UoW
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
@@ -76,9 +72,6 @@ public class FundingRateFetcherTests
         _mockHubClients.Setup(c => c.Group("MarketData")).Returns(_mockDashboardClient.Object);
         _mockDashboardClient
             .Setup(d => d.ReceiveFundingRateUpdate(It.IsAny<List<FundingRateDto>>()))
-            .Returns(Task.CompletedTask);
-        _mockDashboardClient
-            .Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<List<ArbitrageOpportunityDto>>()))
             .Returns(Task.CompletedTask);
 
         _sut = new FundingRateFetcher(
@@ -231,6 +224,28 @@ public class FundingRateFetcherTests
         _mockDashboardClient.Verify(
             d => d.ReceiveFundingRateUpdate(It.IsAny<List<FundingRateDto>>()),
             Times.Once);
+    }
+
+    // ── H8: FundingRateFetcher does NOT push opportunities (SRP violation removed) ─
+
+    [Fact]
+    public async Task FetchAll_DoesNotPushOpportunityUpdate()
+    {
+        // H8: Opportunity computation and push moved to BotOrchestrator.
+        // FundingRateFetcher must only fetch rates and push ReceiveFundingRateUpdate.
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        _mockDashboardClient.Verify(
+            d => d.ReceiveOpportunityUpdate(It.IsAny<List<ArbitrageOpportunityDto>>()),
+            Times.Never,
+            "FundingRateFetcher must not call ReceiveOpportunityUpdate — that responsibility belongs to BotOrchestrator");
     }
 
     // ── H-FR1: Purge is called during FetchAll with 48h cutoff ────────────────

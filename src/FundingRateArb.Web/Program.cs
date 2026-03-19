@@ -206,7 +206,10 @@ try
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- SignalR ---
-    builder.Services.AddSignalR();
+    builder.Services.AddSignalR(options =>
+    {
+        options.MaximumReceiveMessageSize = 64 * 1024;
+    });
 
     // --- Rate Limiting ---
     builder.Services.AddRateLimiter(options =>

@@ -13,24 +13,36 @@ public class FundingRateRepository : IFundingRateRepository
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
-        // Correlated subquery: fetch the row whose RecordedAt matches the max per (Exchange, Asset).
-        // More efficient than GroupBy + First() which can cause client-side evaluation on large tables.
+        // H5: Replace O(N^2) correlated subquery with GroupBy + Max + Join for O(N log N) performance.
+        // The correlated subquery re-scans the entire table per row; with 3.6M rows this is the bottleneck.
+        var maxTimes = _context.FundingRateSnapshots
+            .GroupBy(f => new { f.ExchangeId, f.AssetId })
+            .Select(g => new { g.Key.ExchangeId, g.Key.AssetId, MaxAt = g.Max(x => x.RecordedAt) });
+
         return await _context.FundingRateSnapshots
+            .Join(maxTimes,
+                f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
+                m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
+                (f, _) => f)
             .Include(f => f.Exchange)
             .Include(f => f.Asset)
             .AsNoTracking()
-            .Where(f => f.RecordedAt == _context.FundingRateSnapshots
-                .Where(x => x.ExchangeId == f.ExchangeId && x.AssetId == f.AssetId)
-                .Max(x => (DateTime?)x.RecordedAt))
             .ToListAsync();
     }
 
-    public Task<List<FundingRateSnapshot>> GetHistoryAsync(int assetId, int exchangeId, DateTime from, DateTime to) =>
-        _context.FundingRateSnapshots
+    public Task<List<FundingRateSnapshot>> GetHistoryAsync(
+        int assetId, int exchangeId, DateTime from, DateTime to,
+        int take = 1000, int skip = 0)
+    {
+        // L2: Cap result to avoid unbounded queries on date-range history
+        return _context.FundingRateSnapshots
             .Where(f => f.AssetId == assetId && f.ExchangeId == exchangeId
                         && f.RecordedAt >= from && f.RecordedAt <= to)
             .OrderBy(f => f.RecordedAt)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync();
+    }
 
     public void Add(FundingRateSnapshot snapshot) =>
         _context.FundingRateSnapshots.Add(snapshot);

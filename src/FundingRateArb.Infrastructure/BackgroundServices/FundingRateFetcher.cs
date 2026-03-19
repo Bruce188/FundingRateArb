@@ -2,7 +2,6 @@ using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
-using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Hubs;
 using Microsoft.AspNetCore.SignalR;
@@ -138,21 +137,7 @@ public class FundingRateFetcher : BackgroundService
         }
 
         // M13: Push live updates consistently to Group("MarketData"), not Clients.All
+        // H8: Opportunity computation and push moved to BotOrchestrator (SRP — fetcher only fetches)
         await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveFundingRateUpdate(allRates);
-
-        // Push computed opportunities so Opportunities page updates in real-time (C4: use Group, not All)
-        try
-        {
-            var signalEngine = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
-            var opportunities = await signalEngine.GetOpportunitiesAsync();
-
-            _logger.LogInformation("Pushing {Count} opportunities via SignalR", opportunities.Count);
-            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunities);
-            _logger.LogInformation("SignalR opportunity push completed");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
-        }
     }
 }

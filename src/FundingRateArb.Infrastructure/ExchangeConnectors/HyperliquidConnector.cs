@@ -7,7 +7,7 @@ using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 
-public class HyperliquidConnector : IExchangeConnector
+public class HyperliquidConnector : IExchangeConnector, IDisposable
 {
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
@@ -168,43 +168,56 @@ public class HyperliquidConnector : IExchangeConnector
 
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        // Check cache without lock first (fast path)
-        if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(asset, out var cachedPrice))
-            return cachedPrice;
+        // 1. Check cache without lock (fast path — avoids serializing callers on a hot cache)
+        var currentCache = _markPriceCache;
+        if (DateTime.UtcNow < _cacheExpiry && currentCache.TryGetValue(asset, out var fastPrice))
+            return fastPrice;
 
+        // 2. Cache miss: fetch HTTP response OUTSIDE the lock (no I/O held under lock)
+        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+
+        var result = await pipeline.ExecuteAsync(
+            async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
+            ct);
+
+        if (!result.Success)
+            throw new InvalidOperationException(result.Error!.ToString());
+
+        var newCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in result.Data.Tickers)
+            newCache[t.Symbol] = t.MarkPrice;
+
+        // 3. Acquire lock only to commit the new cache atomically (no I/O inside lock)
         await _cacheLock.WaitAsync(ct);
         try
         {
-            // Double-checked: re-verify inside the lock
-            if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(asset, out cachedPrice))
-                return cachedPrice;
-
-            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
-
-            var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
-                ct);
-
-            if (!result.Success)
-                throw new InvalidOperationException(result.Error!.ToString());
-
-            // Populate cache with all tickers so subsequent calls for other assets are also cached
-            var newCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-            foreach (var t in result.Data.Tickers)
-                newCache[t.Symbol] = t.MarkPrice;
-
-            _markPriceCache = newCache;
-            _cacheExpiry = DateTime.UtcNow + MarkPriceCacheTtl;
+            // Re-check: a concurrent caller may have already refreshed the cache
+            if (_markPriceCache.Count == 0 || DateTime.UtcNow >= _cacheExpiry)
+            {
+                _markPriceCache = newCache;
+                _cacheExpiry = DateTime.UtcNow + MarkPriceCacheTtl;
+            }
+            else
+            {
+                // Another caller already refreshed; use their result (avoids redundant overwrite)
+                newCache = _markPriceCache;
+            }
         }
         finally
         {
             _cacheLock.Release();
         }
 
-        if (!_markPriceCache.TryGetValue(asset, out var price))
+        // 4. Use local variable for post-lock read (avoids stale-read race with concurrent writer)
+        if (!newCache.TryGetValue(asset, out var price))
             throw new InvalidOperationException($"Asset '{asset}' not found on Hyperliquid.");
 
         return price;
+    }
+
+    public void Dispose()
+    {
+        _cacheLock.Dispose();
     }
 
     public async Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default)

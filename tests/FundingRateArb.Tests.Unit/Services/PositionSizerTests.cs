@@ -23,13 +23,17 @@ public class PositionSizerTests
     private static ArbitrageOpportunityDto DefaultOpp(
         decimal netYieldPerHour = 0.0005m,
         decimal longVolume24h = 100_000_000m,
-        decimal shortVolume24h = 100_000_000m) => new()
+        decimal shortVolume24h = 100_000_000m,
+        decimal? spreadPerHour = null) => new()
     {
         AssetId = 1,
         LongExchangeId = 1,
         ShortExchangeId = 2,
         LongRatePerHour = 0.0008m,
         ShortRatePerHour = 0.0003m,
+        // SpreadPerHour is the gross spread (before fees). Must be >= NetYieldPerHour.
+        // Default: same as netYieldPerHour (zero-fee scenario — fees amortized separately).
+        SpreadPerHour = spreadPerHour ?? netYieldPerHour,
         NetYieldPerHour = netYieldPerHour,
         LongVolume24h = longVolume24h,
         ShortVolume24h = shortVolume24h,
@@ -118,6 +122,35 @@ public class PositionSizerTests
         var result = await _sut.CalculateOptimalSizeAsync(opp);
 
         result.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task CalculateOptimalSize_ReturnsZero_WhenEntryFeeRateIsNegative()
+    {
+        // H4: SpreadPerHour < NetYieldPerHour produces negative entryFeeRate
+        // This is an invalid/corrupted opportunity and must be rejected
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(DefaultConfig());
+
+        // SpreadPerHour defaults to LongRatePerHour - ShortRatePerHour = 0.0008 - 0.0003 = 0.0005
+        // But we override NetYieldPerHour to be HIGHER than SpreadPerHour
+        // entryFeeRate = SpreadPerHour(0.0005) - NetYieldPerHour(0.0008) = -0.0003 → guard triggers
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SpreadPerHour = 0.0005m,
+            NetYieldPerHour = 0.0008m,   // net yield > gross spread: impossible/corrupted
+            LongVolume24h = 100_000_000m,
+            ShortVolume24h = 100_000_000m,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m,
+        };
+
+        var result = await _sut.CalculateOptimalSizeAsync(opp);
+
+        result.Should().Be(0m, "negative entryFeeRate signals a corrupted opportunity and must be rejected");
     }
 
     [Fact]

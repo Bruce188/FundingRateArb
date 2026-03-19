@@ -28,7 +28,9 @@ public class BotConfigController : Controller
             MaxConcurrentPositions = config.MaxConcurrentPositions,
             MaxCapitalPerPosition = config.MaxCapitalPerPosition,
             StopLossPct = config.StopLossPct,
-            MaxHoldTimeHours = config.MaxHoldTimeHours
+            MaxHoldTimeHours = config.MaxHoldTimeHours,
+            VolumeFraction = config.VolumeFraction,
+            BreakevenHoursMax = config.BreakevenHoursMax
         };
 
         return View(model);
@@ -52,6 +54,8 @@ public class BotConfigController : Controller
         config.MaxCapitalPerPosition = model.MaxCapitalPerPosition!.Value;
         config.StopLossPct = model.StopLossPct!.Value;
         config.MaxHoldTimeHours = model.MaxHoldTimeHours!.Value;
+        config.VolumeFraction = model.VolumeFraction!.Value;
+        config.BreakevenHoursMax = model.BreakevenHoursMax!.Value;
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
 

@@ -82,12 +82,16 @@ public class UsersController : Controller
             return RedirectToAction(nameof(Index));
         }
 
-        // Remove all current roles and assign the selected one
+        // Whitelist: only allow known application roles to prevent privilege escalation
+        var validRoles = new HashSet<string> { "Admin", "Trader" };
+        var filteredRoles = (model.Roles ?? new List<string>()).Where(r => validRoles.Contains(r)).ToList();
+
+        // Remove all current roles and assign the selected ones
         var currentRoles = await _userManager.GetRolesAsync(user);
         await _userManager.RemoveFromRolesAsync(user, currentRoles);
 
-        if (selectedRoles is { Count: > 0 })
-            await _userManager.AddToRolesAsync(user, selectedRoles);
+        if (filteredRoles.Count > 0)
+            await _userManager.AddToRolesAsync(user, filteredRoles);
 
         TempData["Success"] = $"Role updated for {user.Email}.";
         return RedirectToAction(nameof(Index));

@@ -414,6 +414,50 @@ public class HyperliquidConnectorTests
             "Fetching a second asset within TTL must use cached ticker data");
     }
 
+    // ── IDisposable (C3) ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void HyperliquidConnector_ImplementsIDisposable()
+    {
+        _sut.Should().BeAssignableTo<IDisposable>(
+            "HyperliquidConnector must implement IDisposable to release the SemaphoreSlim");
+    }
+
+    [Fact]
+    public void HyperliquidConnector_Dispose_DoesNotThrow()
+    {
+        var act = () => ((IDisposable)_sut).Dispose();
+        act.Should().NotThrow("Dispose must be safe to call");
+    }
+
+    // ── GetMarkPrice cache correctness (H6) ───────────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_CacheHit_DoesNotPerformExtraHttpCall()
+    {
+        // Two calls within TTL should result in exactly one API call (post-lock read uses local var)
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 2999m),
+            CreateTicker("BTC", 0.0001m, 65000m, 1m, 64999m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // First call fetches, second and third should use the cache
+        var price1 = await _sut.GetMarkPriceAsync("ETH");
+        var price2 = await _sut.GetMarkPriceAsync("ETH");
+        var price3 = await _sut.GetMarkPriceAsync("BTC");
+
+        price1.Should().Be(3000m);
+        price2.Should().Be(3000m);
+        price3.Should().Be(65000m);
+
+        _mockExchangeData.Verify(
+            e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "All subsequent calls within TTL must use the cached result without re-fetching");
+    }
+
     // ── GetAvailableBalanceAsync ──────────────────────────────────────────────
 
     [Fact]
