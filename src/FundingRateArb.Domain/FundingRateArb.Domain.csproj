@@ -7,6 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Required: ApplicationUser inherits IdentityUser from Microsoft.AspNetCore.Identity.
+         Clean Architecture would isolate this, but removing it breaks EF Core Identity integration.
+         Accepted trade-off for school project scope. -->
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 

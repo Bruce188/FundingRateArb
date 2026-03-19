@@ -80,10 +80,23 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
         await Task.WhenAll(ratesTask, statsTask);
 
-        var ratesResponse = await (await ratesTask).Content
+        var ratesHttpResponse = await ratesTask;
+        ratesHttpResponse.EnsureSuccessStatusCode();
+        var ratesResponse = await ratesHttpResponse.Content
             .ReadFromJsonAsync<LighterFundingRatesResponse>(JsonOptions, ct);
-        var statsResponse = await (await statsTask).Content
-            .ReadFromJsonAsync<LighterExchangeStatsResponse>(JsonOptions, ct);
+
+        LighterExchangeStatsResponse? statsResponse = null;
+        try
+        {
+            var statsHttpResponse = await statsTask;
+            statsHttpResponse.EnsureSuccessStatusCode();
+            statsResponse = await statsHttpResponse.Content
+                .ReadFromJsonAsync<LighterExchangeStatsResponse>(JsonOptions, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch exchange stats from Lighter; volume data will be unavailable");
+        }
 
         var allRates = ratesResponse?.FundingRates;
         if (allRates is null || allRates.Count == 0)

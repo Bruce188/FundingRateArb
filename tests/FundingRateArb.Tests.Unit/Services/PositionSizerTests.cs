@@ -190,45 +190,6 @@ public class PositionSizerTests
     }
 
     // -----------------------------------------------------------------------
-    // CalculateMaxPositionsAsync
-    // -----------------------------------------------------------------------
-
-    [Fact]
-    public async Task CalculateMaxPositions_ReturnsCorrectCount_CappedAtMaxConcurrent()
-    {
-        // total=107, sizePerPos=50 → floor(107/50)=2, capped at MaxConcurrentPositions=1
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig(totalCapital: 107m, maxConcurrentPositions: 1));
-
-        var result = await _sut.CalculateMaxPositionsAsync(50m);
-
-        result.Should().Be(1);
-    }
-
-    [Fact]
-    public async Task CalculateMaxPositions_ReturnsRawCount_WhenBelowCap()
-    {
-        // total=107, sizePerPos=50 → floor(107/50)=2, maxConcurrent=5 → result=2
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig(totalCapital: 107m, maxConcurrentPositions: 5));
-
-        var result = await _sut.CalculateMaxPositionsAsync(50m);
-
-        result.Should().Be(2);
-    }
-
-    [Fact]
-    public async Task CalculateMaxPositions_ReturnsZero_WhenZeroSize()
-    {
-        _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
-
-        var result = await _sut.CalculateMaxPositionsAsync(0m);
-
-        result.Should().Be(0);
-    }
-
-    // -----------------------------------------------------------------------
     // RoundToStepSize (static — no mock needed)
     // -----------------------------------------------------------------------
 

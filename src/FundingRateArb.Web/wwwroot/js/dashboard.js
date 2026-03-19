@@ -16,10 +16,10 @@ connection.on("ReceiveDashboardUpdate", (data) => {
     if (openPositions) openPositions.textContent = data.openPositionCount;
 
     const totalPnl = document.getElementById("total-pnl");
-    if (totalPnl) totalPnl.textContent = "$" + data.totalPnl.toFixed(2);
+    if (totalPnl) totalPnl.textContent = "$" + (data.totalPnl ?? 0).toFixed(2);
 
     const bestSpread = document.getElementById("best-spread");
-    if (bestSpread) bestSpread.textContent = (data.bestSpread * 100).toFixed(4) + "%";
+    if (bestSpread) bestSpread.textContent = ((data.bestSpread ?? 0) * 100).toFixed(4) + "%";
 });
 
 // C1 fix: replaced innerHTML with createElement + textContent for all server data
@@ -55,8 +55,16 @@ connection.on("ReceiveFundingRateUpdate", (rates) => {
 connection.on("ReceivePositionUpdate", (position) => {
     const positionRow = document.getElementById("position-" + position.id);
     if (positionRow) {
-        positionRow.querySelector(".position-pnl").textContent = "$" + position.unrealizedPnl.toFixed(2);
-        positionRow.querySelector(".position-spread").textContent = (position.currentSpreadPerHour * 100).toFixed(6) + "%";
+        const pnlEl = positionRow.querySelector(".position-pnl");
+        if (pnlEl) {
+            const pnl = position.unrealizedPnl ?? 0;
+            pnlEl.textContent = "$" + pnl.toFixed(2);
+            pnlEl.className = "position-pnl " + (pnl >= 0 ? "text-success" : "text-danger");
+        }
+        const spreadEl = positionRow.querySelector(".position-spread");
+        if (spreadEl) {
+            spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(6) + "%";
+        }
     }
 });
 

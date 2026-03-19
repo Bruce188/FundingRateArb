@@ -3,6 +3,7 @@ using Aster.Net.Interfaces.Clients;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Registry;
 
@@ -16,14 +17,17 @@ public class AsterConnector : IExchangeConnector, IDisposable
 {
     private readonly IAsterRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
+    private readonly ILogger<AsterConnector> _logger;
     private readonly MarkPriceCacheHelper _markPriceCache = new();
 
     public AsterConnector(
         IAsterRestClient restClient,
-        ResiliencePipelineProvider<string> pipelineProvider)
+        ResiliencePipelineProvider<string> pipelineProvider,
+        ILogger<AsterConnector> logger)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
+        _logger = logger;
     }
 
     public string ExchangeName => "Aster";
@@ -86,8 +90,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var markPrice = await GetMarkPriceAsync(asset, ct);
         var quantity = sizeUsdc * leverage / markPrice;
 
-        // Set leverage before placing the order (best-effort; ignore result)
-        await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
+        // Set leverage before placing the order (best-effort; log failure but do not throw)
+        var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
+        if (!leverageResult.Success)
+        {
+            _logger.LogWarning(
+                "Failed to set leverage for {Symbol} to {Leverage}x: {Error}. Order will proceed with current leverage.",
+                symbol, leverage, leverageResult.Error?.ToString() ?? "unknown");
+        }
 
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
 
