@@ -12,10 +12,10 @@ public class AssetRepository : IAssetRepository
     public AssetRepository(AppDbContext context) => _context = context;
 
     public Task<List<Asset>> GetAllAsync() =>
-        _context.Assets.ToListAsync();
+        _context.Assets.AsNoTracking().ToListAsync();
 
     public Task<List<Asset>> GetActiveAsync() =>
-        _context.Assets.Where(a => a.IsActive).ToListAsync();
+        _context.Assets.AsNoTracking().Where(a => a.IsActive).ToListAsync();
 
     public Task<Asset?> GetByIdAsync(int id) =>
         _context.Assets.FirstOrDefaultAsync(a => a.Id == id);
