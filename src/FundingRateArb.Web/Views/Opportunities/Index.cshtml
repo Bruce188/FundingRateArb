@@ -22,7 +22,9 @@
                         <th>APR</th>
                     </tr>
                 </thead>
-                <tbody id="opportunities-table-body">
+                <tbody id="opportunities-table-body"
+                       data-notional-per-leg="@Model.NotionalPerLeg"
+                       data-volume-fraction="@Model.VolumeFraction">
                     @if (Model.Opportunities.Count == 0)
                     {
                         <tr>
