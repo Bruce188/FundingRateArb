@@ -20,6 +20,15 @@ public class BotConfigRepository : IBotConfigRepository
         return config;
     }
 
+    public async Task<BotConfiguration> GetActiveTrackedAsync()
+    {
+        var config = await _context.BotConfigurations.FirstOrDefaultAsync();
+        if (config is null)
+            throw new InvalidOperationException(
+                "No BotConfiguration found. Run the seeder or create one via Admin UI.");
+        return config;
+    }
+
     public void Update(BotConfiguration config) =>
         _context.BotConfigurations.Update(config);
 }

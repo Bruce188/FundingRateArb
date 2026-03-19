@@ -21,7 +21,8 @@ public class DashboardController : Controller
 
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
-        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null) return Unauthorized();
 
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var allOpenPositions = await _uow.Positions.GetOpenAsync();

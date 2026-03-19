@@ -102,8 +102,16 @@ public class AssetController : Controller
         if (asset is null)
             return NotFound();
 
-        _uow.Assets.Remove(asset);
-        await _uow.SaveAsync();
+        try
+        {
+            _uow.Assets.Remove(asset);
+            await _uow.SaveAsync();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            TempData["Error"] = "Cannot delete this asset — it has associated positions or data.";
+            return RedirectToAction(nameof(Delete), new { id });
+        }
 
         TempData["Success"] = $"Asset '{asset.Symbol}' deleted successfully.";
         return RedirectToAction(nameof(Index));

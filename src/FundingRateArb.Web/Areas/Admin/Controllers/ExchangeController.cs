@@ -151,8 +151,16 @@ public class ExchangeController : Controller
         if (exchange is null)
             return NotFound();
 
-        _uow.Exchanges.Remove(exchange);
-        await _uow.SaveAsync();
+        try
+        {
+            _uow.Exchanges.Remove(exchange);
+            await _uow.SaveAsync();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            TempData["Error"] = "Cannot delete this exchange — it has associated positions or data.";
+            return RedirectToAction(nameof(Delete), new { id });
+        }
 
         TempData["Success"] = $"Exchange '{exchange.Name}' deleted successfully.";
         return RedirectToAction(nameof(Index));
