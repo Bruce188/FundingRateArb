@@ -13,4 +13,5 @@ public interface IAlertRepository
     Task<List<Alert>> GetRecentUnreadAsync(TimeSpan within);
     void Add(Alert alert);
     void Update(Alert alert);
+    Task MarkAllReadAsync(string userId);
 }

@@ -1,5 +1,6 @@
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
@@ -271,6 +272,8 @@ try
     // --- Background Services ---
     builder.Services.AddHostedService<FundingRateFetcher>();
     builder.Services.AddHostedService<BotOrchestrator>();
+    builder.Services.AddSingleton<IBotControl>(sp =>
+        sp.GetServices<IHostedService>().OfType<BotOrchestrator>().Single());
 
     // --- MVC ---
     builder.Services.AddControllersWithViews();

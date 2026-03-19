@@ -5,6 +5,8 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Moq;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Interfaces;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.Controllers;
@@ -20,6 +22,8 @@ public class DashboardControllerTests
     private readonly Mock<IFundingRateRepository> _mockFundingRateRepo;
     private readonly Mock<IAlertRepository> _mockAlertRepo;
     private readonly Mock<ILogger<DashboardController>> _mockLogger;
+    private readonly Mock<ISignalEngine> _mockSignalEngine;
+    private readonly Mock<IBotControl> _mockBotControl;
     private readonly DashboardController _controller;
 
     public DashboardControllerTests()
@@ -30,6 +34,8 @@ public class DashboardControllerTests
         _mockFundingRateRepo = new Mock<IFundingRateRepository>();
         _mockAlertRepo = new Mock<IAlertRepository>();
         _mockLogger = new Mock<ILogger<DashboardController>>();
+        _mockSignalEngine = new Mock<ISignalEngine>();
+        _mockBotControl = new Mock<IBotControl>();
 
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfigRepo.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
@@ -44,8 +50,10 @@ public class DashboardControllerTests
             .ReturnsAsync([]);
         _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
             .ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object);
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {

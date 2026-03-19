@@ -22,36 +22,6 @@ connection.on("ReceiveDashboardUpdate", (data) => {
     if (bestSpread) bestSpread.textContent = ((data.bestSpread ?? 0) * 100).toFixed(4) + "%";
 });
 
-// C1 fix: replaced innerHTML with createElement + textContent for all server data
-connection.on("ReceiveFundingRateUpdate", (rates) => {
-    const tbody = document.getElementById("rates-table-body");
-    if (!tbody) return;
-
-    tbody.innerHTML = "";
-    rates.forEach(r => {
-        const row = document.createElement("tr");
-
-        const tdExchange = document.createElement("td");
-        tdExchange.textContent = r.exchangeName;
-        row.appendChild(tdExchange);
-
-        const tdSymbol = document.createElement("td");
-        tdSymbol.textContent = r.symbol;
-        row.appendChild(tdSymbol);
-
-        const tdRate = document.createElement("td");
-        tdRate.className = r.ratePerHour >= 0 ? "text-success" : "text-danger";
-        tdRate.textContent = (r.ratePerHour * 100).toFixed(6) + "%";
-        row.appendChild(tdRate);
-
-        const tdPrice = document.createElement("td");
-        tdPrice.textContent = "$" + r.markPrice.toLocaleString();
-        row.appendChild(tdPrice);
-
-        tbody.appendChild(row);
-    });
-});
-
 connection.on("ReceivePositionUpdate", (position) => {
     const positionRow = document.getElementById("position-" + position.id);
     if (positionRow) {
@@ -110,7 +80,7 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
     if (opportunities.length === 0) {
         const emptyRow = document.createElement("tr");
         const emptyCell = document.createElement("td");
-        emptyCell.colSpan = 6;
+        emptyCell.colSpan = 7;
         emptyCell.className = "text-center text-muted py-5";
         emptyCell.textContent = "No arbitrage opportunities detected at this time. Rates are fetched every minute. Check back shortly.";
         emptyRow.appendChild(emptyCell);
@@ -139,6 +109,11 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
         strong.textContent = opp.assetSymbol;
         tdAsset.appendChild(strong);
         row.appendChild(tdAsset);
+
+        const tdPrice = document.createElement("td");
+        const avgPrice = ((opp.longMarkPrice || 0) + (opp.shortMarkPrice || 0)) / 2;
+        tdPrice.textContent = "$" + avgPrice.toFixed(2);
+        row.appendChild(tdPrice);
 
         const tdLong = document.createElement("td");
         tdLong.textContent = opp.longExchangeName;

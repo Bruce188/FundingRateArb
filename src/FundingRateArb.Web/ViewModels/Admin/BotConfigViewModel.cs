@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Web.ViewModels.Admin;
 
@@ -39,4 +40,13 @@ public class BotConfigViewModel
 
     [Required, Range(1, 168), Display(Name = "Max Break-Even Hours")]
     public int? BreakevenHoursMax { get; set; }
+
+    [Required]
+    [Display(Name = "Allocation Strategy")]
+    public AllocationStrategy? AllocationStrategy { get; set; }
+
+    [Required]
+    [Range(1, 20)]
+    [Display(Name = "Top N Opportunities")]
+    public int? AllocationTopN { get; set; }
 }

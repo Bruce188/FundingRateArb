@@ -127,3 +127,78 @@ No bulk action exists for dismissing alerts. Users must mark each alert as read 
 The Dashboard and Opportunities pages show related information that would be more useful on a single view. Merge them so the main dashboard shows KPI cards, bot status, live rates, AND the opportunities table together.
 
 **Fix**: Move the opportunities table (from `OpportunitiesController/Index`) into the `Dashboard/Index` view below the existing KPI cards and positions section. Keep the Opportunities controller for API/JSON endpoints but remove the separate page from navigation. Update SignalR `ReceiveOpportunities` handler to target the consolidated view.
+
+---
+
+## F1: Configurable capital allocation strategies
+
+**Source**: Design proposal (post-V7, trading-bot-developer agent analysis)
+**Severity**: Medium (feature / operational flexibility)
+
+### Current behavior
+
+The bot uses a single hard-wired allocation model: `SignalEngine` returns opportunities sorted by `NetYieldPerHour`, then `BotOrchestrator` iterates and opens the **first** eligible one per cycle. `PositionSizer` sizes each candidate independently as `capitalLimit = TotalCapitalUsdc * MaxCapitalPerPosition`, capped by liquidity. This is a de-facto **Concentrated** strategy — all cycles converge on the single best-APR opportunity. There is no mechanism to deliberately spread capital across multiple opportunities in a weighted fashion.
+
+### Strategies to add
+
+| Strategy | Description | Formula |
+|----------|-------------|---------|
+| **Concentrated** | Default (current). Full `MaxCapitalPerPosition` cap on best APR only | Existing logic, no change |
+| **WeightedSpread** | Top N, capital weighted by `NetYieldPerHour` | `slice_i = budget * (yield_i / sum(yields))` |
+| **EqualSpread** | Top N, capital split equally | `slice_i = budget / N` |
+| **RiskAdjusted** | Top N, weighted by `APR * log10(1 + minVolume)` to penalize illiquid markets | `score_i = yield_i * log10(1 + minVol_i)` → normalize |
+
+### Proposed enum
+
+New file `src/FundingRateArb.Domain/Enums/AllocationStrategy.cs`:
+
+```csharp
+public enum AllocationStrategy
+{
+    Concentrated   = 0,
+    WeightedSpread = 1,
+    EqualSpread    = 2,
+    RiskAdjusted   = 3,
+}
+```
+
+### Schema changes to BotConfiguration
+
+```csharp
+public AllocationStrategy AllocationStrategy { get; set; } = AllocationStrategy.Concentrated;
+
+[Range(1, 20)]
+public int AllocationTopN { get; set; } = 3;
+```
+
+`AllocationTopN` ignored when `Concentrated`. Interaction with `MaxConcurrentPositions`: the orchestrator opens at most `min(AllocationTopN, MaxConcurrentPositions - openCount)` per cycle.
+
+### Files that need changes
+
+| File | Change |
+|------|--------|
+| `BotConfiguration.cs` | Add `AllocationStrategy` + `AllocationTopN` fields |
+| `AllocationStrategy.cs` | New enum file |
+| `IPositionSizer.cs` | Add `CalculateBatchSizesAsync` overload |
+| `PositionSizer.cs` | Implement batch sizing with strategy dispatch |
+| `BotOrchestrator.cs` | Replace single-opportunity loop with strategy-aware batch open |
+| EF Migrations | New migration for two columns |
+| `BotConfigViewModel.cs` | Add strategy + TopN fields |
+| `BotConfigController.cs` | Map new fields |
+| `BotConfig/Index.cshtml` | Strategy dropdown + TopN input in "Capital Allocation" section |
+
+### BotOrchestrator cycle changes
+
+Replace the single-opportunity `foreach` + `break` with:
+
+```
+candidates = opportunities.Where(not open, not on cooldown)
+    .Take(strategy == Concentrated ? 1 : config.AllocationTopN)
+sizes[] = positionSizer.CalculateBatchSizesAsync(candidates, strategy)
+for each (candidate, size) where size > 0 and slotsAvailable > 0:
+    open position, decrement slots
+```
+
+### Why deferred
+
+Current operation is single-position with $107 capital. The concentrated strategy is correct for this scale. Worth adding once capital grows or multi-position operation is needed, since there's currently no way to express "spread $500 across three coins proportional to yield."

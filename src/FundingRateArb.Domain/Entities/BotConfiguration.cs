@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Domain.Entities;
 
@@ -30,6 +31,11 @@ public class BotConfiguration
 
     [Range(1, 100)]
     public int MaxConcurrentPositions { get; set; } = 1;
+
+    public AllocationStrategy AllocationStrategy { get; set; } = AllocationStrategy.Concentrated;
+
+    [Range(1, 20)]
+    public int AllocationTopN { get; set; } = 3;
 
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;

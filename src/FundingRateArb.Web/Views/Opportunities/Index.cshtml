@@ -15,6 +15,7 @@
                 <thead class="table-light">
                     <tr>
                         <th>Asset</th>
+                        <th>Mark Price</th>
                         <th>Long Exchange</th>
                         <th>Short Exchange</th>
                         <th>Spread/hr</th>
@@ -28,7 +29,7 @@
                     @if (Model.Opportunities.Count == 0)
                     {
                         <tr>
-                            <td colspan="6" class="text-center text-muted py-5">
+                            <td colspan="7" class="text-center text-muted py-5">
                                 No arbitrage opportunities detected at this time.
                                 <br />
                                 <small>Rates are fetched every minute. Check back shortly.</small>
@@ -47,6 +48,7 @@
                             var constrained = Model.IsVolumeConstrained(opp);
                             <tr class="@(constrained ? "table-warning" : "")">
                                 <td><strong>@opp.AssetSymbol</strong></td>
+                                <td>$@(((opp.LongMarkPrice + opp.ShortMarkPrice) / 2).ToString("F2"))</td>
                                 <td>@opp.LongExchangeName</td>
                                 <td>@opp.ShortExchangeName</td>
                                 <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
