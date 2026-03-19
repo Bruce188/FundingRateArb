@@ -464,40 +464,28 @@ public class ExecutionEngineTests
         position.RealizedPnl.Should().BeApproximately(longPnl + shortPnl, 0.0001m);
     }
 
-    /// <summary>
-    /// C2: If one connector returns Success=false (without throwing — LighterConnector pattern),
-    /// the position must NOT be marked Closed and PnL must NOT be computed with zeros.
-    /// The position should stay in Closing state and a critical alert created.
-    /// </summary>
+    // ── C2: Close-leg Success=false scenarios (LighterConnector pattern) ──────
+
     [Fact]
     public async Task ClosePosition_OneLegReturnsSuccessFalse_StaysClosing_NoZeroPnl()
     {
-        // Long leg (Hyperliquid) succeeds
         var position = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.1m));
-
-        // Short leg (Lighter) returns failure without throwing
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Order rejected by exchange"));
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
 
-        // Position must NOT be marked Closed — it stays in Closing for manual intervention
         position.Status.Should().Be(PositionStatus.Closing);
-        // PnL must NOT be computed with the zero fill data from failed leg
         position.RealizedPnl.Should().BeNull();
-        // Must create a critical alert
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),
             Times.AtLeastOnce);
     }
 
-    /// <summary>
-    /// C2: If both close legs return Success=false, position must be marked EmergencyClosed.
-    /// </summary>
     [Fact]
     public async Task ClosePosition_BothLegsReturnSuccessFalse_MarksEmergencyClosed()
     {
@@ -518,10 +506,8 @@ public class ExecutionEngineTests
             Times.AtLeastOnce);
     }
 
-    /// <summary>
-    /// H4: Entry prices must NOT be overwritten in the partial close failure branch.
-    /// They must be preserved for manual PnL computation.
-    /// </summary>
+    // ── H4: Entry price preservation ──────────────────────────────────────────
+
     [Fact]
     public async Task ClosePosition_OneLegFails_EntryPricesPreserved()
     {
@@ -538,8 +524,67 @@ public class ExecutionEngineTests
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
 
-        // Entry prices must remain unchanged — not overwritten with close fill data
         position.LongEntryPrice.Should().Be(originalLongEntry);
         position.ShortEntryPrice.Should().Be(originalShortEntry);
+    }
+
+    // ── C1: Close-leg exception scenarios ─────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_LongLegThrows_ShortSucceeds_CreatesAlertAndStaysClosing()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange timeout on long leg"));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.1m));
+
+        await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closing);
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ClosePosition_ShortLegThrows_LongSucceeds_CreatesAlertAndStaysClosing()
+    {
+        var position = MakeOpenPosition();
+
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.1m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange timeout on short leg"));
+
+        await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closing);
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ClosePosition_BothLegsThrow_MarksEmergencyClosed()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Long exchange unreachable"));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Short exchange unreachable"));
+
+        await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.EmergencyClosed);
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),
+            Times.AtLeastOnce);
     }
 }

@@ -112,9 +112,16 @@ try
     });
 
     // --- Data Protection (for IApiKeyVault) ---
+    var dpKeysDir = new DirectoryInfo(
+        Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys"));
+    if (!dpKeysDir.Exists) dpKeysDir.Create();
+    // On Linux, restrict to owner-only (chmod 700 equivalent)
+    if (!OperatingSystem.IsWindows())
+    {
+        dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    }
     builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new System.IO.DirectoryInfo(
-            Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys")))
+        .PersistKeysToFileSystem(dpKeysDir)
         .SetApplicationName("FundingRateArb");
     builder.Services.AddScoped<IApiKeyVault, ApiKeyVault>();
 
@@ -158,19 +165,18 @@ try
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(15));
     });
 
-    // "OrderExecution" — critical path; single retry only (market orders must not double-fill)
+    // "OrderExecution" — critical path; no retry — market orders must never be retried to prevent double fills
     builder.Services.AddResiliencePipeline("OrderExecution", static pipelineBuilder =>
     {
-        pipelineBuilder.AddRetry(new RetryStrategyOptions
+        pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
         {
+            FailureRatio      = 0.5,
+            SamplingDuration  = TimeSpan.FromSeconds(30),
+            MinimumThroughput = 3,
+            BreakDuration     = TimeSpan.FromSeconds(60),
             ShouldHandle = new PredicateBuilder()
                 .Handle<HttpRequestException>()
-                .Handle<TimeoutRejectedException>()
-                .Handle<TaskCanceledException>(),
-            MaxRetryAttempts = 1,
-            Delay            = TimeSpan.FromSeconds(1),
-            BackoffType      = DelayBackoffType.Exponential,
-            UseJitter        = true,
+                .Handle<TimeoutRejectedException>(),
         });
 
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(30));
@@ -220,6 +226,12 @@ try
             opt.Window = TimeSpan.FromMinutes(1);
             opt.PermitLimit = 10;
             opt.QueueLimit = 0;
+        });
+        options.AddFixedWindowLimiter("signalr", opt =>
+        {
+            opt.Window = TimeSpan.FromSeconds(10);
+            opt.PermitLimit = 5;
+            opt.QueueLimit = 2;
         });
     });
 
@@ -272,7 +284,8 @@ try
     app.MapControllerRoute("default", "{controller=Dashboard}/{action=Index}/{id?}");
     app.MapRazorPages()
         .RequireRateLimiting("auth");
-    app.MapHub<DashboardHub>("/hubs/dashboard");
+    app.MapHub<DashboardHub>("/hubs/dashboard")
+        .RequireRateLimiting("signalr");
 
     app.Run();
 }
