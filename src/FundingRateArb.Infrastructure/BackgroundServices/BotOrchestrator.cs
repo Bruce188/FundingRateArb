@@ -207,21 +207,23 @@ public class BotOrchestrator : BackgroundService
     /// Pushes a ReceivePositionUpdate for each open position to the owning user's group.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
     /// H-BO1: Position updates target per-user groups to prevent data leaks.
+    /// H8: Uses Task.WhenAll with per-item try/catch so one failed push does not drop the rest.
     /// </summary>
     private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
     {
-        try
+        var tasks = openPositions.Select(async pos =>
         {
-            foreach (var pos in openPositions)
+            try
             {
                 var dto = MapPositionToDto(pos);
                 await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to push position updates via SignalR");
-        }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to push position update for #{PositionId}", pos.Id);
+            }
+        });
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>
@@ -234,12 +236,14 @@ public class BotOrchestrator : BackgroundService
     {
         try
         {
-            // M7: Compute the window from when we last pushed, then update the marker
+            // M1+M2: Capture both timestamps once; move marker update AFTER query so alerts
+            // created between marker update and query return are not silently missed.
             var since = _lastAlertPushUtc;
-            _lastAlertPushUtc = DateTime.UtcNow;
-            var window = TimeSpan.FromSeconds((DateTime.UtcNow - since).TotalSeconds);
+            var now = DateTime.UtcNow;
+            var window = now - since;
 
             var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(window);
+            _lastAlertPushUtc = now;
 
             foreach (var alert in recentAlerts)
             {
