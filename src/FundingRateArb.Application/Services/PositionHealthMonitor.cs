@@ -27,6 +27,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     public async Task CheckAndActAsync(CancellationToken ct = default)
     {
+        // M4: Reap stale Opening positions (stuck > 5 minutes)
+        await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
+        // M4: Reap stale Closing positions (stuck > 10 minutes)
+        await ReapStalePositionsAsync(PositionStatus.Closing, TimeSpan.FromMinutes(10), ct);
+
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
         if (openPositions.Count == 0) return;
@@ -69,18 +74,21 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var currentLongMark = await longTask;
                 var currentShortMark = await shortTask;
 
-                var avgEntryPrice   = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
-                var avgCurrentPrice = (currentLongMark + currentShortMark) / 2m;
-                var priceMove = avgEntryPrice > 0
-                    ? Math.Abs(avgCurrentPrice - avgEntryPrice) / avgEntryPrice
+                // M5: Compute net unrealized PnL for stop-loss check
+                var avgEntryPrice = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+                var estimatedQty = avgEntryPrice > 0
+                    ? pos.SizeUsdc * pos.Leverage / avgEntryPrice
                     : 0m;
+                var longPnl  = (currentLongMark - pos.LongEntryPrice) * estimatedQty;
+                var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
+                var unrealizedPnl = longPnl + shortPnl;
 
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
                 // Determine close reason (priority: stop-loss > max hold > spread collapsed)
                 CloseReason? reason = null;
 
-                if (priceMove >= config.StopLossPct)
+                if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
                     reason = CloseReason.StopLoss;
                 else if (hoursOpen >= config.MaxHoldTimeHours)
                     reason = CloseReason.MaxHoldTimeReached;
@@ -92,9 +100,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     _logger.LogWarning(
                         "Auto-closing position #{PositionId}: {Asset} " +
                         "reason={CloseReason}, spread={Spread}/hour, " +
-                        "hoursOpen={HoursOpen:F1}, priceMove={PriceMove:P2}",
+                        "hoursOpen={HoursOpen:F1}, unrealizedPnl={UnrealizedPnl:F2}",
                         pos.Id, assetSymbol, reason.Value,
-                        spread, hoursOpen, priceMove);
+                        spread, hoursOpen, unrealizedPnl);
 
                     toClose.Add((pos, reason.Value));
                     continue; // skip alert check — position will be closed
@@ -135,5 +143,33 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             await _executionEngine.ClosePositionAsync(pos, reason, ct);
         }
+    }
+
+    private async Task ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)
+    {
+        var positions = await _uow.Positions.GetByStatusAsync(status);
+        var cutoff = DateTime.UtcNow - maxAge;
+
+        foreach (var pos in positions.Where(p => p.OpenedAt < cutoff))
+        {
+            _logger.LogCritical(
+                "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
+                status, pos.Id, pos.Asset?.Symbol ?? "?", pos.OpenedAt);
+
+            pos.Status = PositionStatus.EmergencyClosed;
+            _uow.Positions.Update(pos);
+            _uow.Alerts.Add(new Alert
+            {
+                UserId   = pos.UserId,
+                ArbitragePositionId = pos.Id,
+                Type     = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message  = $"Position #{pos.Id} stuck in {status} for >{maxAge.TotalMinutes:F0} minutes. " +
+                           $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
+            });
+        }
+
+        if (positions.Any(p => p.OpenedAt < cutoff))
+            await _uow.SaveAsync(ct);
     }
 }

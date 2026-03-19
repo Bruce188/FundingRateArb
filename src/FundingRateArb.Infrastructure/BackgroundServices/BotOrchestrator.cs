@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
@@ -24,6 +25,11 @@ public class BotOrchestrator : BackgroundService
 
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
     private DateTime _lastAlertPushUtc = DateTime.UtcNow;
+
+    // C3: Exponential cooldown for failed opportunities — prevents infinite retry loops burning fees
+    private readonly ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> _failedOpCooldowns = new();
+    internal static readonly TimeSpan BaseCooldown = TimeSpan.FromMinutes(5);
+    internal static readonly TimeSpan MaxCooldown = TimeSpan.FromMinutes(60);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -70,6 +76,9 @@ public class BotOrchestrator : BackgroundService
             }
         }
     }
+
+    /// <summary>Exposes cooldown state for unit testing.</summary>
+    internal ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> FailedOpCooldowns => _failedOpCooldowns;
 
     /// <summary>
     /// One bot cycle: health-monitor open positions → find & open one new opportunity.
@@ -139,6 +148,15 @@ public class BotOrchestrator : BackgroundService
             var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
             if (openKeys.Contains(key)) continue;
 
+            // C3: Skip if this opportunity is on cooldown from a recent failure
+            if (_failedOpCooldowns.TryGetValue(key, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+            {
+                _logger.LogDebug(
+                    "Skipping {Asset} {Long}/{Short} — on cooldown until {Until} (failures={Failures})",
+                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, cd.CooldownUntil, cd.Failures);
+                continue;
+            }
+
             var size = await positionSizer.CalculateOptimalSizeAsync(opp);
             if (size <= 0) continue;
 
@@ -150,6 +168,9 @@ public class BotOrchestrator : BackgroundService
 
             if (success)
             {
+                // C3: Clear cooldown on success
+                _failedOpCooldowns.TryRemove(key, out _);
+
                 // H7: Route to owning user + admins only (Clients.All would reveal trading to all users)
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
@@ -162,6 +183,16 @@ public class BotOrchestrator : BackgroundService
             }
             else
             {
+                // C3: Register exponential cooldown
+                var failures = _failedOpCooldowns.GetValueOrDefault(key).Failures + 1;
+                var delay = TimeSpan.FromTicks(
+                    Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
+                _failedOpCooldowns[key] = (DateTime.UtcNow + delay, failures);
+
+                _logger.LogWarning(
+                    "Opportunity {Asset} {Long}/{Short} failed ({Failures} consecutive). Cooldown until {Until}",
+                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, failures, DateTime.UtcNow + delay);
+
                 _logger.LogError("Failed to open position: {Error}", error);
                 // Push alerts for emergency close failures
                 await PushNewAlertsAsync(uow);

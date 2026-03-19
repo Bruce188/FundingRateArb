@@ -1,0 +1,41 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "${SA_PASSWORD:?Set SA_PASSWORD in .env}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      test: /opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P "$$SA_PASSWORD" -C -Q "SELECT 1" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "5273:8080"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__DefaultConnection: "Server=sqlserver,1433;Database=FundingRateArbDb;User Id=SA;Password=${SA_PASSWORD};TrustServerCertificate=True"
+      Exchanges__Lighter__ApiKey: "${LIGHTER_API_KEY:-2}"
+      Exchanges__Lighter__SignerPrivateKey: "${LIGHTER_SIGNER_KEY}"
+      Exchanges__Aster__ApiKey: "${ASTER_API_KEY}"
+      Exchanges__Aster__ApiSecret: "${ASTER_API_SECRET}"
+      Exchanges__Hyperliquid__WalletAddress: "${HL_WALLET:-PLACEHOLDER}"
+      Exchanges__Hyperliquid__PrivateKey: "${HL_PRIVATE_KEY:-PLACEHOLDER}"
+      Seed__AdminPassword: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}"
+    volumes:
+      - dpkeys:/app/DataProtection-Keys
+      - applogs:/app/logs
+
+volumes:
+  sqldata:
+  dpkeys:
+  applogs:

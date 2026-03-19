@@ -58,6 +58,14 @@ public class ExecutionEngineTests
         _mockFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(_mockLongConnector.Object);
         _mockFactory.Setup(f => f.GetConnector("Lighter")).Returns(_mockShortConnector.Object);
 
+        // Default: both exchanges have ample balance for pre-flight margin check
+        _mockLongConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        _mockShortConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+
         _sut = new ExecutionEngine(_mockUow.Object, _mockFactory.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
@@ -310,6 +318,96 @@ public class ExecutionEngineTests
         _mockLongConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
+    }
+
+    /// <summary>
+    /// Root cause of the leg size mismatch: emergency close returned Success=false
+    /// (e.g. "No open position found" on Lighter before on-chain settlement),
+    /// but the old code discarded the return value. Now we check it and create a critical alert.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_EmergencyCloseReturnsFailure_CreatesCriticalAlert()
+    {
+        // Short leg succeeds, long leg fails → emergency close fires on short
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long margin insufficient"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        // Emergency close returns failure (position not settled yet / not found)
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("No open position found"));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+
+        // Must create TWO LegFailed alerts: one for the failed emergency close, one for the overall failure
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Once);
+    }
+
+    // ── Pre-flight margin check ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_InsufficientMarginOnShortExchange_AbortsWithoutOpeningLegs()
+    {
+        // Short exchange has no balance — pre-flight should catch this
+        _mockShortConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Insufficient margin on Lighter");
+
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        // No sentinel record should have been created
+        _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_InsufficientMarginOnLongExchange_AbortsWithoutOpeningLegs()
+    {
+        // C2: requiredMargin = sizeUsdc (not sizeUsdc / leverage). Balance=90, size=100 → fail
+        _mockLongConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(90m);
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Insufficient margin on Hyperliquid");
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BalanceCheckThrows_AbortsWithoutOpeningLegs()
+    {
+        _mockLongConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange unreachable"));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Pre-flight balance check failed");
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── ClosePositionAsync ─────────────────────────────────────────────────────

@@ -211,7 +211,7 @@ public class LighterSendTxResponse
     public string? TxHash { get; set; }
 
     [JsonPropertyName("predicted_execution_time_ms")]
-    public int PredictedExecutionTimeMs { get; set; }
+    public double PredictedExecutionTimeMs { get; set; }
 
     [JsonPropertyName("message")]
     public string? Message { get; set; }

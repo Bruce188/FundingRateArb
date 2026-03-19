@@ -19,6 +19,7 @@ using Polly.Retry;
 using Polly.Timeout;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using CryptoExchange.Net.Authentication;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.MSSqlServer;
@@ -185,8 +186,27 @@ try
     });
 
     // --- Exchange SDK Clients (CryptoExchange.Net DI pattern) ---
-    builder.Services.AddHyperLiquid(builder.Configuration);
-    builder.Services.AddAster(builder.Configuration);
+    // Credentials live in User Secrets — the IConfiguration overload reads from
+    // "HyperLiquid"/"Aster" root sections which don't exist, so we bind explicitly.
+    builder.Services.AddHyperLiquid(options =>
+    {
+        var addr = builder.Configuration["Exchanges:Hyperliquid:WalletAddress"];
+        var key  = builder.Configuration["Exchanges:Hyperliquid:PrivateKey"];
+        if (!string.IsNullOrEmpty(addr) && addr != "PLACEHOLDER"
+            && !string.IsNullOrEmpty(key) && key != "PLACEHOLDER")
+        {
+            options.ApiCredentials = new ApiCredentials(addr, key);
+        }
+    });
+    builder.Services.AddAster(options =>
+    {
+        var apiKey    = builder.Configuration["Exchanges:Aster:ApiKey"];
+        var apiSecret = builder.Configuration["Exchanges:Aster:ApiSecret"];
+        if (!string.IsNullOrEmpty(apiKey) && !string.IsNullOrEmpty(apiSecret))
+        {
+            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+        }
+    });
 
     // --- Exchange Connectors ---
     // API credentials come from User Secrets — never appsettings
@@ -203,6 +223,17 @@ try
         options.Retry.Delay                          = TimeSpan.FromSeconds(1);
         options.Retry.BackoffType                    = DelayBackoffType.Exponential;
         options.Retry.UseJitter                      = true;
+        // C4: Never retry POST requests — sendTx is a non-idempotent on-chain transaction
+        options.Retry.ShouldHandle = args =>
+        {
+            if (args.Outcome.Result is HttpResponseMessage resp
+                && resp.RequestMessage?.Method == HttpMethod.Post)
+                return ValueTask.FromResult(false);
+
+            if (args.Outcome.Exception is not null)
+                return ValueTask.FromResult(true);
+            return ValueTask.FromResult(args.Outcome.Result?.IsSuccessStatusCode == false);
+        };
         options.CircuitBreaker.FailureRatio          = 0.5;
         options.CircuitBreaker.SamplingDuration      = TimeSpan.FromSeconds(30);
         options.CircuitBreaker.MinimumThroughput     = 5;

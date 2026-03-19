@@ -30,9 +30,10 @@ public class PositionSizer : IPositionSizer
         if (breakEvenHours > config.BreakevenHoursMax)
             return 0m;
 
+        // Capital limit is the max collateral (margin) per leg.
+        // Connectors multiply by leverage to get notional.
         var capitalLimit = config.TotalCapitalUsdc
-                           * config.MaxCapitalPerPosition
-                           * config.DefaultLeverage;
+                           * config.MaxCapitalPerPosition;
 
         var minVolume = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
         var liquidityLimit = minVolume * config.VolumeFraction;

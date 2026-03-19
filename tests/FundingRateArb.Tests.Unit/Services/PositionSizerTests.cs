@@ -65,9 +65,9 @@ public class PositionSizerTests
     [Fact]
     public async Task CalculateOptimalSize_ReturnsCapitalLimit_WhenSmallestOfThree()
     {
-        // capitalLimit = 107 * 0.80 * 5 = 428
+        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
         // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
-        // capital (428) < liquidity (100_000)  →  expect 428
+        // capital (85.6) < liquidity (100_000)  →  expect 85.6
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(DefaultConfig());
 
@@ -77,15 +77,15 @@ public class PositionSizerTests
 
         var result = await _sut.CalculateOptimalSizeAsync(opp);
 
-        result.Should().Be(428m);
+        result.Should().Be(85.6m);
     }
 
     [Fact]
     public async Task CalculateOptimalSize_ReturnsLiquidityLimit_WhenSmallestOfThree()
     {
-        // capitalLimit = 107 * 0.80 * 5 = 428
+        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
         // liquidityLimit = min(10_000, 10_000) * 0.001 = 10
-        // liquidity (10) < capital (428)  →  expect 10
+        // liquidity (10) < capital (85.6)  →  expect 10
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(DefaultConfig());
 
@@ -154,11 +154,11 @@ public class PositionSizerTests
     }
 
     [Fact]
-    public async Task CalculateOptimalSize_AppliesLeverage_ToCapitalLimit()
+    public async Task CalculateOptimalSize_DoesNotApplyLeverage_ToCapitalLimit()
     {
-        // capitalLimit = 107 * 0.80 * 10 = 856
+        // capitalLimit = 107 * 0.80 = 85.6 (leverage is NOT applied here — connectors handle it)
         // liquidityLimit = min(100_000_000, 100_000_000) * 0.001 = 100_000
-        // capital (856) < liquidity (100_000)  →  expect 856
+        // capital (85.6) < liquidity (100_000)  →  expect 85.6
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(DefaultConfig(leverage: 10));
 
@@ -168,15 +168,15 @@ public class PositionSizerTests
 
         var result = await _sut.CalculateOptimalSizeAsync(opp);
 
-        result.Should().Be(856m);
+        result.Should().Be(85.6m);
     }
 
     [Fact]
     public async Task CalculateOptimalSize_UsesMinVolume_ForLiquidityLimit()
     {
-        // capitalLimit = 107 * 0.80 * 5 = 428
+        // capitalLimit = 107 * 0.80 = 85.6 (collateral per leg; connectors apply leverage)
         // liquidityLimit = min(10_000, 500_000) * 0.001 = 10
-        // liquidity (10) < capital (428)  →  expect 10
+        // liquidity (10) < capital (85.6)  →  expect 10
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(DefaultConfig());
 

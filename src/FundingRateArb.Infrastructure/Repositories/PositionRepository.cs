@@ -59,6 +59,14 @@ public class PositionRepository : IPositionRepository
             .Take(take)
             .ToListAsync();
 
+    public Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status) =>
+        _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .Where(p => p.Status == status)
+            .ToListAsync();
+
     public void Add(ArbitragePosition position) =>
         _context.ArbitragePositions.Add(position);
 

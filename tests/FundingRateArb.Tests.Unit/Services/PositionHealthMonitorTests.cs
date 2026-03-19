@@ -44,6 +44,10 @@ public class PositionHealthMonitorTests
         _mockFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(_mockLongConnector.Object);
         _mockFactory.Setup(f => f.GetConnector("Lighter")).Returns(_mockShortConnector.Object);
 
+        // Default: no stale positions for M4 reaper
+        _mockPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>()))
+            .ReturnsAsync([]);
+
         _sut = new PositionHealthMonitor(_mockUow.Object, _mockExecEngine.Object,
             _mockFactory.Object, NullLogger<PositionHealthMonitor>.Instance);
     }
@@ -52,7 +56,8 @@ public class PositionHealthMonitorTests
         DateTime? openedAt = null,
         decimal entrySpread = 0.0005m,
         decimal longEntry = 3000m,
-        decimal shortEntry = 3001m)
+        decimal shortEntry = 3001m,
+        decimal marginUsdc = 100m)
     {
         return new ArbitragePosition
         {
@@ -62,6 +67,7 @@ public class PositionHealthMonitorTests
             LongExchangeId = 1,
             ShortExchangeId = 2,
             SizeUsdc = 100m,
+            MarginUsdc = marginUsdc,
             Leverage = 5,
             LongEntryPrice = longEntry,
             ShortEntryPrice = shortEntry,
@@ -146,11 +152,17 @@ public class PositionHealthMonitorTests
     [Fact]
     public async Task CheckAndAct_WhenStopLossTriggered_ClosesPosition()
     {
-        // Entry = 3000/3001. Price moved >15%: 3000 → 3500 = 16.7% move
-        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        // M5: Stop-loss uses net unrealized PnL, not averaged price move.
+        // Entry: long=3000, short=3001, margin=100, leverage=5
+        // avgEntry = 3000.5, estimatedQty = 100*5/3000.5 ≈ 0.16664
+        // Current: long drops to 2500, short stays at 3001
+        // longPnl  = (2500-3000) * 0.16664 ≈ -83.32
+        // shortPnl = (3001-3001) * 0.16664 = 0
+        // unrealizedPnl ≈ -83.32, threshold = 0.15 * 100 = 15 → |83.32| > 15 → triggers
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
         _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
-        SetupMarkPrices(longMark: 3500m, shortMark: 3500m); // big price move
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m); // asymmetric move → net loss
 
         await _sut.CheckAndActAsync();
 
@@ -324,6 +336,72 @@ public class PositionHealthMonitorTests
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
         _mockExecEngine.Verify(
             e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── M5: Stop-loss uses net unrealized PnL ─────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_StopLossTriggered_WhenUnrealizedPnlExceedsThreshold()
+    {
+        // Entry: long=3000, short=3001, sizeUsdc=100, leverage=5
+        // MarginUsdc = 100 (after C2 fix)
+        // avgEntry = 3000.5, estimatedQty = 100*5/3000.5 ≈ 0.16664
+        // Current: long drops to 2700, short drops to 2701
+        // longPnl  = (2700 - 3000) * 0.16664 ≈ -49.99
+        // shortPnl = (3001 - 2701) * 0.16664 ≈ +49.99
+        // unrealizedPnl ≈ -49.99 + 49.99 ≈ 0 → won't trigger
+        // For asymmetric loss: long drops to 2500, short stays at 3001
+        // longPnl  = (2500 - 3000) * 0.16664 ≈ -83.32
+        // shortPnl = (3001 - 3001) * 0.16664 ≈ 0
+        // unrealizedPnl ≈ -83.32, |unrealizedPnl| = 83.32 > 15% * 100 = 15 → triggers
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        pos.MarginUsdc = 100m;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>())).ReturnsAsync([]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m); // long dropped significantly
+
+        await _sut.CheckAndActAsync();
+
+        _mockExecEngine.Verify(
+            e => e.ClosePositionAsync(pos, CloseReason.StopLoss, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── M4: Stale state reaper ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_ReapsStaleOpeningPositions_After5Minutes()
+    {
+        // No open positions
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+
+        // One stale Opening position (stuck for 10 minutes)
+        var stalePos = new ArbitragePosition
+        {
+            Id = 99,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-10),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync([stalePos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync([]);
+
+        await _sut.CheckAndActAsync();
+
+        stalePos.Status.Should().Be(PositionStatus.EmergencyClosed);
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("stuck in Opening"))),
             Times.Once);
     }
 

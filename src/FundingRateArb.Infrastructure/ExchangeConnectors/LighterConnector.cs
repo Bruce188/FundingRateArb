@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using FundingRateArb.Application.Common.Exchanges;
@@ -35,6 +36,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
     private DateTime _marketCacheExpiry = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
+    // Cache leverage per market to skip redundant TryUpdateLeverageAsync calls
+    private readonly ConcurrentDictionary<int, int> _leverageCache = new();
+
     // In-flight refresh task — prevents thundering-herd when multiple callers see an expired cache.
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
     private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
@@ -194,10 +198,35 @@ public class LighterConnector : IExchangeConnector, IDisposable
             if (markPrice <= 0)
                 throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
 
-            // 2. Update leverage for this market
-            await UpdateLeverageAsync(market.MarketId, leverage, ct);
+            // 2. Validate leverage against market's IMF limits
+            if (market.MinInitialMarginFraction > 0)
+            {
+                var maxLeverage = 10_000 / market.MinInitialMarginFraction;
+                if (leverage > maxLeverage)
+                {
+                    return new OrderResultDto
+                    {
+                        Success = false,
+                        Error = $"Leverage {leverage}x exceeds {asset} market max {maxLeverage}x (MinIMF={market.MinInitialMarginFraction})"
+                    };
+                }
+            }
 
-            // 3. Calculate base amount in Lighter integer format
+            // 3. Update leverage for this market
+            if (!_leverageCache.TryGetValue(market.MarketId, out var cachedLeverage) || cachedLeverage != leverage)
+            {
+                if (!await TryUpdateLeverageAsync(market.MarketId, leverage, ct))
+                {
+                    return new OrderResultDto
+                    {
+                        Success = false,
+                        Error = $"Failed to set leverage {leverage}x for {asset} on Lighter"
+                    };
+                }
+                _leverageCache[market.MarketId] = leverage;
+            }
+
+            // 4. Calculate base amount in Lighter integer format
             //    notional = sizeUsdc * leverage
             //    baseReal = notional / markPrice
             //    baseAmount = (long)(baseReal * 10^sizeDecimals)
@@ -215,7 +244,10 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 };
             }
 
-            // 4. Calculate price in Lighter integer format with slippage
+            if (baseAmount > 1_000_000_000_000L)
+                throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
+
+            // 5. Calculate price in Lighter integer format with slippage
             var priceMultiplier = (long)Math.Pow(10, market.PriceDecimals);
             bool isAsk = side == Side.Short;
             long priceInt;
@@ -231,10 +263,10 @@ public class LighterConnector : IExchangeConnector, IDisposable
             }
 
             // Bounds check: native signer's SignCreateOrder takes int price
-            if (priceInt > int.MaxValue || priceInt < int.MinValue)
+            if (priceInt <= 0 || priceInt > int.MaxValue)
                 throw new InvalidOperationException($"Price {priceInt} exceeds int range for Lighter API");
 
-            // 5. Get nonce and sign order
+            // 6. Get nonce and sign order
             var nonce = await GetNextNonceAsync(ct);
             var clientOrderIndex = (int)(Interlocked.Increment(ref _orderCounter) % int.MaxValue);
 
@@ -246,7 +278,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 market.MarketId, clientOrderIndex, baseAmount, (int)priceInt,
                 isAsk, reduceOnly: false, nonce);
 
-            // 6. Submit the signed transaction
+            // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);
 
             _logger.LogInformation(
@@ -337,6 +369,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 };
             }
 
+            if (baseAmount > 1_000_000_000_000L)
+                throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
+
             // 3. To close: reverse the side (Long->Sell, Short->Buy)
             bool isAsk = side == Side.Long;
 
@@ -353,7 +388,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
             }
 
             // Bounds check: native signer's SignCreateOrder takes int price
-            if (priceInt > int.MaxValue || priceInt < int.MinValue)
+            if (priceInt <= 0 || priceInt > int.MaxValue)
                 throw new InvalidOperationException($"Price {priceInt} exceeds int range for Lighter API");
 
             // 5. Sign and submit
@@ -520,13 +555,24 @@ public class LighterConnector : IExchangeConnector, IDisposable
     /// <summary>
     /// Update leverage for a market via signed transaction.
     /// </summary>
-    private async Task UpdateLeverageAsync(int marketId, int leverage, CancellationToken ct)
+    private async Task<bool> TryUpdateLeverageAsync(int marketId, int leverage, CancellationToken ct)
     {
         _logger.LogDebug("Updating leverage for market {MarketId} to {Leverage}x", marketId, leverage);
 
-        var nonce = await GetNextNonceAsync(ct);
-        var (txType, txInfo, _) = _signer.SignLeverageUpdate(marketId, leverage, nonce);
-        await SendTransactionAsync(txType, txInfo, ct);
+        try
+        {
+            var nonce = await GetNextNonceAsync(ct);
+            var (txType, txInfo, _) = _signer.SignLeverageUpdate(marketId, leverage, nonce);
+            await SendTransactionAsync(txType, txInfo, ct);
+            return true;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        {
+            _logger.LogWarning(
+                "Failed to set leverage for market {MarketId} to {Leverage}x: {Error}. Order will proceed with current leverage.",
+                marketId, leverage, ex.Message);
+            return false;
+        }
     }
 
     /// <summary>

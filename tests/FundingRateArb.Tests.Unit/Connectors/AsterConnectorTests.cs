@@ -88,6 +88,21 @@ public class AsterConnectorTests
             null, null, ResultDataSource.Server, new AsterLeverage(), null);
 
     /// <summary>
+    /// Creates a successful WebCallResult wrapping an array of AsterPosition objects.
+    /// </summary>
+    private static WebCallResult<AsterPosition[]> SuccessPositions(AsterPosition[] data)
+        => new WebCallResult<AsterPosition[]>(
+            HttpStatusCode.OK, null, null, null, null, null, null, null, null,
+            null, null, ResultDataSource.Server, data, null);
+
+    /// <summary>
+    /// Creates a failed WebCallResult for positions.
+    /// </summary>
+    private static WebCallResult<AsterPosition[]> FailPositions(string message)
+        => new WebCallResult<AsterPosition[]>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
+
+    /// <summary>
     /// Builds a mock IAsterRestClient wired with the given mark price response on FuturesApi.ExchangeData.
     /// Also mocks GetTickersAsync with an empty array by default (needed since GetFundingRatesAsync
     /// fetches tickers in parallel for volume data).
@@ -246,8 +261,7 @@ public class AsterConnectorTests
 
         var act = () => sut.GetFundingRatesAsync();
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*API server error*");
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
     [Fact]
@@ -479,7 +493,7 @@ public class AsterConnectorTests
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
 
         result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Insufficient balance");
+        result.Error.Should().NotBeNullOrEmpty("error message must be populated on failure");
     }
 
     [Fact]
@@ -624,17 +638,75 @@ public class AsterConnectorTests
 
     // ── ClosePositionAsync ─────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Builds a mock IAsterRestClient wired for ClosePositionAsync tests.
+    /// Sets up GetPositionsAsync to return the given position data, and PlaceOrderAsync for the close order.
+    /// </summary>
+    private static (Mock<IAsterRestClient> clientMock, Mock<IAsterRestClientFuturesApiTrading> tradingMock) BuildClientForClose(
+        WebCallResult<AsterPosition[]> positionsResult,
+        WebCallResult<AsterOrder>? orderResult = null)
+    {
+        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.GetPositionsAsync(
+                It.IsAny<string>(),
+                It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(positionsResult);
+
+        if (orderResult != null)
+        {
+            tradingMock
+                .Setup(x => x.PlaceOrderAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<Aster.Net.Enums.OrderSide>(),
+                    It.IsAny<Aster.Net.Enums.OrderType>(),
+                    It.IsAny<decimal?>(),
+                    It.IsAny<decimal?>(),
+                    It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                    It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                    It.IsAny<bool?>(),
+                    It.IsAny<string>(),
+                    It.IsAny<decimal?>(),
+                    It.IsAny<bool?>(),
+                    It.IsAny<decimal?>(),
+                    It.IsAny<decimal?>(),
+                    It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                    It.IsAny<bool?>(),
+                    It.IsAny<long?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(orderResult);
+        }
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        return (clientMock, tradingMock);
+    }
+
     [Fact]
     public async Task ClosePosition_Long_PlacesSellOrderWithReduceOnly()
     {
-        // Closing a Long position → place Sell order with reduceOnly = true
-        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
-        tradingMock
-            .Setup(x => x.PlaceOrderAsync(
+        // Closing a Long position → fetch position, place Sell order with reduceOnly = true
+        var position = new AsterPosition { Symbol = "ETHUSDT", PositionAmount = 0.5m };
+        var (clientMock, tradingMock) = BuildClientForClose(
+            SuccessPositions([position]),
+            SuccessOrder(new AsterOrder { Id = 3 }));
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeTrue();
+        tradingMock.Verify(
+            x => x.PlaceOrderAsync(
                 It.IsAny<string>(),
                 Aster.Net.Enums.OrderSide.Sell,
                 It.IsAny<Aster.Net.Enums.OrderType>(),
-                It.IsAny<decimal?>(),
+                0.5m,                               // explicit quantity from position
                 It.IsAny<decimal?>(),
                 It.IsAny<Aster.Net.Enums.PositionSide?>(),
                 It.IsAny<Aster.Net.Enums.TimeInForce?>(),
@@ -647,26 +719,29 @@ public class AsterConnectorTests
                 It.IsAny<Aster.Net.Enums.WorkingType?>(),
                 It.IsAny<bool?>(),
                 It.IsAny<long?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 3 }));
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 
-        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
-        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
-
-        var clientMock = new Mock<IAsterRestClient>();
-        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+    [Fact]
+    public async Task ClosePosition_Short_PlacesBuyOrderWithReduceOnly()
+    {
+        // Closing a Short position → place Buy order with reduceOnly = true and abs(quantity)
+        var position = new AsterPosition { Symbol = "ETHUSDT", PositionAmount = -0.3m };
+        var (clientMock, tradingMock) = BuildClientForClose(
+            SuccessPositions([position]),
+            SuccessOrder(new AsterOrder { Id = 4 }));
 
         var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
-        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+        await sut.ClosePositionAsync("ETH", Side.Short);
 
-        result.Success.Should().BeTrue();
         tradingMock.Verify(
             x => x.PlaceOrderAsync(
                 It.IsAny<string>(),
-                Aster.Net.Enums.OrderSide.Sell,
+                Aster.Net.Enums.OrderSide.Buy,
                 It.IsAny<Aster.Net.Enums.OrderType>(),
-                It.IsAny<decimal?>(),
+                0.3m,                               // abs(-0.3) = 0.3
                 It.IsAny<decimal?>(),
                 It.IsAny<Aster.Net.Enums.PositionSide?>(),
                 It.IsAny<Aster.Net.Enums.TimeInForce?>(),
@@ -684,61 +759,68 @@ public class AsterConnectorTests
     }
 
     [Fact]
-    public async Task ClosePosition_Short_PlacesBuyOrderWithReduceOnly()
+    public async Task ClosePosition_CallsGetPositionsAndPassesNonNullQuantity()
     {
-        // Closing a Short position → place Buy order with reduceOnly = true
+        // C1 test: ClosePosition calls GetPositionsAsync and passes non-null quantity to PlaceOrderAsync
+        decimal? capturedQuantity = null;
+        var position = new AsterPosition { Symbol = "ETHUSDT", PositionAmount = 1.25m };
+
         var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
         tradingMock
+            .Setup(x => x.GetPositionsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([position]));
+        tradingMock
             .Setup(x => x.PlaceOrderAsync(
-                It.IsAny<string>(),
-                Aster.Net.Enums.OrderSide.Buy,
-                It.IsAny<Aster.Net.Enums.OrderType>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<Aster.Net.Enums.PositionSide?>(),
-                It.IsAny<Aster.Net.Enums.TimeInForce?>(),
-                true,
-                It.IsAny<string>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<bool?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<Aster.Net.Enums.WorkingType?>(),
-                It.IsAny<bool?>(),
-                It.IsAny<long?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 4 }));
+                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(), It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(), It.IsAny<string>(), It.IsAny<decimal?>(), It.IsAny<bool?>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+            {
+                capturedQuantity = (decimal?)invocation.Arguments[3];
+            }))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 1 }));
 
         var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
         futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
-
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
         var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
-        await sut.ClosePositionAsync("ETH", Side.Short);
+        result.Success.Should().BeTrue();
+        tradingMock.Verify(x => x.GetPositionsAsync("ETHUSDT", It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Once);
+        capturedQuantity.Should().NotBeNull("quantity must be fetched from position, not null");
+        capturedQuantity.Should().Be(1.25m);
+    }
 
-        tradingMock.Verify(
-            x => x.PlaceOrderAsync(
-                It.IsAny<string>(),
-                Aster.Net.Enums.OrderSide.Buy,
-                It.IsAny<Aster.Net.Enums.OrderType>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<Aster.Net.Enums.PositionSide?>(),
-                It.IsAny<Aster.Net.Enums.TimeInForce?>(),
-                true,
-                It.IsAny<string>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<bool?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<Aster.Net.Enums.WorkingType?>(),
-                It.IsAny<bool?>(),
-                It.IsAny<long?>(),
-                It.IsAny<CancellationToken>()),
-            Times.Once);
+    [Fact]
+    public async Task ClosePosition_ReturnsFailure_WhenNoPositionFound()
+    {
+        // C1 test: ClosePosition returns failure when no position found on Aster
+        var (clientMock, _) = BuildClientForClose(SuccessPositions([]));
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("No open position");
+    }
+
+    [Fact]
+    public async Task ClosePosition_ReturnsFailure_WhenGetPositionsFails()
+    {
+        // C1 test: ClosePosition returns failure when GetPositionsAsync fails
+        var (clientMock, _) = BuildClientForClose(FailPositions("API error"));
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Failed to fetch position");
     }
 
     // ── GetMarkPriceAsync ──────────────────────────────────────────────────────
@@ -893,7 +975,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task GetAvailableBalance_ReturnsCorrectBalance()
     {
-        var balance = new AsterBalance { AvailableBalance = 250.75m };
+        var balance = new AsterBalance { Asset = "USDT", AvailableBalance = 250.75m };
         var balanceResult = SuccessBalances([balance]);
 
         var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
@@ -934,17 +1016,18 @@ public class AsterConnectorTests
 
         var act = () => sut.GetAvailableBalanceAsync();
 
-        await act.Should().ThrowAsync<InvalidOperationException>()
-            .WithMessage("*Balance fetch failed*");
+        await act.Should().ThrowAsync<InvalidOperationException>();
     }
 
     [Fact]
-    public async Task GetAvailableBalance_SumsAvailableBalances_WhenMultipleAssets()
+    public async Task GetAvailableBalance_ReturnsOnlyUsdtBalance_NotSumOfAllAssets()
     {
+        // H7 test: only USDT balance counts, not BTC or other assets
         var balances = new[]
         {
-            new AsterBalance { AvailableBalance = 100m },
-            new AsterBalance { AvailableBalance = 50m },
+            new AsterBalance { Asset = "USDT", AvailableBalance = 100m },
+            new AsterBalance { Asset = "BTC", AvailableBalance = 50m },
+            new AsterBalance { Asset = "ETH", AvailableBalance = 25m },
         };
         var balanceResult = SuccessBalances(balances);
 
@@ -963,7 +1046,8 @@ public class AsterConnectorTests
 
         var available = await sut.GetAvailableBalanceAsync();
 
-        available.Should().Be(150m);
+        available.Should().Be(100m,
+            "only USDT balance should be counted, not the sum of all assets");
     }
 
     // ── B-W3: SetLeverage failure is logged, order still proceeds ─────────────

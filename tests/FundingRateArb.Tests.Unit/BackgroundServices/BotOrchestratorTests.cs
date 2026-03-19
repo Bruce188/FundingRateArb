@@ -436,4 +436,152 @@ public class BotOrchestratorTests
         var act = () => _sut.Dispose();
         act.Should().NotThrow();
     }
+
+    // ── C3: Failed opportunity cooldown ─────────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_AfterFailure_SuppressesRetryOnNextCycle()
+    {
+        // C3: After OpenPositionAsync fails, the same opportunity should NOT be retried next cycle
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Exchange error"));
+
+        // Cycle 1: fails
+        await _sut.RunCycleAsync(CancellationToken.None);
+        // Cycle 2: same opportunity should be skipped due to cooldown
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Once, "Failed opportunity must be on cooldown and not retried on the next cycle");
+    }
+
+    [Fact]
+    public async Task RunCycle_AfterCooldownExpires_RetriesOpportunity()
+    {
+        // C3: After cooldown expires, the opportunity should be retried
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Exchange error"));
+
+        // Cycle 1: fails — registers cooldown
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Manually expire the cooldown for testing
+        var key = "1_1_2";
+        var entry = _sut.FailedOpCooldowns[key];
+        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
+
+        // Cycle 2: cooldown expired — should retry
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2), "Opportunity must be retried after cooldown expires");
+    }
+
+    [Fact]
+    public async Task RunCycle_SuccessfulOpen_ClearsCooldown()
+    {
+        // C3: A successful open must clear the cooldown for that opportunity
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
+
+        // First call fails, second succeeds
+        _mockExecEngine.SetupSequence(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Exchange error"))
+            .ReturnsAsync((true, (string?)null));
+
+        // Cycle 1: fails
+        await _sut.RunCycleAsync(CancellationToken.None);
+        var key = "1_1_2";
+        _sut.FailedOpCooldowns.ContainsKey(key).Should().BeTrue("cooldown must be registered after failure");
+
+        // Expire cooldown so cycle 2 retries
+        var entry = _sut.FailedOpCooldowns[key];
+        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
+
+        // Cycle 2: succeeds — clears cooldown
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _sut.FailedOpCooldowns.ContainsKey(key).Should().BeFalse("cooldown must be cleared after successful open");
+    }
+
+    [Fact]
+    public async Task RunCycle_ExponentialBackoff_IncreasesWithConsecutiveFailures()
+    {
+        // C3: After multiple consecutive failures, cooldown duration increases exponentially
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(100m);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Exchange error"));
+
+        var key = "1_1_2";
+
+        // Failure 1: cooldown = BaseCooldown (5 min)
+        await _sut.RunCycleAsync(CancellationToken.None);
+        var cooldown1 = _sut.FailedOpCooldowns[key];
+        cooldown1.Failures.Should().Be(1);
+
+        // Expire and fail again
+        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown1.Failures);
+        await _sut.RunCycleAsync(CancellationToken.None);
+        var cooldown2 = _sut.FailedOpCooldowns[key];
+        cooldown2.Failures.Should().Be(2);
+
+        // Expire and fail a third time
+        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown2.Failures);
+        await _sut.RunCycleAsync(CancellationToken.None);
+        var cooldown3 = _sut.FailedOpCooldowns[key];
+        cooldown3.Failures.Should().Be(3);
+
+        // After 3 failures, cooldown should be longer than after 1 failure
+        // Failure 1: 5 min, Failure 2: 10 min, Failure 3: 20 min
+        var duration1 = BotOrchestrator.BaseCooldown; // 5 min
+        var duration3 = TimeSpan.FromTicks(
+            Math.Min(BotOrchestrator.BaseCooldown.Ticks * (1L << 2), BotOrchestrator.MaxCooldown.Ticks)); // 20 min
+        duration3.Should().BeGreaterThan(duration1, "exponential backoff must increase cooldown with consecutive failures");
+    }
 }
