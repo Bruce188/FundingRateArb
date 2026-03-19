@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Web.ViewModels;
 
 namespace FundingRateArb.Web.Controllers;
@@ -21,9 +22,10 @@ public class OpportunitiesController : Controller
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
-        var config = await _uow.BotConfig.GetActiveAsync();
+        BotConfiguration? config = null;
+        try { config = await _uow.BotConfig.GetActiveAsync(); }
+        catch (InvalidOperationException) { }
 
-        // M9: guard against missing BotConfig (empty DB / test environment)
         if (config is null)
             return View(new OpportunityListViewModel { Opportunities = new() });
 
