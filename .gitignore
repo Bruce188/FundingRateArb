@@ -50,3 +50,15 @@ efbundle
 *.exe
 *.pdb
 publish/
+
+## Claude Code workflow docs (contain AI references — NEVER commit)
+docs/progress.md
+docs/prompts.md
+docs/plan*.md
+docs/review*
+docs/findings*
+.claude/settings.local.json
+.claude/worktrees/
+
+## Claude Code config (NEVER commit)
+.claude/
