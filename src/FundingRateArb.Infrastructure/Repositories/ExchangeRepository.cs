@@ -12,10 +12,10 @@ public class ExchangeRepository : IExchangeRepository
     public ExchangeRepository(AppDbContext context) => _context = context;
 
     public Task<List<Exchange>> GetAllAsync() =>
-        _context.Exchanges.ToListAsync();
+        _context.Exchanges.AsNoTracking().ToListAsync();
 
     public Task<List<Exchange>> GetActiveAsync() =>
-        _context.Exchanges.Where(e => e.IsActive).ToListAsync();
+        _context.Exchanges.AsNoTracking().Where(e => e.IsActive).ToListAsync();
 
     public Task<Exchange?> GetByIdAsync(int id) =>
         _context.Exchanges.FirstOrDefaultAsync(e => e.Id == id);

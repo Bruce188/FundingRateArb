@@ -125,7 +125,7 @@ public class FundingRateFetcher : BackgroundService
 
         _logger.LogInformation(
             "Funding rates saved: {Total} snapshots from {ExchangeCount} exchanges",
-            allRates.Count, connectors.Count);
+            snapshots.Count, connectors.Count);
 
         // H-FR1: Hourly purge — keep only 48h of data to prevent unbounded table growth
         if (DateTime.UtcNow - _lastPurgeUtc >= TimeSpan.FromHours(1))
