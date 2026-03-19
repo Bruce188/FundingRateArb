@@ -94,12 +94,14 @@ public class BotOrchestratorTests
     public async Task RunCycle_WhenKillSwitchOff_ReturnsImmediately()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
-        // H3: Disabled path still fetches positions once for dashboard push
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<ArbitrageOpportunityDto>());
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        // Opportunities are always computed even when disabled
+        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // Health monitor only runs when enabled
         _mockHealthMonitor.Verify(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -134,10 +136,13 @@ public class BotOrchestratorTests
         // MaxConcurrentPositions = 1, already have 1 open
         _mockPositions.Setup(p => p.GetOpenAsync())
             .ReturnsAsync([new ArbitragePosition { Status = Domain.Enums.PositionStatus.Open }]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<ArbitrageOpportunityDto>());
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        // Opportunities are always computed before the max-positions gate
+        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        // Execution engine must not be called — no new positions should be opened
         _mockExecEngine.Verify(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
@@ -262,28 +267,28 @@ public class BotOrchestratorTests
             Times.AtLeastOnce);
     }
 
-    // ── H-BO1: Dashboard aggregates go to Admins group ────────────────────────
+    // ── H-BO1: Dashboard aggregates go to MarketData group ───────────────────
 
     [Fact]
-    public async Task RunCycle_PushesDashboardUpdate_ToAdminsGroup()
+    public async Task RunCycle_PushesDashboardUpdate_ToMarketDataGroup()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
-        var dashboardSentToAdmins = false;
+        var dashboardSentToMarketData = false;
         _mockGroupClient
             .Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
-            .Callback(() => dashboardSentToAdmins = true)
+            .Callback(() => dashboardSentToMarketData = true)
             .Returns(Task.CompletedTask);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        dashboardSentToAdmins.Should().BeTrue(
-            "dashboard KPI updates must be sent to the Admins group");
+        dashboardSentToMarketData.Should().BeTrue(
+            "dashboard KPI updates must be sent to the MarketData group");
 
         _mockHubClients.Verify(
-            c => c.Group(HubGroups.Admins),
+            c => c.Group(HubGroups.MarketData),
             Times.AtLeastOnce);
     }
 
