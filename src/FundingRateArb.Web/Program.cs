@@ -246,6 +246,16 @@ try
 
     var app = builder.Build();
 
+    // Validate connection string is configured (not still using placeholder)
+    var connStr = app.Configuration.GetConnectionString("DefaultConnection") ?? "";
+    if (connStr.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
+    {
+        Log.Fatal("Database password not configured. Set the connection string via User Secrets: " +
+                   "dotnet user-secrets set \"ConnectionStrings:DefaultConnection\" \"Server=...; Password=YOUR_PASSWORD\"");
+        throw new InvalidOperationException(
+            "Database password not configured. Update the connection string via User Secrets.");
+    }
+
     // --- Seed Database ---
     using (var scope = app.Services.CreateScope())
         await DbSeeder.SeedAsync(scope.ServiceProvider);

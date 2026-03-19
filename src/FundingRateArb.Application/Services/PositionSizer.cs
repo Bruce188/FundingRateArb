@@ -40,16 +40,6 @@ public class PositionSizer : IPositionSizer
         return Math.Min(capitalLimit, liquidityLimit);
     }
 
-    public async Task<int> CalculateMaxPositionsAsync(decimal sizePerPosition)
-    {
-        if (sizePerPosition <= 0)
-            return 0;
-
-        var config = await _uow.BotConfig.GetActiveAsync();
-        var rawMax = (int)(config.TotalCapitalUsdc / sizePerPosition);
-        return Math.Min(rawMax, config.MaxConcurrentPositions);
-    }
-
     public static decimal RoundToStepSize(decimal quantity, decimal stepSize, int decimals)
     {
         if (stepSize <= 0) return Math.Round(quantity, decimals);

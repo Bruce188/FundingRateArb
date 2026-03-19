@@ -7,6 +7,7 @@ using CryptoExchange.Net.Objects.Errors;
 using FluentAssertions;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using Microsoft.Extensions.Logging;
 using Moq;
 using Polly;
 using Polly.Registry;
@@ -24,6 +25,9 @@ public class AsterConnectorTests
             .Returns(ResiliencePipeline.Empty);
         return mock.Object;
     }
+
+    private static ILogger<AsterConnector> BuildNullLogger()
+        => new Mock<ILogger<AsterConnector>>().Object;
 
     /// <summary>
     /// Creates a successful WebCallResult wrapping an array of AsterMarkPrice objects.
@@ -184,7 +188,7 @@ public class AsterConnectorTests
     public void ExchangeName_ReturnsAster()
     {
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         sut.ExchangeName.Should().Be("Aster");
     }
@@ -197,7 +201,7 @@ public class AsterConnectorTests
         // Aster returns 4-hour funding rate; connector must divide by 4.
         var markPrice = MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m);
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -212,7 +216,7 @@ public class AsterConnectorTests
         // RawRate must preserve the original 4-hour rate, not the normalised per-hour rate.
         var markPrice = MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m);
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -226,7 +230,7 @@ public class AsterConnectorTests
         // "ETHUSDT" → "ETH"
         var markPrice = MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0001m);
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -238,7 +242,7 @@ public class AsterConnectorTests
     public async Task GetFundingRates_WhenApiFails_ThrowsInvalidOperationException()
     {
         var client = BuildClientWithMarkPrices(FailMarkPrices("API server error"));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var act = () => sut.GetFundingRatesAsync();
 
@@ -256,7 +260,7 @@ public class AsterConnectorTests
             MakeMarkPrice("SOLUSDT", 180m, 179.5m, fundingRate: -0.0004m),
         };
         var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -288,7 +292,7 @@ public class AsterConnectorTests
             MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0008m),
         };
         var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -299,7 +303,7 @@ public class AsterConnectorTests
     public async Task GetFundingRates_WhenEmptyResponse_ReturnsEmptyList()
     {
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -318,7 +322,7 @@ public class AsterConnectorTests
             MakeMarkPrice("USTCUSDT", 0.02m, 0.02m, 0.0001m),
         };
         var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -380,7 +384,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
 
@@ -439,7 +443,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 1);
 
@@ -456,7 +460,7 @@ public class AsterConnectorTests
             QuantityFilled = 0.05m,
         };
         var client = BuildClientWithOrderResult(SuccessOrder(asterOrder));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
 
@@ -470,7 +474,7 @@ public class AsterConnectorTests
     public async Task PlaceMarketOrder_ReturnsFailureResult_WhenSdkFails()
     {
         var client = BuildClientWithOrderResult(FailOrder("Insufficient balance"));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
 
@@ -522,7 +526,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
 
@@ -592,7 +596,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         await sut.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5);
 
@@ -652,7 +656,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
@@ -711,7 +715,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         await sut.ClosePositionAsync("ETH", Side.Short);
 
@@ -748,7 +752,7 @@ public class AsterConnectorTests
             MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m),
         };
         var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var price = await sut.GetMarkPriceAsync("ETH");
 
@@ -760,7 +764,7 @@ public class AsterConnectorTests
     {
         var prices = new[] { MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m) };
         var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var act = () => sut.GetMarkPriceAsync("DOGE");
 
@@ -782,7 +786,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var price1 = await sut.GetMarkPriceAsync("ETH");
         var price2 = await sut.GetMarkPriceAsync("ETH");
@@ -813,7 +817,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var ethPrice = await sut.GetMarkPriceAsync("ETH");
         var btcPrice = await sut.GetMarkPriceAsync("BTC");
@@ -832,7 +836,7 @@ public class AsterConnectorTests
     public void AsterConnector_ImplementsIDisposable()
     {
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         sut.Should().BeAssignableTo<IDisposable>(
             "AsterConnector must implement IDisposable to release the SemaphoreSlim");
@@ -842,7 +846,7 @@ public class AsterConnectorTests
     public void AsterConnector_Dispose_DoesNotThrow()
     {
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var act = () => ((IDisposable)sut).Dispose();
         act.Should().NotThrow("Dispose must be safe to call");
@@ -868,7 +872,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var price1 = await sut.GetMarkPriceAsync("ETH");
         var price2 = await sut.GetMarkPriceAsync("ETH");
@@ -903,7 +907,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var available = await sut.GetAvailableBalanceAsync();
 
@@ -926,7 +930,7 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var act = () => sut.GetAvailableBalanceAsync();
 
@@ -955,10 +959,99 @@ public class AsterConnectorTests
         var clientMock = new Mock<IAsterRestClient>();
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
 
-        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
 
         var available = await sut.GetAvailableBalanceAsync();
 
         available.Should().Be(150m);
+    }
+
+    // ── B-W3: SetLeverage failure is logged, order still proceeds ─────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_WhenSetLeverageFails_LogsWarningAndProceedsWithOrder()
+    {
+        // Arrange — SetLeverageAsync returns a failure result
+        var loggerMock = new Mock<ILogger<AsterConnector>>();
+
+        var failLeverage = new WebCallResult<AsterLeverage>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, "leverage limit exceeded"), null!));
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(failLeverage);
+
+        var asterOrder = new AsterOrder { Id = 1, AveragePrice = 3500m, QuantityFilled = 0.1m };
+        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(), It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(), It.IsAny<string>(), It.IsAny<decimal?>(), It.IsAny<bool?>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder(asterOrder));
+
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), loggerMock.Object);
+
+        // Act
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert — order must succeed despite leverage failure
+        result.Success.Should().BeTrue("order must proceed even if SetLeverage fails");
+
+        // A warning must have been logged about the leverage failure
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("leverage")),
+                null,
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce,
+            "a warning must be logged when SetLeverage fails");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_WhenSetLeverageSucceeds_NoWarningLogged()
+    {
+        // Arrange — SetLeverageAsync succeeds
+        var loggerMock = new Mock<ILogger<AsterConnector>>();
+
+        var asterOrder = new AsterOrder { Id = 2, AveragePrice = 3500m, QuantityFilled = 0.1m };
+        var client = BuildClientWithOrderResult(SuccessOrder(asterOrder));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), loggerMock.Object);
+
+        // Act
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        // Assert — no warning logged for leverage
+        result.Success.Should().BeTrue();
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("leverage")),
+                null,
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never,
+            "no warning should be logged when SetLeverage succeeds");
     }
 }
