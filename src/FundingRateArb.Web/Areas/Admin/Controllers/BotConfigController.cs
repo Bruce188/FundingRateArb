@@ -42,7 +42,7 @@ public class BotConfigController : Controller
         if (!ModelState.IsValid)
             return View(model);
 
-        var config = await _uow.BotConfig.GetActiveAsync();
+        var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
         config.IsEnabled = model.IsEnabled;
         config.OpenThreshold = model.OpenThreshold!.Value;
@@ -69,7 +69,7 @@ public class BotConfigController : Controller
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> Toggle()
     {
-        var config = await _uow.BotConfig.GetActiveAsync();
+        var config = await _uow.BotConfig.GetActiveTrackedAsync();
         config.IsEnabled = !config.IsEnabled;
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
