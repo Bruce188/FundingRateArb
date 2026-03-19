@@ -15,10 +15,15 @@ public class BotOrchestrator : BackgroundService
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
+    private bool _disposed;
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
-    private const int StartupDelaySeconds = 90;
+    // M8: 65s gives FundingRateFetcher one full 60s cycle + 5s margin to complete its first fetch
+    private const int StartupDelaySeconds = 65;
+
+    // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
+    private DateTime _lastAlertPushUtc = DateTime.UtcNow;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -46,7 +51,8 @@ public class BotOrchestrator : BackgroundService
             // Belt-and-suspenders: skip if previous cycle still running
             if (!await _cycleLock.WaitAsync(0, ct))
             {
-                _logger.LogWarning("Previous bot cycle still running — skipping this tick");
+                // L1: Routine overlap — Debug to avoid polluting the SQL audit sink
+                _logger.LogDebug("Previous bot cycle still running — skipping this tick");
                 continue;
             }
 
@@ -90,9 +96,9 @@ public class BotOrchestrator : BackgroundService
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
 
         // Step 1: Monitor and auto-close stale/unhealthy positions
-        await healthMonitor.CheckAndActAsync();
+        await healthMonitor.CheckAndActAsync(ct);
 
-        // H3: Fetch open positions ONCE after health monitor (may have closed some)
+        // M6: Fetch open positions AFTER health monitor so closed positions are excluded
         var openPositions = await uow.Positions.GetOpenAsync();
 
         // Push position updates + alerts created by health monitor
@@ -114,7 +120,17 @@ public class BotOrchestrator : BackgroundService
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
 
-        var opportunities = await signalEngine.GetOpportunitiesAsync();
+        var opportunities = await signalEngine.GetOpportunitiesAsync(ct);
+
+        // H8: Push opportunity updates here (moved from FundingRateFetcher to keep SRP)
+        try
+        {
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunities);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
+        }
 
         foreach (var opp in opportunities)
         {
@@ -128,12 +144,14 @@ public class BotOrchestrator : BackgroundService
                 "Opening position: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
                 opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
 
-            var (success, error) = await executionEngine.OpenPositionAsync(opp, size);
+            var (success, error) = await executionEngine.OpenPositionAsync(opp, size, ct);
 
             if (success)
             {
-                await _hubContext.Clients.All.ReceiveNotification(
-                    $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}");
+                // H7: Route to owning user + admins only (Clients.All would reveal trading to all users)
+                var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
+                await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
+                await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
                 // H3: Re-fetch after opening to include new position
                 openPositions = await uow.Positions.GetOpenAsync();
@@ -156,8 +174,9 @@ public class BotOrchestrator : BackgroundService
     }
 
     /// <summary>
-    /// Pushes a ReceiveDashboardUpdate to ALL connected clients with current KPI values.
+    /// Pushes a ReceiveDashboardUpdate to the Admins group with current KPI values.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
+    /// H-BO1: Dashboard aggregates target Admins group only (not Clients.All).
     /// </summary>
     private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
     {
@@ -176,7 +195,7 @@ public class BotOrchestrator : BackgroundService
                 BestSpread        = bestSpread,
             };
 
-            await _hubContext.Clients.All.ReceiveDashboardUpdate(dto);
+            await _hubContext.Clients.Group(HubGroups.Admins).ReceiveDashboardUpdate(dto);
         }
         catch (Exception ex)
         {
@@ -185,37 +204,46 @@ public class BotOrchestrator : BackgroundService
     }
 
     /// <summary>
-    /// Pushes a ReceivePositionUpdate for each open position to ALL connected clients.
+    /// Pushes a ReceivePositionUpdate for each open position to the owning user's group.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
-    /// TODO: Future improvement — target per-user groups for position updates
+    /// H-BO1: Position updates target per-user groups to prevent data leaks.
+    /// H8: Uses Task.WhenAll with per-item try/catch so one failed push does not drop the rest.
     /// </summary>
     private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
     {
-        try
+        var tasks = openPositions.Select(async pos =>
         {
-            foreach (var pos in openPositions)
+            try
             {
                 var dto = MapPositionToDto(pos);
-                await _hubContext.Clients.All.ReceivePositionUpdate(dto);
+                await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to push position updates via SignalR");
-        }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to push position update for #{PositionId}", pos.Id);
+            }
+        });
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>
     /// Pushes a ReceiveAlert for recent unread alerts to per-user SignalR groups.
     /// M12: Uses GetRecentUnreadAsync instead of GetAllAsync + in-memory filter.
+    /// M7: Uses rolling _lastAlertPushUtc cutoff to avoid replaying alerts across cycles.
     /// C4: Targets per-user groups instead of Clients.All.
     /// </summary>
     private async Task PushNewAlertsAsync(IUnitOfWork uow)
     {
         try
         {
-            // M12: Query only recent unread alerts at the database level
-            var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(TimeSpan.FromMinutes(2));
+            // M1+M2: Capture both timestamps once; move marker update AFTER query so alerts
+            // created between marker update and query return are not silently missed.
+            var since = _lastAlertPushUtc;
+            var now = DateTime.UtcNow;
+            var window = now - since;
+
+            var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(window);
+            _lastAlertPushUtc = now;
 
             foreach (var alert in recentAlerts)
             {
@@ -239,6 +267,17 @@ public class BotOrchestrator : BackgroundService
         {
             _logger.LogWarning(ex, "Failed to push alert updates via SignalR");
         }
+    }
+
+    // M-BO2: Dispose SemaphoreSlim to release kernel resources
+    public override void Dispose()
+    {
+        if (!_disposed)
+        {
+            _cycleLock.Dispose();
+            _disposed = true;
+        }
+        base.Dispose();
     }
 
     private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)

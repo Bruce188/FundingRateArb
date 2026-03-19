@@ -329,9 +329,9 @@ public class AsterConnectorTests
     // ── PlaceMarketOrderAsync ──────────────────────────────────────────────────
 
     [Fact]
-    public async Task PlaceMarketOrder_ComputesQuantityFromMarkPrice()
+    public async Task PlaceMarketOrder_ComputesQuantityFromMarkPriceAndLeverage()
     {
-        // Verify that quantity = sizeUsdc / markPrice is passed (not null)
+        // Verify that quantity = sizeUsdc * leverage / markPrice (leverage must be applied)
         decimal? capturedQuantity = null;
         var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
         tradingMock
@@ -365,7 +365,67 @@ public class AsterConnectorTests
                 It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessLeverage());
 
-        // Mark price = 2500 so quantity = 100 / 2500 = 0.04
+        // Mark price = 2500, leverage = 5
+        // Expected quantity = 100 * 5 / 2500 = 0.2 (NOT 100/2500 = 0.04 which would be wrong)
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 2500m, 2495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+
+        await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
+
+        capturedQuantity.Should().NotBeNull("quantity must be computed from mark price and leverage");
+        capturedQuantity.Should().Be(0.2m, "100 USDC * 5 leverage / 2500 mark price = 0.2");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_LeverageOneGivesCorrectQuantity()
+    {
+        // With leverage = 1: quantity = sizeUsdc * 1 / markPrice = sizeUsdc / markPrice
+        decimal? capturedQuantity = null;
+        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+                {
+                    capturedQuantity = (decimal?)invocation.Arguments[3];
+                }))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 1 }));
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+
+        // Mark price = 2500, leverage = 1 → quantity = 100 * 1 / 2500 = 0.04
         var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
         exchangeDataMock
             .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
@@ -383,8 +443,7 @@ public class AsterConnectorTests
 
         await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 1);
 
-        capturedQuantity.Should().NotBeNull("quantity must be computed from mark price, not null");
-        capturedQuantity.Should().Be(0.04m, "100 USDC / 2500 mark price = 0.04");
+        capturedQuantity.Should().Be(0.04m, "100 USDC * 1 leverage / 2500 mark price = 0.04");
     }
 
     [Fact]
@@ -706,6 +765,123 @@ public class AsterConnectorTests
         var act = () => sut.GetMarkPriceAsync("DOGE");
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_CachePreventsRedundantApiCalls()
+    {
+        // Two consecutive GetMarkPriceAsync calls for the same asset must only hit the API once.
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+
+        var price1 = await sut.GetMarkPriceAsync("ETH");
+        var price2 = await sut.GetMarkPriceAsync("ETH");
+
+        price1.Should().Be(3500m);
+        price2.Should().Be(3500m);
+        exchangeDataMock.Verify(
+            x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "The mark price endpoint should only be fetched once; second call must use cache");
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_CacheIsSharedAcrossMultipleAssets()
+    {
+        // Fetching ETH then BTC within TTL should only call the API once.
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([
+                MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m),
+                MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m),
+            ]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+
+        var ethPrice = await sut.GetMarkPriceAsync("ETH");
+        var btcPrice = await sut.GetMarkPriceAsync("BTC");
+
+        ethPrice.Should().Be(3500m);
+        btcPrice.Should().Be(65000m);
+        exchangeDataMock.Verify(
+            x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Fetching a second asset within TTL must use cached mark price data");
+    }
+
+    // ── IDisposable (C4) ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void AsterConnector_ImplementsIDisposable()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+
+        sut.Should().BeAssignableTo<IDisposable>(
+            "AsterConnector must implement IDisposable to release the SemaphoreSlim");
+    }
+
+    [Fact]
+    public void AsterConnector_Dispose_DoesNotThrow()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+
+        var act = () => ((IDisposable)sut).Dispose();
+        act.Should().NotThrow("Dispose must be safe to call");
+    }
+
+    // ── GetMarkPrice cache post-lock read (H6) ─────────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_CacheHit_DoesNotPerformExtraHttpCall()
+    {
+        // Three calls within TTL should result in exactly one API call
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([
+                MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m),
+                MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m),
+            ]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+
+        var price1 = await sut.GetMarkPriceAsync("ETH");
+        var price2 = await sut.GetMarkPriceAsync("ETH");
+        var price3 = await sut.GetMarkPriceAsync("BTC");
+
+        price1.Should().Be(3500m);
+        price2.Should().Be(3500m);
+        price3.Should().Be(65000m);
+
+        exchangeDataMock.Verify(
+            x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "All subsequent calls within TTL must use cached result without re-fetching");
     }
 
     // ── GetAvailableBalanceAsync ───────────────────────────────────────────────

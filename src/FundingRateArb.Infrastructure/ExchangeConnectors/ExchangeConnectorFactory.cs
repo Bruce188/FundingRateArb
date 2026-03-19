@@ -7,7 +7,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 {
     private readonly IServiceProvider _serviceProvider;
 
-    private static readonly Dictionary<string, Type> ConnectorTypes = new()
+    private static readonly Dictionary<string, Type> ConnectorTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         { "Hyperliquid", typeof(HyperliquidConnector) },
         { "Lighter",     typeof(LighterConnector) },

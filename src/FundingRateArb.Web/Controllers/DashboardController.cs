@@ -19,9 +19,10 @@ public class DashboardController : Controller
         _logger = logger;
     }
 
-    public async Task<IActionResult> Index()
+    public async Task<IActionResult> Index(CancellationToken ct = default)
     {
-        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null) return Unauthorized();
 
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var allOpenPositions = await _uow.Positions.GetOpenAsync();
@@ -59,7 +60,7 @@ public class DashboardController : Controller
             Volume24hUsd = r.Volume24hUsd
         }).ToList();
 
-        var totalPnl = positionSummaries.Sum(p => p.CurrentSpreadPerHour * p.SizeUsdc);
+        var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
         var bestSpread = positionSummaries.Count > 0
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
             : (rateDtos.Count > 0 ? rateDtos.Max(r => r.RatePerHour) : 0m);

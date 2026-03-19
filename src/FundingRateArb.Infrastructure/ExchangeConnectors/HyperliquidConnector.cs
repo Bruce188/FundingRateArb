@@ -7,10 +7,11 @@ using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 
-public class HyperliquidConnector : IExchangeConnector
+public class HyperliquidConnector : IExchangeConnector, IDisposable
 {
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
+    private readonly MarkPriceCacheHelper _markPriceCache = new();
 
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
@@ -162,19 +163,25 @@ public class HyperliquidConnector : IExchangeConnector
 
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        return await _markPriceCache.GetOrRefreshAsync(asset, async token =>
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async t => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(t),
+                token);
+            if (!result.Success)
+                throw new InvalidOperationException(result.Error!.ToString());
 
-        var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
-            ct);
+            var cache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in result.Data.Tickers)
+                cache[t.Symbol] = t.MarkPrice;
+            return cache;
+        }, ct);
+    }
 
-        if (!result.Success)
-            throw new InvalidOperationException(result.Error!.ToString());
-
-        var ticker = result.Data.Tickers.FirstOrDefault(t => t.Symbol == asset)
-            ?? throw new InvalidOperationException($"Asset '{asset}' not found on Hyperliquid.");
-
-        return ticker.MarkPrice;
+    public void Dispose()
+    {
+        _markPriceCache.Dispose();
     }
 
     public async Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default)

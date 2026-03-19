@@ -1,8 +1,8 @@
-using FundingRateArb.Domain.Entities;
+using FundingRateArb.Application.DTOs;
 
 namespace FundingRateArb.Web.ViewModels;
 
 public class PositionIndexViewModel
 {
-    public List<ArbitragePosition> Positions { get; set; } = [];
+    public List<PositionSummaryDto> Positions { get; set; } = [];
 }

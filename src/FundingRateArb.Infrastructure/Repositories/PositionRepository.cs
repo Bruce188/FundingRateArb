@@ -28,7 +28,15 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == PositionStatus.Open)
             .ToListAsync();
 
-    public Task<List<ArbitragePosition>> GetByUserAsync(string userId) =>
+    public Task<List<ArbitragePosition>> GetOpenTrackedAsync() =>
+        _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .Where(p => p.Status == PositionStatus.Open)
+            .ToListAsync();
+
+    public Task<List<ArbitragePosition>> GetByUserAsync(string userId, int skip = 0, int take = 500) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
@@ -36,15 +44,19 @@ public class PositionRepository : IPositionRepository
             .AsNoTracking()
             .Where(p => p.UserId == userId)
             .OrderByDescending(p => p.OpenedAt)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync();
 
-    public Task<List<ArbitragePosition>> GetAllAsync() =>
+    public Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
             .Include(p => p.ShortExchange)
             .AsNoTracking()
             .OrderByDescending(p => p.OpenedAt)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync();
 
     public void Add(ArbitragePosition position) =>

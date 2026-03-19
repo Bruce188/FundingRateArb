@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Web.ViewModels;
 
 namespace FundingRateArb.Web.Controllers;
@@ -18,17 +19,28 @@ public class OpportunitiesController : Controller
         _uow = uow;
     }
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(CancellationToken ct = default)
     {
-        ct.ThrowIfCancellationRequested();
-        var opportunities = await _signalEngine.GetOpportunitiesAsync();
-        var config = await _uow.BotConfig.GetActiveAsync();
+        var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
+        BotConfiguration? config = null;
+        try { config = await _uow.BotConfig.GetActiveAsync(); }
+        catch (InvalidOperationException) { }
+
+        if (config is null)
+            return View(new OpportunityListViewModel { Opportunities = new() });
+
         var vm = new OpportunityListViewModel
         {
-            Opportunities   = opportunities,
-            NotionalPerLeg  = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * config.DefaultLeverage,
-            VolumeFraction  = config.VolumeFraction,
+            Opportunities = opportunities,
         };
+
+        // L5: only expose operator capital/leverage parameters to Admins
+        if (User.IsInRole("Admin"))
+        {
+            vm.NotionalPerLeg = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * config.DefaultLeverage;
+            vm.VolumeFraction = config.VolumeFraction;
+        }
+
         return View(vm);
     }
 }

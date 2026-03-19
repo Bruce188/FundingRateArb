@@ -34,14 +34,14 @@ public class ExchangeController : Controller
     public async Task<IActionResult> Create(ExchangeCreateViewModel model)
     {
         if (!Uri.TryCreate(model.ApiBaseUrl, UriKind.Absolute, out var apiUri)
-            || (apiUri.Scheme != "https" && apiUri.Scheme != "http"))
+            || apiUri.Scheme != "https")
         {
-            ModelState.AddModelError(nameof(model.ApiBaseUrl), "Must be a valid HTTP(S) URL.");
+            ModelState.AddModelError(nameof(model.ApiBaseUrl), "Must be a valid HTTPS URL.");
         }
         if (!Uri.TryCreate(model.WsBaseUrl, UriKind.Absolute, out var wsUri)
-            || (wsUri.Scheme != "wss" && wsUri.Scheme != "ws"))
+            || wsUri.Scheme != "wss")
         {
-            ModelState.AddModelError(nameof(model.WsBaseUrl), "Must be a valid WebSocket URL (ws/wss).");
+            ModelState.AddModelError(nameof(model.WsBaseUrl), "Must be a valid secure WebSocket URL (wss://).");
         }
 
         if (!ModelState.IsValid)
@@ -99,14 +99,14 @@ public class ExchangeController : Controller
             return BadRequest();
 
         if (!Uri.TryCreate(model.ApiBaseUrl, UriKind.Absolute, out var apiUri)
-            || (apiUri.Scheme != "https" && apiUri.Scheme != "http"))
+            || apiUri.Scheme != "https")
         {
-            ModelState.AddModelError(nameof(model.ApiBaseUrl), "Must be a valid HTTP(S) URL.");
+            ModelState.AddModelError(nameof(model.ApiBaseUrl), "Must be a valid HTTPS URL.");
         }
         if (!Uri.TryCreate(model.WsBaseUrl, UriKind.Absolute, out var wsUri)
-            || (wsUri.Scheme != "wss" && wsUri.Scheme != "ws"))
+            || wsUri.Scheme != "wss")
         {
-            ModelState.AddModelError(nameof(model.WsBaseUrl), "Must be a valid WebSocket URL (ws/wss).");
+            ModelState.AddModelError(nameof(model.WsBaseUrl), "Must be a valid secure WebSocket URL (wss://).");
         }
 
         if (!ModelState.IsValid)
@@ -151,8 +151,16 @@ public class ExchangeController : Controller
         if (exchange is null)
             return NotFound();
 
-        _uow.Exchanges.Remove(exchange);
-        await _uow.SaveAsync();
+        try
+        {
+            _uow.Exchanges.Remove(exchange);
+            await _uow.SaveAsync();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+        {
+            TempData["Error"] = "Cannot delete this exchange — it has associated positions or data.";
+            return RedirectToAction(nameof(Delete), new { id });
+        }
 
         TempData["Success"] = $"Exchange '{exchange.Name}' deleted successfully.";
         return RedirectToAction(nameof(Index));

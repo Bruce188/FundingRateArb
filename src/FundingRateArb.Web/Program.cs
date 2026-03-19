@@ -90,6 +90,7 @@ try
     {
         options.Password.RequireDigit           = true;
         options.Password.RequiredLength         = 12;
+        options.Password.RequireLowercase       = true;
         options.Password.RequireUppercase       = true;
         options.Password.RequireNonAlphanumeric = true;
         options.SignIn.RequireConfirmedAccount  = false;
@@ -111,9 +112,16 @@ try
     });
 
     // --- Data Protection (for IApiKeyVault) ---
+    var dpKeysDir = new DirectoryInfo(
+        Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys"));
+    if (!dpKeysDir.Exists) dpKeysDir.Create();
+    // On Linux, restrict to owner-only (chmod 700 equivalent)
+    if (!OperatingSystem.IsWindows())
+    {
+        dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    }
     builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new System.IO.DirectoryInfo(
-            Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys")))
+        .PersistKeysToFileSystem(dpKeysDir)
         .SetApplicationName("FundingRateArb");
     builder.Services.AddScoped<IApiKeyVault, ApiKeyVault>();
 
@@ -125,7 +133,7 @@ try
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
-    builder.Services.AddScoped<IYieldCalculator, YieldCalculator>();
+    builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
@@ -157,19 +165,18 @@ try
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(15));
     });
 
-    // "OrderExecution" — critical path; more aggressive retry, no circuit breaker
+    // "OrderExecution" — critical path; no retry — market orders must never be retried to prevent double fills
     builder.Services.AddResiliencePipeline("OrderExecution", static pipelineBuilder =>
     {
-        pipelineBuilder.AddRetry(new RetryStrategyOptions
+        pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
         {
+            FailureRatio      = 0.5,
+            SamplingDuration  = TimeSpan.FromSeconds(30),
+            MinimumThroughput = 3,
+            BreakDuration     = TimeSpan.FromSeconds(60),
             ShouldHandle = new PredicateBuilder()
                 .Handle<HttpRequestException>()
-                .Handle<TimeoutRejectedException>()
-                .Handle<TaskCanceledException>(),
-            MaxRetryAttempts = 5,
-            Delay            = TimeSpan.FromSeconds(1),
-            BackoffType      = DelayBackoffType.Exponential,
-            UseJitter        = true,
+                .Handle<TimeoutRejectedException>(),
         });
 
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(30));
@@ -205,7 +212,10 @@ try
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- SignalR ---
-    builder.Services.AddSignalR();
+    builder.Services.AddSignalR(options =>
+    {
+        options.MaximumReceiveMessageSize = 64 * 1024;
+    });
 
     // --- Rate Limiting ---
     builder.Services.AddRateLimiter(options =>
@@ -216,6 +226,12 @@ try
             opt.Window = TimeSpan.FromMinutes(1);
             opt.PermitLimit = 10;
             opt.QueueLimit = 0;
+        });
+        options.AddFixedWindowLimiter("signalr", opt =>
+        {
+            opt.Window = TimeSpan.FromSeconds(10);
+            opt.PermitLimit = 5;
+            opt.QueueLimit = 2;
         });
     });
 
@@ -266,8 +282,10 @@ try
 
     app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}");
     app.MapControllerRoute("default", "{controller=Dashboard}/{action=Index}/{id?}");
-    app.MapRazorPages();
-    app.MapHub<DashboardHub>("/hubs/dashboard");
+    app.MapRazorPages()
+        .RequireRateLimiting("auth");
+    app.MapHub<DashboardHub>("/hubs/dashboard")
+        .RequireRateLimiting("signalr");
 
     app.Run();
 }

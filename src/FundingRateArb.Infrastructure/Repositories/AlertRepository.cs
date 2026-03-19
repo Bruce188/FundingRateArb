@@ -22,16 +22,19 @@ public class AlertRepository : IAlertRepository
     public Task<Alert?> GetByIdAsync(int id) =>
         _context.Alerts.FirstOrDefaultAsync(a => a.Id == id);
 
-    public Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false) =>
+    public Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false, int skip = 0, int take = 500) =>
         _context.Alerts
             .Where(a => a.UserId == userId && (!unreadOnly || !a.IsRead))
             .OrderByDescending(a => a.CreatedAt)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync();
 
     public Task<List<Alert>> GetByPositionAsync(int positionId) =>
         _context.Alerts
             .Where(a => a.ArbitragePositionId == positionId)
             .OrderByDescending(a => a.CreatedAt)
+            .Take(200)
             .ToListAsync();
 
     public Task<Alert?> GetRecentAsync(string userId, int? positionId, AlertType type, TimeSpan within)
@@ -52,6 +55,7 @@ public class AlertRepository : IAlertRepository
         return await _context.Alerts
             .Where(a => !a.IsRead && a.CreatedAt >= cutoff)
             .OrderByDescending(a => a.CreatedAt)
+            .Take(100)
             .ToListAsync();
     }
 

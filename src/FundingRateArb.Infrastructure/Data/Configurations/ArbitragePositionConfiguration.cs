@@ -42,5 +42,7 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
             .WithMany(u => u.Positions)
             .HasForeignKey(p => p.UserId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasIndex(p => p.Status);
     }
 }

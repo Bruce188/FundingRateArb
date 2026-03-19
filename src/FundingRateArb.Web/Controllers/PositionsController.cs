@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels;
@@ -24,7 +25,7 @@ public class PositionsController : Controller
     }
 
     [HttpGet]
-    public async Task<IActionResult> Index()
+    public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
@@ -33,11 +34,29 @@ public class PositionsController : Controller
             ? await _uow.Positions.GetAllAsync()
             : await _uow.Positions.GetByUserAsync(userId);
 
-        return View(new PositionIndexViewModel { Positions = positions });
+        var positionDtos = positions.Select(p => new PositionSummaryDto
+        {
+            Id = p.Id,
+            AssetSymbol = p.Asset?.Symbol ?? $"Asset #{p.AssetId}",
+            LongExchangeName = p.LongExchange?.Name ?? $"Exchange #{p.LongExchangeId}",
+            ShortExchangeName = p.ShortExchange?.Name ?? $"Exchange #{p.ShortExchangeId}",
+            SizeUsdc = p.SizeUsdc,
+            MarginUsdc = p.MarginUsdc,
+            EntrySpreadPerHour = p.EntrySpreadPerHour,
+            CurrentSpreadPerHour = p.CurrentSpreadPerHour,
+            AccumulatedFunding = p.AccumulatedFunding,
+            UnrealizedPnl = p.AccumulatedFunding,
+            RealizedPnl = p.RealizedPnl,
+            Status = p.Status,
+            OpenedAt = p.OpenedAt,
+            ClosedAt = p.ClosedAt,
+        }).ToList();
+
+        return View(new PositionIndexViewModel { Positions = positionDtos });
     }
 
     [HttpGet]
-    public async Task<IActionResult> Details(int id)
+    public async Task<IActionResult> Details(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
@@ -49,9 +68,34 @@ public class PositionsController : Controller
         if (!User.IsInRole("Admin") && position.UserId != userId)
             return Forbid();
 
+        var positionDto = new PositionDetailsDto
+        {
+            Id = position.Id,
+            AssetSymbol = position.Asset?.Symbol ?? $"Asset #{position.AssetId}",
+            AssetId = position.AssetId,
+            LongExchangeName = position.LongExchange?.Name ?? $"Exchange #{position.LongExchangeId}",
+            LongExchangeId = position.LongExchangeId,
+            ShortExchangeName = position.ShortExchange?.Name ?? $"Exchange #{position.ShortExchangeId}",
+            ShortExchangeId = position.ShortExchangeId,
+            SizeUsdc = position.SizeUsdc,
+            MarginUsdc = position.MarginUsdc,
+            Leverage = position.Leverage,
+            LongEntryPrice = position.LongEntryPrice,
+            ShortEntryPrice = position.ShortEntryPrice,
+            EntrySpreadPerHour = position.EntrySpreadPerHour,
+            CurrentSpreadPerHour = position.CurrentSpreadPerHour,
+            AccumulatedFunding = position.AccumulatedFunding,
+            RealizedPnl = position.RealizedPnl,
+            Status = position.Status,
+            CloseReason = position.CloseReason,
+            OpenedAt = position.OpenedAt,
+            ClosedAt = position.ClosedAt,
+            Notes = position.Notes,
+        };
+
         var vm = new PositionDetailsViewModel
         {
-            Position = position,
+            Position = positionDto,
             UnrealizedPnl = position.AccumulatedFunding,
             DurationHours = (decimal)(DateTime.UtcNow - position.OpenedAt).TotalHours,
         };
@@ -60,7 +104,7 @@ public class PositionsController : Controller
     }
 
     [HttpPost, ValidateAntiForgeryToken]
-    public async Task<IActionResult> Close(int id)
+    public async Task<IActionResult> Close(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
@@ -76,7 +120,7 @@ public class PositionsController : Controller
             return BadRequest("Position is already closed.");
 
         _logger.LogInformation("User {UserId} manually closing position {PositionId}", userId, id);
-        await _executionEngine.ClosePositionAsync(position, CloseReason.Manual);
+        await _executionEngine.ClosePositionAsync(position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
     }

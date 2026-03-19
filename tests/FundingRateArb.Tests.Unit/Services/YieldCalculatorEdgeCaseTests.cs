@@ -51,7 +51,7 @@ public class YieldCalculatorEdgeCaseTests
     [Fact]
     public void BreakEvenHours_WithZeroNetRate_ReturnsMaxValue()
     {
-        var result = _sut.BreakEvenHours(100m, 0.001m, 0m);
+        var result = _sut.BreakEvenHours(0.001m, 0m);
 
         result.Should().Be(decimal.MaxValue);
     }
@@ -61,7 +61,7 @@ public class YieldCalculatorEdgeCaseTests
     [Fact]
     public void BreakEvenHours_WithNegativeNetRate_ReturnsMaxValue()
     {
-        var result = _sut.BreakEvenHours(100m, 0.001m, -0.0001m);
+        var result = _sut.BreakEvenHours(0.001m, -0.0001m);
 
         result.Should().Be(decimal.MaxValue);
     }

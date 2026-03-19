@@ -111,7 +111,7 @@ public class PositionHealthMonitorTests
     public async Task CheckAndAct_WhenSpreadBelowCloseThreshold_ClosesPosition()
     {
         var pos = MakeOpenPosition();
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
 
         // Spread collapsed: short rate now lower than long rate → negative spread
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m); // spread = -0.0002
@@ -120,7 +120,7 @@ public class PositionHealthMonitorTests
         await _sut.CheckAndActAsync();
 
         _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed),
+            e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -130,14 +130,14 @@ public class PositionHealthMonitorTests
     public async Task CheckAndAct_WhenMaxHoldTimeReached_ClosesPosition()
     {
         var pos = MakeOpenPosition(openedAt: DateTime.UtcNow.AddHours(-73)); // >72 hours
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
         SetupMarkPrices();
 
         await _sut.CheckAndActAsync();
 
         _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.MaxHoldTimeReached),
+            e => e.ClosePositionAsync(pos, CloseReason.MaxHoldTimeReached, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -148,14 +148,14 @@ public class PositionHealthMonitorTests
     {
         // Entry = 3000/3001. Price moved >15%: 3000 → 3500 = 16.7% move
         var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
         SetupMarkPrices(longMark: 3500m, shortMark: 3500m); // big price move
 
         await _sut.CheckAndActAsync();
 
         _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.StopLoss),
+            e => e.ClosePositionAsync(pos, CloseReason.StopLoss, It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -165,14 +165,14 @@ public class PositionHealthMonitorTests
     public async Task CheckAndAct_WhenSpreadHealthy_DoesNothing()
     {
         var pos = MakeOpenPosition();
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // spread = 0.0005 (healthy)
         SetupMarkPrices();
 
         await _sut.CheckAndActAsync();
 
         _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>()),
+            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -183,7 +183,7 @@ public class PositionHealthMonitorTests
     {
         // Spread is low (below alertThreshold=0.0001) but above closeThreshold=-0.00005
         var pos = MakeOpenPosition();
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.00035m); // spread = 0.00005 < alertThreshold
         SetupMarkPrices();
 
@@ -201,7 +201,7 @@ public class PositionHealthMonitorTests
     public async Task CheckAndAct_DoesNotCreateDuplicateAlerts_WithinOneHour()
     {
         var pos = MakeOpenPosition();
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.00035m); // spread low
         SetupMarkPrices();
 
@@ -227,7 +227,7 @@ public class PositionHealthMonitorTests
     public async Task CheckAndAct_UpdatesCurrentSpreadPerHour_OnEveryCheck()
     {
         var pos = MakeOpenPosition(entrySpread: 0.0005m);
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0004m); // spread = 0.0003
         SetupMarkPrices();
 
@@ -242,12 +242,88 @@ public class PositionHealthMonitorTests
     [Fact]
     public async Task CheckAndAct_WhenNoOpenPositions_DoesNothing()
     {
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
 
         await _sut.CheckAndActAsync();
 
         _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>()),
+            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // ── C-PR1: Uses GetOpenTrackedAsync (not GetOpenAsync) ─────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_UsesTrackedQuery_NotReadOnlyQuery()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+
+        await _sut.CheckAndActAsync();
+
+        // GetOpenTrackedAsync must be called; GetOpenAsync (read-only) must NOT be called
+        _mockPositions.Verify(p => p.GetOpenTrackedAsync(), Times.Once);
+        _mockPositions.Verify(p => p.GetOpenAsync(), Times.Never);
+    }
+
+    // ── C-PH1: SaveAsync called exactly once per cycle (not inside loop) ────────
+
+    [Fact]
+    public async Task CheckAndAct_CallsSaveAsyncExactlyOnce_RegardlessOfPositionCount()
+    {
+        var pos1 = MakeOpenPosition();
+        var pos2 = new ArbitragePosition
+        {
+            Id = 2,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos1, pos2]);
+        // Healthy spread for both — no close, but spread update + SaveAsync should still happen once
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        _mockAlerts.Setup(a => a.GetRecentAsync(
+            It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<AlertType>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync((Alert?)null);
+
+        await _sut.CheckAndActAsync();
+
+        // SaveAsync must be called exactly once regardless of how many positions exist
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── C-PH1: SaveAsync called once even when a position triggers close ────────
+
+    [Fact]
+    public async Task CheckAndAct_WithCloseTrigger_SavesOnceBeforeClose()
+    {
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        // Spread collapsed → triggers auto-close
+        SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m);
+        SetupMarkPrices();
+
+        await _sut.CheckAndActAsync();
+
+        // One save for the spread update batch, then close is called
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecEngine.Verify(
+            e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

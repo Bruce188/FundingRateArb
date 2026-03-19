@@ -83,7 +83,12 @@ public class ExecutionEngineEdgeCaseTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNull();
-        _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Never);
+
+        // C-EE2: A sentinel position IS persisted before legs fire (with Opening status),
+        // then updated to EmergencyClosed after failure. Exactly one Add call expected.
+        _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Once);
+        _mockPositions.Verify(p => p.Update(It.Is<ArbitragePosition>(
+            pos => pos.Status == PositionStatus.EmergencyClosed)), Times.Once);
     }
 
     // ── Test 2: Emergency close of long leg throws HttpRequestException ────────

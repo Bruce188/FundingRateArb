@@ -41,7 +41,7 @@ public class YieldCalculator : IYieldCalculator
     /// (position would never break even).
     /// Example: 0.09% fees / 0.04%/hr = 2.25 hours
     /// </summary>
-    public decimal BreakEvenHours(decimal sizeUsdc, decimal feeRateTotal, decimal netRatePerHour)
+    public decimal BreakEvenHours(decimal feeRateTotal, decimal netRatePerHour)
     {
         if (netRatePerHour <= 0m)
             return decimal.MaxValue;

@@ -22,8 +22,11 @@ public class PositionSizer : IPositionSizer
         var config = await _uow.BotConfig.GetActiveAsync();
 
         // Break-even limit: fee rate = gross spread minus net yield (fees subtracted by SignalEngine)
-        var entryFeeRate   = opp.SpreadPerHour - opp.NetYieldPerHour;
-        var breakEvenHours = _yieldCalculator.BreakEvenHours(0m, entryFeeRate, opp.NetYieldPerHour);
+        var entryFeeRate = opp.SpreadPerHour - opp.NetYieldPerHour;
+        // H4: Negative entryFeeRate means spread < net yield — invalid opportunity, reject
+        if (entryFeeRate < 0)
+            return 0m;
+        var breakEvenHours = _yieldCalculator.BreakEvenHours(entryFeeRate, opp.NetYieldPerHour);
         if (breakEvenHours > config.BreakevenHoursMax)
             return 0m;
 

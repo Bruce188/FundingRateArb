@@ -2,5 +2,5 @@ namespace FundingRateArb.Application.Services;
 
 public interface IPositionHealthMonitor
 {
-    Task CheckAndActAsync();
+    Task CheckAndActAsync(CancellationToken ct = default);
 }

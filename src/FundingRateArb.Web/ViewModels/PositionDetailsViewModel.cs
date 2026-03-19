@@ -1,10 +1,10 @@
-using FundingRateArb.Domain.Entities;
+using FundingRateArb.Application.DTOs;
 
 namespace FundingRateArb.Web.ViewModels;
 
 public class PositionDetailsViewModel
 {
-    public ArbitragePosition Position { get; set; } = null!;
+    public PositionDetailsDto Position { get; set; } = null!;
     public decimal UnrealizedPnl { get; set; }
     public decimal DurationHours { get; set; }
 }
