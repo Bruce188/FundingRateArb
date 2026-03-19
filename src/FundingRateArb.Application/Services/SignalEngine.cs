@@ -22,7 +22,8 @@ public class SignalEngine : ISignalEngine
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
-        var rates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
 
         var opportunities = new List<ArbitrageOpportunityDto>();
 
