@@ -59,15 +59,43 @@ public class ExecutionEngine : IExecutionEngine
         var longTask  = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long,  sizeUsdc, config.DefaultLeverage, ct);
         var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, config.DefaultLeverage, ct);
 
-        await Task.WhenAll(longTask, shortTask);
+        // C1: Wrap Task.WhenAll in try/catch — SDK connectors (Hyperliquid, Aster) throw
+        // InvalidOperationException/HttpRequestException on errors. If one task faults, WhenAll
+        // propagates the first exception immediately. We must inspect each task individually to
+        // determine which legs succeeded and need emergency close.
+        OrderResultDto? longResult  = null;
+        OrderResultDto? shortResult = null;
+        string? longException  = null;
+        string? shortException = null;
 
-        var longResult  = longTask.Result;
-        var shortResult = shortTask.Result;
-
-        if (longResult.Success && shortResult.Success)
+        try
         {
-            position.LongEntryPrice  = longResult.FilledPrice;
-            position.ShortEntryPrice = shortResult.FilledPrice;
+            await Task.WhenAll(longTask, shortTask);
+        }
+        catch
+        {
+            // At least one task faulted. Inspect each task individually.
+            // A completed task has a result; a faulted task has an exception.
+        }
+
+        if (longTask.IsCompletedSuccessfully)
+            longResult = longTask.Result;
+        else if (longTask.IsFaulted)
+            longException = longTask.Exception?.InnerException?.Message ?? longTask.Exception?.Message ?? "Unknown error";
+
+        if (shortTask.IsCompletedSuccessfully)
+            shortResult = shortTask.Result;
+        else if (shortTask.IsFaulted)
+            shortException = shortTask.Exception?.InnerException?.Message ?? shortTask.Exception?.Message ?? "Unknown error";
+
+        // If both legs returned results (no exceptions), use the existing Success=true/false logic
+        var longSuccess  = longResult?.Success  == true;
+        var shortSuccess = shortResult?.Success == true;
+
+        if (longSuccess && shortSuccess)
+        {
+            position.LongEntryPrice  = longResult!.FilledPrice;
+            position.ShortEntryPrice = shortResult!.FilledPrice;
             position.LongOrderId     = longResult.OrderId;
             position.ShortOrderId    = shortResult.OrderId;
             position.Status          = PositionStatus.Open;
@@ -92,14 +120,18 @@ public class ExecutionEngine : IExecutionEngine
             return (true, null);
         }
 
-        // Emergency close — close any leg that succeeded, independently fault-tolerant
+        // One or both legs failed (Success=false or threw an exception)
+        var longError  = longException ?? longResult?.Error;
+        var shortError = shortException ?? shortResult?.Error;
+
         _logger.LogError(
             "EMERGENCY CLOSE — One leg failed: {Asset} Long={LongStatus} Short={ShortStatus}",
             opp.AssetSymbol,
-            longResult.Success  ? "OK" : $"FAILED: {longResult.Error}",
-            shortResult.Success ? "OK" : $"FAILED: {shortResult.Error}");
+            longSuccess  ? "OK" : $"FAILED: {longError}",
+            shortSuccess ? "OK" : $"FAILED: {shortError}");
 
-        if (longResult.Success)
+        // Emergency close any leg that succeeded, independently fault-tolerant
+        if (longSuccess)
         {
             try { await longConnector.ClosePositionAsync(opp.AssetSymbol, Side.Long, ct); }
             catch (Exception ex)
@@ -114,7 +146,7 @@ public class ExecutionEngine : IExecutionEngine
                 });
             }
         }
-        if (shortResult.Success)
+        if (shortSuccess)
         {
             try { await shortConnector.ClosePositionAsync(opp.AssetSymbol, Side.Short, ct); }
             catch (Exception ex)
@@ -136,7 +168,7 @@ public class ExecutionEngine : IExecutionEngine
             Type     = AlertType.LegFailed,
             Severity = AlertSeverity.Critical,
             Message  = $"Emergency close: {opp.AssetSymbol} " +
-                       $"Long={longResult.Error ?? "OK"} Short={shortResult.Error ?? "OK"}",
+                       $"Long={longError ?? "OK"} Short={shortError ?? "OK"}",
         });
 
         // Mark the pre-persisted sentinel as EmergencyClosed so the position is not orphaned
@@ -145,7 +177,7 @@ public class ExecutionEngine : IExecutionEngine
 
         await _uow.SaveAsync(ct);
 
-        var error = longResult.Error ?? shortResult.Error ?? "Both legs failed";
+        var error = longError ?? shortError ?? "Both legs failed";
         return (false, error);
     }
 
@@ -176,6 +208,62 @@ public class ExecutionEngine : IExecutionEngine
         await Task.WhenAll(longCloseTask, shortCloseTask);
         var longClose  = longCloseTask.Result;
         var shortClose = shortCloseTask.Result;
+
+        // C2: Check Success=false BEFORE computing PnL. LighterConnector catches all exceptions
+        // and returns OrderResultDto { Success = false } — the task never faults, so a try/catch
+        // around WhenAll would miss it. PnL with FilledPrice=0 and FilledQuantity=0 is wrong.
+        if (!longClose.Success || !shortClose.Success)
+        {
+            var longCloseError  = longClose.Success  ? null : longClose.Error;
+            var shortCloseError = shortClose.Success ? null : shortClose.Error;
+
+            _logger.LogError(
+                "CLOSE FAILURE — position #{PositionId}: {Asset} Long={LongStatus} Short={ShortStatus}",
+                position.Id, assetSymbol,
+                longClose.Success  ? "OK" : $"FAILED: {longCloseError}",
+                shortClose.Success ? "OK" : $"FAILED: {shortCloseError}");
+
+            if (!longClose.Success && !shortClose.Success)
+            {
+                // Both legs failed — mark EmergencyClosed
+                position.Status = PositionStatus.EmergencyClosed;
+                _uow.Positions.Update(position);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId              = position.UserId,
+                    ArbitragePositionId = position.Id,
+                    Type                = AlertType.LegFailed,
+                    Severity            = AlertSeverity.Critical,
+                    Message             = $"CLOSE FAILED both legs: {assetSymbol} " +
+                                         $"Long={longCloseError ?? "error"} Short={shortCloseError ?? "error"}. " +
+                                         "Manual intervention required.",
+                });
+            }
+            else
+            {
+                // One leg failed — leave in Closing for manual intervention.
+                // H4: Do NOT overwrite entry prices — they must be preserved for manual PnL computation.
+                // The alert message contains the close fill data for the successful leg.
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId              = position.UserId,
+                    ArbitragePositionId = position.Id,
+                    Type                = AlertType.LegFailed,
+                    Severity            = AlertSeverity.Critical,
+                    Message             = $"PARTIAL CLOSE FAILURE: {assetSymbol} " +
+                                         (longClose.Success
+                                             ? $"Long=closed @ {longClose.FilledPrice:F4} "
+                                             : $"Long=FAILED: {longCloseError} ") +
+                                         (shortClose.Success
+                                             ? $"Short=closed @ {shortClose.FilledPrice:F4}. "
+                                             : $"Short=FAILED: {shortCloseError}. ") +
+                                         "Manual intervention required.",
+                });
+            }
+
+            await _uow.SaveAsync(ct);
+            return;
+        }
 
         // C-EE1: Compute each leg independently so differing fill quantities produce correct PnL.
         var longPnl  = (longClose.FilledPrice  - position.LongEntryPrice)  * longClose.FilledQuantity;
