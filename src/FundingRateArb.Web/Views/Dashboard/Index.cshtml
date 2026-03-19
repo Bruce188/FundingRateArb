@@ -167,16 +167,16 @@
                             <tbody>
                                 @foreach (var pos in Model.OpenPositions)
                                 {
-                                    <tr>
+                                    <tr id="position-@pos.Id">
                                         <td><strong>@pos.AssetSymbol</strong></td>
                                         <td>@pos.LongExchangeName</td>
                                         <td>@pos.ShortExchangeName</td>
                                         <td>$@pos.SizeUsdc.ToString("F2")</td>
                                         <td>@((pos.EntrySpreadPerHour * 100).ToString("F4"))%</td>
-                                        <td class="@(pos.CurrentSpreadPerHour >= 0 ? "text-success" : "text-danger")">
+                                        <td class="position-spread @(pos.CurrentSpreadPerHour >= 0 ? "text-success" : "text-danger")">
                                             @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%
                                         </td>
-                                        <td class="text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        <td class="position-pnl text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
                                         <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
                                     </tr>
                                 }
