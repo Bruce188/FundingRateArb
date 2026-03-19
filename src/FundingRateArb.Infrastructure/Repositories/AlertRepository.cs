@@ -34,6 +34,7 @@ public class AlertRepository : IAlertRepository
         _context.Alerts
             .Where(a => a.ArbitragePositionId == positionId)
             .OrderByDescending(a => a.CreatedAt)
+            .Take(200)
             .ToListAsync();
 
     public Task<Alert?> GetRecentAsync(string userId, int? positionId, AlertType type, TimeSpan within)

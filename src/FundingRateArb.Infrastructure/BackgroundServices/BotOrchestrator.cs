@@ -19,7 +19,11 @@ public class BotOrchestrator : BackgroundService
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
-    private const int StartupDelaySeconds = 90;
+    // M8: 65s gives FundingRateFetcher one full 60s cycle + 5s margin to complete its first fetch
+    private const int StartupDelaySeconds = 65;
+
+    // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
+    private DateTime _lastAlertPushUtc = DateTime.UtcNow;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -47,7 +51,8 @@ public class BotOrchestrator : BackgroundService
             // Belt-and-suspenders: skip if previous cycle still running
             if (!await _cycleLock.WaitAsync(0, ct))
             {
-                _logger.LogWarning("Previous bot cycle still running — skipping this tick");
+                // L1: Routine overlap — Debug to avoid polluting the SQL audit sink
+                _logger.LogDebug("Previous bot cycle still running — skipping this tick");
                 continue;
             }
 
@@ -91,9 +96,9 @@ public class BotOrchestrator : BackgroundService
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
 
         // Step 1: Monitor and auto-close stale/unhealthy positions
-        await healthMonitor.CheckAndActAsync();
+        await healthMonitor.CheckAndActAsync(ct);
 
-        // H3: Fetch open positions ONCE after health monitor (may have closed some)
+        // M6: Fetch open positions AFTER health monitor so closed positions are excluded
         var openPositions = await uow.Positions.GetOpenAsync();
 
         // Push position updates + alerts created by health monitor
@@ -115,7 +120,17 @@ public class BotOrchestrator : BackgroundService
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
 
-        var opportunities = await signalEngine.GetOpportunitiesAsync();
+        var opportunities = await signalEngine.GetOpportunitiesAsync(ct);
+
+        // H8: Push opportunity updates here (moved from FundingRateFetcher to keep SRP)
+        try
+        {
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunities);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
+        }
 
         foreach (var opp in opportunities)
         {
@@ -129,12 +144,14 @@ public class BotOrchestrator : BackgroundService
                 "Opening position: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
                 opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
 
-            var (success, error) = await executionEngine.OpenPositionAsync(opp, size);
+            var (success, error) = await executionEngine.OpenPositionAsync(opp, size, ct);
 
             if (success)
             {
-                await _hubContext.Clients.All.ReceiveNotification(
-                    $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}");
+                // H7: Route to owning user + admins only (Clients.All would reveal trading to all users)
+                var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
+                await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
+                await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
                 // H3: Re-fetch after opening to include new position
                 openPositions = await uow.Positions.GetOpenAsync();
@@ -210,14 +227,19 @@ public class BotOrchestrator : BackgroundService
     /// <summary>
     /// Pushes a ReceiveAlert for recent unread alerts to per-user SignalR groups.
     /// M12: Uses GetRecentUnreadAsync instead of GetAllAsync + in-memory filter.
+    /// M7: Uses rolling _lastAlertPushUtc cutoff to avoid replaying alerts across cycles.
     /// C4: Targets per-user groups instead of Clients.All.
     /// </summary>
     private async Task PushNewAlertsAsync(IUnitOfWork uow)
     {
         try
         {
-            // M12: Query only recent unread alerts at the database level
-            var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(TimeSpan.FromMinutes(2));
+            // M7: Compute the window from when we last pushed, then update the marker
+            var since = _lastAlertPushUtc;
+            _lastAlertPushUtc = DateTime.UtcNow;
+            var window = TimeSpan.FromSeconds((DateTime.UtcNow - since).TotalSeconds);
+
+            var recentAlerts = await uow.Alerts.GetRecentUnreadAsync(window);
 
             foreach (var alert in recentAlerts)
             {

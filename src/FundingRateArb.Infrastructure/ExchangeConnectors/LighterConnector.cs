@@ -26,14 +26,22 @@ public class LighterConnector : IExchangeConnector, IDisposable
     private bool _signerInitialized;
     private readonly object _signerLock = new();
 
-    // Monotonically increasing order counter to avoid clientOrderIndex collisions
-    private static long _orderCounter = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    // Monotonically increasing order counter to avoid clientOrderIndex collisions.
+    // Instance field (not static) so two instances cannot produce duplicate clientOrderIndex values.
+    private long _orderCounter = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     // Cache market metadata (orderBookDetails) for 5 minutes
     private Dictionary<string, LighterOrderBookDetail>? _marketCache;
     private DateTime _marketCacheExpiry = DateTime.MinValue;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
+    // In-flight refresh task — prevents thundering-herd when multiple callers see an expired cache.
+    // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
+    private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
+
+    // Cached config values populated in EnsureSignerReady (read once, used many times)
+    private long _accountIndex;
+    private string _apiKeyIndexStr = "2";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -132,12 +140,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
         _logger.LogDebug("Fetching available balance from Lighter DEX");
 
         var accountIndex = GetAccountIndex();
-        var response = await _httpClient.GetAsync(
-            $"account?by=index&value={accountIndex}", ct);
-        response.EnsureSuccessStatusCode();
-
-        var accountResponse = await response.Content
-            .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
+        var accountResponse = await GetAccountAsync(accountIndex, ct);
 
         var account = accountResponse?.Accounts?.FirstOrDefault();
         if (account is null)
@@ -275,26 +278,33 @@ public class LighterConnector : IExchangeConnector, IDisposable
             if (markPrice <= 0)
                 throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
 
-            // 2. Get current position size from account
+            // 2. Get current position size from account (single HTTP fetch via helper)
             var accountIndex = GetAccountIndex();
-            var response = await _httpClient.GetAsync(
-                $"account?by=index&value={accountIndex}", ct);
-            response.EnsureSuccessStatusCode();
-
-            var accountResponse = await response.Content
-                .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
+            var accountResponse = await GetAccountAsync(accountIndex, ct);
 
             var account = accountResponse?.Accounts?.FirstOrDefault();
             if (account is null)
                 throw new InvalidOperationException("Account not found on Lighter DEX");
 
-            var position = account.Positions?.FirstOrDefault(
-                p => p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase)
-                     && decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
-                         System.Globalization.CultureInfo.InvariantCulture, out var posSize)
-                     && Math.Abs(posSize) > 0);
+            // Find the position and parse its size in one pass (avoids double TryParse)
+            decimal positionSize = 0m;
+            LighterAccountPosition? matchedPosition = null;
+            foreach (var p in account.Positions ?? [])
+            {
+                if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                    continue;
+                var absSize = Math.Abs(parsed);
+                if (absSize <= 0)
+                    continue;
+                positionSize = absSize;
+                matchedPosition = p;
+                break;
+            }
 
-            if (position is null)
+            if (matchedPosition is null)
             {
                 return new OrderResultDto
                 {
@@ -302,19 +312,6 @@ public class LighterConnector : IExchangeConnector, IDisposable
                     Error = $"No open position found for '{asset}' on Lighter DEX"
                 };
             }
-
-            // Parse position size (already in base asset decimal form)
-            if (!decimal.TryParse(position.Position, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var positionSize))
-            {
-                return new OrderResultDto
-                {
-                    Success = false,
-                    Error = $"Could not parse position size: {position.Position}"
-                };
-            }
-
-            positionSize = Math.Abs(positionSize);
             var sizeMultiplier = (long)Math.Pow(10, market.SizeDecimals);
             var baseAmount = (long)(positionSize * sizeMultiplier);
 
@@ -388,6 +385,8 @@ public class LighterConnector : IExchangeConnector, IDisposable
     /// <summary>
     /// Ensure the native signer is initialized with credentials from user secrets.
     /// Thread-safe; only initializes once.
+    /// Also populates cached config fields (_accountIndex, _apiKeyIndexStr) used by GetNextNonceAsync
+    /// so that IConfiguration is not re-read on every order.
     /// </summary>
     private void EnsureSignerReady()
     {
@@ -405,7 +404,13 @@ public class LighterConnector : IExchangeConnector, IDisposable
             if (!int.TryParse(apiKeyStr, out var apiKeyIndex))
                 throw new InvalidOperationException($"Invalid Lighter ApiKey value: {apiKeyStr}");
 
-            var accountIndex = GetAccountIndex();
+            var indexStr = _configuration["Exchanges:Lighter:AccountIndex"] ?? "281474976624240";
+            if (!long.TryParse(indexStr, out var accountIndex))
+                throw new InvalidOperationException($"Invalid Lighter AccountIndex: {indexStr}");
+
+            // Cache for use in GetNextNonceAsync and GetAccountAsync (avoids re-reading IConfiguration)
+            _accountIndex = accountIndex;
+            _apiKeyIndexStr = apiKeyStr;
 
             // Base URL without /api/v1/ suffix (the signer needs the root URL)
             var baseUrl = _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "";
@@ -419,9 +424,13 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
     /// <summary>
     /// Get the account index from configuration.
+    /// Used for non-trading calls (e.g. GetAvailableBalanceAsync) that run before EnsureSignerReady.
     /// </summary>
     private long GetAccountIndex()
     {
+        // If already cached by EnsureSignerReady, return cached value immediately
+        if (_signerInitialized) return _accountIndex;
+
         var indexStr = _configuration["Exchanges:Lighter:AccountIndex"] ?? "281474976624240";
         if (!long.TryParse(indexStr, out var accountIndex))
             throw new InvalidOperationException($"Invalid Lighter AccountIndex: {indexStr}");
@@ -429,15 +438,28 @@ public class LighterConnector : IExchangeConnector, IDisposable
     }
 
     /// <summary>
+    /// Fetch the account data for the configured account index from the Lighter API.
+    /// Extracted helper to avoid duplicate HTTP fetches in ClosePositionAsync.
+    /// </summary>
+    private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, CancellationToken ct)
+    {
+        var response = await _httpClient.GetAsync(
+            $"account?by=index&value={accountIndex}", ct);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content
+            .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
+    }
+
+    /// <summary>
     /// Fetch the next nonce from the Lighter API.
+    /// Uses cached _accountIndex and _apiKeyIndexStr (populated by EnsureSignerReady)
+    /// to avoid re-reading IConfiguration on every order.
     /// </summary>
     private async Task<int> GetNextNonceAsync(CancellationToken ct)
     {
-        var accountIndex = GetAccountIndex();
-        var apiKeyStr = _configuration["Exchanges:Lighter:ApiKey"] ?? "2";
-
         var response = await _httpClient.GetAsync(
-            $"nextNonce?account_index={accountIndex}&api_key_index={apiKeyStr}", ct);
+            $"nextNonce?account_index={_accountIndex}&api_key_index={_apiKeyIndexStr}", ct);
         response.EnsureSuccessStatusCode();
 
         var nonceResponse = await response.Content
@@ -496,36 +518,40 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
     /// <summary>
     /// Get market metadata for a specific asset symbol. Cached for 5 minutes.
-    /// Uses double-checked locking so the lock is NOT held during HTTP I/O.
+    /// Prevents thundering-herd: concurrent callers on an expired cache all await the same in-flight
+    /// HTTP fetch via <see cref="_pendingMarketRefresh"/> rather than each issuing a separate request.
+    /// The lock is NOT held during HTTP I/O — it is acquired only to check/set _pendingMarketRefresh
+    /// and to commit the new cache.
     /// </summary>
     private async Task<LighterOrderBookDetail?> GetMarketDetailAsync(string asset, CancellationToken ct)
     {
-        // 1. Check cache without lock (fast path — avoids serializing callers on a hot cache)
+        // 1. Fast path: cache is warm — no locking needed
         var currentCache = _marketCache;
         if (currentCache is not null && DateTime.UtcNow < _marketCacheExpiry)
             return currentCache.GetValueOrDefault(asset);
 
-        // 2. Cache miss: fetch outside the lock, then acquire lock to update
-        var response = await _httpClient.GetAsync("orderBookDetails?filter=perp", ct);
-        response.EnsureSuccessStatusCode();
+        // 2. Cache miss — acquire lock to inspect/create a shared in-flight refresh task
+        Task<Dictionary<string, LighterOrderBookDetail>> refreshTask;
 
-        var detailsResponse = await response.Content
-            .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct);
-
-        var newCache = detailsResponse?.OrderBookDetails?
-            .ToDictionary(d => d.Symbol, d => d, StringComparer.OrdinalIgnoreCase)
-            ?? new Dictionary<string, LighterOrderBookDetail>(StringComparer.OrdinalIgnoreCase);
-
-        // 3. Acquire lock only to commit the new cache atomically (no I/O inside lock)
         await _cacheLock.WaitAsync(ct);
         try
         {
-            // Re-check: another concurrent caller may have already refreshed the cache
-            if (_marketCache is null || DateTime.UtcNow >= _marketCacheExpiry)
+            // Re-check while under lock (another thread may have just refreshed)
+            if (_marketCache is not null && DateTime.UtcNow < _marketCacheExpiry)
             {
-                _marketCache = newCache;
-                _marketCacheExpiry = DateTime.UtcNow + CacheTtl;
-                _logger.LogDebug("Refreshed Lighter market cache: {Count} markets", _marketCache.Count);
+                return _marketCache.GetValueOrDefault(asset);
+            }
+
+            // Reuse an already in-flight refresh task if one exists (thundering-herd prevention)
+            if (_pendingMarketRefresh is not null)
+            {
+                refreshTask = _pendingMarketRefresh;
+            }
+            else
+            {
+                // First caller: start the fetch and store it so subsequent callers can share it
+                _pendingMarketRefresh = FetchMarketCacheAsync(ct);
+                refreshTask = _pendingMarketRefresh;
             }
         }
         finally
@@ -533,7 +559,45 @@ public class LighterConnector : IExchangeConnector, IDisposable
             _cacheLock.Release();
         }
 
-        return _marketCache.GetValueOrDefault(asset);
+        // 3. Await the shared fetch OUTSIDE the lock (no I/O held under lock)
+        var newCache = await refreshTask;
+
+        // 4. Commit the result and clear the pending task
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            if (_marketCache is null || DateTime.UtcNow >= _marketCacheExpiry)
+            {
+                _marketCache = newCache;
+                _marketCacheExpiry = DateTime.UtcNow + CacheTtl;
+                _logger.LogDebug("Refreshed Lighter market cache: {Count} markets", _marketCache.Count);
+            }
+            // Clear the pending task so the next expiry triggers a fresh fetch
+            _pendingMarketRefresh = null;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+
+        return _marketCache!.GetValueOrDefault(asset);
+    }
+
+    /// <summary>
+    /// Performs the actual HTTP fetch for market metadata. Called by GetMarketDetailAsync
+    /// as the shared in-flight task — only executed once per cache expiry cycle.
+    /// </summary>
+    private async Task<Dictionary<string, LighterOrderBookDetail>> FetchMarketCacheAsync(CancellationToken ct)
+    {
+        var response = await _httpClient.GetAsync("orderBookDetails?filter=perp", ct);
+        response.EnsureSuccessStatusCode();
+
+        var detailsResponse = await response.Content
+            .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct);
+
+        return detailsResponse?.OrderBookDetails?
+            .ToDictionary(d => d.Symbol, d => d, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, LighterOrderBookDetail>(StringComparer.OrdinalIgnoreCase);
     }
 
     public void Dispose()

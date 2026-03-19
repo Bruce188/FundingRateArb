@@ -17,11 +17,11 @@ public sealed class LighterSigner : IDisposable
     private const int MainnetChainId = 304;
 
     // Order type constants (mirrored from Python SDK SignerClient)
-    public const int OrderTypeMarket = 1;
-    public const int TimeInForceIoc = 0;  // Immediate or Cancel
-    public const int DefaultIocExpiry = 0;
-    public const int NilTriggerPrice = 0;
-    public const int CrossMarginMode = 0;
+    private const int OrderTypeMarket = 1;
+    private const int TimeInForceIoc = 0;  // Immediate or Cancel
+    private const int DefaultIocExpiry = 0;
+    private const int NilTriggerPrice = 0;
+    private const int CrossMarginMode = 0;
 
     private readonly ILogger _logger;
     private int _apiKeyIndex;

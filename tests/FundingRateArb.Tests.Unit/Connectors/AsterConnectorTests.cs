@@ -826,6 +826,64 @@ public class AsterConnectorTests
             "Fetching a second asset within TTL must use cached mark price data");
     }
 
+    // ── IDisposable (C4) ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void AsterConnector_ImplementsIDisposable()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+
+        sut.Should().BeAssignableTo<IDisposable>(
+            "AsterConnector must implement IDisposable to release the SemaphoreSlim");
+    }
+
+    [Fact]
+    public void AsterConnector_Dispose_DoesNotThrow()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider());
+
+        var act = () => ((IDisposable)sut).Dispose();
+        act.Should().NotThrow("Dispose must be safe to call");
+    }
+
+    // ── GetMarkPrice cache post-lock read (H6) ─────────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_CacheHit_DoesNotPerformExtraHttpCall()
+    {
+        // Three calls within TTL should result in exactly one API call
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([
+                MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m),
+                MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m),
+            ]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider());
+
+        var price1 = await sut.GetMarkPriceAsync("ETH");
+        var price2 = await sut.GetMarkPriceAsync("ETH");
+        var price3 = await sut.GetMarkPriceAsync("BTC");
+
+        price1.Should().Be(3500m);
+        price2.Should().Be(3500m);
+        price3.Should().Be(65000m);
+
+        exchangeDataMock.Verify(
+            x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "All subsequent calls within TTL must use cached result without re-fetching");
+    }
+
     // ── GetAvailableBalanceAsync ───────────────────────────────────────────────
 
     [Fact]

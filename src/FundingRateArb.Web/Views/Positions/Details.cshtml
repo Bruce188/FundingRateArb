@@ -14,7 +14,7 @@
         <h5>Position Info</h5>
         <dl class="row">
             <dt class="col-sm-5">Asset</dt>
-            <dd class="col-sm-7">@(pos.Asset?.Symbol ?? $"Asset #{pos.AssetId}")</dd>
+            <dd class="col-sm-7">@pos.AssetSymbol</dd>
 
             <dt class="col-sm-5">Status</dt>
             <dd class="col-sm-7">
@@ -31,10 +31,10 @@
             </dd>
 
             <dt class="col-sm-5">Long Exchange</dt>
-            <dd class="col-sm-7">@(pos.LongExchange?.Name ?? $"Exchange #{pos.LongExchangeId}")</dd>
+            <dd class="col-sm-7">@pos.LongExchangeName</dd>
 
             <dt class="col-sm-5">Short Exchange</dt>
-            <dd class="col-sm-7">@(pos.ShortExchange?.Name ?? $"Exchange #{pos.ShortExchangeId}")</dd>
+            <dd class="col-sm-7">@pos.ShortExchangeName</dd>
 
             <dt class="col-sm-5">Size (USDC)</dt>
             <dd class="col-sm-7">@pos.SizeUsdc.ToString("F2")</dd>

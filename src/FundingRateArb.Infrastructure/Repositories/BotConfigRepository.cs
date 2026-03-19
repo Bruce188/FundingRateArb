@@ -11,8 +11,14 @@ public class BotConfigRepository : IBotConfigRepository
 
     public BotConfigRepository(AppDbContext context) => _context = context;
 
-    public Task<BotConfiguration> GetActiveAsync() =>
-        _context.BotConfigurations.FirstAsync();
+    public async Task<BotConfiguration> GetActiveAsync()
+    {
+        var config = await _context.BotConfigurations.AsNoTracking().FirstOrDefaultAsync();
+        if (config is null)
+            throw new InvalidOperationException(
+                "No BotConfiguration found. Run the seeder or create one via Admin UI.");
+        return config;
+    }
 
     public void Update(BotConfiguration config) =>
         _context.BotConfigurations.Update(config);
