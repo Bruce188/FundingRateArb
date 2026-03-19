@@ -55,6 +55,7 @@ public class AlertRepository : IAlertRepository
         return await _context.Alerts
             .Where(a => !a.IsRead && a.CreatedAt >= cutoff)
             .OrderByDescending(a => a.CreatedAt)
+            .Take(100)
             .ToListAsync();
     }
 
