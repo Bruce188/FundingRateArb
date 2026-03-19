@@ -1,0 +1,71 @@
+@model AssetCreateViewModel
+@{
+    ViewData["Title"] = "Add Asset";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Add Asset</h1>
+    <a asp-action="Index" class="btn btn-outline-secondary">Back to List</a>
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form asp-action="Create" method="post">
+            <div asp-validation-summary="ModelOnly" class="alert alert-danger" role="alert"></div>
+
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label asp-for="Symbol" class="form-label"></label>
+                    <input asp-for="Symbol" class="form-control" placeholder="e.g. BTC" />
+                    <span asp-validation-for="Symbol" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-8">
+                    <label asp-for="Name" class="form-label"></label>
+                    <input asp-for="Name" class="form-control" placeholder="e.g. Bitcoin" />
+                    <span asp-validation-for="Name" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MinNotionalUsdc" class="form-label"></label>
+                    <input asp-for="MinNotionalUsdc" class="form-control" type="number" step="0.01" />
+                    <span asp-validation-for="MinNotionalUsdc" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MaxLeverageHyperliquid" class="form-label"></label>
+                    <input asp-for="MaxLeverageHyperliquid" class="form-control" type="number" min="1" max="50" />
+                    <span asp-validation-for="MaxLeverageHyperliquid" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MaxLeverageLighter" class="form-label"></label>
+                    <input asp-for="MaxLeverageLighter" class="form-control" type="number" min="1" max="50" />
+                    <span asp-validation-for="MaxLeverageLighter" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="MaxLeverageAster" class="form-label"></label>
+                    <input asp-for="MaxLeverageAster" class="form-control" type="number" min="1" max="50" />
+                    <span asp-validation-for="MaxLeverageAster" class="text-danger"></span>
+                </div>
+
+                <div class="col-12">
+                    <div class="form-check">
+                        <input asp-for="IsActive" class="form-check-input" type="checkbox" />
+                        <label asp-for="IsActive" class="form-check-label"></label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <button type="submit" class="btn btn-primary">Create Asset</button>
+                <a asp-action="Index" class="btn btn-outline-secondary ms-2">Cancel</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@section Scripts {
+    <partial name="_ValidationScriptsPartial" />
+}

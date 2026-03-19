@@ -1,0 +1,95 @@
+@model FundingRateArb.Web.ViewModels.AlertIndexViewModel
+@using FundingRateArb.Domain.Enums
+
+@{
+    ViewData["Title"] = "Alerts";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>
+        Alerts
+        @if (Model.UnreadCount > 0)
+        {
+            <span class="badge bg-danger ms-2">@Model.UnreadCount unread</span>
+        }
+    </h2>
+</div>
+
+@if (!Model.Alerts.Any())
+{
+    <div class="alert alert-info">No alerts found.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead class="table-dark">
+                <tr>
+                    <th>Type</th>
+                    <th>Severity</th>
+                    <th>Message</th>
+                    <th>Created</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var alert in Model.Alerts)
+                {
+                    <tr class="@(!alert.IsRead ? "table-warning" : string.Empty)">
+                        <td>
+                            @{
+                                var typeBadge = alert.Type switch
+                                {
+                                    AlertType.OpportunityDetected => "bg-success",
+                                    AlertType.SpreadWarning       => "bg-warning text-dark",
+                                    AlertType.SpreadCollapsed     => "bg-danger",
+                                    AlertType.PositionOpened      => "bg-primary",
+                                    AlertType.PositionClosed      => "bg-secondary",
+                                    AlertType.LegFailed           => "bg-danger",
+                                    AlertType.BotError            => "bg-danger",
+                                    AlertType.MarginWarning       => "bg-warning text-dark",
+                                    _                             => "bg-secondary",
+                                };
+                            }
+                            <span class="badge @typeBadge">@alert.Type</span>
+                        </td>
+                        <td>
+                            @{
+                                var severityBadge = alert.Severity switch
+                                {
+                                    AlertSeverity.Info     => "bg-info text-dark",
+                                    AlertSeverity.Warning  => "bg-warning text-dark",
+                                    AlertSeverity.Critical => "bg-danger",
+                                    _                      => "bg-secondary",
+                                };
+                            }
+                            <span class="badge @severityBadge">@alert.Severity</span>
+                        </td>
+                        <td>@alert.Message</td>
+                        <td>@alert.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>
+                            @if (alert.IsRead)
+                            {
+                                <span class="text-muted">Read</span>
+                            }
+                            else
+                            {
+                                <strong class="text-warning">Unread</strong>
+                            }
+                        </td>
+                        <td>
+                            @if (!alert.IsRead)
+                            {
+                                <form asp-action="MarkAsRead" asp-route-id="@alert.Id" method="post" class="d-inline">
+                                    @Html.AntiForgeryToken()
+                                    <button type="submit" class="btn btn-sm btn-outline-secondary">Mark as Read</button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}

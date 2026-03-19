@@ -1,0 +1,275 @@
+using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
+
+namespace FundingRateArb.Tests.Unit.Services;
+
+public class ExecutionEngineTests
+{
+    private readonly Mock<IUnitOfWork> _mockUow = new();
+    private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
+    private readonly Mock<IPositionRepository> _mockPositions = new();
+    private readonly Mock<IAlertRepository> _mockAlerts = new();
+    private readonly Mock<IExchangeRepository> _mockExchanges = new();
+    private readonly Mock<IAssetRepository> _mockAssets = new();
+    private readonly Mock<IExchangeConnectorFactory> _mockFactory = new();
+    private readonly Mock<IExchangeConnector> _mockLongConnector = new();
+    private readonly Mock<IExchangeConnector> _mockShortConnector = new();
+    private readonly ExecutionEngine _sut;
+
+    private static readonly BotConfiguration DefaultConfig = new()
+    {
+        IsEnabled = true,
+        DefaultLeverage = 5,
+        UpdatedByUserId = "admin-user-id",
+    };
+
+    private static readonly ArbitrageOpportunityDto DefaultOpp = new()
+    {
+        AssetSymbol = "ETH",
+        AssetId = 1,
+        LongExchangeName = "Hyperliquid",
+        LongExchangeId = 1,
+        ShortExchangeName = "Lighter",
+        ShortExchangeId = 2,
+        SpreadPerHour = 0.0005m,
+        NetYieldPerHour = 0.0004m,
+        LongMarkPrice = 3000m,
+        ShortMarkPrice = 3001m,
+    };
+
+    public ExecutionEngineTests()
+    {
+        _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
+        _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
+        _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
+        _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
+        _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
+
+        _mockFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(_mockLongConnector.Object);
+        _mockFactory.Setup(f => f.GetConnector("Lighter")).Returns(_mockShortConnector.Object);
+
+        _sut = new ExecutionEngine(_mockUow.Object, _mockFactory.Object, NullLogger<ExecutionEngine>.Instance);
+    }
+
+    private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
+        new() { Success = true, OrderId = orderId, FilledPrice = price, FilledQuantity = qty };
+
+    private static OrderResultDto FailOrder(string error = "Insufficient margin") =>
+        new() { Success = false, Error = error };
+
+    // ── OpenPositionAsync ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_BothLegsSucceed_SavesPosition()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        result.Success.Should().BeTrue();
+        result.Error.Should().BeNull();
+        _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothLegsSucceed_CreatesPositionOpenedAlert()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionOpened)), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothLegsSucceed_SetsCorrectEntryPrices()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 2999m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3002m));
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        savedPos.Should().NotBeNull();
+        savedPos!.LongEntryPrice.Should().Be(2999m);
+        savedPos.ShortEntryPrice.Should().Be(3002m);
+        savedPos.LongOrderId.Should().Be("long-1");
+        savedPos.ShortOrderId.Should().Be("short-1");
+        savedPos.Status.Should().Be(PositionStatus.Open);
+    }
+
+    [Fact]
+    public async Task OpenPosition_LongLegFails_ClosesShortLeg_ReturnsError()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long failed"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Long failed");
+        _mockShortConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()), Times.Once);
+        _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_ShortLegFails_ClosesLongLeg_ReturnsError()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short failed"));
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Short failed");
+        _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothLegsFail_ReturnsError_NoEmergencyClose()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long failed"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short failed"));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        result.Success.Should().BeFalse();
+        _mockLongConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── ClosePositionAsync ─────────────────────────────────────────────────────
+
+    private ArbitragePosition MakeOpenPosition(decimal longEntry = 3000m, decimal shortEntry = 3001m) =>
+        new()
+        {
+            Id = 42,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = longEntry,
+            ShortEntryPrice = shortEntry,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+    [Fact]
+    public async Task ClosePosition_CloseBothLegs_UpdatesStatus()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.1m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.1m));
+
+        await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed);
+
+        position.Status.Should().Be(PositionStatus.Closed);
+        _mockPositions.Verify(p => p.Update(position), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ClosePosition_SetsCloseReason_And_ClosedAt()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        await _sut.ClosePositionAsync(position, CloseReason.MaxHoldTimeReached);
+
+        position.CloseReason.Should().Be(CloseReason.MaxHoldTimeReached);
+        position.ClosedAt.Should().NotBeNull();
+        position.ClosedAt!.Value.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ClosePosition_CreatesPositionClosedAlert()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        await _sut.ClosePositionAsync(position, CloseReason.Manual);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionClosed)), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_LegFail_CreatesLegFailedAlert()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("API error"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("API error"));
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.Once);
+    }
+}

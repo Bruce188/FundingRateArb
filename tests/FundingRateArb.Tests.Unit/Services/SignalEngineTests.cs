@@ -1,0 +1,236 @@
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
+using FluentAssertions;
+using Moq;
+
+namespace FundingRateArb.Tests.Unit.Services;
+
+public class SignalEngineTests
+{
+    private readonly Mock<IUnitOfWork> _mockUow = new();
+    private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
+    private readonly Mock<IFundingRateRepository> _mockFundingRates = new();
+    private readonly SignalEngine _sut;
+
+    public SignalEngineTests()
+    {
+        _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
+        _mockUow.Setup(u => u.FundingRates).Returns(_mockFundingRates.Object);
+        _sut = new SignalEngine(_mockUow.Object);
+    }
+
+    private static FundingRateSnapshot MakeRate(
+        int exchangeId, string exchangeName,
+        int assetId, string symbol,
+        decimal ratePerHour,
+        decimal markPrice = 3000m,
+        decimal volume = 1_000_000m) =>
+        new FundingRateSnapshot
+        {
+            ExchangeId = exchangeId,
+            AssetId = assetId,
+            RatePerHour = ratePerHour,
+            MarkPrice = markPrice,
+            Volume24hUsd = volume,
+            Exchange = new Exchange { Id = exchangeId, Name = exchangeName },
+            Asset = new Asset { Id = assetId, Symbol = symbol },
+        };
+
+    [Fact]
+    public async Task GetOpportunities_WhenSpreadAboveThreshold_ReturnsOpportunity()
+    {
+        // Arrange
+        // Hyperliquid ETH rate=0.0001/hr, Lighter ETH rate=0.0010/hr
+        // Spread = 0.0009/hr, fees = (0.00090+0)/24 = 0.0000375/hr, net = 0.0008625/hr
+        // OpenThreshold = 0.0003 → net > threshold → 1 opportunity
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().HaveCount(1);
+        result[0].AssetSymbol.Should().Be("ETH");
+        result[0].NetYieldPerHour.Should().BeGreaterThan(0.0003m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WhenSpreadBelowThreshold_ReturnsEmpty()
+    {
+        // Arrange
+        // Spread = 0.0002/hr, threshold = 0.0003 → net will be below threshold after fees
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0003m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_AssignsCorrectLongShort()
+    {
+        // Arrange
+        // Hyperliquid = lower rate → Long; Lighter = higher rate → Short
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().HaveCount(1);
+        result[0].LongExchangeName.Should().Be("Hyperliquid");
+        result[0].ShortExchangeName.Should().Be("Lighter");
+        result[0].LongRatePerHour.Should().BeLessThan(result[0].ShortRatePerHour);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_DeductsFees_FromNetYield()
+    {
+        // Arrange
+        // Hyperliquid (fee 0.00090) + Lighter (fee 0) pair
+        // feePerHour = (0.00090 + 0.00000) / 24 = 0.0000375
+        // spread = 0.0010 - 0.0001 = 0.0009
+        // net = 0.0009 - 0.0000375 = 0.0008625
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread = 0.0010m - 0.0001m;                       // 0.0009
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;         // 0.0000375
+        var expectedNet = expectedSpread - expectedFeePerHour;         // 0.0008625
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().HaveCount(1);
+        result[0].SpreadPerHour.Should().Be(expectedSpread);
+        result[0].NetYieldPerHour.Should().Be(expectedNet);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_RanksOpportunitiesByNetYieldDescending()
+    {
+        // Arrange
+        // ETH: Hyperliquid(0.0001) vs Lighter(0.0010) → high spread
+        // BTC: Hyperliquid(0.0002) vs Lighter(0.0004) → low spread
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            MakeRate(1, "Hyperliquid", 2, "BTC", 0.0002m),
+            MakeRate(2, "Lighter",     2, "BTC", 0.0005m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().HaveCountGreaterThan(1);
+        result.Should().BeInDescendingOrder(o => o.NetYieldPerHour);
+        result[0].NetYieldPerHour.Should().BeGreaterThanOrEqualTo(result[1].NetYieldPerHour);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_HandlesMultipleAssetsAndExchanges()
+    {
+        // Arrange
+        // 3 exchanges × 2 assets
+        // Per asset there are C(3,2) = 3 pairs
+        // Only pairs where net >= threshold should appear
+        // Set threshold low so all pairs qualify
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            MakeRate(3, "Aster",       1, "ETH", 0.0008m),
+
+            MakeRate(1, "Hyperliquid", 2, "BTC", 0.0002m),
+            MakeRate(2, "Lighter",     2, "BTC", 0.0012m),
+            MakeRate(3, "Aster",       2, "BTC", 0.0009m),
+        };
+
+        // Threshold low enough that all pairs should qualify
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        // We expect opportunities for both ETH and BTC
+        result.Should().Contain(o => o.AssetSymbol == "ETH");
+        result.Should().Contain(o => o.AssetSymbol == "BTC");
+
+        // Each pair should appear at most once
+        var ethOpportunities = result.Where(o => o.AssetSymbol == "ETH").ToList();
+        var btcOpportunities = result.Where(o => o.AssetSymbol == "BTC").ToList();
+
+        // With 3 exchanges, max 3 pairs per asset
+        ethOpportunities.Should().HaveCountLessOrEqualTo(3);
+        btcOpportunities.Should().HaveCountLessOrEqualTo(3);
+
+        // Results should be ranked descending
+        result.Should().BeInDescendingOrder(o => o.NetYieldPerHour);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WhenNoRatesAvailable_ReturnsEmpty()
+    {
+        // Arrange
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync();
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+}

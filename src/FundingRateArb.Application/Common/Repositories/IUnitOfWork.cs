@@ -8,5 +8,6 @@ public interface IUnitOfWork : IDisposable
     IPositionRepository Positions { get; }
     IAlertRepository Alerts { get; }
     IBotConfigRepository BotConfig { get; }
+    IExchangeAssetConfigRepository ExchangeAssetConfigs { get; }
     Task<int> SaveAsync(CancellationToken ct = default);
 }

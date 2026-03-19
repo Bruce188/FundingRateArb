@@ -25,6 +25,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\FundingRateArb.Application\FundingRateArb.Application.csproj" />
     <ProjectReference Include="..\..\src\FundingRateArb.Infrastructure\FundingRateArb.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\FundingRateArb.Web\FundingRateArb.Web.csproj">
+      <OutputItemType>Analyzer</OutputItemType>
+      <ReferenceOutputAssembly>true</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
 
 </Project>

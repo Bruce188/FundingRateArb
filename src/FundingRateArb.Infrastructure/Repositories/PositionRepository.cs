@@ -24,6 +24,7 @@ public class PositionRepository : IPositionRepository
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
             .Include(p => p.ShortExchange)
+            .AsNoTracking()
             .Where(p => p.Status == PositionStatus.Open)
             .ToListAsync();
 
@@ -32,6 +33,7 @@ public class PositionRepository : IPositionRepository
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
             .Include(p => p.ShortExchange)
+            .AsNoTracking()
             .Where(p => p.UserId == userId)
             .OrderByDescending(p => p.OpenedAt)
             .ToListAsync();
@@ -41,6 +43,7 @@ public class PositionRepository : IPositionRepository
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
             .Include(p => p.ShortExchange)
+            .AsNoTracking()
             .OrderByDescending(p => p.OpenedAt)
             .ToListAsync();
 
