@@ -18,20 +18,6 @@ An automated funding rate arbitrage bot that opens delta-neutral positions acros
 | Aster DEX | `JKorf.Aster.Net` | HMAC-SHA256 | USDT | 4 hours |
 | Lighter DEX | Custom `HttpClient` | API key + nonce | USDC | 1 hour |
 
-## Key Domain Entities (8 total, excl. Identity)
-Exchange, Asset, FundingRateSnapshot, ArbitragePosition, Alert, BotConfiguration, ExchangeAssetConfig, AuditLog
-
-## Service Interfaces (all in Application layer)
-- `ISignalEngine` — detects arbitrage opportunities, ranks by net yield
-- `IPositionSizer` — calculates optimal size (3 limits: liquidity, capital, break-even) + tick/lot rounding
-- `IExecutionEngine` — opens/closes dual-leg positions, emergency close on leg failure
-- `IPositionHealthMonitor` — monitors spreads, auto-closes on 3 criteria
-- `IYieldCalculator` — PnL projections, break-even calculations
-- `IExchangeConnector` — single interface for all exchange operations
-- `IExchangeConnectorFactory` — resolves connector by exchange name
-- `IUnitOfWork` — Unit of Work with all repositories (from cursus BankingApp pattern)
-- `IApiKeyVault` — encrypts/decrypts API keys via Data Protection API
-
 ## Conventions
 - **English** for all code, comments, and commit messages
 - Interfaces for ALL services (for DI and mocking in tests)
@@ -59,43 +45,6 @@ Exchange, Asset, FundingRateSnapshot, ArbitragePosition, Alert, BotConfiguration
 - **School requirements PDF**: `projectrichtlijnen.pdf`
 - **Cursus examples**: `\\wsl.localhost\Ubuntu-24.04\home\bruce\bad\cursus\`
 
-## Model & Effort Guide (per task)
-
-| Phase | Task | Model | Effort | Notes |
-|-------|------|-------|--------|-------|
-| 4 | 4.1 Connector interface + factory | Sonnet | medium | Clean interface design |
-| 4 | 4.2 Hyperliquid connector | Sonnet | high | HyperLiquid.Net SDK |
-| 4 | 4.3 Lighter connector | Opus | high | Custom HttpClient, tricky auth |
-| 4 | 4.4 Aster connector | Sonnet | high | JKorf.Aster.Net SDK |
-| 4 | 4.5 Polly resilience | Sonnet | medium | Retry + circuit breaker |
-| 4 | Agent teammates (4.2–4.4 parallel) | Sonnet | medium | Each connector is isolated |
-| 5 | 5.1 YieldCalculator | Sonnet | high | Pure math, thorough TDD |
-| 5 | 5.2 SignalEngine | Sonnet | high | Opportunity ranking logic |
-| 5 | 5.3 PositionSizer | Sonnet | high | 3-limit calc + RoundToStepSize TDD |
-| 5 | 5.4 ExecutionEngine | Opus | high | Dual-leg open/close, emergency logic |
-| 5 | 5.5 PositionHealthMonitor | Opus | high | Auto-close criteria, spread monitoring |
-| 6 | 6.1 FundingRateFetcher | Sonnet | high | BackgroundService, all 3 exchanges |
-| 6 | 6.2 BotOrchestrator | Sonnet | high | SemaphoreSlim, full cycle logic |
-| 6 | 6.3 Hosted service registration | Sonnet | medium | DI wiring |
-| 7 | 7.1 Serilog setup | Sonnet | medium | Console + File sinks |
-| 7 | 7.2 AuditLog sink | Sonnet | medium | SQL Server sink |
-| 7 | 7.3 ApiKeyVault + secrets | Sonnet | medium | Data Protection API |
-| 8 | 8.1 DashboardHub | Sonnet | medium | Strongly-typed SignalR hub |
-| 8 | 8.2 JS client | Sonnet | medium | dashboard.js SignalR client |
-| 8 | 8.3 BackgroundService → Hub | Sonnet | medium | IHubContext injection |
-| 9 | 9.1 DashboardController | Sonnet | low | KPI cards, bot status |
-| 9 | 9.2 OpportunitiesController | Sonnet | low | Live opportunity table |
-| 9 | 9.3 PositionsController | Sonnet | low | Open/closed, PnL, manual close |
-| 9 | 9.4 AlertsController | Sonnet | low | Unread count, mark as read |
-| 9 | 9.5–9.8 Admin CRUD | Sonnet | low | Exchange, Asset, BotConfig, Users |
-| 9 | 9.9 Layout + navigation | Sonnet | medium | _Layout.cshtml, SignalR status |
-| 10 | 10.1 Security audit | Opus | high | Full OWASP review |
-| 10 | 10.2 Code quality review | Opus | medium | SOLID, Clean Architecture |
-| 10 | 10.3 Playwright UI tests | Sonnet | medium | Automated browser testing |
-| 10 | 10.4 Edge case tests | Opus | medium | Corner cases, error paths |
-| 10 | 10.5 Performance review | Opus | medium | Polling, DB queries, SignalR |
-| 10 | 10.6 CSS polish | Sonnet | medium | Responsive design |
-
 ## Agent Team Rules
 
 Agent teams run in parallel when tasks have **zero file overlap**. Enable with:
@@ -118,13 +67,26 @@ Agent teams run in parallel when tasks have **zero file overlap**. Enable with:
 You are Teammate [A/B/C] working on [Task X.X: description].
 Read docs/plan.md section [N] for implementation details.
 Your files: [list exact files — no overlap with other teammates]
-Write tests FIRST (TDD). Run dotnet test before reporting done.
-Do NOT modify any files outside your assigned list.
+
+IMPLEMENTATION:
+- Write tests FIRST (TDD).
+- Run dotnet build && dotnet test before reporting done.
+- If tests fail: fix the issue. Do NOT report done with failing tests.
+
+BEFORE REPORTING DONE (agent commit — automatic, no user confirmation needed):
+- Stage all changed files and commit with message "wip: [stream A/B/C description]".
+- If a pre-commit hook fails: fix the issue and retry the commit.
+- Do NOT report done without a successful commit — uncommitted worktree changes are lost on cleanup.
+
+RULES:
+- Do NOT modify any files outside your assigned list.
 ```
+
+**Note for review-cycle prompts**: The same template applies to review-fix teammates. When writing review-v{N}-prompts.md, include the commit instruction in every teammate prompt. Review prompts that omit the commit instruction will cause work loss.
 
 ## Workflow Rules
 1. **Start of session**: Read `docs/progress.md` to see what's next
-2. **Set model/effort**: Use `/model` and `/effort` per the table above for each task
+2. **Set model/effort**: Each task prompt in `docs/prompts.md` specifies its model and effort level
 3. **Before coding**: Read the relevant task prompt in `docs/prompts.md`
 4. **For implementation details**: Read the specific section of `docs/plan.md` referenced in the prompt
 5. **Agent team tasks**: Spawn teammates with exact file assignments; merge after all finish

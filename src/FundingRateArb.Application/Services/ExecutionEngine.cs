@@ -202,10 +202,83 @@ public class ExecutionEngine : IExecutionEngine
         _uow.Positions.Update(position);
         await _uow.SaveAsync(ct);
 
-        // Close both legs concurrently to minimize directional exposure between fills
+        // Close both legs concurrently to minimize directional exposure between fills.
+        // C1: Wrap Task.WhenAll in try/catch — if either leg throws, we must handle partial
+        // closure to prevent a position being stuck in Closing status forever.
         var longCloseTask  = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
         var shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
-        await Task.WhenAll(longCloseTask, shortCloseTask);
+
+        try
+        {
+            await Task.WhenAll(longCloseTask, shortCloseTask);
+        }
+        catch
+        {
+            // Inspect each leg independently to determine which failed
+            var longFailed  = longCloseTask.IsFaulted;
+            var shortFailed = shortCloseTask.IsFaulted;
+
+            if (longFailed && shortFailed)
+            {
+                // Both legs failed — mark as EmergencyClosed, operator must intervene
+                var longEx  = longCloseTask.Exception?.GetBaseException();
+                var shortEx = shortCloseTask.Exception?.GetBaseException();
+
+                _logger.LogCritical(longEx,
+                    "CLOSE FAILED — long leg threw for position #{PositionId} {Asset}: {Message}",
+                    position.Id, assetSymbol, longEx?.Message);
+                _logger.LogCritical(shortEx,
+                    "CLOSE FAILED — short leg threw for position #{PositionId} {Asset}: {Message}",
+                    position.Id, assetSymbol, shortEx?.Message);
+
+                position.Status = PositionStatus.EmergencyClosed;
+                _uow.Positions.Update(position);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId              = position.UserId,
+                    ArbitragePositionId = position.Id,
+                    Type                = AlertType.LegFailed,
+                    Severity            = AlertSeverity.Critical,
+                    Message             = $"Close failed on BOTH legs for {assetSymbol}. " +
+                                         $"Long error: {longEx?.Message}. Short error: {shortEx?.Message}. " +
+                                         "Manual intervention required.",
+                });
+                await _uow.SaveAsync(ct);
+                return;
+            }
+
+            // Exactly one leg failed — save partial data from the successful leg,
+            // leave position in Closing so the operator can manually close the remaining open leg.
+            var failedLegName = longFailed ? "long" : "short";
+            var failedEx = longFailed
+                ? longCloseTask.Exception?.GetBaseException()
+                : shortCloseTask.Exception?.GetBaseException();
+
+            _logger.LogCritical(failedEx,
+                "CLOSE PARTIALLY FAILED — {FailedLeg} leg threw for position #{PositionId} {Asset}: {Message}",
+                failedLegName, position.Id, assetSymbol, failedEx?.Message);
+
+            // Persist the successful leg's fill data if available
+            if (!longFailed && longCloseTask.IsCompletedSuccessfully)
+                position.LongEntryPrice = longCloseTask.Result.FilledPrice;  // reuse field as close price record
+            if (!shortFailed && shortCloseTask.IsCompletedSuccessfully)
+                position.ShortEntryPrice = shortCloseTask.Result.FilledPrice;
+
+            // Leave position.Status = Closing — do NOT mark Closed or EmergencyClosed
+            _uow.Positions.Update(position);
+            _uow.Alerts.Add(new Alert
+            {
+                UserId              = position.UserId,
+                ArbitragePositionId = position.Id,
+                Type                = AlertType.LegFailed,
+                Severity            = AlertSeverity.Critical,
+                Message             = $"Close partially failed: {failedLegName} leg failed for {assetSymbol}. " +
+                                      $"Error: {failedEx?.Message}. Manual intervention required.",
+            });
+            await _uow.SaveAsync(ct);
+            return;
+        }
+
         var longClose  = longCloseTask.Result;
         var shortClose = shortCloseTask.Result;
 
