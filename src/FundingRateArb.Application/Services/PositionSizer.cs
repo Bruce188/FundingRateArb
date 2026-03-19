@@ -23,7 +23,7 @@ public class PositionSizer : IPositionSizer
 
         // Break-even limit: fee rate = gross spread minus net yield (fees subtracted by SignalEngine)
         var entryFeeRate   = opp.SpreadPerHour - opp.NetYieldPerHour;
-        var breakEvenHours = _yieldCalculator.BreakEvenHours(0m, entryFeeRate, opp.NetYieldPerHour);
+        var breakEvenHours = _yieldCalculator.BreakEvenHours(entryFeeRate, opp.NetYieldPerHour);
         if (breakEvenHours > config.BreakevenHoursMax)
             return 0m;
 

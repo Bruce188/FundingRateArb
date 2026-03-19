@@ -90,6 +90,7 @@ try
     {
         options.Password.RequireDigit           = true;
         options.Password.RequiredLength         = 12;
+        options.Password.RequireLowercase       = true;
         options.Password.RequireUppercase       = true;
         options.Password.RequireNonAlphanumeric = true;
         options.SignIn.RequireConfirmedAccount  = false;
@@ -125,7 +126,7 @@ try
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
-    builder.Services.AddScoped<IYieldCalculator, YieldCalculator>();
+    builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
@@ -157,7 +158,7 @@ try
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(15));
     });
 
-    // "OrderExecution" — critical path; more aggressive retry, no circuit breaker
+    // "OrderExecution" — critical path; single retry only (market orders must not double-fill)
     builder.Services.AddResiliencePipeline("OrderExecution", static pipelineBuilder =>
     {
         pipelineBuilder.AddRetry(new RetryStrategyOptions
@@ -166,7 +167,7 @@ try
                 .Handle<HttpRequestException>()
                 .Handle<TimeoutRejectedException>()
                 .Handle<TaskCanceledException>(),
-            MaxRetryAttempts = 5,
+            MaxRetryAttempts = 1,
             Delay            = TimeSpan.FromSeconds(1),
             BackoffType      = DelayBackoffType.Exponential,
             UseJitter        = true,
@@ -266,7 +267,8 @@ try
 
     app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}");
     app.MapControllerRoute("default", "{controller=Dashboard}/{action=Index}/{id?}");
-    app.MapRazorPages();
+    app.MapRazorPages()
+        .RequireRateLimiting("auth");
     app.MapHub<DashboardHub>("/hubs/dashboard");
 
     app.Run();

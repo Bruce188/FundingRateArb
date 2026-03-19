@@ -40,9 +40,9 @@ else
                 @foreach (var pos in Model.Positions)
                 {
                     <tr>
-                        <td>@(pos.Asset?.Symbol ?? $"Asset #{pos.AssetId}")</td>
-                        <td>@(pos.LongExchange?.Name ?? $"Exchange #{pos.LongExchangeId}")</td>
-                        <td>@(pos.ShortExchange?.Name ?? $"Exchange #{pos.ShortExchangeId}")</td>
+                        <td>@pos.AssetSymbol</td>
+                        <td>@pos.LongExchangeName</td>
+                        <td>@pos.ShortExchangeName</td>
                         <td>
                             @{
                                 var badgeClass = pos.Status switch

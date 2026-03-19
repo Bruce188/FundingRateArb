@@ -21,6 +21,11 @@ public class Exchange
     public bool SupportsSubAccounts { get; set; }
     public bool IsActive { get; set; } = true;
 
+    /// <summary>
+    /// Taker fee rate as a fraction (e.g. 0.00045 = 0.045%). Null means use the built-in fallback.
+    /// </summary>
+    public decimal? TakerFeeRate { get; set; }
+
     [MaxLength(500)]
     public string? Description { get; set; }
 

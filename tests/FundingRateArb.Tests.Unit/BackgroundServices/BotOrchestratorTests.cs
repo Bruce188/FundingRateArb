@@ -95,7 +95,7 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(), Times.Never);
+        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Never);
         _mockHealthMonitor.Verify(h => h.CheckAndActAsync(), Times.Never);
     }
 
@@ -106,13 +106,13 @@ public class BotOrchestratorTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
         var callOrder = new List<string>();
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync())
             .Callback(() => callOrder.Add("health"))
             .Returns(Task.CompletedTask);
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync())
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("signal"))
             .ReturnsAsync([]);
 
@@ -133,8 +133,8 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(), Times.Never);
-        _mockExecEngine.Verify(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>()), Times.Never);
+        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _mockExecEngine.Verify(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── Opens at most one position per cycle ───────────────────────────────────
@@ -148,17 +148,17 @@ public class BotOrchestratorTests
         var opp1 = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.001m };
         var opp2 = new ArbitrageOpportunityDto { AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.0005m };
 
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync()).ReturnsAsync([opp1, opp2]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp1, opp2]);
         _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(It.IsAny<ArbitrageOpportunityDto>()))
             .ReturnsAsync(100m);
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>()))
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Only 1 position opened even with 2 opportunities
         _mockExecEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>()),
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -183,12 +183,12 @@ public class BotOrchestratorTests
             LongExchangeId = 1, ShortExchangeId = 2,  // same pair
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync()).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockExecEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>()),
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -201,13 +201,95 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
         var opp = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.001m };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync()).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
         _mockPositionSizer.Setup(s => s.CalculateOptimalSizeAsync(opp)).ReturnsAsync(0m);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockExecEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>()),
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // ── H-BO1: Position updates go to per-user group, not Clients.All ─────────
+
+    [Fact]
+    public async Task RunCycle_PushesPositionUpdates_ToUserGroup_NotClientsAll()
+    {
+        var userId = "trader-user-id";
+        var openPosition = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = userId,
+            Status = Domain.Enums.PositionStatus.Open,
+            Asset = new Asset { Symbol = "ETH" },
+            LongExchange = new Exchange { Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Name = "Lighter" },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([openPosition]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var positionUpdateSentToAll = false;
+        _mockDashboardClient
+            .Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>()))
+            .Callback(() => positionUpdateSentToAll = true)
+            .Returns(Task.CompletedTask);
+
+        var positionUpdateSentToGroup = false;
+        _mockGroupClient
+            .Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>()))
+            .Callback(() => positionUpdateSentToGroup = true)
+            .Returns(Task.CompletedTask);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Position updates must NOT go to Clients.All
+        positionUpdateSentToAll.Should().BeFalse(
+            "position updates contain user-specific data and must not be broadcast to all clients");
+
+        // Position updates MUST go to the user's group
+        positionUpdateSentToGroup.Should().BeTrue(
+            "position updates must be sent to the per-user group");
+
+        _mockHubClients.Verify(
+            c => c.Group($"user-{userId}"),
+            Times.AtLeastOnce);
+    }
+
+    // ── H-BO1: Dashboard aggregates go to Admins group ────────────────────────
+
+    [Fact]
+    public async Task RunCycle_PushesDashboardUpdate_ToAdminsGroup()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        var dashboardSentToAdmins = false;
+        _mockGroupClient
+            .Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
+            .Callback(() => dashboardSentToAdmins = true)
+            .Returns(Task.CompletedTask);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        dashboardSentToAdmins.Should().BeTrue(
+            "dashboard KPI updates must be sent to the Admins group");
+
+        _mockHubClients.Verify(
+            c => c.Group(HubGroups.Admins),
+            Times.AtLeastOnce);
+    }
+
+    // ── M-BO2: SemaphoreSlim is disposed when orchestrator is disposed ─────────
+
+    [Fact]
+    public void BotOrchestrator_Dispose_DoesNotThrow()
+    {
+        // Verifies that Dispose() works correctly (SemaphoreSlim is disposed)
+        var act = () => _sut.Dispose();
+        act.Should().NotThrow();
     }
 }

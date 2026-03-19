@@ -54,7 +54,7 @@ public class FundingRateFetcherTests
         _mockScopeProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(_mockUow.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(_mockFactory.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(ISignalEngine))).Returns(_mockSignalEngine.Object);
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync()).ReturnsAsync(new List<ArbitrageOpportunityDto>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<ArbitrageOpportunityDto>());
 
         // Wire UoW
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
@@ -231,5 +231,98 @@ public class FundingRateFetcherTests
         _mockDashboardClient.Verify(
             d => d.ReceiveFundingRateUpdate(It.IsAny<List<FundingRateDto>>()),
             Times.Once);
+    }
+
+    // ── H-FR1: Purge is called during FetchAll with 48h cutoff ────────────────
+
+    [Fact]
+    public async Task FetchAll_CallsPurgeOlderThan_With48HourCutoff()
+    {
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        _mockFundingRates
+            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        var before = DateTime.UtcNow;
+        await _sut.FetchAllAsync(CancellationToken.None);
+        var after = DateTime.UtcNow;
+
+        _mockFundingRates.Verify(
+            f => f.PurgeOlderThanAsync(
+                It.Is<DateTime>(dt =>
+                    dt >= before.AddHours(-48).AddSeconds(-5) &&
+                    dt <= after.AddHours(-48).AddSeconds(5)),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── H-FR1: Purge is NOT called on every tick (only hourly) ────────────────
+
+    [Fact]
+    public async Task FetchAll_DoesNotCallPurge_OnConsecutiveCallsWithinSameHour()
+    {
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        _mockFundingRates
+            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        // First call — purge should happen
+        await _sut.FetchAllAsync(CancellationToken.None);
+        // Second call immediately after — purge should NOT happen again (within same hour)
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Purge called exactly once across two consecutive fetches
+        _mockFundingRates.Verify(
+            f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── H-FR2: Dictionary lookup used instead of O(N*M) FirstOrDefault scan ───
+    // This is validated structurally: multiple rates for multiple assets map correctly
+    // (if O(N*M) scan had a bug with case sensitivity, this would catch it)
+
+    [Fact]
+    public async Task FetchAll_MapsRatesUsingCaseInsensitiveLookup()
+    {
+        // Rate uses mixed-case "HYPERLIQUID" — should still match "Hyperliquid"
+        var rateWithDifferentCase = new FundingRateDto
+        {
+            ExchangeName = "HYPERLIQUID",
+            Symbol = "eth",           // lowercase — should match "ETH"
+            RatePerHour = 0.0004m,
+            RawRate = 0.0004m,
+            MarkPrice = 3000m,
+        };
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([rateWithDifferentCase]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        List<FundingRateSnapshot>? saved = null;
+        _mockFundingRates.Setup(f => f.AddRange(It.IsAny<IEnumerable<FundingRateSnapshot>>()))
+            .Callback<IEnumerable<FundingRateSnapshot>>(s => saved = s.ToList());
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Case-insensitive lookup must find the exchange and asset
+        saved.Should().NotBeNull();
+        saved.Should().HaveCount(1, "case-insensitive match should succeed for 'HYPERLIQUID'/'eth'");
+        saved![0].ExchangeId.Should().Be(1);
+        saved[0].AssetId.Should().Be(1);
     }
 }

@@ -7,7 +7,10 @@ public class SignalEngine : ISignalEngine
 {
     private readonly IUnitOfWork _uow;
 
-    private static readonly Dictionary<string, decimal> RoundTripFees = new()
+    /// <summary>
+    /// Fallback round-trip fee constants used when Exchange.TakerFeeRate is not set in the DB.
+    /// </summary>
+    private static readonly Dictionary<string, decimal> FallbackRoundTripFees = new()
     {
         { "Hyperliquid", 0.00090m },
         { "Lighter",     0.00000m },
@@ -16,7 +19,7 @@ public class SignalEngine : ISignalEngine
 
     public SignalEngine(IUnitOfWork uow) => _uow = uow;
 
-    public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync()
+    public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
         var rates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
@@ -36,8 +39,13 @@ public class SignalEngine : ISignalEngine
 
                 var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
                 var diff = shortR.RatePerHour - longR.RatePerHour;
-                var feePerHour = (RoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m)
-                    + RoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m)) / 24m;
+
+                // Use DB-stored TakerFeeRate when available; fall back to built-in constants.
+                var longFee  = longR.Exchange.TakerFeeRate * 2
+                               ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
+                var shortFee = shortR.Exchange.TakerFeeRate * 2
+                               ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
+                var feePerHour = (longFee + shortFee) / 24m;
                 var net = diff - feePerHour;
 
                 if (net >= config.OpenThreshold)

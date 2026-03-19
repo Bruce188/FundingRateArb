@@ -6,6 +6,6 @@ namespace FundingRateArb.Application.Services;
 
 public interface IExecutionEngine
 {
-    Task<(bool Success, string? Error)> OpenPositionAsync(ArbitrageOpportunityDto opp, decimal sizeUsdc);
-    Task ClosePositionAsync(ArbitragePosition position, CloseReason reason);
+    Task<(bool Success, string? Error)> OpenPositionAsync(ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default);
+    Task ClosePositionAsync(ArbitragePosition position, CloseReason reason, CancellationToken ct = default);
 }

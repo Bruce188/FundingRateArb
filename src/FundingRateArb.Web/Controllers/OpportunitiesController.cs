@@ -18,10 +18,9 @@ public class OpportunitiesController : Controller
         _uow = uow;
     }
 
-    public async Task<IActionResult> Index(CancellationToken ct)
+    public async Task<IActionResult> Index(CancellationToken ct = default)
     {
-        ct.ThrowIfCancellationRequested();
-        var opportunities = await _signalEngine.GetOpportunitiesAsync();
+        var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
         var config = await _uow.BotConfig.GetActiveAsync();
         var vm = new OpportunityListViewModel
         {

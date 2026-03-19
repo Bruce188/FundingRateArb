@@ -15,6 +15,7 @@ public class BotOrchestrator : BackgroundService
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
+    private bool _disposed;
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
@@ -156,8 +157,9 @@ public class BotOrchestrator : BackgroundService
     }
 
     /// <summary>
-    /// Pushes a ReceiveDashboardUpdate to ALL connected clients with current KPI values.
+    /// Pushes a ReceiveDashboardUpdate to the Admins group with current KPI values.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
+    /// H-BO1: Dashboard aggregates target Admins group only (not Clients.All).
     /// </summary>
     private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
     {
@@ -176,7 +178,7 @@ public class BotOrchestrator : BackgroundService
                 BestSpread        = bestSpread,
             };
 
-            await _hubContext.Clients.All.ReceiveDashboardUpdate(dto);
+            await _hubContext.Clients.Group(HubGroups.Admins).ReceiveDashboardUpdate(dto);
         }
         catch (Exception ex)
         {
@@ -185,9 +187,9 @@ public class BotOrchestrator : BackgroundService
     }
 
     /// <summary>
-    /// Pushes a ReceivePositionUpdate for each open position to ALL connected clients.
+    /// Pushes a ReceivePositionUpdate for each open position to the owning user's group.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
-    /// TODO: Future improvement — target per-user groups for position updates
+    /// H-BO1: Position updates target per-user groups to prevent data leaks.
     /// </summary>
     private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
     {
@@ -196,7 +198,7 @@ public class BotOrchestrator : BackgroundService
             foreach (var pos in openPositions)
             {
                 var dto = MapPositionToDto(pos);
-                await _hubContext.Clients.All.ReceivePositionUpdate(dto);
+                await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);
             }
         }
         catch (Exception ex)
@@ -239,6 +241,17 @@ public class BotOrchestrator : BackgroundService
         {
             _logger.LogWarning(ex, "Failed to push alert updates via SignalR");
         }
+    }
+
+    // M-BO2: Dispose SemaphoreSlim to release kernel resources
+    public override void Dispose()
+    {
+        if (!_disposed)
+        {
+            _cycleLock.Dispose();
+            _disposed = true;
+        }
+        base.Dispose();
     }
 
     private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)

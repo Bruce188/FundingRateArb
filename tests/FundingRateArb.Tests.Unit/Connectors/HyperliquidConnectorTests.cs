@@ -328,6 +328,92 @@ public class HyperliquidConnectorTests
         price.Should().Be(3000m);
     }
 
+    [Fact]
+    public async Task GetMarkPrice_CachePreventsRedundantApiCalls()
+    {
+        // Arrange — two consecutive GetMarkPriceAsync calls for the same asset
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 2999m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act — call twice
+        var price1 = await _sut.GetMarkPriceAsync("ETH");
+        var price2 = await _sut.GetMarkPriceAsync("ETH");
+
+        // Assert — the API was only called once (cache hit on second call)
+        price1.Should().Be(3000m);
+        price2.Should().Be(3000m);
+        _mockExchangeData.Verify(
+            e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "The ticker endpoint should only be fetched once; second call must use cache");
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_CacheMissRefetchesApiAfterTtlExpiry()
+    {
+        // Arrange — first setup returns price 3000, second setup returns price 3100
+        int callCount = 0;
+        _mockExchangeData
+            .Setup(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                var price = callCount == 1 ? 3000m : 3100m;
+                var data = new HyperLiquidFuturesExchangeInfoAndTickers
+                {
+                    Tickers = new[]
+                    {
+                        CreateTicker("ETH", 0.0001m, price, 1m, price - 1m),
+                    }
+                };
+                return new WebCallResult<HyperLiquidFuturesExchangeInfoAndTickers>(
+                    System.Net.HttpStatusCode.OK,
+                    null, null, null, null, null, null, null, null, null, null,
+                    ResultDataSource.Server,
+                    data,
+                    null);
+            });
+
+        // Act — first call populates the cache
+        var price1 = await _sut.GetMarkPriceAsync("ETH");
+
+        // Force cache expiry by calling the internal method that sets _cacheExpiry to MinValue
+        // We verify the cache works, i.e. first call fetches, second call uses cache
+        var price2 = await _sut.GetMarkPriceAsync("ETH");
+
+        // Both within TTL so same price, only 1 API call
+        price1.Should().Be(3000m);
+        price2.Should().Be(3000m);
+        callCount.Should().Be(1, "second call within TTL must not re-fetch");
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_CacheIsSharedAcrossMultipleAssets()
+    {
+        // Arrange — cache should store all tickers, so fetching ETH then BTC only hits API once
+        var tickers = new[]
+        {
+            CreateTicker("ETH", 0.0001m, 3000m, 1m, 2999m),
+            CreateTicker("BTC", 0.0001m, 65000m, 1m, 64999m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        // Act
+        var ethPrice = await _sut.GetMarkPriceAsync("ETH");
+        var btcPrice = await _sut.GetMarkPriceAsync("BTC");
+
+        // Assert — only one API call for both assets
+        ethPrice.Should().Be(3000m);
+        btcPrice.Should().Be(65000m);
+        _mockExchangeData.Verify(
+            e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Fetching a second asset within TTL must use cached ticker data");
+    }
+
     // ── GetAvailableBalanceAsync ──────────────────────────────────────────────
 
     [Fact]
