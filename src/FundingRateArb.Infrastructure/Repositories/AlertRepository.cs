@@ -22,10 +22,12 @@ public class AlertRepository : IAlertRepository
     public Task<Alert?> GetByIdAsync(int id) =>
         _context.Alerts.FirstOrDefaultAsync(a => a.Id == id);
 
-    public Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false) =>
+    public Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false, int skip = 0, int take = 500) =>
         _context.Alerts
             .Where(a => a.UserId == userId && (!unreadOnly || !a.IsRead))
             .OrderByDescending(a => a.CreatedAt)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync();
 
     public Task<List<Alert>> GetByPositionAsync(int positionId) =>

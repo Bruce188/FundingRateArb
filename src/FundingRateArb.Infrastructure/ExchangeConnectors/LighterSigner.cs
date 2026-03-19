@@ -139,7 +139,15 @@ public sealed class LighterSigner : IDisposable
 
         if (err != IntPtr.Zero)
         {
-            var errMsg = Marshal.PtrToStringAnsi(err) ?? "Unknown error";
+            string errMsg;
+            try
+            {
+                errMsg = Marshal.PtrToStringAnsi(err) ?? "Unknown error";
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(err);
+            }
             throw new InvalidOperationException($"Lighter signer CreateClient failed: {errMsg}");
         }
 
@@ -147,8 +155,16 @@ public sealed class LighterSigner : IDisposable
         var checkErr = CheckClient(apiKeyIndex, accountIndex);
         if (checkErr != IntPtr.Zero)
         {
-            var errMsg = Marshal.PtrToStringAnsi(checkErr) ?? "Unknown error";
-            throw new InvalidOperationException($"Lighter signer CheckClient failed: {errMsg}");
+            string checkErrMsg;
+            try
+            {
+                checkErrMsg = Marshal.PtrToStringAnsi(checkErr) ?? "Unknown error";
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(checkErr);
+            }
+            throw new InvalidOperationException($"Lighter signer CheckClient failed: {checkErrMsg}");
         }
 
         // Store for later use (can't change after init due to native library state)
@@ -219,18 +235,45 @@ public sealed class LighterSigner : IDisposable
 
     private (byte txType, string txInfo, string txHash) DecodeResult(SignedTxResponse result)
     {
-        if (result.Err != IntPtr.Zero)
+        // Marshal all IntPtr strings and free native memory in a finally block.
+        // The Go library allocates strings with C.CString (malloc); Marshal.FreeHGlobal
+        // calls free() on Linux, which is the correct counterpart.
+        string? errMsg = null;
+        string txInfo = "";
+        string txHash = "";
+
+        try
         {
-            var errMsg = Marshal.PtrToStringAnsi(result.Err) ?? "Unknown signing error";
-            throw new InvalidOperationException($"Lighter signing failed: {errMsg}");
+            if (result.Err != IntPtr.Zero)
+                errMsg = Marshal.PtrToStringAnsi(result.Err) ?? "Unknown signing error";
+
+            if (result.TxInfo != IntPtr.Zero)
+                txInfo = Marshal.PtrToStringAnsi(result.TxInfo) ?? "";
+
+            if (result.TxHash != IntPtr.Zero)
+                txHash = Marshal.PtrToStringAnsi(result.TxHash) ?? "";
+
+            if (result.MessageToSign != IntPtr.Zero)
+            {
+                // MessageToSign is not used by the caller; marshal and discard to trigger cleanup
+                _ = Marshal.PtrToStringAnsi(result.MessageToSign);
+            }
+        }
+        finally
+        {
+            // Free native memory allocated by Go's C.CString (malloc) for each non-zero pointer
+            if (result.Err != IntPtr.Zero)
+                Marshal.FreeHGlobal(result.Err);
+            if (result.TxInfo != IntPtr.Zero)
+                Marshal.FreeHGlobal(result.TxInfo);
+            if (result.TxHash != IntPtr.Zero)
+                Marshal.FreeHGlobal(result.TxHash);
+            if (result.MessageToSign != IntPtr.Zero)
+                Marshal.FreeHGlobal(result.MessageToSign);
         }
 
-        var txInfo = result.TxInfo != IntPtr.Zero
-            ? Marshal.PtrToStringAnsi(result.TxInfo) ?? ""
-            : "";
-        var txHash = result.TxHash != IntPtr.Zero
-            ? Marshal.PtrToStringAnsi(result.TxHash) ?? ""
-            : "";
+        if (errMsg is not null)
+            throw new InvalidOperationException($"Lighter signing failed: {errMsg}");
 
         if (string.IsNullOrEmpty(txInfo))
             throw new InvalidOperationException("Lighter signing returned empty txInfo");

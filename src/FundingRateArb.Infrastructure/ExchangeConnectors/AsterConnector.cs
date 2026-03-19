@@ -17,6 +17,12 @@ public class AsterConnector : IExchangeConnector
     private readonly IAsterRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
 
+    // TTL-guarded cache for mark prices (10 second TTL)
+    private Dictionary<string, decimal> _markPriceCache = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan MarkPriceCacheTtl = TimeSpan.FromSeconds(10);
+    private readonly SemaphoreSlim _cacheLock = new(1, 1);
+
     public AsterConnector(
         IAsterRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider)
@@ -81,9 +87,9 @@ public class AsterConnector : IExchangeConnector
         var symbol = asset + "USDT";
         var orderSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
 
-        // Fetch mark price to compute quantity from the USDC notional size
+        // Fetch mark price to compute quantity from the USDC notional size with leverage
         var markPrice = await GetMarkPriceAsync(asset, ct);
-        var quantity = sizeUsdc / markPrice;
+        var quantity = sizeUsdc * leverage / markPrice;
 
         // Set leverage before placing the order (best-effort; ignore result)
         await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
@@ -187,23 +193,45 @@ public class AsterConnector : IExchangeConnector
     /// <inheritdoc />
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
-
-        var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token),
-            ct);
-
-        if (!result.Success)
-            throw new InvalidOperationException(result.Error!.ToString());
-
         var symbol = asset + "USDT";
-        var entry = result.Data!.FirstOrDefault(mp =>
-            mp.Symbol.Equals(symbol, StringComparison.OrdinalIgnoreCase));
 
-        if (entry is null)
+        // Check cache without lock first (fast path)
+        if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(symbol, out var cachedPrice))
+            return cachedPrice;
+
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            // Double-checked: re-verify inside the lock
+            if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(symbol, out cachedPrice))
+                return cachedPrice;
+
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token),
+                ct);
+
+            if (!result.Success)
+                throw new InvalidOperationException(result.Error!.ToString());
+
+            // Populate cache with all mark prices so subsequent calls for other assets are also cached
+            var newCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            foreach (var mp in result.Data!)
+                newCache[mp.Symbol] = mp.MarkPrice;
+
+            _markPriceCache = newCache;
+            _cacheExpiry = DateTime.UtcNow + MarkPriceCacheTtl;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+
+        if (!_markPriceCache.TryGetValue(symbol, out var price))
             throw new KeyNotFoundException($"No mark price found for asset '{asset}' on Aster.");
 
-        return entry.MarkPrice;
+        return price;
     }
 
     /// <inheritdoc />

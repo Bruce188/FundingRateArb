@@ -58,26 +58,26 @@ public class YieldCalculatorTests
     // ── BreakEvenHours ───────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(1000, 0.0009, 0.0004, 2.25)]   // 0.09% fees / 0.04%/hr = 2.25 h
-    [InlineData(500,  0.001,  0.0005, 2.0)]
+    [InlineData(0.0009, 0.0004, 2.25)]   // 0.09% fees / 0.04%/hr = 2.25 h
+    [InlineData(0.001,  0.0005, 2.0)]
     public void BreakEvenHours_CalculatesCorrectly(
-        decimal sizeUsdc, decimal feeRateTotal, decimal netRatePerHour, decimal expected)
+        decimal feeRateTotal, decimal netRatePerHour, decimal expected)
     {
-        var result = _sut.BreakEvenHours(sizeUsdc, feeRateTotal, netRatePerHour);
+        var result = _sut.BreakEvenHours(feeRateTotal, netRatePerHour);
         result.Should().BeApproximately(expected, 0.0001m);
     }
 
     [Fact]
     public void BreakEvenHours_ZeroYield_ReturnsMaxValue()
     {
-        var result = _sut.BreakEvenHours(1000m, 0.0009m, 0m);
+        var result = _sut.BreakEvenHours(0.0009m, 0m);
         result.Should().Be(decimal.MaxValue);
     }
 
     [Fact]
     public void BreakEvenHours_NegativeYield_ReturnsMaxValue()
     {
-        var result = _sut.BreakEvenHours(1000m, 0.0009m, -0.0004m);
+        var result = _sut.BreakEvenHours(0.0009m, -0.0004m);
         result.Should().Be(decimal.MaxValue);
     }
 

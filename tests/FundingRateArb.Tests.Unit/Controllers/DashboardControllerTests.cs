@@ -42,7 +42,7 @@ public class DashboardControllerTests
             .ReturnsAsync([]);
         _mockFundingRateRepo.Setup(r => r.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync([]);
-        _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true))
+        _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
             .ReturnsAsync([]);
 
         _controller = new DashboardController(_mockUow.Object, _mockLogger.Object);

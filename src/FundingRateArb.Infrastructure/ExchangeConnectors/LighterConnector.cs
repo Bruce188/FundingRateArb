@@ -6,7 +6,6 @@ using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Polly;
 using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
@@ -16,14 +15,12 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// Uses a custom HttpClient for REST API calls and the native lighter-signer
 /// library (via P/Invoke) for cryptographic order signing.
 /// </summary>
-public class LighterConnector : IExchangeConnector
+public class LighterConnector : IExchangeConnector, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<LighterConnector> _logger;
     private readonly IConfiguration _configuration;
     private readonly LighterSigner _signer;
-    private readonly ResiliencePipelineProvider<string>? _pipelineProvider;
-
     // Signer initialisation is deferred until the first trading call
     // to avoid blocking startup when credentials are not configured.
     private bool _signerInitialized;
@@ -56,84 +53,76 @@ public class LighterConnector : IExchangeConnector
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
-        _pipelineProvider = pipelineProvider;
+        _ = pipelineProvider; // Pipeline not used: HttpClient-level resilience handles retries (M-LC3)
         _signer = new LighterSigner(logger);
     }
 
     public string ExchangeName => "Lighter";
 
-    // ── Funding Rates (unchanged) ──
+    // ── Funding Rates ──
+    // Note: HttpClient has AddStandardResilienceHandler applied at registration (Program.cs).
+    // No internal Polly pipeline is used here to avoid double-retry (M-LC3).
 
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
-        var pipeline = _pipelineProvider?.GetPipeline("ExchangeSdk");
+        _logger.LogDebug("Fetching funding rates from Lighter DEX");
 
-        return await ExecuteWithOptionalPipeline(pipeline, async token =>
+        var ratesTask = _httpClient.GetAsync("funding-rates", ct);
+        var statsTask = _httpClient.GetAsync("exchangeStats", ct);
+
+        await Task.WhenAll(ratesTask, statsTask);
+
+        var ratesResponse = await (await ratesTask).Content
+            .ReadFromJsonAsync<LighterFundingRatesResponse>(JsonOptions, ct);
+        var statsResponse = await (await statsTask).Content
+            .ReadFromJsonAsync<LighterExchangeStatsResponse>(JsonOptions, ct);
+
+        var allRates = ratesResponse?.FundingRates;
+        if (allRates is null || allRates.Count == 0)
         {
-            _logger.LogDebug("Fetching funding rates from Lighter DEX");
+            _logger.LogDebug("Lighter returned no funding rates");
+            return [];
+        }
 
-            var ratesTask = _httpClient.GetAsync("funding-rates", token);
-            var statsTask = _httpClient.GetAsync("exchangeStats", token);
+        var volumeBySymbol = statsResponse?.OrderBookStats?
+            .ToDictionary(s => s.Symbol, s => s.DailyQuoteTokenVolume)
+            ?? new Dictionary<string, decimal>();
 
-            await Task.WhenAll(ratesTask, statsTask);
-
-            var ratesResponse = await (await ratesTask).Content
-                .ReadFromJsonAsync<LighterFundingRatesResponse>(JsonOptions, token);
-            var statsResponse = await (await statsTask).Content
-                .ReadFromJsonAsync<LighterExchangeStatsResponse>(JsonOptions, token);
-
-            var allRates = ratesResponse?.FundingRates;
-            if (allRates is null || allRates.Count == 0)
+        // The endpoint returns rates for all reference exchanges; keep only Lighter's own rates
+        return allRates
+            .Where(r => r.Exchange.Equals("lighter", StringComparison.OrdinalIgnoreCase))
+            .Select(r => new FundingRateDto
             {
-                _logger.LogDebug("Lighter returned no funding rates");
-                return [];
-            }
-
-            var volumeBySymbol = statsResponse?.OrderBookStats?
-                .ToDictionary(s => s.Symbol, s => s.DailyQuoteTokenVolume)
-                ?? new Dictionary<string, decimal>();
-
-            // The endpoint returns rates for all reference exchanges; keep only Lighter's own rates
-            return allRates
-                .Where(r => r.Exchange.Equals("lighter", StringComparison.OrdinalIgnoreCase))
-                .Select(r => new FundingRateDto
-                {
-                    ExchangeName = ExchangeName,
-                    Symbol       = r.Symbol,
-                    RawRate      = r.Rate,
-                    RatePerHour  = r.Rate,
-                    Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
-                }).ToList();
-        }, ct);
+                ExchangeName = ExchangeName,
+                Symbol       = r.Symbol,
+                RawRate      = r.Rate,
+                RatePerHour  = r.Rate,
+                Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
+            }).ToList();
     }
 
     // ── Mark Price ──
 
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        var pipeline = _pipelineProvider?.GetPipeline("ExchangeSdk");
+        _logger.LogDebug("Fetching mark price for {Asset} from Lighter DEX", asset);
 
-        return await ExecuteWithOptionalPipeline(pipeline, async token =>
+        // Use orderBookDetails which includes last_trade_price (best available proxy for mark price)
+        var market = await GetMarketDetailAsync(asset, ct);
+        if (market is null)
         {
-            _logger.LogDebug("Fetching mark price for {Asset} from Lighter DEX", asset);
+            throw new KeyNotFoundException(
+                $"Asset '{asset}' not found on Lighter DEX");
+        }
 
-            // Use orderBookDetails which includes last_trade_price (best available proxy for mark price)
-            var market = await GetMarketDetailAsync(asset, token);
-            if (market is null)
-            {
-                throw new KeyNotFoundException(
-                    $"Asset '{asset}' not found on Lighter DEX");
-            }
+        if (market.LastTradePrice <= 0)
+        {
+            _logger.LogWarning("Lighter last_trade_price is 0 for {Asset}, trying funding-rates endpoint", asset);
+            throw new InvalidOperationException(
+                $"No valid price available for '{asset}' on Lighter DEX");
+        }
 
-            if (market.LastTradePrice <= 0)
-            {
-                _logger.LogWarning("Lighter last_trade_price is 0 for {Asset}, trying funding-rates endpoint", asset);
-                throw new InvalidOperationException(
-                    $"No valid price available for '{asset}' on Lighter DEX");
-            }
-
-            return market.LastTradePrice;
-        }, ct);
+        return market.LastTradePrice;
     }
 
     // ── Available Balance ──
@@ -506,49 +495,49 @@ public class LighterConnector : IExchangeConnector
     }
 
     /// <summary>
-    /// Executes an async function with an optional Polly resilience pipeline.
-    /// If no pipeline provider was injected, the function runs directly.
-    /// </summary>
-    private static async Task<T> ExecuteWithOptionalPipeline<T>(
-        Polly.ResiliencePipeline? pipeline,
-        Func<CancellationToken, ValueTask<T>> action,
-        CancellationToken ct)
-    {
-        if (pipeline is not null)
-            return await pipeline.ExecuteAsync(action, ct);
-
-        return await action(ct);
-    }
-
-    /// <summary>
     /// Get market metadata for a specific asset symbol. Cached for 5 minutes.
+    /// Uses double-checked locking so the lock is NOT held during HTTP I/O.
     /// </summary>
     private async Task<LighterOrderBookDetail?> GetMarketDetailAsync(string asset, CancellationToken ct)
     {
+        // 1. Check cache without lock (fast path — avoids serializing callers on a hot cache)
+        var currentCache = _marketCache;
+        if (currentCache is not null && DateTime.UtcNow < _marketCacheExpiry)
+            return currentCache.GetValueOrDefault(asset);
+
+        // 2. Cache miss: fetch outside the lock, then acquire lock to update
+        var response = await _httpClient.GetAsync("orderBookDetails?filter=perp", ct);
+        response.EnsureSuccessStatusCode();
+
+        var detailsResponse = await response.Content
+            .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct);
+
+        var newCache = detailsResponse?.OrderBookDetails?
+            .ToDictionary(d => d.Symbol, d => d, StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, LighterOrderBookDetail>(StringComparer.OrdinalIgnoreCase);
+
+        // 3. Acquire lock only to commit the new cache atomically (no I/O inside lock)
         await _cacheLock.WaitAsync(ct);
         try
         {
+            // Re-check: another concurrent caller may have already refreshed the cache
             if (_marketCache is null || DateTime.UtcNow >= _marketCacheExpiry)
             {
-                var response = await _httpClient.GetAsync("orderBookDetails?filter=perp", ct);
-                response.EnsureSuccessStatusCode();
-
-                var detailsResponse = await response.Content
-                    .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct);
-
-                _marketCache = detailsResponse?.OrderBookDetails?
-                    .ToDictionary(d => d.Symbol, d => d, StringComparer.OrdinalIgnoreCase)
-                    ?? new Dictionary<string, LighterOrderBookDetail>(StringComparer.OrdinalIgnoreCase);
+                _marketCache = newCache;
                 _marketCacheExpiry = DateTime.UtcNow + CacheTtl;
-
                 _logger.LogDebug("Refreshed Lighter market cache: {Count} markets", _marketCache.Count);
             }
-
-            return _marketCache.GetValueOrDefault(asset);
         }
         finally
         {
             _cacheLock.Release();
         }
+
+        return _marketCache.GetValueOrDefault(asset);
+    }
+
+    public void Dispose()
+    {
+        _cacheLock.Dispose();
     }
 }

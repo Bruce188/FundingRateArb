@@ -23,5 +23,6 @@ public class AlertConfiguration : IEntityTypeConfiguration<Alert>
             .IsRequired(false);
 
         builder.HasIndex(a => new { a.UserId, a.CreatedAt });
+        builder.HasIndex(a => new { a.IsRead, a.CreatedAt });
     }
 }

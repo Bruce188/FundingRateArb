@@ -72,6 +72,67 @@ public class MultiRouteHttpMessageHandler : HttpMessageHandler
     }
 }
 
+/// <summary>
+/// HTTP handler that counts calls, used to verify caching behaviour.
+/// </summary>
+public class CountingHttpMessageHandler : HttpMessageHandler
+{
+    private readonly string _content;
+    private int _callCount;
+
+    public int CallCount => _callCount;
+
+    public CountingHttpMessageHandler(string content)
+    {
+        _content = content;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        Interlocked.Increment(ref _callCount);
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(_content, System.Text.Encoding.UTF8, "application/json")
+        });
+    }
+}
+
+/// <summary>
+/// HTTP handler that counts calls and can simulate a slow first response
+/// to help verify that the lock is not held during HTTP I/O.
+/// </summary>
+public class CountingSlowHttpMessageHandler : HttpMessageHandler
+{
+    private readonly string _content;
+    private readonly TaskCompletionSource<bool>? _onFirstCall;
+    private int _callCount;
+
+    public int CallCount => _callCount;
+
+    public CountingSlowHttpMessageHandler(string content, TaskCompletionSource<bool>? onFirstCall = null)
+    {
+        _content = content;
+        _onFirstCall = onFirstCall;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var count = Interlocked.Increment(ref _callCount);
+        if (count == 1)
+            _onFirstCall?.TrySetResult(true);
+
+        // Small yield to allow concurrent callers to reach the cache check
+        await Task.Yield();
+
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(_content, System.Text.Encoding.UTF8, "application/json")
+        };
+    }
+}
+
 public class LighterConnectorTests
 {
     private readonly Mock<ILogger<LighterConnector>> _loggerMock = new();
@@ -408,5 +469,81 @@ public class LighterConnectorTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("SignerPrivateKey");
+    }
+
+    // ── Cache concurrency (C-LC1) ─────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_ConcurrentCalls_DoNotSerializeOnHttpIo()
+    {
+        // The lock must NOT be held during the HTTP I/O. Multiple concurrent callers should
+        // be able to read the cache simultaneously once it is populated.
+        // Arrange: use a slow handler that introduces latency to detect serialization
+        var completionSource = new TaskCompletionSource<bool>();
+
+        var handler = new CountingSlowHttpMessageHandler(
+            OrderBookDetailsJson,
+            onFirstCall: completionSource);
+
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        // First call populates cache
+        var price1 = await sut.GetMarkPriceAsync("ETH");
+
+        // Now two concurrent calls — both should resolve from cache without waiting for HTTP
+        var t1 = sut.GetMarkPriceAsync("ETH");
+        var t2 = sut.GetMarkPriceAsync("BTC");
+
+        await Task.WhenAll(t1, t2);
+
+        price1.Should().Be(3500.50m);
+        (await t1).Should().Be(3500.50m);
+        (await t2).Should().Be(65000.00m);
+
+        // HTTP handler should have been called exactly once (cache hit on concurrent calls)
+        handler.CallCount.Should().Be(1,
+            "cache should be populated after first call; concurrent calls must not re-fetch");
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_CachePreventsRedundantFetches()
+    {
+        // Two sequential calls within TTL must only issue one HTTP request.
+        var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var price1 = await sut.GetMarkPriceAsync("ETH");
+        var price2 = await sut.GetMarkPriceAsync("ETH");
+
+        price1.Should().Be(3500.50m);
+        price2.Should().Be(3500.50m);
+        handler.CallCount.Should().Be(1,
+            "second call within TTL should use cache, not make another HTTP request");
+    }
+
+    // ── IDisposable (M-LC2) ───────────────────────────────────
+
+    [Fact]
+    public void LighterConnector_ImplementsIDisposable()
+    {
+        var sut = CreateConnector("{}");
+        sut.Should().BeAssignableTo<IDisposable>(
+            "LighterConnector must implement IDisposable to release the SemaphoreSlim");
+    }
+
+    [Fact]
+    public void LighterConnector_Dispose_DoesNotThrow()
+    {
+        var sut = CreateConnector("{}");
+        var act = () => ((IDisposable)sut).Dispose();
+        act.Should().NotThrow("Dispose must be safe to call");
     }
 }

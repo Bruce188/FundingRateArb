@@ -14,6 +14,12 @@ namespace FundingRateArb.Infrastructure.BackgroundServices;
 
 public class FundingRateFetcher : BackgroundService
 {
+    // M-FR3: Named constant instead of magic number
+    private const int FetchIntervalSeconds = 60;
+
+    // H-FR1: Track last purge time to run hourly purge without a separate timer
+    private DateTime _lastPurgeUtc = DateTime.MinValue;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
     private readonly ILogger<FundingRateFetcher> _logger;
@@ -30,7 +36,17 @@ public class FundingRateFetcher : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
+        // M-FR3: Run once immediately so the dashboard has data on startup (no 60s blank wait)
+        try
+        {
+            await FetchAllAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Initial funding rate fetch failed");
+        }
+
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(FetchIntervalSeconds));
 
         while (await timer.WaitForNextTickAsync(ct))
         {
@@ -49,10 +65,6 @@ public class FundingRateFetcher : BackgroundService
     /// Fetches rates from all active exchanges and persists them as FundingRateSnapshot rows.
     /// Exposed as internal for unit testing.
     /// </summary>
-    /// <remarks>
-    /// Note: PeriodicTimer.WaitForNextTickAsync waits BEFORE the first tick, so the first
-    /// fetch cycle runs ~60s after app startup. This is expected behavior.
-    /// </remarks>
     internal async Task FetchAllAsync(CancellationToken ct)
     {
         using var scope  = _scopeFactory.CreateScope();
@@ -83,16 +95,18 @@ public class FundingRateFetcher : BackgroundService
         var exchanges = await uow.Exchanges.GetActiveAsync();
         var assets    = await uow.Assets.GetActiveAsync();
 
+        // H-FR2: Build lookup dictionaries before the loop — O(N+M) instead of O(N*M)
+        var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
+        var assetMap    = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
+
         // M9: Build snapshot list first, then AddRange once (instead of individual Add calls)
         var now = DateTime.UtcNow;
         var snapshots = new List<FundingRateSnapshot>();
 
         foreach (var rate in allRates)
         {
-            var exchange = exchanges.FirstOrDefault(e => e.Name == rate.ExchangeName);
-            var asset    = assets.FirstOrDefault(a => a.Symbol == rate.Symbol);
-
-            if (exchange is null || asset is null) continue;
+            if (!exchangeMap.TryGetValue(rate.ExchangeName, out var exchange)) continue;
+            if (!assetMap.TryGetValue(rate.Symbol, out var asset)) continue;
 
             snapshots.Add(new FundingRateSnapshot
             {
@@ -113,6 +127,15 @@ public class FundingRateFetcher : BackgroundService
         _logger.LogInformation(
             "Funding rates saved: {Total} snapshots from {ExchangeCount} exchanges",
             allRates.Count, connectors.Count);
+
+        // H-FR1: Hourly purge — keep only 48h of data to prevent unbounded table growth
+        if (DateTime.UtcNow - _lastPurgeUtc >= TimeSpan.FromHours(1))
+        {
+            var cutoff = DateTime.UtcNow.AddHours(-48);
+            var purged = await uow.FundingRates.PurgeOlderThanAsync(cutoff, ct);
+            _lastPurgeUtc = DateTime.UtcNow;
+            _logger.LogInformation("Purged {Count} funding rate snapshots older than {Cutoff:u}", purged, cutoff);
+        }
 
         // M13: Push live updates consistently to Group("MarketData"), not Clients.All
         await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveFundingRateUpdate(allRates);

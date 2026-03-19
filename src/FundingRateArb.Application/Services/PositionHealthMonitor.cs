@@ -27,11 +27,15 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     public async Task CheckAndActAsync()
     {
-        var openPositions = await _uow.Positions.GetOpenAsync();
+        // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
+        var openPositions = await _uow.Positions.GetOpenTrackedAsync();
         if (openPositions.Count == 0) return;
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+
+        // C-PH1: Collect positions that need closing; call SaveAsync ONCE after the loop
+        var toClose = new List<(ArbitragePosition Position, CloseReason Reason)>();
 
         foreach (var pos in openPositions)
         {
@@ -47,7 +51,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             var spread = (shortRate?.RatePerHour ?? 0m) - (longRate?.RatePerHour ?? 0m);
 
-            // Always update current spread
+            // Always update current spread (tracked entity — change recorded by EF)
             pos.CurrentSpreadPerHour = spread;
             _uow.Positions.Update(pos);
 
@@ -89,9 +93,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     pos.Id, assetSymbol, reason.Value,
                     spread, hoursOpen, priceMove);
 
-                await _uow.SaveAsync(); // persist spread update before close
-                await _executionEngine.ClosePositionAsync(pos, reason.Value);
-                continue; // skip alert check — position is closed
+                toClose.Add((pos, reason.Value));
+                continue; // skip alert check — position will be closed
             }
 
             // Alert if spread below alert threshold (but above close threshold)
@@ -114,8 +117,15 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     });
                 }
             }
+        }
 
-            await _uow.SaveAsync();
+        // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
+        await _uow.SaveAsync();
+
+        // Execute closes after the batch save (spread update is persisted before close)
+        foreach (var (pos, reason) in toClose)
+        {
+            await _executionEngine.ClosePositionAsync(pos, reason);
         }
     }
 }

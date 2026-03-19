@@ -12,6 +12,12 @@ public class HyperliquidConnector : IExchangeConnector
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
 
+    // TTL-guarded cache for mark prices (10 second TTL)
+    private Dictionary<string, decimal> _markPriceCache = new(StringComparer.OrdinalIgnoreCase);
+    private DateTime _cacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan MarkPriceCacheTtl = TimeSpan.FromSeconds(10);
+    private readonly SemaphoreSlim _cacheLock = new(1, 1);
+
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider)
@@ -162,19 +168,43 @@ public class HyperliquidConnector : IExchangeConnector
 
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        // Check cache without lock first (fast path)
+        if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(asset, out var cachedPrice))
+            return cachedPrice;
 
-        var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
-            ct);
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            // Double-checked: re-verify inside the lock
+            if (DateTime.UtcNow < _cacheExpiry && _markPriceCache.TryGetValue(asset, out cachedPrice))
+                return cachedPrice;
 
-        if (!result.Success)
-            throw new InvalidOperationException(result.Error!.ToString());
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
-        var ticker = result.Data.Tickers.FirstOrDefault(t => t.Symbol == asset)
-            ?? throw new InvalidOperationException($"Asset '{asset}' not found on Hyperliquid.");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
+                ct);
 
-        return ticker.MarkPrice;
+            if (!result.Success)
+                throw new InvalidOperationException(result.Error!.ToString());
+
+            // Populate cache with all tickers so subsequent calls for other assets are also cached
+            var newCache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in result.Data.Tickers)
+                newCache[t.Symbol] = t.MarkPrice;
+
+            _markPriceCache = newCache;
+            _cacheExpiry = DateTime.UtcNow + MarkPriceCacheTtl;
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+
+        if (!_markPriceCache.TryGetValue(asset, out var price))
+            throw new InvalidOperationException($"Asset '{asset}' not found on Hyperliquid.");
+
+        return price;
     }
 
     public async Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default)

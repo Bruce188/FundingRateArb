@@ -25,7 +25,8 @@ public class SignalEngineTests
         int assetId, string symbol,
         decimal ratePerHour,
         decimal markPrice = 3000m,
-        decimal volume = 1_000_000m) =>
+        decimal volume = 1_000_000m,
+        decimal? takerFeeRate = null) =>
         new FundingRateSnapshot
         {
             ExchangeId = exchangeId,
@@ -33,7 +34,7 @@ public class SignalEngineTests
             RatePerHour = ratePerHour,
             MarkPrice = markPrice,
             Volume24hUsd = volume,
-            Exchange = new Exchange { Id = exchangeId, Name = exchangeName },
+            Exchange = new Exchange { Id = exchangeId, Name = exchangeName, TakerFeeRate = takerFeeRate },
             Asset = new Asset { Id = assetId, Symbol = symbol },
         };
 
@@ -56,7 +57,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().HaveCount(1);
@@ -81,7 +82,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().BeEmpty();
@@ -104,7 +105,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().HaveCount(1);
@@ -137,7 +138,7 @@ public class SignalEngineTests
         var expectedNet = expectedSpread - expectedFeePerHour;         // 0.0008625
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().HaveCount(1);
@@ -165,7 +166,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().HaveCountGreaterThan(1);
@@ -199,7 +200,7 @@ public class SignalEngineTests
             .ReturnsAsync(rates);
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         // We expect opportunities for both ETH and BTC
@@ -228,9 +229,103 @@ public class SignalEngineTests
             .ReturnsAsync(new List<FundingRateSnapshot>());
 
         // Act
-        var result = await _sut.GetOpportunitiesAsync();
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
         // Assert
         result.Should().BeEmpty();
+    }
+
+    // ── H-SE1: DB-driven fee tests ─────────────────────────────────────────────
+
+    /// <summary>
+    /// H-SE1: When Exchange.TakerFeeRate is set in DB, it overrides the hardcoded fallback.
+    /// Round-trip fee = TakerFeeRate * 2 (entry + exit).
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunities_UsesDbTakerFeeRate_WhenSet()
+    {
+        // Hyperliquid DB fee = 0.0002 (round-trip = 0.0004) instead of fallback 0.00090
+        // Lighter DB fee = 0.0001 (round-trip = 0.0002) instead of fallback 0.00000
+        // feePerHour = (0.0004 + 0.0002) / 24 = 0.000025
+        // spread = 0.0009
+        // net = 0.0009 - 0.000025 = 0.000875
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0.0002m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, takerFeeRate: 0.0001m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread    = 0.0009m;
+        var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 24m;  // 0.000025
+        var expectedNet       = expectedSpread - expectedFeePerHour;   // 0.000875
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
+    }
+
+    /// <summary>
+    /// H-SE1 fallback: When TakerFeeRate is null, the built-in constant is used.
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunities_FallsBackToConstantFee_WhenTakerFeeRateIsNull()
+    {
+        // No TakerFeeRate set → fallback: Hyperliquid=0.00090, Lighter=0.00000
+        // feePerHour = (0.00090 + 0.00000) / 24
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: null),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, takerFeeRate: null),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread    = 0.0009m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
+        var expectedNet       = expectedSpread - expectedFeePerHour;
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
+    }
+
+    /// <summary>
+    /// H-SE1: When one exchange has a DB fee and the other does not, mixing works correctly.
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunities_MixedDbAndFallbackFees_ComputedCorrectly()
+    {
+        // Hyperliquid: TakerFeeRate = 0.0003 (round-trip = 0.0006)
+        // Lighter:     TakerFeeRate = null  → fallback = 0.00000
+        // feePerHour = (0.0006 + 0.00000) / 24
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0.0003m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, takerFeeRate: null),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var expectedSpread    = 0.0009m;
+        var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 24m;
+        var expectedNet       = expectedSpread - expectedFeePerHour;
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].NetYieldPerHour.Should().BeApproximately(expectedNet, 0.0000001m);
     }
 }

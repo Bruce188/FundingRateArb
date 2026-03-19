@@ -14,6 +14,8 @@ public class ExchangeConfiguration : IEntityTypeConfiguration<Exchange>
         builder.Property(e => e.WsBaseUrl).IsRequired().HasMaxLength(255);
         builder.Property(e => e.Description).HasMaxLength(500);
 
+        builder.Property(e => e.TakerFeeRate).HasPrecision(18, 8);
+
         builder.HasIndex(e => e.Name).IsUnique();
     }
 }

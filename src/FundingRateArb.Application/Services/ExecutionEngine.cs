@@ -24,7 +24,7 @@ public class ExecutionEngine : IExecutionEngine
     }
 
     public async Task<(bool Success, string? Error)> OpenPositionAsync(
-        ArbitrageOpportunityDto opp, decimal sizeUsdc)
+        ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
 
@@ -35,9 +35,29 @@ public class ExecutionEngine : IExecutionEngine
             "Opening position: {Asset} Long={LongExchange} Short={ShortExchange} Size={Size} USDC",
             opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
 
+        // C-EE2: Persist a sentinel record BEFORE firing legs so that a crash after one leg
+        // succeeds leaves a recoverable audit trail.
+        var position = new ArbitragePosition
+        {
+            UserId               = config.UpdatedByUserId,
+            AssetId              = opp.AssetId,
+            LongExchangeId       = opp.LongExchangeId,
+            ShortExchangeId      = opp.ShortExchangeId,
+            SizeUsdc             = sizeUsdc,
+            MarginUsdc           = sizeUsdc / config.DefaultLeverage,
+            Leverage             = config.DefaultLeverage,
+            EntrySpreadPerHour   = opp.SpreadPerHour,
+            CurrentSpreadPerHour = opp.SpreadPerHour,
+            Status               = PositionStatus.Opening,
+            OpenedAt             = DateTime.UtcNow,
+        };
+
+        _uow.Positions.Add(position);
+        await _uow.SaveAsync(ct);
+
         // Place both legs concurrently
-        var longTask  = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long,  sizeUsdc, config.DefaultLeverage);
-        var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, config.DefaultLeverage);
+        var longTask  = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long,  sizeUsdc, config.DefaultLeverage, ct);
+        var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, config.DefaultLeverage, ct);
 
         await Task.WhenAll(longTask, shortTask);
 
@@ -46,26 +66,13 @@ public class ExecutionEngine : IExecutionEngine
 
         if (longResult.Success && shortResult.Success)
         {
-            var position = new ArbitragePosition
-            {
-                UserId               = config.UpdatedByUserId,
-                AssetId              = opp.AssetId,
-                LongExchangeId       = opp.LongExchangeId,
-                ShortExchangeId      = opp.ShortExchangeId,
-                SizeUsdc             = sizeUsdc,
-                MarginUsdc           = sizeUsdc / config.DefaultLeverage,
-                Leverage             = config.DefaultLeverage,
-                LongEntryPrice       = longResult.FilledPrice,
-                ShortEntryPrice      = shortResult.FilledPrice,
-                EntrySpreadPerHour   = opp.SpreadPerHour,
-                CurrentSpreadPerHour = opp.SpreadPerHour,
-                LongOrderId          = longResult.OrderId,
-                ShortOrderId         = shortResult.OrderId,
-                Status               = PositionStatus.Open,
-                OpenedAt             = DateTime.UtcNow,
-            };
+            position.LongEntryPrice  = longResult.FilledPrice;
+            position.ShortEntryPrice = shortResult.FilledPrice;
+            position.LongOrderId     = longResult.OrderId;
+            position.ShortOrderId    = shortResult.OrderId;
+            position.Status          = PositionStatus.Open;
 
-            _uow.Positions.Add(position);
+            _uow.Positions.Update(position);
             _uow.Alerts.Add(new Alert
             {
                 UserId   = config.UpdatedByUserId,
@@ -76,7 +83,7 @@ public class ExecutionEngine : IExecutionEngine
                            $"@ {sizeUsdc:F2} USDC",
             });
 
-            await _uow.SaveAsync();
+            await _uow.SaveAsync(ct);
 
             _logger.LogInformation(
                 "Position opened: {Asset} LongOrderId={LongOrderId} ShortOrderId={ShortOrderId}",
@@ -94,7 +101,7 @@ public class ExecutionEngine : IExecutionEngine
 
         if (longResult.Success)
         {
-            try { await longConnector.ClosePositionAsync(opp.AssetSymbol, Side.Long); }
+            try { await longConnector.ClosePositionAsync(opp.AssetSymbol, Side.Long, ct); }
             catch (Exception ex)
             {
                 _logger.LogCritical(ex, "EMERGENCY CLOSE FAILED for long leg: {Asset}", opp.AssetSymbol);
@@ -109,7 +116,7 @@ public class ExecutionEngine : IExecutionEngine
         }
         if (shortResult.Success)
         {
-            try { await shortConnector.ClosePositionAsync(opp.AssetSymbol, Side.Short); }
+            try { await shortConnector.ClosePositionAsync(opp.AssetSymbol, Side.Short, ct); }
             catch (Exception ex)
             {
                 _logger.LogCritical(ex, "EMERGENCY CLOSE FAILED for short leg: {Asset}", opp.AssetSymbol);
@@ -132,13 +139,17 @@ public class ExecutionEngine : IExecutionEngine
                        $"Long={longResult.Error ?? "OK"} Short={shortResult.Error ?? "OK"}",
         });
 
-        await _uow.SaveAsync();
+        // Mark the pre-persisted sentinel as EmergencyClosed so the position is not orphaned
+        position.Status = PositionStatus.EmergencyClosed;
+        _uow.Positions.Update(position);
+
+        await _uow.SaveAsync(ct);
 
         var error = longResult.Error ?? shortResult.Error ?? "Both legs failed";
         return (false, error);
     }
 
-    public async Task ClosePositionAsync(ArbitragePosition position, CloseReason reason)
+    public async Task ClosePositionAsync(ArbitragePosition position, CloseReason reason, CancellationToken ct = default)
     {
         // Resolve exchange names (use nav property if loaded, else query DB)
         var longExchangeName  = position.LongExchange?.Name
@@ -157,18 +168,19 @@ public class ExecutionEngine : IExecutionEngine
 
         position.Status = PositionStatus.Closing;
         _uow.Positions.Update(position);
-        await _uow.SaveAsync();
+        await _uow.SaveAsync(ct);
 
         // Close both legs concurrently to minimize directional exposure between fills
-        var longCloseTask  = longConnector.ClosePositionAsync(assetSymbol, Side.Long);
-        var shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short);
+        var longCloseTask  = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
+        var shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
         await Task.WhenAll(longCloseTask, shortCloseTask);
         var longClose  = longCloseTask.Result;
         var shortClose = shortCloseTask.Result;
 
-        var qty = longClose.FilledQuantity > 0 ? longClose.FilledQuantity : shortClose.FilledQuantity;
-        var pnl = (position.ShortEntryPrice - shortClose.FilledPrice
-                 + longClose.FilledPrice    - position.LongEntryPrice) * qty;
+        // C-EE1: Compute each leg independently so differing fill quantities produce correct PnL.
+        var longPnl  = (longClose.FilledPrice  - position.LongEntryPrice)  * longClose.FilledQuantity;
+        var shortPnl = (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity;
+        var pnl = longPnl + shortPnl;
 
         position.RealizedPnl = pnl;
         position.Status      = PositionStatus.Closed;
@@ -185,6 +197,6 @@ public class ExecutionEngine : IExecutionEngine
             Message             = $"Position closed: {assetSymbol} reason={reason} PnL={pnl:F4} USDC",
         });
 
-        await _uow.SaveAsync();
+        await _uow.SaveAsync(ct);
     }
 }
