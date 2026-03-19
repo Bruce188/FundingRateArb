@@ -81,45 +81,23 @@ public class BotOrchestrator : BackgroundService
         var uow         = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var config      = await uow.BotConfig.GetActiveAsync();
 
-        if (!config.IsEnabled)
-        {
-            _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
-            // Still push dashboard update so UI shows disabled state
-            var disabledPositions = await uow.Positions.GetOpenAsync();
-            await PushDashboardUpdateAsync(disabledPositions, config.IsEnabled);
-            return;
-        }
-
         var healthMonitor   = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
         var signalEngine    = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
         var positionSizer   = scope.ServiceProvider.GetRequiredService<IPositionSizer>();
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
 
-        // Step 1: Monitor and auto-close stale/unhealthy positions
-        await healthMonitor.CheckAndActAsync(ct);
+        // Step 1: Monitor and auto-close stale/unhealthy positions (only when enabled)
+        if (config.IsEnabled)
+            await healthMonitor.CheckAndActAsync(ct);
 
         // M6: Fetch open positions AFTER health monitor so closed positions are excluded
         var openPositions = await uow.Positions.GetOpenAsync();
 
-        // Push position updates + alerts created by health monitor
+        // Push position updates + alerts (always, regardless of bot state)
         await PushPositionUpdatesAsync(openPositions);
         await PushNewAlertsAsync(uow);
 
-        // Step 2: Check how many positions are open
-        if (openPositions.Count >= config.MaxConcurrentPositions)
-        {
-            _logger.LogDebug(
-                "Max concurrent positions reached ({Count}/{Max}). No new positions this cycle.",
-                openPositions.Count, config.MaxConcurrentPositions);
-            await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
-            return;
-        }
-
-        // Step 3: Find new opportunities — skip pairs already open
-        var openKeys = openPositions
-            .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
-            .ToHashSet();
-
+        // Step 2: Compute + push opportunities (always, regardless of bot state)
         var opportunities = await signalEngine.GetOpportunitiesAsync(ct);
 
         // H8: Push opportunity updates here (moved from FundingRateFetcher to keep SRP)
@@ -131,6 +109,30 @@ public class BotOrchestrator : BackgroundService
         {
             _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
         }
+
+        // Step 3: Push dashboard KPI update (always, regardless of bot state)
+        await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
+
+        // Step 4: Gate — skip position opening if bot is disabled
+        if (!config.IsEnabled)
+        {
+            _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
+            return;
+        }
+
+        // Step 5: Gate — skip if max positions reached
+        if (openPositions.Count >= config.MaxConcurrentPositions)
+        {
+            _logger.LogDebug(
+                "Max concurrent positions reached ({Count}/{Max}). No new positions this cycle.",
+                openPositions.Count, config.MaxConcurrentPositions);
+            return;
+        }
+
+        // Step 6: Find new opportunities — skip pairs already open
+        var openKeys = openPositions
+            .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+            .ToHashSet();
 
         foreach (var opp in opportunities)
         {
@@ -167,16 +169,12 @@ public class BotOrchestrator : BackgroundService
 
             break; // One position per cycle for safety
         }
-
-        // Step 4: Push dashboard KPI update at end of every cycle
-        // H3: Use already-fetched openPositions (or re-fetched after open)
-        await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
     }
 
     /// <summary>
-    /// Pushes a ReceiveDashboardUpdate to the Admins group with current KPI values.
+    /// Pushes a ReceiveDashboardUpdate to the MarketData group with current KPI values.
     /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
-    /// H-BO1: Dashboard aggregates target Admins group only (not Clients.All).
+    /// H-BO1: Dashboard aggregates target MarketData group (not Clients.All).
     /// </summary>
     private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
     {
@@ -195,7 +193,7 @@ public class BotOrchestrator : BackgroundService
                 BestSpread        = bestSpread,
             };
 
-            await _hubContext.Clients.Group(HubGroups.Admins).ReceiveDashboardUpdate(dto);
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveDashboardUpdate(dto);
         }
         catch (Exception ex)
         {
