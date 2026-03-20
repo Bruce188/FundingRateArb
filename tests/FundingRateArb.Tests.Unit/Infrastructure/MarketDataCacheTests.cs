@@ -1,0 +1,119 @@
+using FluentAssertions;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Infrastructure.ExchangeConnectors;
+
+namespace FundingRateArb.Tests.Unit.Infrastructure;
+
+public class MarketDataCacheTests
+{
+    private readonly MarketDataCache _sut = new();
+
+    private static FundingRateDto MakeDto(string exchange = "Aster", string symbol = "BTC",
+        decimal rate = 0.0005m, decimal markPrice = 50000m) => new()
+    {
+        ExchangeName = exchange,
+        Symbol = symbol,
+        RatePerHour = rate,
+        RawRate = rate,
+        MarkPrice = markPrice,
+        IndexPrice = markPrice,
+        Volume24hUsd = 1_000_000m,
+    };
+
+    [Fact]
+    public void Update_StoresRate_RetrievableByExchangeAndSymbol()
+    {
+        var dto = MakeDto();
+        _sut.Update(dto);
+
+        var result = _sut.GetLatest("Aster", "BTC");
+        result.Should().NotBeNull();
+        result!.MarkPrice.Should().Be(50000m);
+    }
+
+    [Fact]
+    public void Update_OverwritesPreviousRate_ForSameKey()
+    {
+        _sut.Update(MakeDto(markPrice: 50000m));
+        _sut.Update(MakeDto(markPrice: 51000m));
+
+        _sut.GetLatest("Aster", "BTC")!.MarkPrice.Should().Be(51000m);
+    }
+
+    [Fact]
+    public void GetAllLatest_ReturnsAllCachedRates()
+    {
+        _sut.Update(MakeDto("Aster", "BTC"));
+        _sut.Update(MakeDto("Hyperliquid", "ETH"));
+        _sut.Update(MakeDto("Lighter", "SOL"));
+
+        _sut.GetAllLatest().Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void GetMarkPrice_ReturnsZero_ForUnknownKey()
+    {
+        _sut.GetMarkPrice("Unknown", "BTC").Should().Be(0m);
+    }
+
+    [Fact]
+    public void GetAllForExchange_ReturnsOnlyMatchingExchange()
+    {
+        _sut.Update(MakeDto("Aster", "BTC"));
+        _sut.Update(MakeDto("Aster", "ETH"));
+        _sut.Update(MakeDto("Lighter", "BTC"));
+
+        var result = _sut.GetAllForExchange("Aster");
+        result.Should().HaveCount(2);
+        result.Should().OnlyContain(r => r.ExchangeName == "Aster");
+    }
+
+    [Fact]
+    public void IsStale_ReturnsTrue_WhenRateOlderThanMaxAge()
+    {
+        _sut.Update(MakeDto());
+
+        // With a zero-second max age, any update is immediately stale
+        _sut.IsStale("Aster", "BTC", TimeSpan.Zero).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsStale_ReturnsFalse_WhenRateFresh()
+    {
+        _sut.Update(MakeDto());
+
+        _sut.IsStale("Aster", "BTC", TimeSpan.FromMinutes(5)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IsStale_ReturnsTrue_WhenKeyNotFound()
+    {
+        _sut.IsStale("Unknown", "BTC", TimeSpan.FromMinutes(5)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsStaleForExchange_ReturnsTrue_WhenNoRatesExist()
+    {
+        _sut.IsStaleForExchange("Aster", TimeSpan.FromMinutes(5)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void GetLatest_ReturnsNull_ForUnknownKey()
+    {
+        _sut.GetLatest("Unknown", "BTC").Should().BeNull();
+    }
+
+    [Fact]
+    public void GetMarkPrice_ReturnsCachedPrice()
+    {
+        _sut.Update(MakeDto(markPrice: 42000m));
+        _sut.GetMarkPrice("Aster", "BTC").Should().Be(42000m);
+    }
+
+    [Fact]
+    public void GetAllForExchange_CaseInsensitive()
+    {
+        _sut.Update(MakeDto("Aster", "BTC"));
+        _sut.GetAllForExchange("aster").Should().HaveCount(1);
+    }
+}

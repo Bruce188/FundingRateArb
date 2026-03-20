@@ -11,16 +11,19 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 {
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
+    private readonly IMarketDataCache _marketDataCache;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
+        IMarketDataCache marketDataCache,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
+        _marketDataCache = marketDataCache;
         _logger = logger;
     }
 
@@ -68,16 +71,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             try
             {
-                // Compute price move for stop-loss check
-                var longConnector = _connectorFactory.GetConnector(longExchangeName);
-                var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+                // Try WebSocket cache first (sub-second freshness), fall back to REST
+                var currentLongMark = _marketDataCache.GetMarkPrice(longExchangeName, assetSymbol);
+                var currentShortMark = _marketDataCache.GetMarkPrice(shortExchangeName, assetSymbol);
 
-                // H9: Fetch mark prices in parallel instead of sequentially
-                var longTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
-                var shortTask = shortConnector.GetMarkPriceAsync(assetSymbol, ct);
-                await Task.WhenAll(longTask, shortTask);
-                var currentLongMark = await longTask;
-                var currentShortMark = await shortTask;
+                if (currentLongMark <= 0 || currentShortMark <= 0)
+                {
+                    var longConnector = _connectorFactory.GetConnector(longExchangeName);
+                    var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+                    var longTask = currentLongMark <= 0 ? longConnector.GetMarkPriceAsync(assetSymbol, ct) : Task.FromResult(currentLongMark);
+                    var shortTask = currentShortMark <= 0 ? shortConnector.GetMarkPriceAsync(assetSymbol, ct) : Task.FromResult(currentShortMark);
+                    await Task.WhenAll(longTask, shortTask);
+                    currentLongMark = await longTask;
+                    currentShortMark = await shortTask;
+                }
 
                 // M5: Compute net unrealized PnL for stop-loss check
                 var avgEntryPrice = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
