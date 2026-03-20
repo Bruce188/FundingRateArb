@@ -14,4 +14,5 @@ public interface IDashboardClient
     Task ReceiveNotification(string message);
     Task ReceiveAlert(AlertDto alert);
     Task ReceiveOpportunityUpdate(List<ArbitrageOpportunityDto> opportunities);
+    Task ReceiveStatusExplanation(string message, string severity);
 }

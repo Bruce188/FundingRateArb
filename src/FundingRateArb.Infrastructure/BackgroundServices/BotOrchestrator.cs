@@ -37,6 +37,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
     private DateTime _lastAlertPushUtc = DateTime.UtcNow.AddMinutes(-5);
 
+    // B3: Cache previous best spread so it survives across cycles (avoids reset to 0 after Retry Now)
+    private decimal _cachedBestSpread;
+
     // C3: Exponential cooldown for failed opportunities — prevents infinite retry loops burning fees
     private readonly ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> _failedOpCooldowns = new();
     internal static readonly TimeSpan BaseCooldown = TimeSpan.FromMinutes(5);
@@ -178,6 +181,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         if (!config.IsEnabled)
         {
             _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
+            await PushStatusExplanationAsync("Bot is disabled — enable in Settings or Admin > Bot Config", "danger");
             return;
         }
 
@@ -190,6 +194,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _logger.LogWarning(
                 "Daily drawdown limit hit: {DailyPnl:F2} USDC (limit: -{Limit:F2}). Pausing position opens for this cycle.",
                 dailyPnl, drawdownLimit);
+            await PushStatusExplanationAsync(
+                $"Daily drawdown limit hit ({dailyPnl:F2} USDC, limit: -{drawdownLimit:F2}) — pausing position opens", "warning");
             return;
         }
 
@@ -199,6 +205,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _logger.LogWarning(
                 "Consecutive loss limit reached ({Count}/{Max}). Pausing position opens.",
                 _consecutiveLosses, config.ConsecutiveLossPause);
+            await PushStatusExplanationAsync(
+                $"Consecutive loss limit reached ({_consecutiveLosses}/{config.ConsecutiveLossPause}) — pausing position opens", "warning");
             return;
         }
 
@@ -208,6 +216,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _logger.LogDebug(
                 "Max concurrent positions reached ({Count}/{Max}). No new positions this cycle.",
                 openPositions.Count, config.MaxConcurrentPositions);
+            await PushStatusExplanationAsync(
+                $"{openPositions.Count}/{config.MaxConcurrentPositions} position slots occupied", "info");
             return;
         }
 
@@ -217,6 +227,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Concat(openingPositions)
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
+
+        // B4: Track cooldown skips for status explanations
+        var cooldownSkips = new List<(string Asset, TimeSpan Remaining)>();
 
         var candidates = opportunities
             .Where(opp =>
@@ -228,6 +241,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     _logger.LogDebug(
                         "Skipping {Asset} {Long}/{Short} — on cooldown until {Until} (failures={Failures})",
                         opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, cd.CooldownUntil, cd.Failures);
+                    cooldownSkips.Add((opp.AssetSymbol, cd.CooldownUntil - DateTime.UtcNow));
                     return false;
                 }
                 return true;
@@ -235,7 +249,30 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Take(config.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : config.AllocationTopN)
             .ToList();
 
-        if (candidates.Count == 0) return;
+        if (candidates.Count == 0)
+        {
+            // B4: Explain why no candidates are available
+            if (opportunities.Count == 0)
+            {
+                await PushStatusExplanationAsync("No arbitrage opportunities detected this cycle", "info");
+            }
+            else if (cooldownSkips.Count > 0)
+            {
+                var first = cooldownSkips[0];
+                var minutes = (int)Math.Ceiling(first.Remaining.TotalMinutes);
+                await PushStatusExplanationAsync(
+                    $"{first.Asset} cooling down — retry in {minutes} minutes", "info");
+            }
+            else
+            {
+                // All opportunities already have active/opening positions
+                var bestOpp = opportunities.OrderByDescending(o => o.SpreadPerHour).First();
+                await PushStatusExplanationAsync(
+                    $"Best spread {(bestOpp.SpreadPerHour * 100):F2}%/hr is below open threshold {(config.OpenThreshold * 100):F2}%/hr",
+                    "info");
+            }
+            return;
+        }
 
         var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, config.AllocationStrategy);
         var slotsAvailable = config.MaxConcurrentPositions - openPositions.Count - openingPositions.Count;
@@ -272,6 +309,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
                                        || error.Contains("balance", StringComparison.OrdinalIgnoreCase)))
             {
                 _logger.LogWarning("Balance exhausted: {Error}", error);
+                await PushStatusExplanationAsync(
+                    $"Insufficient balance on {opp.LongExchangeName}/{opp.ShortExchangeName} for {opp.AssetSymbol}", "warning");
                 break;
             }
             else
@@ -305,12 +344,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 ? openPositions.Max(p => p.CurrentSpreadPerHour)
                 : 0m;
 
+            // B3: Only overwrite cached spread when a real value arrives
+            if (bestSpread > 0)
+                _cachedBestSpread = bestSpread;
+
             var dto = new DashboardDto
             {
                 BotEnabled        = botEnabled,
                 OpenPositionCount = openPositions.Count,
                 TotalPnl          = totalPnl,
-                BestSpread        = bestSpread,
+                BestSpread        = bestSpread > 0 ? bestSpread : _cachedBestSpread,
             };
 
             await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveDashboardUpdate(dto);
@@ -404,6 +447,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _disposed = true;
         }
         base.Dispose();
+    }
+
+    /// <summary>
+    /// Pushes a status explanation to all connected dashboard clients.
+    /// Used to explain why no position was opened this cycle.
+    /// </summary>
+    private async Task PushStatusExplanationAsync(string message, string severity)
+    {
+        try
+        {
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveStatusExplanation(message, severity);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push status explanation via SignalR");
+        }
     }
 
     private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)
