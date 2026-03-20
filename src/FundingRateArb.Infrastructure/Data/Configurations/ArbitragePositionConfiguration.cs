@@ -17,6 +17,8 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
         builder.Property(p => p.EntrySpreadPerHour).HasColumnType("decimal(18,10)");
         builder.Property(p => p.CurrentSpreadPerHour).HasColumnType("decimal(18,10)");
         builder.Property(p => p.AccumulatedFunding).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.EntryFeesUsdc).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.ExitFeesUsdc).HasColumnType("decimal(18,4)");
         builder.Property(p => p.RealizedPnl).HasColumnType("decimal(18,4)");
         builder.Property(p => p.LongOrderId).HasMaxLength(200);
         builder.Property(p => p.ShortOrderId).HasMaxLength(200);

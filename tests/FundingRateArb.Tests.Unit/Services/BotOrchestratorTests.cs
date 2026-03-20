@@ -58,6 +58,10 @@ public class BotOrchestratorTests
         _mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync(new List<ArbitragePosition>());
 
+        // Default mock for Opening status query (used in duplicate check)
+        _mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
         // Stub SignalR hub context
         var mockClients = new Mock<IHubClients<IDashboardClient>>();
         var mockClient = new Mock<IDashboardClient>();

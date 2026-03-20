@@ -15,6 +15,8 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     private readonly MarkPriceCacheHelper _markPriceCache = new();
     private readonly ConcurrentDictionary<string, int> _szDecimalsCache = new(StringComparer.OrdinalIgnoreCase);
 
+    private const decimal SlippagePct = 0.005m; // 0.5% max slippage
+
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider)
@@ -56,55 +58,75 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         int leverage,
         CancellationToken ct = default)
     {
-        // Fetch current mark price for market order slippage parameter
-        var markPrice = await GetMarkPriceAsync(asset, ct);
-
-        // Set leverage before placing the order
-        var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
-        await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.SetLeverageAsync(
-                asset, leverage, MarginType.Cross, null, null, token),
-            ct);
-
-        var sdkSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
-        var szDecimals = _szDecimalsCache.TryGetValue(asset, out var cached) ? cached : 6;
-        var quantity = Math.Round(sizeUsdc * leverage / markPrice, szDecimals, MidpointRounding.ToZero);
-
-        var orderResult = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
-                symbol: asset,
-                side: sdkSide,
-                orderType: OrderType.Market,
-                quantity: quantity,
-                price: markPrice,
-                timeInForce: TimeInForce.ImmediateOrCancel,
-                reduceOnly: false,
-                clientOrderId: null,
-                triggerPrice: null,
-                tpSlType: null,
-                tpSlGrouping: null,
-                vaultAddress: null,
-                expireAfter: null,
-                ct: token),
-            ct);
-
-        if (!orderResult.Success)
+        try
         {
+            // Fetch current mark price for market order slippage parameter
+            var markPrice = await GetMarkPriceAsync(asset, ct);
+
+            // B1: Guard mark price = 0
+            if (markPrice <= 0)
+                return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+
+            // Set leverage before placing the order
+            var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
+            await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.SetLeverageAsync(
+                    asset, leverage, MarginType.Cross, null, null, token),
+                ct);
+
+            var sdkSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
+            var szDecimals = _szDecimalsCache.TryGetValue(asset, out var cached) ? cached : 6;
+            var quantity = Math.Round(sizeUsdc * leverage / markPrice, szDecimals, MidpointRounding.ToZero);
+
+            // B3: Zero-quantity guard
+            if (quantity <= 0)
+                return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
+
+            // B5: Slippage protection
+            var limitPrice = side == Side.Long
+                ? markPrice * (1 + SlippagePct)
+                : markPrice * (1 - SlippagePct);
+
+            var orderResult = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                    symbol: asset,
+                    side: sdkSide,
+                    orderType: OrderType.Market,
+                    quantity: quantity,
+                    price: limitPrice,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: false,
+                    clientOrderId: null,
+                    triggerPrice: null,
+                    tpSlType: null,
+                    tpSlGrouping: null,
+                    vaultAddress: null,
+                    expireAfter: null,
+                    ct: token),
+                ct);
+
+            if (!orderResult.Success)
+            {
+                return new OrderResultDto
+                {
+                    Success = false,
+                    Error = orderResult.Error!.ToString(),
+                };
+            }
+
+            var data = orderResult.Data;
             return new OrderResultDto
             {
-                Success = false,
-                Error = orderResult.Error!.ToString(),
+                Success = true,
+                OrderId = data.OrderId.ToString(),
+                FilledQuantity = data.FilledQuantity ?? 0m,
+                FilledPrice = data.AveragePrice ?? 0m,
             };
         }
-
-        var data = orderResult.Data;
-        return new OrderResultDto
+        catch (Exception ex)
         {
-            Success = true,
-            OrderId = data.OrderId.ToString(),
-            FilledQuantity = data.FilledQuantity ?? 0m,
-            FilledPrice = data.AveragePrice ?? 0m,
-        };
+            return new OrderResultDto { Success = false, Error = ex.Message };
+        }
     }
 
     public async Task<OrderResultDto> ClosePositionAsync(
@@ -118,22 +140,28 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         var quantity = await GetPositionQuantityAsync(asset, ct);
         if (quantity <= 0)
         {
-            // Fallback: use a large quantity. With reduceOnly=true the SDK treats it
+            // B4: Capped fallback. With reduceOnly=true the SDK treats it
             // as an upper bound and only closes the actual position size.
-            quantity = decimal.MaxValue / 1_000_000m;
+            quantity = 1_000_000m; // Safe upper bound; reduceOnly=true caps to actual position
         }
 
         // To close: place opposite side with reduceOnly=true
         var closingSide = side == Side.Long ? OrderSide.Sell : OrderSide.Buy;
 
-        var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
+        // B5: Slippage protection for close
+        var limitPrice = closingSide == OrderSide.Buy
+            ? markPrice * (1 + SlippagePct)
+            : markPrice * (1 - SlippagePct);
+
+        // B8: Use separate OrderClose pipeline (no circuit breaker)
+        var pipeline = _pipelineProvider.GetPipeline("OrderClose");
         var orderResult = await pipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
                 symbol: asset,
                 side: closingSide,
                 orderType: OrderType.Market,
                 quantity: quantity,
-                price: markPrice,
+                price: limitPrice,
                 timeInForce: TimeInForce.ImmediateOrCancel,
                 reduceOnly: true,
                 clientOrderId: null,

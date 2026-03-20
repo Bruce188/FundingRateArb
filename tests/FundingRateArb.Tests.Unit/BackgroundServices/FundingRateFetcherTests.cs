@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Tests.Unit.BackgroundServices;
 
@@ -22,6 +23,7 @@ public class FundingRateFetcherTests
     private readonly Mock<IExchangeRepository> _mockExchanges = new();
     private readonly Mock<IAssetRepository> _mockAssets = new();
     private readonly Mock<IFundingRateRepository> _mockFundingRates = new();
+    private readonly Mock<IPositionRepository> _mockPositions = new();
     private readonly Mock<IExchangeConnectorFactory> _mockFactory = new();
     private readonly Mock<IExchangeConnector> _mockHyperliquid = new();
     private readonly Mock<IExchangeConnector> _mockLighter = new();
@@ -56,7 +58,10 @@ public class FundingRateFetcherTests
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
         _mockUow.Setup(u => u.FundingRates).Returns(_mockFundingRates.Object);
+        _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        // Default: no open positions for funding accumulation
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(Exchanges);
         _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(Assets);
 
@@ -339,5 +344,81 @@ public class FundingRateFetcherTests
         saved.Should().HaveCount(1, "case-insensitive match should succeed for 'HYPERLIQUID'/'eth'");
         saved![0].ExchangeId.Should().Be(1);
         saved[0].AssetId.Should().Be(1);
+    }
+
+    // ── D10: Funding accumulation delta ─────────────────────────────────────────
+
+    [Fact]
+    public async Task UpdateAccumulatedFunding_AccumulatesDelta()
+    {
+        // Open position: SizeUsdc=100, Leverage=5 → notional=500
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            AccumulatedFunding = 0m,
+            Status = PositionStatus.Open,
+        };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        // Latest rates: shortRate=0.001/hr, longRate=0.0002/hr
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0002m },
+                new() { ExchangeId = 2, AssetId = 1, RatePerHour = 0.001m },
+            });
+
+        // Setup connectors to return rates
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // notional=500, netRate=0.001-0.0002=0.0008, delta=500*0.0008/60 = 0.006667
+        pos.AccumulatedFunding.Should().BeApproximately(0.00667m, 0.0001m);
+    }
+
+    // ── D10: Skip missing rates ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task UpdateAccumulatedFunding_SkipsMissingRates()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            AccumulatedFunding = 5.0m,
+            Status = PositionStatus.Open,
+        };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        // No matching rates for this position's exchanges
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // AccumulatedFunding should remain unchanged
+        pos.AccumulatedFunding.Should().Be(5.0m);
     }
 }

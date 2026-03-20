@@ -23,7 +23,10 @@ public class PositionSizer : IPositionSizer
             return [];
 
         var config = await _uow.BotConfig.GetActiveAsync();
-        var totalCapital = config.TotalCapitalUsdc * config.MaxCapitalPerPosition;
+        var openPositions = await _uow.Positions.GetOpenAsync();
+        var allocatedCapital = openPositions.Sum(p => p.SizeUsdc);
+        var availableCapital = Math.Max(0, config.TotalCapitalUsdc - allocatedCapital);
+        var totalCapital = availableCapital * config.MaxCapitalPerPosition;
         var sizes = new decimal[opportunities.Count];
 
         switch (strategy)

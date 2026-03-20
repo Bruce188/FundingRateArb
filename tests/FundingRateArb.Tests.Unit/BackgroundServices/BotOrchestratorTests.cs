@@ -73,6 +73,10 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
 
+        // Default mock for Opening status query (used in duplicate check)
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
         // M12: Default mock for GetRecentUnreadAsync (returns empty list)
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync(new List<Alert>());
@@ -872,5 +876,149 @@ public class BotOrchestratorTests
 
         _sut.ConsecutiveLosses.Should().Be(0,
             "open failures do not count as realized losses — only RecordCloseResult increments the counter");
+    }
+
+    // ── D5: Opening status duplicate check ──────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_DuplicateCheck_IncludesOpeningStatus()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            UpdatedByUserId = "admin-user-id",
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+        });
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        // Existing Opening position for asset 1 on exchanges 1/2
+        var openingPos = new ArbitragePosition
+        {
+            AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+        };
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync([openingPos]);
+
+        // Signal engine returns opportunity for same asset/exchange combo
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Should be skipped as duplicate (Opening status included in check)
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never, "Opening-status position should block duplicate opportunity");
+    }
+
+    // ── D5: RecordCloseResult only on successful close ──────────────────────────
+
+    [Fact]
+    public async Task RunCycle_RecordCloseResult_OnlyOnSuccessfulClose()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        // Health monitor returns a position to close
+        var pos = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = "admin-user-id",
+            Status = PositionStatus.Open,
+            RealizedPnl = null, // PnL not set
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { (pos, CloseReason.SpreadCollapsed) });
+
+        // After ClosePositionAsync, position stays in Closing (partial fill)
+        _mockExecEngine.Setup(e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
+            .Callback(() => { pos.Status = PositionStatus.Closing; })
+            .Returns(Task.CompletedTask);
+
+        _sut.ConsecutiveLosses = 0;
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // RecordCloseResult should NOT have been called since pos is not Closed
+        _sut.ConsecutiveLosses.Should().Be(0,
+            "RecordCloseResult should only be called when position.Status == Closed");
+    }
+
+    // ── D5: Balance exhaustion breaks loop ──────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_BalanceExhaustion_BreaksLoop()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            UpdatedByUserId = "admin-user-id",
+            AllocationStrategy = AllocationStrategy.EqualSpread,
+            AllocationTopN = 3,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp1 = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+        var opp2 = new ArbitrageOpportunityDto { AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 3, LongExchangeName = "ExA", ShortExchangeName = "ExC", NetYieldPerHour = 0.001m };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp1, opp2]);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
+            .ReturnsAsync([100m, 100m]);
+
+        // First attempt fails with balance error
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Insufficient margin for order"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Only first attempted — balance error breaks the loop
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Once, "Balance exhaustion should break the position-opening loop");
+    }
+
+    // ── D5: First cycle catches startup alerts ──────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_FirstCycle_CatchesStartupAlerts()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        // Alert created 3 minutes before orchestrator start
+        var startupAlert = new Alert
+        {
+            Id = 99,
+            UserId = "test-user",
+            Message = "Startup alert",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-3),
+        };
+        _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
+            .ReturnsAsync([startupAlert]);
+
+        var alertPushed = false;
+        _mockGroupClient.Setup(d => d.ReceiveAlert(It.Is<AlertDto>(a => a.Id == 99)))
+            .Callback(() => alertPushed = true)
+            .Returns(Task.CompletedTask);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        alertPushed.Should().BeTrue(
+            "_lastAlertPushUtc initialized to UtcNow.AddMinutes(-5) should catch alerts created 3 min ago");
     }
 }

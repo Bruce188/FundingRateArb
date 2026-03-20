@@ -27,4 +27,18 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
     public IEnumerable<IExchangeConnector> GetAllConnectors()
         => ConnectorTypes.Values.Select(t => (IExchangeConnector)_serviceProvider.GetRequiredService(t));
+
+    public void ValidateRegistrations(IEnumerable<string> exchangeNames)
+    {
+        foreach (var name in exchangeNames)
+        {
+            try { GetConnector(name); }
+            catch (ArgumentException ex)
+            {
+                throw new InvalidOperationException(
+                    $"Exchange '{name}' in database has no registered connector. " +
+                    "Check DI registration in Program.cs.", ex);
+            }
+        }
+    }
 }

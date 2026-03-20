@@ -40,6 +40,22 @@ public class ConfigValidator : IConfigValidator
         if (config.DailyDrawdownPausePct <= 0 || config.DailyDrawdownPausePct > 1)
             errors.Add("DailyDrawdownPausePct must be between 0 and 1 (exclusive).");
 
+        if (config.ConsecutiveLossPause < 1)
+            errors.Add("ConsecutiveLossPauseCount must be at least 1.");
+
+        if (config.CloseThreshold >= config.AlertThreshold)
+            errors.Add("CloseThreshold must be less than AlertThreshold.");
+
+        if (config.DefaultLeverage < 1)
+            errors.Add("DefaultLeverage must be at least 1.");
+
+        if (config.MaxHoldTimeHours < 1)
+            errors.Add("MaxHoldTimeHours must be at least 1 hour.");
+
+        if (config.AllocationStrategy != AllocationStrategy.Concentrated
+            && config.MaxCapitalPerPosition * config.MaxConcurrentPositions > 1.5m)
+            errors.Add("MaxCapitalPerPosition × MaxConcurrentPositions exceeds 150% — risk of capital over-allocation.");
+
         return new ConfigValidationResult(errors.Count == 0, errors);
     }
 }

@@ -103,11 +103,13 @@ public class YieldCalculatorTests
     public void UnrealizedPnl_WithNoAccumulated_EstimatesFromHoursOpen()
     {
         // Position opened exactly 6 hours ago, AccumulatedFunding == 0
-        // Expected: 1000 * 0.0004 * 6 = 2.4
+        // Fallback uses notional: SizeUsdc * Leverage * EntrySpreadPerHour * hoursOpen
+        // Expected: 1000 * 5 * 0.0004 * 6 = 12.0
         var openedAt = DateTime.UtcNow.AddHours(-6);
         var pos = new ArbitragePosition
         {
             SizeUsdc            = 1000m,
+            Leverage            = 5,
             EntrySpreadPerHour  = 0.0004m,
             AccumulatedFunding  = 0m,
             OpenedAt            = openedAt
@@ -115,8 +117,8 @@ public class YieldCalculatorTests
 
         var result = _sut.UnrealizedPnl(pos);
 
-        // Allow ±0.05 tolerance because UtcNow advances slightly during test execution
-        result.Should().BeApproximately(2.4m, 0.05m);
+        // Allow ±0.25 tolerance because UtcNow advances slightly during test execution
+        result.Should().BeApproximately(12.0m, 0.25m);
     }
 
     [Fact]
@@ -133,5 +135,47 @@ public class YieldCalculatorTests
         var result = _sut.UnrealizedPnl(pos);
 
         result.Should().Be(0m);
+    }
+
+    // ── D8: Negative AccumulatedFunding ─────────────────────────────────────────
+
+    [Fact]
+    public void UnrealizedPnl_NegativeAccumulatedFunding_ReturnsNegative()
+    {
+        var pos = new ArbitragePosition
+        {
+            SizeUsdc = 1000m,
+            EntrySpreadPerHour = 0.0004m,
+            AccumulatedFunding = -5.0m,
+            OpenedAt = DateTime.UtcNow.AddHours(-10),
+        };
+
+        var result = _sut.UnrealizedPnl(pos);
+
+        result.Should().Be(-5.0m);
+    }
+
+    // ── D8: Fallback estimate uses notional ─────────────────────────────────────
+
+    [Fact]
+    public void UnrealizedPnl_FallbackEstimate_UsesNotional()
+    {
+        // AccumulatedFunding=0, SizeUsdc=100, Leverage=5, EntrySpreadPerHour=0.001
+        // notional = 100 * 5 = 500
+        // Expected: 500 * 0.001 * hours (not 100 * 0.001 * hours)
+        var openedAt = DateTime.UtcNow.AddHours(-2);
+        var pos = new ArbitragePosition
+        {
+            SizeUsdc = 100m,
+            Leverage = 5,
+            EntrySpreadPerHour = 0.001m,
+            AccumulatedFunding = 0m,
+            OpenedAt = openedAt,
+        };
+
+        var result = _sut.UnrealizedPnl(pos);
+
+        // notional * spread * hours = 500 * 0.001 * 2 = 1.0
+        result.Should().BeApproximately(1.0m, 0.05m);
     }
 }

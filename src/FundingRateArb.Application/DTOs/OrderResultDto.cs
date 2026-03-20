@@ -7,4 +7,5 @@ public class OrderResultDto
     public string? Error { get; set; }
     public decimal FilledPrice { get; set; }
     public decimal FilledQuantity { get; set; }
+    public bool IsEstimatedFill { get; set; }
 }

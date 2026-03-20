@@ -31,10 +31,12 @@ public class YieldCalculatorEdgeCaseTests
     [Fact]
     public void UnrealizedPnl_WithZeroAccumulatedFunding_UsesLinearEstimate()
     {
-        // Expected: 1000 * 0.0004 * ~2 hours ≈ 0.8
+        // Fallback uses notional: SizeUsdc * Leverage * EntrySpreadPerHour * hoursOpen
+        // Expected: 1000 * 5 * 0.0004 * ~2 hours ≈ 4.0
         var position = new ArbitragePosition
         {
             SizeUsdc = 1000m,
+            Leverage = 5,
             EntrySpreadPerHour = 0.0004m,
             OpenedAt = DateTime.UtcNow.AddHours(-2),
             AccumulatedFunding = 0m,
@@ -42,8 +44,8 @@ public class YieldCalculatorEdgeCaseTests
 
         var result = _sut.UnrealizedPnl(position);
 
-        // Allow ±0.01 tolerance for execution timing
-        result.Should().BeApproximately(0.8m, 0.01m);
+        // Allow ±0.05 tolerance for execution timing
+        result.Should().BeApproximately(4.0m, 0.05m);
     }
 
     // ── Test 11: Zero net rate → MaxValue ─────────────────────────────────────

@@ -437,4 +437,133 @@ public class PositionHealthMonitorTests
         // SaveAsync still called once
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ── D4: ClosingStartedAt reaper tests ───────────────────────────────────────
+
+    [Fact]
+    public async Task ReapStalePositions_ClosingStatus_UsesClosingStartedAt()
+    {
+        // Position opened 2hrs ago but ClosingStartedAt only 1 min ago — should NOT be reaped
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 50,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-1),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([pos]);
+
+        await _sut.CheckAndActAsync();
+
+        pos.Status.Should().Be(PositionStatus.Closing, "ClosingStartedAt is recent — should not be reaped");
+    }
+
+    [Fact]
+    public async Task ReapStalePositions_ClosingStatus_ReapsWhenClosingStartedAtIsOld()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 51,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-15), // > 10 min threshold
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([pos]);
+
+        await _sut.CheckAndActAsync();
+
+        pos.Status.Should().Be(PositionStatus.EmergencyClosed, "ClosingStartedAt > 10min ago — should be reaped");
+    }
+
+    // ── D4: Stop-loss exact boundary ────────────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_StopLoss_ExactBoundary_Triggers()
+    {
+        // StopLossPct=0.15, MarginUsdc=100 → threshold=15
+        // Need unrealizedPnl = -15 exactly
+        // avgEntry = (3000+3000)/2 = 3000, estimatedQty = 100*5/3000 = 0.16667
+        // longPnl = (longMark - 3000) * 0.16667, shortPnl = (3000 - shortMark) * 0.16667
+        // For symmetric drop: longMark=2910, shortMark=3000
+        // longPnl = (2910-3000)*0.16667 = -90*0.16667 = -15.0003
+        // shortPnl = (3000-3000)*0.16667 = 0
+        // unrealizedPnl ≈ -15.0 → |15| >= 15 → triggers
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m, marginUsdc: 100m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2910m, shortMark: 3000m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.Should().ContainSingle(r => r.Reason == CloseReason.StopLoss);
+    }
+
+    // ── D4: Max hold time exact boundary ────────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_MaxHoldTime_ExactBoundary_Triggers()
+    {
+        // MaxHoldTimeHours=72, position opened exactly 72 hours ago
+        var pos = MakeOpenPosition(openedAt: DateTime.UtcNow.AddHours(-72));
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.Should().ContainSingle(r => r.Reason == CloseReason.MaxHoldTimeReached);
+    }
+
+    // ── D4: Zero entry prices guard ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_ZeroEntryPrices_SkipsPosition()
+    {
+        var pos = MakeOpenPosition(longEntry: 0m, shortEntry: 0m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.Should().BeEmpty("position with zero entry prices should be skipped, not closed");
+    }
+
+    // ── D4: Price feed failure — 5 consecutive creates alert ────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_PriceFeedFailure_5Consecutive_CreatesAlert()
+    {
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Make GetMarkPriceAsync throw every time
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        // Run 5 cycles to accumulate failures
+        for (int i = 0; i < 5; i++)
+            await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PriceFeedFailure && al.Severity == AlertSeverity.Critical)),
+            Times.Once);
+    }
 }

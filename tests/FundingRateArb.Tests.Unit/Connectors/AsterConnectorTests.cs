@@ -1053,7 +1053,7 @@ public class AsterConnectorTests
     // ── B-W3: SetLeverage failure is logged, order still proceeds ─────────────
 
     [Fact]
-    public async Task PlaceMarketOrder_WhenSetLeverageFails_LogsWarningAndProceedsWithOrder()
+    public async Task PlaceMarketOrder_WhenSetLeverageFails_AbortsOrder()
     {
         // Arrange — SetLeverageAsync returns a failure result
         var loggerMock = new Mock<ILogger<AsterConnector>>();
@@ -1067,17 +1067,7 @@ public class AsterConnectorTests
                 It.IsAny<long?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(failLeverage);
 
-        var asterOrder = new AsterOrder { Id = 1, AveragePrice = 3500m, QuantityFilled = 0.1m };
         var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
-        tradingMock
-            .Setup(x => x.PlaceOrderAsync(
-                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(),
-                It.IsAny<Aster.Net.Enums.OrderType>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
-                It.IsAny<Aster.Net.Enums.PositionSide?>(), It.IsAny<Aster.Net.Enums.TimeInForce?>(),
-                It.IsAny<bool?>(), It.IsAny<string>(), It.IsAny<decimal?>(), It.IsAny<bool?>(),
-                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.WorkingType?>(),
-                It.IsAny<bool?>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder(asterOrder));
 
         var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
         exchangeDataMock
@@ -1097,19 +1087,94 @@ public class AsterConnectorTests
         // Act
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 100m, leverage: 5);
 
-        // Assert — order must succeed despite leverage failure
-        result.Success.Should().BeTrue("order must proceed even if SetLeverage fails");
+        // Assert — order must be aborted when SetLeverage fails
+        result.Success.Should().BeFalse("leverage failure now aborts the order");
+        result.Error.Should().Contain("leverage");
 
-        // A warning must have been logged about the leverage failure
-        loggerMock.Verify(
-            x => x.Log(
-                LogLevel.Warning,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("leverage")),
-                null,
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.AtLeastOnce,
-            "a warning must be logged when SetLeverage fails");
+        // No order should have been placed
+        tradingMock.Verify(
+            x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(), It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(), It.IsAny<string>(), It.IsAny<decimal?>(), It.IsAny<bool?>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "no order should be placed when SetLeverage fails");
+    }
+
+    // ── D3: Connector safety tests ────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_MarkPriceZero_ReturnsFalse()
+    {
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 0m, 0m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock.Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+            It.IsAny<long?>(), It.IsAny<CancellationToken>())).ReturnsAsync(SuccessLeverage());
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_ZeroQuantity_ReturnsFalse()
+    {
+        // sizeUsdc=0 → quantity = 0*5/3500 = 0
+        var client = BuildClientWithOrderResult(SuccessOrder(new AsterOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 0m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_LeverageSetFails_ReturnsFalse()
+    {
+        // Already tested above as PlaceMarketOrder_WhenSetLeverageFails_AbortsOrder
+        // but with different framing for D3 coverage
+        var failLeverage = new WebCallResult<AsterLeverage>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, "not supported"), null!));
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock.Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+            It.IsAny<long?>(), It.IsAny<CancellationToken>())).ReturnsAsync(failLeverage);
+
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock.Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+        futuresApiMock.SetupGet(f => f.Trading).Returns(new Mock<IAsterRestClientFuturesApiTrading>().Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
+
+        result.Success.Should().BeFalse();
     }
 
     [Fact]

@@ -14,9 +14,13 @@ public class PositionSizerEdgeCaseTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly PositionSizer _sut;
 
+    private readonly Mock<IPositionRepository> _mockPositions = new();
+
     public PositionSizerEdgeCaseTests()
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
+        _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         // Use real YieldCalculator — no external dependencies
         _sut = new PositionSizer(_mockUow.Object, new YieldCalculator());
     }

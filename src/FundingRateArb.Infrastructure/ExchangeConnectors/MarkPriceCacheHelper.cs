@@ -10,7 +10,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// </summary>
 public sealed class MarkPriceCacheHelper : IDisposable
 {
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(10);
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
     private Dictionary<string, decimal> _cache = new(StringComparer.OrdinalIgnoreCase);
     private DateTime _cacheExpiry;
