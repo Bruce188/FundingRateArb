@@ -9,5 +9,8 @@ public interface IUnitOfWork : IDisposable
     IAlertRepository Alerts { get; }
     IBotConfigRepository BotConfig { get; }
     IExchangeAssetConfigRepository ExchangeAssetConfigs { get; }
+    IUserExchangeCredentialRepository UserCredentials { get; }
+    IUserConfigurationRepository UserConfigurations { get; }
+    IUserPreferenceRepository UserPreferences { get; }
     Task<int> SaveAsync(CancellationToken ct = default);
 }

@@ -12,4 +12,8 @@ public class ApplicationUser : IdentityUser
 
     public ICollection<ArbitragePosition> Positions { get; set; } = [];
     public ICollection<Alert> Alerts { get; set; } = [];
+    public ICollection<UserExchangeCredential> ExchangeCredentials { get; set; } = [];
+    public ICollection<UserConfiguration> Configurations { get; set; } = [];
+    public ICollection<UserExchangePreference> ExchangePreferences { get; set; } = [];
+    public ICollection<UserAssetPreference> AssetPreferences { get; set; } = [];
 }

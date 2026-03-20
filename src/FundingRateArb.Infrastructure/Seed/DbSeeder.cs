@@ -24,6 +24,7 @@ public static class DbSeeder
         await SeedExchangesAsync(context);
         await SeedAssetsAsync(context);
         await SeedBotConfigAsync(context, userMgr);
+        await SeedAdminUserSettingsAsync(context, userMgr);
     }
 
     private static async Task SeedRolesAsync(RoleManager<IdentityRole> roleMgr)
@@ -251,6 +252,87 @@ public static class DbSeeder
             LastUpdatedAt = DateTime.UtcNow,
             UpdatedByUserId = admin.Id
         });
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task SeedAdminUserSettingsAsync(
+        AppDbContext context, UserManager<ApplicationUser> userMgr)
+    {
+        var admin = await userMgr.FindByEmailAsync(AdminEmail);
+        if (admin is null) return;
+
+        // Create default UserConfiguration for admin if none exists
+        var hasConfig = await context.UserConfigurations
+            .AnyAsync(c => c.UserId == admin.Id);
+        if (!hasConfig)
+        {
+            context.UserConfigurations.Add(new UserConfiguration
+            {
+                UserId = admin.Id,
+                IsEnabled = false,
+                OpenThreshold = 0.0003m,
+                CloseThreshold = -0.00005m,
+                AlertThreshold = 0.0001m,
+                DefaultLeverage = 5,
+                TotalCapitalUsdc = 107m,
+                MaxCapitalPerPosition = 0.80m,
+                MaxConcurrentPositions = 1,
+                StopLossPct = 0.15m,
+                MaxHoldTimeHours = 72,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                FeeAmortizationHours = 24m,
+                MinPositionSizeUsdc = 10m,
+                MinVolume24hUsdc = 50_000m,
+                RateStalenessMinutes = 15,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        // Create exchange preferences for all active exchanges
+        var hasExchangePrefs = await context.UserExchangePreferences
+            .AnyAsync(p => p.UserId == admin.Id);
+        if (!hasExchangePrefs)
+        {
+            var exchangeIds = await context.Exchanges
+                .Where(e => e.IsActive)
+                .Select(e => e.Id)
+                .ToListAsync();
+
+            foreach (var exchangeId in exchangeIds)
+            {
+                context.UserExchangePreferences.Add(new UserExchangePreference
+                {
+                    UserId = admin.Id,
+                    ExchangeId = exchangeId,
+                    IsEnabled = true
+                });
+            }
+        }
+
+        // Create asset preferences for all active assets
+        var hasAssetPrefs = await context.UserAssetPreferences
+            .AnyAsync(p => p.UserId == admin.Id);
+        if (!hasAssetPrefs)
+        {
+            var assetIds = await context.Assets
+                .Where(a => a.IsActive)
+                .Select(a => a.Id)
+                .ToListAsync();
+
+            foreach (var assetId in assetIds)
+            {
+                context.UserAssetPreferences.Add(new UserAssetPreference
+                {
+                    UserId = admin.Id,
+                    AssetId = assetId,
+                    IsEnabled = true
+                });
+            }
+        }
+
         await context.SaveChangesAsync();
     }
 }

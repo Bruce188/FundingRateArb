@@ -144,6 +144,7 @@ try
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
     builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
     builder.Services.AddSingleton<IConfigValidator, ConfigValidator>();
+    builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
