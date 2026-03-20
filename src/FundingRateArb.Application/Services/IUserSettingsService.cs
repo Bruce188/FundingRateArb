@@ -9,6 +9,7 @@ public interface IUserSettingsService
         string? apiKey, string? apiSecret, string? walletAddress, string? privateKey);
     Task<UserExchangeCredential?> GetCredentialAsync(string userId, int exchangeId);
     Task<List<UserExchangeCredential>> GetActiveCredentialsAsync(string userId);
+    Task<List<UserExchangeCredential>> GetAllCredentialsAsync(string userId);
     Task DeleteCredentialAsync(string userId, int exchangeId);
     (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey) DecryptCredential(
         UserExchangeCredential credential);
@@ -24,6 +25,7 @@ public interface IUserSettingsService
     Task<List<int>> GetUserEnabledAssetIdsAsync(string userId);
     Task SetExchangePreferenceAsync(string userId, int exchangeId, bool isEnabled);
     Task SetAssetPreferenceAsync(string userId, int assetId, bool isEnabled);
+    Task SavePreferencesAsync(string userId, Dictionary<int, bool> exchangePreferences, Dictionary<int, bool> assetPreferences);
     Task InitializeDefaultsForNewUserAsync(string userId);
 
     // Validation

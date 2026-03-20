@@ -31,11 +31,14 @@ public class SettingsController : Controller
         if (userId is null) return Unauthorized();
 
         var exchanges = await _settings.GetAvailableExchangesAsync();
+        // Fetch all credentials in a single query to avoid N+1
+        var allCredentials = await _settings.GetAllCredentialsAsync(userId);
+        var credentialByExchange = allCredentials.ToDictionary(c => c.ExchangeId);
         var items = new List<ExchangeCredentialItem>();
 
         foreach (var exchange in exchanges)
         {
-            var credential = await _settings.GetCredentialAsync(userId, exchange.Id);
+            credentialByExchange.TryGetValue(exchange.Id, out var credential);
             items.Add(BuildCredentialItem(exchange.Id, exchange.Name, credential));
         }
 
@@ -58,6 +61,20 @@ public class SettingsController : Controller
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
+
+        // Input validation: reject suspiciously long or whitespace-only values
+        const int MaxCredentialLength = 500;
+        if (apiKey?.Length > MaxCredentialLength || apiSecret?.Length > MaxCredentialLength
+            || walletAddress?.Length > MaxCredentialLength || privateKey?.Length > MaxCredentialLength)
+        {
+            TempData["Error"] = "Credential value exceeds maximum allowed length.";
+            return RedirectToAction(nameof(ApiKeys));
+        }
+        if (string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrEmpty(apiKey))
+        {
+            TempData["Error"] = "API key cannot be whitespace only.";
+            return RedirectToAction(nameof(ApiKeys));
+        }
 
         await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey);
         TempData["Success"] = "API key saved successfully.";
@@ -196,11 +213,8 @@ public class SettingsController : Controller
             return RedirectToAction(nameof(Preferences));
         }
 
-        foreach (var (exchangeId, isEnabled) in exchangePreferences)
-            await _settings.SetExchangePreferenceAsync(userId, exchangeId, isEnabled);
-
-        foreach (var (assetId, isEnabled) in assetPreferences)
-            await _settings.SetAssetPreferenceAsync(userId, assetId, isEnabled);
+        // Batch all preference upserts into a single SaveAsync call
+        await _settings.SavePreferencesAsync(userId, exchangePreferences, assetPreferences);
 
         _logger.LogInformation("User {UserId} saved preferences: {Exchanges} exchanges, {Assets} assets enabled",
             userId, enabledExchangeCount, enabledAssetCount);

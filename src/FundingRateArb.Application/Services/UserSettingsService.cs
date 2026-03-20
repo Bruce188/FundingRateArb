@@ -56,6 +56,9 @@ public class UserSettingsService : IUserSettingsService
     public Task<List<UserExchangeCredential>> GetActiveCredentialsAsync(string userId) =>
         _uow.UserCredentials.GetActiveByUserAsync(userId);
 
+    public Task<List<UserExchangeCredential>> GetAllCredentialsAsync(string userId) =>
+        _uow.UserCredentials.GetAllByUserAsync(userId);
+
     public async Task DeleteCredentialAsync(string userId, int exchangeId)
     {
         var credential = await _uow.UserCredentials.GetByUserAndExchangeAsync(userId, exchangeId);
@@ -124,6 +127,22 @@ public class UserSettingsService : IUserSettingsService
     public async Task SetAssetPreferenceAsync(string userId, int assetId, bool isEnabled)
     {
         await _uow.UserPreferences.SetAssetPreferenceAsync(userId, assetId, isEnabled);
+        await _uow.SaveAsync();
+    }
+
+    /// <summary>
+    /// Saves all exchange and asset preferences in a single database round-trip.
+    /// </summary>
+    public async Task SavePreferencesAsync(string userId,
+        Dictionary<int, bool> exchangePreferences,
+        Dictionary<int, bool> assetPreferences)
+    {
+        foreach (var (exchangeId, isEnabled) in exchangePreferences)
+            await _uow.UserPreferences.SetExchangePreferenceAsync(userId, exchangeId, isEnabled);
+
+        foreach (var (assetId, isEnabled) in assetPreferences)
+            await _uow.UserPreferences.SetAssetPreferenceAsync(userId, assetId, isEnabled);
+
         await _uow.SaveAsync();
     }
 

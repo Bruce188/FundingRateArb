@@ -108,9 +108,32 @@ body {
 }
 
 /* ── Responsive tweaks ────────────────────────────────── */
-@media (max-width: 576px) {
+@media (max-width: 575.98px) {
     .kpi-value { font-size: 1.4rem; }
     .navbar-brand { font-size: 1rem; }
+
+    /* KPI cards stack vertically with tighter spacing */
+    .kpi-card { margin-bottom: 0.5rem; }
+
+    /* Tables: smaller font to reduce overflow */
+    .table-responsive { font-size: 0.85rem; }
+
+    /* Toast container: move to bottom on mobile so it doesn't obscure content */
+    #notification-toast-container {
+        top: auto !important;
+        bottom: 0 !important;
+        right: 0 !important;
+        left: 0 !important;
+        padding: 0.5rem !important;
+    }
+
+    /* Settings forms: ensure inputs are full-width */
+    .settings-card .form-control,
+    .card .form-control { width: 100%; }
+
+    /* Touch targets: minimum 44×44 px for all interactive elements */
+    .btn { min-height: 44px; min-width: 44px; }
+    .nav-link { padding: 0.75rem 1rem; }
 }
 
 /* ── Footer ───────────────────────────────────────────── */
