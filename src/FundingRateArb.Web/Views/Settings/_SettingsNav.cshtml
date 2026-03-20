@@ -1,0 +1,17 @@
+@{
+    var activeTab = ViewData["ActiveTab"]?.ToString();
+}
+<ul class="nav nav-tabs mb-4">
+    <li class="nav-item">
+        <a class="nav-link @(activeTab == "ApiKeys" ? "active" : "")"
+           asp-controller="Settings" asp-action="ApiKeys">API Keys</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link @(activeTab == "Configuration" ? "active" : "")"
+           asp-controller="Settings" asp-action="Configuration">Configuration</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link @(activeTab == "Preferences" ? "active" : "")"
+           asp-controller="Settings" asp-action="Preferences">Exchanges &amp; Coins</a>
+    </li>
+</ul>
