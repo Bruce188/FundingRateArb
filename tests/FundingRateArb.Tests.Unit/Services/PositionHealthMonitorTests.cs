@@ -48,7 +48,7 @@ public class PositionHealthMonitorTests
             .ReturnsAsync([]);
 
         _sut = new PositionHealthMonitor(_mockUow.Object,
-            _mockFactory.Object, NullLogger<PositionHealthMonitor>.Instance);
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, NullLogger<PositionHealthMonitor>.Instance);
     }
 
     private ArbitragePosition MakeOpenPosition(

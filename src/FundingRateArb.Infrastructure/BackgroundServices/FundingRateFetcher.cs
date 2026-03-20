@@ -19,16 +19,21 @@ public class FundingRateFetcher : BackgroundService
     // H-FR1: Track last purge time to run hourly purge without a separate timer
     private DateTime _lastPurgeUtc = DateTime.MinValue;
 
+    private static readonly TimeSpan CacheStaleThreshold = TimeSpan.FromSeconds(90);
+
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IMarketDataCache _cache;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
     private readonly ILogger<FundingRateFetcher> _logger;
 
     public FundingRateFetcher(
         IServiceScopeFactory scopeFactory,
+        IMarketDataCache cache,
         IHubContext<DashboardHub, IDashboardClient> hubContext,
         ILogger<FundingRateFetcher> logger)
     {
         _scopeFactory = scopeFactory;
+        _cache        = cache;
         _hubContext   = hubContext;
         _logger       = logger;
     }
@@ -72,23 +77,31 @@ public class FundingRateFetcher : BackgroundService
 
         var connectors = factory.GetAllConnectors().ToList();
 
-        // M8: Fetch from all exchanges in parallel instead of sequentially
-        var tasks = connectors.Select(async c =>
+        // Hybrid: use WebSocket cache when fresh, fall back to REST when stale
+        var allRates = new List<FundingRateDto>();
+        foreach (var c in connectors)
         {
-            try
+            var cached = _cache.GetAllForExchange(c.ExchangeName);
+            if (cached.Count > 0 && !_cache.IsStaleForExchange(c.ExchangeName, CacheStaleThreshold))
             {
-                var rates = await c.GetFundingRatesAsync(ct);
-                _logger.LogDebug("Fetched {Count} rates from {Exchange}", rates.Count, c.ExchangeName);
-                return rates;
+                _logger.LogDebug("Using WebSocket cache for {Exchange} ({Count} rates)", c.ExchangeName, cached.Count);
+                allRates.AddRange(cached);
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogWarning(ex, "Failed to fetch funding rates from {Exchange}", c.ExchangeName);
-                return new List<FundingRateDto>();
+                _logger.LogDebug("Cache stale/empty for {Exchange}, falling back to REST", c.ExchangeName);
+                try
+                {
+                    var rates = await c.GetFundingRatesAsync(ct);
+                    _logger.LogDebug("Fetched {Count} rates from {Exchange} via REST", rates.Count, c.ExchangeName);
+                    allRates.AddRange(rates);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "REST fallback failed for {Exchange}", c.ExchangeName);
+                }
             }
-        });
-        var results  = await Task.WhenAll(tasks);
-        var allRates = results.SelectMany(r => r).ToList();
+        }
 
         // Resolve exchange and asset lookup tables once
         var exchanges = await uow.Exchanges.GetActiveAsync();
