@@ -15,6 +15,10 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<BotConfiguration> BotConfigurations => Set<BotConfiguration>();
     public DbSet<ExchangeAssetConfig> ExchangeAssetConfigs => Set<ExchangeAssetConfig>();
+    public DbSet<UserExchangeCredential> UserExchangeCredentials => Set<UserExchangeCredential>();
+    public DbSet<UserConfiguration> UserConfigurations => Set<UserConfiguration>();
+    public DbSet<UserExchangePreference> UserExchangePreferences => Set<UserExchangePreference>();
+    public DbSet<UserAssetPreference> UserAssetPreferences => Set<UserAssetPreference>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

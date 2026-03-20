@@ -24,6 +24,7 @@ public class DashboardControllerTests
     private readonly Mock<ILogger<DashboardController>> _mockLogger;
     private readonly Mock<ISignalEngine> _mockSignalEngine;
     private readonly Mock<IBotControl> _mockBotControl;
+    private readonly Mock<IUserSettingsService> _mockUserSettings;
     private readonly DashboardController _controller;
 
     public DashboardControllerTests()
@@ -36,6 +37,14 @@ public class DashboardControllerTests
         _mockLogger = new Mock<ILogger<DashboardController>>();
         _mockSignalEngine = new Mock<ISignalEngine>();
         _mockBotControl = new Mock<IBotControl>();
+        _mockUserSettings = new Mock<IUserSettingsService>();
+
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { IsEnabled = false });
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 1, 2, 3 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
 
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfigRepo.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
@@ -53,7 +62,7 @@ public class DashboardControllerTests
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object);
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {

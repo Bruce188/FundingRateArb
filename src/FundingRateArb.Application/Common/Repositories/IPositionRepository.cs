@@ -10,6 +10,9 @@ public interface IPositionRepository
     /// <summary>Returns open positions without change tracking (read-only).</summary>
     Task<List<ArbitragePosition>> GetOpenAsync();
 
+    /// <summary>Returns open positions for a specific user without change tracking.</summary>
+    Task<List<ArbitragePosition>> GetOpenByUserAsync(string userId);
+
     /// <summary>Returns open positions with EF change tracking so mutations are persisted.</summary>
     Task<List<ArbitragePosition>> GetOpenTrackedAsync();
 

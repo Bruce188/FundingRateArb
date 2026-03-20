@@ -26,8 +26,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // H6: Track pushed alert IDs to prevent duplicate pushes across cycles
     private readonly ConcurrentDictionary<int, byte> _pushedAlertIds = new();
 
-    // M6: Track consecutive money-losing position closes for circuit breaker
-    private int _consecutiveLosses;
+    // Per-user consecutive loss tracking for circuit breaker
+    private readonly ConcurrentDictionary<string, int> _userConsecutiveLosses = new();
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
@@ -37,7 +37,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
     private DateTime _lastAlertPushUtc = DateTime.UtcNow.AddMinutes(-5);
 
-    // C3: Exponential cooldown for failed opportunities — prevents infinite retry loops burning fees
+    // B3: Cache previous best spread so it survives across cycles (avoids reset to 0 after Retry Now)
+    private decimal _cachedBestSpread;
+
+    // Per-user cooldown for failed opportunities — keyed by (userId, oppKey)
     private readonly ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> _failedOpCooldowns = new();
     internal static readonly TimeSpan BaseCooldown = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan MaxCooldown = TimeSpan.FromMinutes(60);
@@ -105,140 +108,237 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // C6: Cancel the timer wait to trigger an immediate cycle
     public void TriggerImmediateCycle() => _immediateCts.Cancel();
 
-    public void RecordCloseResult(decimal realizedPnl)
+    public void RecordCloseResult(decimal realizedPnl, string? userId = null)
     {
+        if (string.IsNullOrEmpty(userId)) return;
+
         if (realizedPnl < 0)
-            _consecutiveLosses++;
+            _userConsecutiveLosses.AddOrUpdate(userId, 1, (_, count) => count + 1);
         else
-            _consecutiveLosses = 0;
+            _userConsecutiveLosses[userId] = 0;
     }
 
     /// <summary>Exposes cooldown state for unit testing.</summary>
     internal ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> FailedOpCooldowns => _failedOpCooldowns;
 
-    /// <summary>Exposes consecutive loss count for unit testing.</summary>
-    internal int ConsecutiveLosses { get => _consecutiveLosses; set => _consecutiveLosses = value; }
+    /// <summary>Exposes per-user consecutive loss counts for unit testing.</summary>
+    internal ConcurrentDictionary<string, int> UserConsecutiveLosses => _userConsecutiveLosses;
 
     /// <summary>Exposes pushed alert IDs for unit testing.</summary>
     internal ConcurrentDictionary<int, byte> PushedAlertIds => _pushedAlertIds;
 
     /// <summary>
-    /// One bot cycle: health-monitor open positions → find & open one new opportunity.
+    /// One bot cycle: health-monitor ALL open positions, then iterate enabled users.
     /// Exposed as internal for unit testing.
     /// </summary>
     internal async Task RunCycleAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
-        var uow         = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        var config      = await uow.BotConfig.GetActiveAsync();
-
-        // H4: TODO: config.UpdatedByUserId is used as position owner in ExecutionEngine, which means
-        // whoever last saved config "owns" all bot-created positions. This should be replaced with a
-        // dedicated system user ID from UserManager or seeder data. Requires ExecutionEngine changes.
-
-        var healthMonitor   = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
-        var signalEngine    = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
-        var positionSizer   = scope.ServiceProvider.GetRequiredService<IPositionSizer>();
+        var uow            = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var globalConfig   = await uow.BotConfig.GetActiveAsync();
+        var healthMonitor  = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
+        var signalEngine   = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+        var userSettings   = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
 
-        // H1: Always run health monitor — positions must be monitored even when kill switch is off
+        // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
         var positionsToClose = await healthMonitor.CheckAndActAsync(ct);
         foreach (var (pos, reason) in positionsToClose)
         {
             await executionEngine.ClosePositionAsync(pos, reason, ct);
-            // Only record PnL for circuit breaker if close actually completed
             if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
-                RecordCloseResult(pos.RealizedPnl.Value);
+                RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
         }
 
-        // M6: Fetch open positions AFTER health monitor so closed positions are excluded
-        var openPositions = await uow.Positions.GetOpenAsync();
+        // Fetch ALL open positions after health monitor so closed positions are excluded
+        var allOpenPositions = await uow.Positions.GetOpenAsync();
 
-        // Push position updates + alerts (always, regardless of bot state)
-        await PushPositionUpdatesAsync(openPositions);
+        // Push per-user position updates + alerts (always, regardless of bot state)
+        await PushPositionUpdatesAsync(allOpenPositions);
         await PushNewAlertsAsync(uow);
 
-        // Step 2: Compute + push opportunities (always, regardless of bot state)
-        var opportunities = await signalEngine.GetOpportunitiesAsync(ct);
-
-        // H8: Push opportunity updates here (moved from FundingRateFetcher to keep SRP)
+        // Step 2: Compute + push opportunities globally (always, regardless of bot state)
+        var allOpportunities = await signalEngine.GetOpportunitiesAsync(ct);
         try
         {
-            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunities);
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(allOpportunities);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
         }
 
-        // Step 3: Push dashboard KPI update (always, regardless of bot state)
-        await PushDashboardUpdateAsync(openPositions, config.IsEnabled);
+        // Step 3: Push global dashboard KPI update
+        await PushDashboardUpdateAsync(allOpenPositions, globalConfig.IsEnabled);
 
-        // Step 4: Gate — skip position opening if bot is disabled
-        if (!config.IsEnabled)
+        // Step 4: Gate — skip position opening if global kill switch is off
+        if (!globalConfig.IsEnabled)
         {
             _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
+            await PushStatusExplanationAsync(null, "Bot is disabled — enable in Settings or Admin > Bot Config", "danger");
             return;
         }
 
-        // H7: Daily drawdown circuit breaker — pause position opens if daily loss exceeds threshold
+        // Step 5: Get all users with enabled UserConfiguration and iterate
+        var enabledUserIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+
+        if (enabledUserIds.Count == 0)
+        {
+            _logger.LogDebug("No users with enabled bot configuration. Skipping cycle.");
+            return;
+        }
+
+        foreach (var userId in enabledUserIds)
+        {
+            try
+            {
+                await ExecuteUserCycleAsync(userId, globalConfig, allOpportunities, allOpenPositions, uow, signalEngine, executionEngine, userSettings, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Cycle failed for user {UserId}", userId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Per-user cycle: filter opportunities, check gates, size and open positions.
+    /// </summary>
+    private async Task ExecuteUserCycleAsync(
+        string userId,
+        BotConfiguration globalConfig,
+        List<ArbitrageOpportunityDto> allOpportunities,
+        List<ArbitragePosition> allOpenPositions,
+        IUnitOfWork uow,
+        ISignalEngine signalEngine,
+        IExecutionEngine executionEngine,
+        IUserSettingsService userSettings,
+        CancellationToken ct)
+    {
+        var userConfig = await userSettings.GetOrCreateConfigAsync(userId);
+        if (!userConfig.IsEnabled) return;
+
+        // Check user has valid credentials (at least 2 exchanges)
+        if (!await userSettings.HasValidCredentialsAsync(userId))
+        {
+            await PushStatusExplanationAsync(userId, "No exchange API keys configured — set up in Settings > API Keys", "danger");
+            return;
+        }
+
+        // Get user's enabled exchange and asset IDs
+        var enabledExchangeIds = await userSettings.GetUserEnabledExchangeIdsAsync(userId);
+        var enabledAssetIds = await userSettings.GetUserEnabledAssetIdsAsync(userId);
+
+        var enabledExchangeSet = enabledExchangeIds.ToHashSet();
+        var enabledAssetSet = enabledAssetIds.ToHashSet();
+
+        // Filter global opportunities to user's preferences
+        var userOpportunities = allOpportunities
+            .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
+            .Where(o => enabledAssetSet.Contains(o.AssetId))
+            .Where(o => o.NetYieldPerHour >= userConfig.OpenThreshold)
+            .ToList();
+
+        // Check user's open positions vs their limit
+        var userOpenPositions = allOpenPositions.Where(p => p.UserId == userId).ToList();
+
+        // Daily drawdown circuit breaker for this user
         var closedToday = await uow.Positions.GetClosedSinceAsync(DateTime.UtcNow.Date);
-        var dailyPnl = closedToday.Sum(p => p.RealizedPnl ?? 0m) + openPositions.Sum(p => p.AccumulatedFunding);
-        var drawdownLimit = config.TotalCapitalUsdc * config.DailyDrawdownPausePct;
+        var userClosedToday = closedToday.Where(p => p.UserId == userId).ToList();
+        var dailyPnl = userClosedToday.Sum(p => p.RealizedPnl ?? 0m) + userOpenPositions.Sum(p => p.AccumulatedFunding);
+        var drawdownLimit = userConfig.TotalCapitalUsdc * userConfig.DailyDrawdownPausePct;
         if (dailyPnl < -drawdownLimit)
         {
             _logger.LogWarning(
-                "Daily drawdown limit hit: {DailyPnl:F2} USDC (limit: -{Limit:F2}). Pausing position opens for this cycle.",
-                dailyPnl, drawdownLimit);
+                "Daily drawdown limit hit for user {UserId}: {DailyPnl:F2} USDC (limit: -{Limit:F2})",
+                userId, dailyPnl, drawdownLimit);
+            await PushStatusExplanationAsync(userId,
+                $"Daily drawdown limit hit ({dailyPnl:F2} USDC, limit: -{drawdownLimit:F2}) — pausing position opens", "warning");
             return;
         }
 
-        // M6: Consecutive loss circuit breaker — pause after N consecutive losing closes
-        if (_consecutiveLosses >= config.ConsecutiveLossPause)
+        // Consecutive loss circuit breaker for this user
+        var consecutiveLosses = _userConsecutiveLosses.GetValueOrDefault(userId, 0);
+        if (consecutiveLosses >= userConfig.ConsecutiveLossPause)
         {
             _logger.LogWarning(
-                "Consecutive loss limit reached ({Count}/{Max}). Pausing position opens.",
-                _consecutiveLosses, config.ConsecutiveLossPause);
+                "Consecutive loss limit reached for user {UserId} ({Count}/{Max})",
+                userId, consecutiveLosses, userConfig.ConsecutiveLossPause);
+            await PushStatusExplanationAsync(userId,
+                $"Consecutive loss limit reached ({consecutiveLosses}/{userConfig.ConsecutiveLossPause}) — pausing position opens", "warning");
             return;
         }
 
-        // Step 5: Gate — skip if max positions reached
-        if (openPositions.Count >= config.MaxConcurrentPositions)
+        // Max positions gate
+        if (userOpenPositions.Count >= userConfig.MaxConcurrentPositions)
         {
             _logger.LogDebug(
-                "Max concurrent positions reached ({Count}/{Max}). No new positions this cycle.",
-                openPositions.Count, config.MaxConcurrentPositions);
+                "Max concurrent positions reached for user {UserId} ({Count}/{Max})",
+                userId, userOpenPositions.Count, userConfig.MaxConcurrentPositions);
+            await PushStatusExplanationAsync(userId,
+                $"{userOpenPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
             return;
         }
 
-        // Step 6: Strategy-aware dispatch — filter candidates, batch-size, iterate
+        // Filter candidates: exclude active/opening positions and cooled-down opportunities
         var openingPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
-        var allActiveKeys = openPositions
-            .Concat(openingPositions)
+        var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
+        var allActiveKeys = userOpenPositions
+            .Concat(userOpeningPositions)
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
 
-        var candidates = opportunities
+        var cooldownSkips = new List<(string Asset, TimeSpan Remaining)>();
+
+        var candidates = userOpportunities
             .Where(opp =>
             {
                 var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
                 if (allActiveKeys.Contains(key)) return false;
-                if (_failedOpCooldowns.TryGetValue(key, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+                // Per-user cooldown key
+                var cooldownKey = $"{userId}:{key}";
+                if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
                 {
                     _logger.LogDebug(
-                        "Skipping {Asset} {Long}/{Short} — on cooldown until {Until} (failures={Failures})",
-                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, cd.CooldownUntil, cd.Failures);
+                        "Skipping {Asset} {Long}/{Short} for user {UserId} — on cooldown until {Until}",
+                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, cd.CooldownUntil);
+                    cooldownSkips.Add((opp.AssetSymbol, cd.CooldownUntil - DateTime.UtcNow));
                     return false;
                 }
                 return true;
             })
-            .Take(config.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : config.AllocationTopN)
+            .Take(userConfig.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : userConfig.AllocationTopN)
             .ToList();
 
-        if (candidates.Count == 0) return;
+        if (candidates.Count == 0)
+        {
+            if (userOpportunities.Count == 0 && allOpportunities.Count == 0)
+            {
+                await PushStatusExplanationAsync(userId, "No arbitrage opportunities detected this cycle", "info");
+            }
+            else if (userOpportunities.Count == 0)
+            {
+                await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges and coins", "info");
+            }
+            else if (cooldownSkips.Count > 0)
+            {
+                var first = cooldownSkips[0];
+                var minutes = (int)Math.Ceiling(first.Remaining.TotalMinutes);
+                await PushStatusExplanationAsync(userId,
+                    $"{first.Asset} cooling down — retry in {minutes} minutes", "info");
+            }
+            else
+            {
+                var bestOpp = userOpportunities.OrderByDescending(o => o.SpreadPerHour).First();
+                await PushStatusExplanationAsync(userId,
+                    $"Best spread {(bestOpp.SpreadPerHour * 100):F2}%/hr — all opportunities have active positions", "info");
+            }
+            return;
+        }
 
-        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, config.AllocationStrategy);
-        var slotsAvailable = config.MaxConcurrentPositions - openPositions.Count - openingPositions.Count;
+        var positionSizer = _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IPositionSizer>();
+        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy);
+        var slotsAvailable = userConfig.MaxConcurrentPositions - userOpenPositions.Count - userOpeningPositions.Count;
 
         for (int idx = 0; idx < candidates.Count; idx++)
         {
@@ -248,43 +348,45 @@ public class BotOrchestrator : BackgroundService, IBotControl
             if (slotsAvailable <= 0) break;
 
             var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+            var cooldownKey = $"{userId}:{key}";
 
             _logger.LogInformation(
-                "Opening position: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
-                opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
+                "Opening position for user {UserId}: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
+                userId, opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
 
             var (success, error) = await executionEngine.OpenPositionAsync(opp, size, ct);
 
             if (success)
             {
                 slotsAvailable--;
-                _failedOpCooldowns.TryRemove(key, out _);
+                _failedOpCooldowns.TryRemove(cooldownKey, out _);
 
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
-                await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
+                await _hubContext.Clients.Group($"user-{userId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
-                openPositions = await uow.Positions.GetOpenAsync();
-                await PushPositionUpdatesAsync(openPositions);
+                var updatedPositions = await uow.Positions.GetOpenAsync();
+                await PushPositionUpdatesAsync(updatedPositions);
                 await PushNewAlertsAsync(uow);
             }
             else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
                                        || error.Contains("balance", StringComparison.OrdinalIgnoreCase)))
             {
-                _logger.LogWarning("Balance exhausted: {Error}", error);
+                _logger.LogWarning("Balance exhausted for user {UserId}: {Error}", userId, error);
+                await PushStatusExplanationAsync(userId,
+                    $"Insufficient balance on {opp.LongExchangeName}/{opp.ShortExchangeName} for {opp.AssetSymbol}", "warning");
                 break;
             }
             else
             {
-                // Register exponential cooldown and continue to next opportunity
-                var failures = _failedOpCooldowns.GetValueOrDefault(key).Failures + 1;
+                var failures = _failedOpCooldowns.GetValueOrDefault(cooldownKey).Failures + 1;
                 var delay = TimeSpan.FromTicks(
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
-                _failedOpCooldowns[key] = (DateTime.UtcNow + delay, failures);
+                _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
 
                 _logger.LogWarning(
-                    "Opportunity {Asset} {Long}/{Short} failed ({Failures} consecutive). Cooldown until {Until}",
-                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, failures, DateTime.UtcNow + delay);
+                    "Opportunity {Asset} {Long}/{Short} failed for user {UserId} ({Failures} consecutive). Cooldown until {Until}",
+                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, failures, DateTime.UtcNow + delay);
                 _logger.LogError("Failed to open position: {Error}", error);
                 await PushNewAlertsAsync(uow);
             }
@@ -293,8 +395,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     /// <summary>
     /// Pushes a ReceiveDashboardUpdate to the MarketData group with current KPI values.
-    /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
-    /// H-BO1: Dashboard aggregates target MarketData group (not Clients.All).
     /// </summary>
     private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
     {
@@ -305,12 +405,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 ? openPositions.Max(p => p.CurrentSpreadPerHour)
                 : 0m;
 
+            // B3: Only overwrite cached spread when a real value arrives
+            if (bestSpread > 0)
+                _cachedBestSpread = bestSpread;
+
             var dto = new DashboardDto
             {
                 BotEnabled        = botEnabled,
                 OpenPositionCount = openPositions.Count,
                 TotalPnl          = totalPnl,
-                BestSpread        = bestSpread,
+                BestSpread        = bestSpread > 0 ? bestSpread : _cachedBestSpread,
             };
 
             await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveDashboardUpdate(dto);
@@ -323,9 +427,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     /// <summary>
     /// Pushes a ReceivePositionUpdate for each open position to the owning user's group.
-    /// H3: Accepts pre-fetched positions to avoid redundant GetOpenAsync calls.
-    /// H-BO1: Position updates target per-user groups to prevent data leaks.
-    /// H8: Uses Task.WhenAll with per-item try/catch so one failed push does not drop the rest.
     /// </summary>
     private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
     {
@@ -346,16 +447,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     /// <summary>
     /// Pushes a ReceiveAlert for recent unread alerts to per-user SignalR groups.
-    /// M12: Uses GetRecentUnreadAsync instead of GetAllAsync + in-memory filter.
-    /// M7: Uses rolling _lastAlertPushUtc cutoff to avoid replaying alerts across cycles.
-    /// C4: Targets per-user groups instead of Clients.All.
     /// </summary>
     private async Task PushNewAlertsAsync(IUnitOfWork uow)
     {
         try
         {
-            // M1+M2: Capture both timestamps once; move marker update AFTER query so alerts
-            // created between marker update and query return are not silently missed.
             var since = _lastAlertPushUtc;
             var now = DateTime.UtcNow;
             var window = now - since;
@@ -384,7 +480,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     CreatedAt           = alert.CreatedAt,
                 };
 
-                // C4: Send alerts only to the user they belong to
                 await _hubContext.Clients.Group($"user-{alert.UserId}").ReceiveAlert(dto);
             }
         }
@@ -404,6 +499,25 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _disposed = true;
         }
         base.Dispose();
+    }
+
+    /// <summary>
+    /// Pushes a status explanation to a specific user's SignalR group.
+    /// If userId is null, broadcasts to the MarketData group (global message).
+    /// </summary>
+    private async Task PushStatusExplanationAsync(string? userId, string message, string severity)
+    {
+        try
+        {
+            if (userId is not null)
+                await _hubContext.Clients.Group($"user-{userId}").ReceiveStatusExplanation(message, severity);
+            else
+                await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveStatusExplanation(message, severity);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push status explanation via SignalR");
+        }
     }
 
     private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)

@@ -17,6 +17,9 @@ public class UnitOfWork : IUnitOfWork
         Alerts = new AlertRepository(context);
         BotConfig = new BotConfigRepository(context);
         ExchangeAssetConfigs = new ExchangeAssetConfigRepository(context);
+        UserCredentials = new UserExchangeCredentialRepository(context);
+        UserConfigurations = new UserConfigurationRepository(context);
+        UserPreferences = new UserPreferenceRepository(context);
     }
 
     public IExchangeRepository Exchanges { get; }
@@ -26,6 +29,9 @@ public class UnitOfWork : IUnitOfWork
     public IAlertRepository Alerts { get; }
     public IBotConfigRepository BotConfig { get; }
     public IExchangeAssetConfigRepository ExchangeAssetConfigs { get; }
+    public IUserExchangeCredentialRepository UserCredentials { get; }
+    public IUserConfigurationRepository UserConfigurations { get; }
+    public IUserPreferenceRepository UserPreferences { get; }
 
     public Task<int> SaveAsync(CancellationToken ct = default) =>
         _context.SaveChangesAsync(ct);

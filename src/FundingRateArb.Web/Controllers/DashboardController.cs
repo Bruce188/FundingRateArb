@@ -16,17 +16,20 @@ public class DashboardController : Controller
     private readonly ILogger<DashboardController> _logger;
     private readonly ISignalEngine _signalEngine;
     private readonly IBotControl _botControl;
+    private readonly IUserSettingsService _userSettings;
 
     public DashboardController(
         IUnitOfWork uow,
         ILogger<DashboardController> logger,
         ISignalEngine signalEngine,
-        IBotControl botControl)
+        IBotControl botControl,
+        IUserSettingsService userSettings)
     {
         _uow = uow;
         _logger = logger;
         _signalEngine = signalEngine;
         _botControl = botControl;
+        _userSettings = userSettings;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct = default)
@@ -34,13 +37,39 @@ public class DashboardController : Controller
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
 
+        // Lazy initialization: ensure user has default settings on first visit
+        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
+        var enabledExchangeIdsForInit = await _userSettings.GetUserEnabledExchangeIdsAsync(userId);
+        if (enabledExchangeIdsForInit.Count == 0)
+        {
+            await _userSettings.InitializeDefaultsForNewUserAsync(userId);
+        }
+
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var allOpenPositions = await _uow.Positions.GetOpenAsync();
         var openPositions = User.IsInRole("Admin")
             ? allOpenPositions
             : allOpenPositions.Where(p => p.UserId == userId).ToList();
         var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId, unreadOnly: true);
-        var opportunities = await _signalEngine.GetOpportunitiesAsync(ct);
+        var allOpportunities = await _signalEngine.GetOpportunitiesAsync(ct);
+
+        // Filter opportunities by user's enabled exchanges and assets (non-admin)
+        List<ArbitrageOpportunityDto> opportunities;
+        if (User.IsInRole("Admin"))
+        {
+            opportunities = allOpportunities;
+        }
+        else
+        {
+            var enabledExchangeIds = (await _userSettings.GetUserEnabledExchangeIdsAsync(userId)).ToHashSet();
+            var enabledAssetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId)).ToHashSet();
+
+            opportunities = allOpportunities
+                .Where(o => enabledExchangeIds.Contains(o.LongExchangeId)
+                         && enabledExchangeIds.Contains(o.ShortExchangeId))
+                .Where(o => enabledAssetIds.Contains(o.AssetId))
+                .ToList();
+        }
 
         var positionSummaries = openPositions.Select(p => new PositionSummaryDto
         {

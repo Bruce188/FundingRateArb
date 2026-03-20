@@ -8,6 +8,17 @@
         var minVol = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
         return minVol * Model.VolumeFraction < Model.NotionalPerLeg;
     }
+
+    // B1: Dynamic decimal formatting for small prices (server-side equivalent)
+    string FormatPrice(decimal price)
+    {
+        if (price == 0) return "$0.00";
+        if (price >= 1) return "$" + price.ToString("F2");
+        if (price >= 0.01m) return "$" + price.ToString("F4");
+        // For very small prices, show 4 significant digits
+        var str = price.ToString("G4");
+        return "$" + str;
+    }
 }
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -91,7 +102,7 @@
                     <div>
                         <p class="text-muted small mb-1">Best Spread/hr</p>
                         <h4 class="mb-0 text-info">
-                            <span id="best-spread">@((Model.BestSpread * 100).ToString("F4"))</span>%
+                            <span id="best-spread">@(Model.BestSpread > 0 ? (Model.BestSpread * 100).ToString("F4") + "%" : "N/A")</span>
                         </h4>
                     </div>
                     <div class="text-muted">
@@ -102,6 +113,13 @@
                 </div>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- B4: Persistent status explanation area -->
+<div class="row mb-3">
+    <div class="col-12">
+        <div id="status-explanation" class="alert alert-info mb-0 py-2 px-3 small" style="display:none;"></div>
     </div>
 </div>
 
@@ -155,7 +173,7 @@
                                         @{ var displayPrice = opp.LongMarkPrice > 0 && opp.ShortMarkPrice > 0
                                                 ? (opp.LongMarkPrice + opp.ShortMarkPrice) / 2
                                                 : Math.Max(opp.LongMarkPrice, opp.ShortMarkPrice); }
-                                        <td>$@displayPrice.ToString("F2")</td>
+                                        <td>@FormatPrice(displayPrice)</td>
                                         <td>@opp.LongExchangeName</td>
                                         <td>@opp.ShortExchangeName</td>
                                         <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
