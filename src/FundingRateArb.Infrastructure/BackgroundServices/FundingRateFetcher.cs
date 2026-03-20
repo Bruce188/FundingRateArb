@@ -136,8 +136,36 @@ public class FundingRateFetcher : BackgroundService
             _logger.LogInformation("Purged {Count} funding rate snapshots older than {Cutoff:u}", purged, cutoff);
         }
 
+        await UpdateAccumulatedFundingAsync(uow, ct);
+
         // M13: Push live updates consistently to Group("MarketData"), not Clients.All
         // H8: Opportunity computation and push moved to BotOrchestrator (SRP — fetcher only fetches)
         await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveFundingRateUpdate(allRates);
+    }
+
+    private async Task UpdateAccumulatedFundingAsync(IUnitOfWork uow, CancellationToken ct)
+    {
+        var openPositions = await uow.Positions.GetOpenTrackedAsync();
+        if (openPositions.Count == 0) return;
+
+        var latestRates = await uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+
+        foreach (var pos in openPositions)
+        {
+            var longRate = latestRates
+                .FirstOrDefault(r => r.ExchangeId == pos.LongExchangeId && r.AssetId == pos.AssetId);
+            var shortRate = latestRates
+                .FirstOrDefault(r => r.ExchangeId == pos.ShortExchangeId && r.AssetId == pos.AssetId);
+
+            if (longRate is null || shortRate is null) continue;
+
+            var netRatePerHour = shortRate.RatePerHour - longRate.RatePerHour;
+            var notional = pos.SizeUsdc * pos.Leverage;
+            // Each cycle is ~60 seconds = 1/60 of an hour
+            var fundingDelta = notional * netRatePerHour / 60m;
+            pos.AccumulatedFunding += fundingDelta;
+        }
+
+        await uow.SaveAsync(ct);
     }
 }

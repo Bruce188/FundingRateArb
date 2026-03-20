@@ -60,6 +60,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             pos.CurrentSpreadPerHour = spread;
             _uow.Positions.Update(pos);
 
+            if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
+            {
+                _logger.LogCritical("Position #{Id} has zero entry prices — stop-loss check disabled, skipping", pos.Id);
+                continue;
+            }
+
             try
             {
                 // Compute price move for stop-loss check
@@ -163,11 +169,19 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         var positions = await _uow.Positions.GetByStatusAsync(status);
         var cutoff = DateTime.UtcNow - maxAge;
 
-        foreach (var pos in positions.Where(p => p.OpenedAt < cutoff))
+        var reaped = false;
+        foreach (var pos in positions)
         {
+            // For Closing status, use ClosingStartedAt; for Opening, use OpenedAt
+            var referenceTime = status == PositionStatus.Closing
+                ? pos.ClosingStartedAt ?? pos.OpenedAt
+                : pos.OpenedAt;
+
+            if (referenceTime >= cutoff) continue;
+
             _logger.LogCritical(
                 "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
-                status, pos.Id, pos.Asset?.Symbol ?? "?", pos.OpenedAt);
+                status, pos.Id, pos.Asset?.Symbol ?? "?", referenceTime);
 
             pos.Status = PositionStatus.EmergencyClosed;
             _uow.Positions.Update(pos);
@@ -180,9 +194,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 Message  = $"Position #{pos.Id} stuck in {status} for >{maxAge.TotalMinutes:F0} minutes. " +
                            $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
             });
+            reaped = true;
         }
 
-        if (positions.Any(p => p.OpenedAt < cutoff))
+        if (reaped)
             await _uow.SaveAsync(ct);
     }
 }

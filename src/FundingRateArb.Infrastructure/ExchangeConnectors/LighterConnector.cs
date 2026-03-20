@@ -179,6 +179,11 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
     // ── Place Market Order ──
 
+    /// <remarks>
+    /// IMPORTANT: Lighter's sendTx API returns only TxHash, not actual fill data.
+    /// FilledPrice and FilledQuantity are estimates based on mark price at submission time.
+    /// Actual fills may differ due to slippage. IsEstimatedFill is set to true.
+    /// </remarks>
     public async Task<OrderResultDto> PlaceMarketOrderAsync(
         string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default)
     {
@@ -291,6 +296,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 OrderId = sendResult.TxHash ?? txHash,
                 FilledPrice = markPrice,
                 FilledQuantity = baseReal,
+                IsEstimatedFill = true,
             };
         }
         catch (Exception ex)
@@ -306,6 +312,11 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
     // ── Close Position ──
 
+    /// <remarks>
+    /// IMPORTANT: Lighter's sendTx API returns only TxHash, not actual fill data.
+    /// FilledPrice and FilledQuantity are estimates based on mark price at submission time.
+    /// Actual fills may differ due to slippage. IsEstimatedFill is set to true.
+    /// </remarks>
     public async Task<OrderResultDto> ClosePositionAsync(
         string asset, Side side, CancellationToken ct = default)
     {
@@ -415,6 +426,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 OrderId = sendResult.TxHash ?? txHash,
                 FilledPrice = markPrice,
                 FilledQuantity = positionSize,
+                IsEstimatedFill = true,
             };
         }
         catch (Exception ex)

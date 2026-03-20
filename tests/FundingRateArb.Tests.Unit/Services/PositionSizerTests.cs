@@ -14,9 +14,13 @@ public class PositionSizerTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly PositionSizer _sut;
 
+    private readonly Mock<IPositionRepository> _mockPositions = new();
+
     public PositionSizerTests()
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
+        _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         // Use real YieldCalculator — no external dependencies
         _sut = new PositionSizer(_mockUow.Object, new YieldCalculator());
     }
@@ -314,5 +318,45 @@ public class PositionSizerTests
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
 
         sizes[0].Should().Be(80m, "position size 80 >= MinPositionSizeUsdc 10");
+    }
+
+    // -----------------------------------------------------------------------
+    // D6: Capital subtraction and empty opportunities
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_SubtractsOpenPositionCapital()
+    {
+        // Config: TotalCapitalUsdc=1000, MaxCapitalPerPosition=0.8
+        // Open positions consuming 500 USDC
+        // Available = Math.Max(0, 1000 - 500) = 500
+        // totalCapital = 500 * 0.8 = 400
+        var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockPositions.Setup(p => p.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { SizeUsdc = 300m },
+                new() { SizeUsdc = 200m },
+            });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+
+        sizes[0].Should().Be(400m, "availableCapital = (1000-500)*0.8 = 400");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_EmptyOpportunities_ReturnsEmpty()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
+
+        var sizes = await _sut.CalculateBatchSizesAsync(
+            new List<ArbitrageOpportunityDto>(), AllocationStrategy.Concentrated);
+
+        sizes.Should().BeEmpty();
     }
 }

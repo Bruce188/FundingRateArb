@@ -18,6 +18,9 @@ public class ArbitragePosition
     public decimal EntrySpreadPerHour { get; set; }
     public decimal CurrentSpreadPerHour { get; set; }
     public decimal AccumulatedFunding { get; set; } = 0m;
+    public decimal EntryFeesUsdc { get; set; }
+    public decimal ExitFeesUsdc { get; set; }
+    public DateTime? ClosingStartedAt { get; set; }
     public decimal? RealizedPnl { get; set; }
     public PositionStatus Status { get; set; } = PositionStatus.Opening;
     public CloseReason? CloseReason { get; set; }

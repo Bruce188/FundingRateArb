@@ -90,16 +90,27 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
         // Fetch mark price to compute quantity from the USDC notional size with leverage
         var markPrice = await GetMarkPriceAsync(asset, ct);
+
+        // B1: Guard mark price = 0
+        if (markPrice <= 0)
+            return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+
         var qtyPrecision = await GetQuantityPrecisionAsync(symbol, ct);
         var quantity = Math.Round(sizeUsdc * leverage / markPrice, qtyPrecision, MidpointRounding.ToZero);
 
-        // Set leverage before placing the order (best-effort; log failure but do not throw)
+        // B3: Zero-quantity guard
+        if (quantity <= 0)
+            return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
+
+        // B2: Abort order if SetLeverageAsync fails
         var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
         if (!leverageResult.Success)
         {
-            _logger.LogWarning(
-                "Failed to set leverage for {Symbol} to {Leverage}x: {Error}. Order will proceed with current leverage.",
-                symbol, leverage, leverageResult.Error?.Message ?? "unknown");
+            return new OrderResultDto
+            {
+                Success = false,
+                Error = $"Failed to set leverage to {leverage}x on {symbol}: {leverageResult.Error?.Message ?? "unknown"}. Aborting order."
+            };
         }
 
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
@@ -168,7 +179,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto { Success = false, Error = $"No open position for {symbol}" };
         var quantity = Math.Abs(pos.PositionAmount);
 
-        var orderPipeline = _pipelineProvider.GetPipeline("OrderExecution");
+        // B8: Use separate OrderClose pipeline (no circuit breaker)
+        var orderPipeline = _pipelineProvider.GetPipeline("OrderClose");
 
         var result = await orderPipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(

@@ -9,6 +9,8 @@ namespace FundingRateArb.Application.Services;
 
 public class ExecutionEngine : IExecutionEngine
 {
+    private const decimal MaxSingleOrderUsdc = 10_000m;
+
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly ILogger<ExecutionEngine> _logger;
@@ -27,6 +29,14 @@ public class ExecutionEngine : IExecutionEngine
         ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
+
+        // B6: Absolute order size cap
+        if (sizeUsdc > MaxSingleOrderUsdc)
+        {
+            _logger.LogCritical("Order size {Size:F2} exceeds safety cap {Max} for {Asset}",
+                sizeUsdc, MaxSingleOrderUsdc, opp.AssetSymbol);
+            return (false, $"Order size {sizeUsdc:F2} exceeds safety cap of {MaxSingleOrderUsdc} USDC");
+        }
 
         var longConnector  = _connectorFactory.GetConnector(opp.LongExchangeName);
         var shortConnector = _connectorFactory.GetConnector(opp.ShortExchangeName);
@@ -132,6 +142,28 @@ public class ExecutionEngine : IExecutionEngine
             position.ShortOrderId    = shortResult.OrderId;
             position.Status          = PositionStatus.Open;
 
+            var longNotional = longResult!.FilledPrice * longResult.FilledQuantity;
+            var shortNotional = shortResult!.FilledPrice * shortResult.FilledQuantity;
+            position.EntryFeesUsdc = (longNotional * GetTakerFeeRate(opp.LongExchangeName))
+                                   + (shortNotional * GetTakerFeeRate(opp.ShortExchangeName));
+
+            if (longResult.IsEstimatedFill || shortResult.IsEstimatedFill)
+                _logger.LogWarning("Position #{Id} has estimated fill prices (Lighter) — PnL may be approximate", position.Id);
+
+            // B7: Validate fill quantities
+            var longQ = longResult.FilledQuantity;
+            var shortQ = shortResult.FilledQuantity;
+            if (longQ > 0 && shortQ > 0)
+            {
+                var mismatchPct = Math.Abs(longQ - shortQ) / Math.Max(longQ, shortQ);
+                if (mismatchPct > 0.05m)
+                {
+                    _logger.LogWarning("Fill quantity mismatch: long={LongQ}, short={ShortQ} ({Pct:P1}) for {Asset}",
+                        longQ, shortQ, mismatchPct, opp.AssetSymbol);
+                    position.Notes = $"Quantity mismatch: long={longQ:F6}, short={shortQ:F6} ({mismatchPct:P1})";
+                }
+            }
+
             _uow.Positions.Update(position);
             _uow.Alerts.Add(new Alert
             {
@@ -205,6 +237,7 @@ public class ExecutionEngine : IExecutionEngine
             position.Id, assetSymbol, reason);
 
         position.Status = PositionStatus.Closing;
+        position.ClosingStartedAt = DateTime.UtcNow;
         _uow.Positions.Update(position);
         await _uow.SaveAsync(ct);
 
@@ -341,7 +374,46 @@ public class ExecutionEngine : IExecutionEngine
         // C-EE1: Compute each leg independently so differing fill quantities produce correct PnL.
         var longPnl  = (longClose.FilledPrice  - position.LongEntryPrice)  * longClose.FilledQuantity;
         var shortPnl = (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity;
-        var pnl = longPnl + shortPnl;
+
+        // Record exit fees
+        var longCloseNotional = longClose.FilledPrice * longClose.FilledQuantity;
+        var shortCloseNotional = shortClose.FilledPrice * shortClose.FilledQuantity;
+        var longExName = position.LongExchange?.Name
+            ?? (await _uow.Exchanges.GetByIdAsync(position.LongExchangeId))!.Name;
+        var shortExName = position.ShortExchange?.Name
+            ?? (await _uow.Exchanges.GetByIdAsync(position.ShortExchangeId))!.Name;
+        position.ExitFeesUsdc = (longCloseNotional * GetTakerFeeRate(longExName))
+                              + (shortCloseNotional * GetTakerFeeRate(shortExName));
+
+        // RealizedPnl = price PnL + funding collected - all fees
+        var pricePnl = longPnl + shortPnl;
+        var pnl = pricePnl + position.AccumulatedFunding
+                 - position.EntryFeesUsdc - position.ExitFeesUsdc;
+
+        // Check for partial fills
+        var avgEntryPrice = (position.LongEntryPrice + position.ShortEntryPrice) / 2m;
+        if (avgEntryPrice > 0)
+        {
+            var expectedQty = position.SizeUsdc * position.Leverage / avgEntryPrice;
+            var longFillRatio = expectedQty > 0 ? longClose.FilledQuantity / expectedQty : 1m;
+            var shortFillRatio = expectedQty > 0 ? shortClose.FilledQuantity / expectedQty : 1m;
+
+            if (longFillRatio < 0.95m || shortFillRatio < 0.95m)
+            {
+                position.Status = PositionStatus.Closing;
+                position.Notes = $"Partial close: long={longFillRatio:P0}, short={shortFillRatio:P0}. Retry next cycle.";
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = position.UserId,
+                    ArbitragePositionId = position.Id,
+                    Type = AlertType.SpreadWarning,
+                    Severity = AlertSeverity.Warning,
+                    Message = $"Partial close on {position.Asset?.Symbol ?? "unknown"}: long filled {longFillRatio:P0}, short filled {shortFillRatio:P0}. Position remains in Closing status.",
+                });
+                await _uow.SaveAsync(ct);
+                return;
+            }
+        }
 
         position.RealizedPnl = pnl;
         position.Status      = PositionStatus.Closed;
@@ -360,6 +432,14 @@ public class ExecutionEngine : IExecutionEngine
 
         await _uow.SaveAsync(ct);
     }
+
+    private static decimal GetTakerFeeRate(string exchangeName) => exchangeName switch
+    {
+        "Hyperliquid" => 0.00045m,
+        "Lighter" => 0m,
+        "Aster" => 0.0004m,
+        _ => 0.0005m,
+    };
 
     private async Task TryEmergencyCloseWithRetryAsync(
         IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)

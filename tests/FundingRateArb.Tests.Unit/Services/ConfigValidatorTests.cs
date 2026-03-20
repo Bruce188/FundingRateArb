@@ -19,6 +19,7 @@ public class ConfigValidatorTests
         MaxHoldTimeHours = 72,
         DefaultLeverage = 5,
         MaxConcurrentPositions = 3,
+        MaxCapitalPerPosition = 0.5m,
         AllocationTopN = 3,
         AllocationStrategy = AllocationStrategy.EqualSpread,
         MinPositionSizeUsdc = 10m,
@@ -193,5 +194,71 @@ public class ConfigValidatorTests
 
         result.IsValid.Should().BeFalse();
         result.Errors.Should().Contain(e => e.Contains("DailyDrawdownPausePct"));
+    }
+
+    // ── D7: New validation rules ────────────────────────────────────────────────
+
+    [Fact]
+    public void Validate_ConsecutiveLossPauseCountZero_Invalid()
+    {
+        var config = ValidConfig();
+        config.ConsecutiveLossPause = 0;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("ConsecutiveLossPauseCount"));
+    }
+
+    [Fact]
+    public void Validate_CloseThresholdAboveAlertThreshold_Invalid()
+    {
+        var config = ValidConfig();
+        config.CloseThreshold = 0.001m; // > AlertThreshold=0.0001
+        config.AlertThreshold = 0.0001m;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("CloseThreshold"));
+    }
+
+    [Fact]
+    public void Validate_LeverageZero_Invalid()
+    {
+        var config = ValidConfig();
+        config.DefaultLeverage = 0;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("DefaultLeverage"));
+    }
+
+    [Fact]
+    public void Validate_MaxHoldTimeZero_Invalid()
+    {
+        var config = ValidConfig();
+        config.MaxHoldTimeHours = 0;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("MaxHoldTimeHours"));
+    }
+
+    [Fact]
+    public void Validate_CapitalOverAllocation_Invalid()
+    {
+        var config = ValidConfig();
+        config.MaxCapitalPerPosition = 0.8m;
+        config.MaxConcurrentPositions = 3;
+        config.AllocationStrategy = AllocationStrategy.EqualSpread; // non-Concentrated
+
+        var result = _sut.Validate(config);
+
+        // 0.8 * 3 = 2.4 > 1.5 → error
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("over-allocation"));
     }
 }

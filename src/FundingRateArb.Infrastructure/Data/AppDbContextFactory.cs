@@ -8,7 +8,7 @@ public class AppDbContextFactory : IDesignTimeDbContextFactory<AppDbContext>
     public AppDbContext CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseSqlServer("Server=(localdb)\\mssqllocaldb;Database=FundingRateArbDb;Trusted_Connection=True;TrustServerCertificate=True")
+            .UseSqlServer("Server=localhost,1433;Database=FundingRateArbDb;User Id=SA;Password=Dev@12345678!;TrustServerCertificate=True")
             .Options;
 
         return new AppDbContext(options);

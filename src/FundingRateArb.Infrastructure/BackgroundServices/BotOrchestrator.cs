@@ -24,7 +24,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
     private CancellationTokenSource _immediateCts = new();
 
     // H6: Track pushed alert IDs to prevent duplicate pushes across cycles
-    private readonly HashSet<int> _pushedAlertIds = new();
+    private readonly ConcurrentDictionary<int, byte> _pushedAlertIds = new();
 
     // M6: Track consecutive money-losing position closes for circuit breaker
     private int _consecutiveLosses;
@@ -35,7 +35,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
     private const int StartupDelaySeconds = 65;
 
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
-    private DateTime _lastAlertPushUtc = DateTime.UtcNow;
+    private DateTime _lastAlertPushUtc = DateTime.UtcNow.AddMinutes(-5);
 
     // C3: Exponential cooldown for failed opportunities — prevents infinite retry loops burning fees
     private readonly ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> _failedOpCooldowns = new();
@@ -120,7 +120,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
     internal int ConsecutiveLosses { get => _consecutiveLosses; set => _consecutiveLosses = value; }
 
     /// <summary>Exposes pushed alert IDs for unit testing.</summary>
-    internal HashSet<int> PushedAlertIds => _pushedAlertIds;
+    internal ConcurrentDictionary<int, byte> PushedAlertIds => _pushedAlertIds;
 
     /// <summary>
     /// One bot cycle: health-monitor open positions → find & open one new opportunity.
@@ -146,7 +146,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         foreach (var (pos, reason) in positionsToClose)
         {
             await executionEngine.ClosePositionAsync(pos, reason, ct);
-            RecordCloseResult(pos.RealizedPnl ?? 0m);
+            // Only record PnL for circuit breaker if close actually completed
+            if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
+                RecordCloseResult(pos.RealizedPnl.Value);
         }
 
         // M6: Fetch open positions AFTER health monitor so closed positions are excluded
@@ -210,7 +212,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 6: Strategy-aware dispatch — filter candidates, batch-size, iterate
-        var openKeys = openPositions
+        var openingPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        var allActiveKeys = openPositions
+            .Concat(openingPositions)
             .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
             .ToHashSet();
 
@@ -218,7 +222,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Where(opp =>
             {
                 var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
-                if (openKeys.Contains(key)) return false;
+                if (allActiveKeys.Contains(key)) return false;
                 if (_failedOpCooldowns.TryGetValue(key, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
                 {
                     _logger.LogDebug(
@@ -234,7 +238,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         if (candidates.Count == 0) return;
 
         var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, config.AllocationStrategy);
-        var slotsAvailable = config.MaxConcurrentPositions - openPositions.Count;
+        var slotsAvailable = config.MaxConcurrentPositions - openPositions.Count - openingPositions.Count;
 
         for (int idx = 0; idx < candidates.Count; idx++)
         {
@@ -366,7 +370,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             foreach (var alert in recentAlerts)
             {
                 // H6: Skip already-pushed alerts to prevent duplicate pushes
-                if (!_pushedAlertIds.Add(alert.Id)) continue;
+                if (!_pushedAlertIds.TryAdd(alert.Id, 0)) continue;
 
                 var dto = new AlertDto
                 {

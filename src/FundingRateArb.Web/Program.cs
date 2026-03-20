@@ -125,14 +125,10 @@ try
     });
 
     // --- Data Protection (for IApiKeyVault) ---
-    var dpKeysDir = new DirectoryInfo(
-        Path.Combine(builder.Environment.ContentRootPath, "DataProtection-Keys"));
+    var dpKeysDir = new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "dp-keys"));
     if (!dpKeysDir.Exists) dpKeysDir.Create();
-    // On Linux, restrict to owner-only (chmod 700 equivalent)
     if (!OperatingSystem.IsWindows())
-    {
         dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-    }
     builder.Services.AddDataProtection()
         .PersistKeysToFileSystem(dpKeysDir)
         .SetApplicationName("FundingRateArb");
@@ -193,6 +189,12 @@ try
                 .Handle<TimeoutRejectedException>(),
         });
 
+        pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(30));
+    });
+
+    // "OrderClose" — close operations must not be blocked by the circuit breaker
+    builder.Services.AddResiliencePipeline("OrderClose", static pipelineBuilder =>
+    {
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(30));
     });
 

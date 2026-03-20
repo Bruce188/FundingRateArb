@@ -32,7 +32,7 @@ public class SignalEngine : ISignalEngine
 
         var opportunities = new List<ArbitrageOpportunityDto>();
 
-        foreach (var group in rates.GroupBy(r => r.Asset.Symbol))
+        foreach (var group in rates.Where(r => r.Asset?.Symbol is not null).GroupBy(r => r.Asset!.Symbol))
         {
             var symbol    = group.Key;
             var assetRates = group.ToList();

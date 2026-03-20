@@ -31,7 +31,8 @@ public class YieldCalculator : IYieldCalculator
             return pos.AccumulatedFunding;
 
         var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
-        return pos.SizeUsdc * pos.EntrySpreadPerHour * hoursOpen;
+        var notional = pos.SizeUsdc * pos.Leverage;
+        return notional * pos.EntrySpreadPerHour * hoursOpen;
     }
 
     /// <summary>

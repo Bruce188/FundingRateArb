@@ -437,12 +437,13 @@ public class ExecutionEngineTests
     public async Task ClosePosition_CloseBothLegs_UpdatesStatus()
     {
         var position = MakeOpenPosition();
+        // Fill quantity must be >= 95% of expected (100*5/3000.5 ≈ 0.167) to avoid partial fill detection
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.1m));
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.167m));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.1m));
+            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.167m));
 
         await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed, CancellationToken.None);
 
@@ -454,12 +455,13 @@ public class ExecutionEngineTests
     public async Task ClosePosition_SetsCloseReason_And_ClosedAt()
     {
         var position = MakeOpenPosition();
+        // Fill quantity must be >= 95% of expected to avoid partial fill detection
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
+            .ReturnsAsync(SuccessOrder("1", 3000m, 0.167m));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
+            .ReturnsAsync(SuccessOrder("2", 3000m, 0.167m));
 
         await _sut.ClosePositionAsync(position, CloseReason.MaxHoldTimeReached, CancellationToken.None);
 
@@ -472,12 +474,13 @@ public class ExecutionEngineTests
     public async Task ClosePosition_CreatesPositionClosedAlert()
     {
         var position = MakeOpenPosition();
+        // Fill quantity must be >= 95% of expected to avoid partial fill detection
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
+            .ReturnsAsync(SuccessOrder("1", 3000m, 0.167m));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
+            .ReturnsAsync(SuccessOrder("2", 3000m, 0.167m));
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
 
@@ -502,10 +505,12 @@ public class ExecutionEngineTests
     // ── C-EE1: PnL with differing fill quantities ─────────────────────────────
 
     /// <summary>
-    /// C-EE1: When long fills 0.033 and short fills 0.034, PnL must be computed per leg.
-    /// longPnl  = (3010 - 3000) * 0.033 = 0.33
-    /// shortPnl = (3001 - 2990) * 0.034 = 0.374
-    /// total    = 0.33 + 0.374 = 0.704
+    /// C-EE1: When long and short fill different quantities, PnL must be computed per leg.
+    /// longPnl  = (3010 - 3000) * 0.165 = 1.65
+    /// shortPnl = (3001 - 2990) * 0.168 = 1.848
+    /// pricePnl = 1.65 + 1.848 = 3.498
+    /// exitFees = (3010*0.165*0.00045 + 2990*0.168*0) = 0.2232... + 0 = 0.2232
+    /// RealizedPnl = pricePnl + AccumulatedFunding(0) - EntryFees(0) - exitFees
     /// </summary>
     [Fact]
     public async Task ClosePosition_DifferingFillQuantities_ComputesPnlPerLeg()
@@ -516,31 +521,34 @@ public class ExecutionEngineTests
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cl", FilledPrice = 3010m, FilledQuantity = 0.033m
+                Success = true, OrderId = "cl", FilledPrice = 3010m, FilledQuantity = 0.165m
             });
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cs", FilledPrice = 2990m, FilledQuantity = 0.034m
+                Success = true, OrderId = "cs", FilledPrice = 2990m, FilledQuantity = 0.168m
             });
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
 
-        // longPnl  = (3010 - 3000) * 0.033 = 0.33
-        // shortPnl = (3001 - 2990) * 0.034 = 0.374
-        var expectedPnl = (3010m - 3000m) * 0.033m + (3001m - 2990m) * 0.034m;
-        position.RealizedPnl.Should().BeApproximately(expectedPnl, 0.0001m);
+        // longPnl  = (3010 - 3000) * 0.165 = 1.65
+        // shortPnl = (3001 - 2990) * 0.168 = 1.848
+        var pricePnl = (3010m - 3000m) * 0.165m + (3001m - 2990m) * 0.168m;
+        // exitFees: long=3010*0.165*0.00045(Hyperliquid), short=2990*0.168*0(Lighter)
+        var exitFees = 3010m * 0.165m * 0.00045m + 2990m * 0.168m * 0m;
+        var expectedPnl = pricePnl + position.AccumulatedFunding - position.EntryFeesUsdc - exitFees;
+        position.RealizedPnl.Should().BeApproximately(expectedPnl, 0.001m);
     }
 
     /// <summary>
-    /// Sanity check: when both legs fill equal quantities the PnL formula still matches the old formula.
+    /// Sanity check: when both legs fill equal quantities the PnL formula includes fees and funding.
     /// </summary>
     [Fact]
     public async Task ClosePosition_EqualFillQuantities_PnlMatchesSymmetricFormula()
     {
         var position = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
-        const decimal qty = 0.1m;
+        const decimal qty = 0.167m;
 
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -559,7 +567,11 @@ public class ExecutionEngineTests
 
         var longPnl  = (3010m - 3000m) * qty;
         var shortPnl = (3001m - 2990m) * qty;
-        position.RealizedPnl.Should().BeApproximately(longPnl + shortPnl, 0.0001m);
+        var pricePnl = longPnl + shortPnl;
+        // exitFees: Hyperliquid long=3010*0.167*0.00045, Lighter short=2990*0.167*0
+        var exitFees = 3010m * qty * 0.00045m + 2990m * qty * 0m;
+        var expectedPnl = pricePnl + position.AccumulatedFunding - position.EntryFeesUsdc - exitFees;
+        position.RealizedPnl.Should().BeApproximately(expectedPnl, 0.001m);
     }
 
     // ── C2: Close-leg Success=false scenarios (LighterConnector pattern) ──────
@@ -723,5 +735,185 @@ public class ExecutionEngineTests
         closeIndex.Should().BeGreaterThanOrEqualTo(0, "short emergency close must be called");
         lastSaveIndex.Should().BeGreaterThan(closeIndex,
             "emergency close must complete before SaveAsync — verifies sequential not parallel execution");
+    }
+
+    // ── D1: Fee tracking tests ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_BothLegsSucceed_RecordsEntryFees()
+    {
+        // Hyperliquid (0.00045) long, Lighter (0) short
+        // FilledPrice=50000, FilledQuantity=0.1 → notional=5000 each
+        // EntryFees = 5000*0.00045 + 5000*0 = 2.25
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 50000m, FilledQuantity = 0.1m });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 50000m, FilledQuantity = 0.1m });
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        savedPos.Should().NotBeNull();
+        // Hyperliquid fee: 50000*0.1*0.00045 = 2.25, Lighter fee: 50000*0.1*0 = 0
+        savedPos!.EntryFeesUsdc.Should().Be(2.25m);
+    }
+
+    [Fact]
+    public async Task ClosePosition_BothLegsSucceed_RealizedPnlIncludesFundingAndFees()
+    {
+        var position = MakeOpenPosition(longEntry: 50000m, shortEntry: 50000m);
+        position.AccumulatedFunding = 10.0m;
+        position.EntryFeesUsdc = 4.0m;
+        // Adjust SizeUsdc and Leverage so fills pass partial fill check
+        // avgEntry=50000, expectedQty = 100*5/50000 = 0.01
+        // Fill qty 0.01 → 100% fill ratio, passes
+
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cl", FilledPrice = 51000m, FilledQuantity = 0.01m });
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cs", FilledPrice = 51000m, FilledQuantity = 0.01m });
+
+        await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
+
+        // longPnl = (51000-50000)*0.01 = 10, shortPnl = (50000-51000)*0.01 = -10, pricePnl = 0
+        // exitFees: Hyperliquid=51000*0.01*0.00045=0.2295, Lighter=51000*0.01*0=0
+        var exitFees = 51000m * 0.01m * 0.00045m;
+        var expectedPnl = 0m + 10.0m - 4.0m - exitFees;
+        position.RealizedPnl.Should().BeApproximately(expectedPnl, 0.001m);
+    }
+
+    [Fact]
+    public async Task ClosePosition_BothLegsSucceed_RecordsExitFees()
+    {
+        var position = MakeOpenPosition(longEntry: 50000m, shortEntry: 50000m);
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cl", FilledPrice = 50000m, FilledQuantity = 0.01m });
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cs", FilledPrice = 50000m, FilledQuantity = 0.01m });
+
+        await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
+
+        position.ExitFeesUsdc.Should().BeGreaterThan(0m);
+    }
+
+    // ── D2: Order safety tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_ExceedsSafetyCap_Rejected()
+    {
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 15000m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("safety cap");
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_FillQuantityMismatch_LogsWarning()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.10m });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.08m });
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        savedPos.Should().NotBeNull();
+        savedPos!.Notes.Should().Contain("mismatch");
+    }
+
+    [Fact]
+    public async Task ClosePosition_PartialFill_StaysInClosingStatus()
+    {
+        var position = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        // expectedQty = 100*5/3000.5 ≈ 0.167, fill at 50% → partial
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cl", FilledPrice = 3010m, FilledQuantity = 0.08m });
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cs", FilledPrice = 2990m, FilledQuantity = 0.08m });
+
+        await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closing);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Message!.Contains("Partial close"))), Times.Once);
+    }
+
+    // ── D9: Emergency close retry tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task EmergencyClose_RetryOnNoOpenPosition_ThenFails()
+    {
+        // Long succeeds, short fails → triggers emergency close on long leg
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("l1"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("API error"));
+
+        // Emergency close retries all return "No open position found"
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "No open position found" });
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        // Should have tried 3 times (retry on "No open position")
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Exactly(3));
+
+        // Alert created for emergency close failure
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task EmergencyClose_ExceptionDuringRetry_CreatesAlert()
+    {
+        // Long succeeds, short fails → triggers emergency close on long leg
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("l1"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("API error"));
+
+        // Emergency close throws exception
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Connection lost"));
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        // Alert created for exception during emergency close
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Once);
     }
 }
