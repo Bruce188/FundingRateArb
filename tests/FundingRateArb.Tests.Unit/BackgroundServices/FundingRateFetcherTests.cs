@@ -79,8 +79,14 @@ public class FundingRateFetcherTests
             .Setup(d => d.ReceiveFundingRateUpdate(It.IsAny<List<FundingRateDto>>()))
             .Returns(Task.CompletedTask);
 
+        // Empty cache forces REST fallback (preserves existing test behavior)
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetAllForExchange(It.IsAny<string>())).Returns(new List<FundingRateDto>());
+        mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(true);
+
         _sut = new FundingRateFetcher(
             _mockScopeFactory.Object,
+            mockCache.Object,
             _mockHubContext.Object,
             NullLogger<FundingRateFetcher>.Instance);
     }
@@ -420,5 +426,87 @@ public class FundingRateFetcherTests
 
         // AccumulatedFunding should remain unchanged
         pos.AccumulatedFunding.Should().Be(5.0m);
+    }
+
+    // ── Hybrid WebSocket/REST Cache Tests ────────────────────────────────────
+
+    [Fact]
+    public async Task FetchAll_UsesCacheWhenFresh()
+    {
+        // Set up cache to return fresh data for all exchanges
+        var cachedRates = MakeRates("Hyperliquid", "ETH");
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetAllForExchange(It.IsAny<string>())).Returns(cachedRates);
+        mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(false);
+
+        var sut = new FundingRateFetcher(
+            _mockScopeFactory.Object, mockCache.Object,
+            _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
+
+        await sut.FetchAllAsync(CancellationToken.None);
+
+        // REST should NOT be called when cache is fresh
+        _mockHyperliquid.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _mockLighter.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        _mockAster.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FetchAll_FallsBackToRestWhenStale()
+    {
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetAllForExchange(It.IsAny<string>())).Returns(new List<FundingRateDto>());
+        mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(true);
+
+        var sut = new FundingRateFetcher(
+            _mockScopeFactory.Object, mockCache.Object,
+            _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Lighter", "ETH"));
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Aster", "ETH"));
+
+        await sut.FetchAllAsync(CancellationToken.None);
+
+        // REST should be called when cache is stale
+        _mockHyperliquid.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockLighter.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockAster.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task FetchAll_MixedMode_SomeCachedSomeRest()
+    {
+        var cachedHyperliquid = MakeRates("Hyperliquid", "ETH");
+
+        var mockCache = new Mock<IMarketDataCache>();
+        // Hyperliquid: fresh cache
+        mockCache.Setup(c => c.GetAllForExchange("Hyperliquid")).Returns(cachedHyperliquid);
+        mockCache.Setup(c => c.IsStaleForExchange("Hyperliquid", It.IsAny<TimeSpan>())).Returns(false);
+        // Lighter & Aster: stale/empty
+        mockCache.Setup(c => c.GetAllForExchange("Lighter")).Returns(new List<FundingRateDto>());
+        mockCache.Setup(c => c.IsStaleForExchange("Lighter", It.IsAny<TimeSpan>())).Returns(true);
+        mockCache.Setup(c => c.GetAllForExchange("Aster")).Returns(new List<FundingRateDto>());
+        mockCache.Setup(c => c.IsStaleForExchange("Aster", It.IsAny<TimeSpan>())).Returns(true);
+
+        var sut = new FundingRateFetcher(
+            _mockScopeFactory.Object, mockCache.Object,
+            _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
+
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Lighter", "ETH"));
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Aster", "ETH"));
+
+        await sut.FetchAllAsync(CancellationToken.None);
+
+        // Hyperliquid: NOT called (cache was fresh)
+        _mockHyperliquid.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        // Lighter + Aster: called (cache stale)
+        _mockLighter.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockAster.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }
