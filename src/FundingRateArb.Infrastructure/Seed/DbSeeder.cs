@@ -38,13 +38,19 @@ public static class DbSeeder
     private static async Task SeedAdminUserAsync(
         UserManager<ApplicationUser> userMgr, IConfiguration config)
     {
-        if (await userMgr.FindByEmailAsync(AdminEmail) is not null) return;
-
         var adminPassword = config["Seed:AdminPassword"]
             ?? Environment.GetEnvironmentVariable("SEED_ADMIN_PASSWORD")
             ?? throw new InvalidOperationException(
                 "Admin seed password must be set via 'Seed:AdminPassword' in User Secrets " +
                 "or the SEED_ADMIN_PASSWORD environment variable.");
+
+        var existing = await userMgr.FindByEmailAsync(AdminEmail);
+        if (existing is not null)
+        {
+            var token = await userMgr.GeneratePasswordResetTokenAsync(existing);
+            await userMgr.ResetPasswordAsync(existing, token, adminPassword);
+            return;
+        }
 
         var admin = new ApplicationUser
         {
