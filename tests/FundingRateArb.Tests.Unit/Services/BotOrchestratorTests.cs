@@ -17,6 +17,8 @@ namespace FundingRateArb.Tests.Unit.Services;
 
 public class BotOrchestratorTests
 {
+    private const string TestUserId = "test-user";
+
     private readonly Mock<IServiceScopeFactory> _mockScopeFactory = new();
     private readonly Mock<IServiceScope> _mockScope = new();
     private readonly Mock<IServiceProvider> _mockSp = new();
@@ -24,10 +26,12 @@ public class BotOrchestratorTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IPositionRepository> _mockPositionRepo = new();
     private readonly Mock<IAlertRepository> _mockAlertRepo = new();
+    private readonly Mock<IUserConfigurationRepository> _mockUserConfigs = new();
     private readonly Mock<ISignalEngine> _mockSignalEngine = new();
     private readonly Mock<IPositionSizer> _mockPositionSizer = new();
     private readonly Mock<IExecutionEngine> _mockExecutionEngine = new();
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
+    private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<ILogger<BotOrchestrator>> _mockLogger = new();
     private readonly BotOrchestrator _sut;
@@ -42,10 +46,12 @@ public class BotOrchestratorTests
         _mockSp.Setup(sp => sp.GetService(typeof(IPositionSizer))).Returns(_mockPositionSizer.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(IExecutionEngine))).Returns(_mockExecutionEngine.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(IPositionHealthMonitor))).Returns(_mockHealthMonitor.Object);
+        _mockSp.Setup(sp => sp.GetService(typeof(IUserSettingsService))).Returns(_mockUserSettings.Object);
 
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlertRepo.Object);
+        _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
 
         _mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync([]);
@@ -61,6 +67,29 @@ public class BotOrchestratorTests
         // Default mock for Opening status query (used in duplicate check)
         _mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
+
+        // Default: enable test user for the multi-user loop
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+            });
+        _mockUserSettings.Setup(s => s.HasValidCredentialsAsync(TestUserId)).ReturnsAsync(true);
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2, 3 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
 
         // Stub SignalR hub context
         var mockClients = new Mock<IHubClients<IDashboardClient>>();
@@ -91,26 +120,27 @@ public class BotOrchestratorTests
             ShortMarkPrice = 100m,
         };
 
-    private BotConfiguration DefaultConfig(
-        AllocationStrategy strategy = AllocationStrategy.Concentrated,
-        int topN = 3,
-        int maxPositions = 5) => new()
-    {
-        IsEnabled = true,
-        OpenThreshold = 0.0003m,
-        MaxConcurrentPositions = maxPositions,
-        AllocationStrategy = strategy,
-        AllocationTopN = topN,
-        TotalCapitalUsdc = 1000m,
-        MaxCapitalPerPosition = 0.5m,
-        VolumeFraction = 0.001m,
-        UpdatedByUserId = "test-user",
-    };
-
     [Fact]
     public async Task RunCycle_OnGenericError_ContinuesToNextOpportunity()
     {
-        var config = DefaultConfig(AllocationStrategy.EqualSpread, topN: 2, maxPositions: 5);
+        // Override user config for this test: EqualSpread with topN=2
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId, IsEnabled = true,
+                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true, MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+        };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
 
@@ -138,7 +168,23 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_OnBalanceError_StopsIterating()
     {
-        var config = DefaultConfig(AllocationStrategy.EqualSpread, topN: 2, maxPositions: 5);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId, IsEnabled = true,
+                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true, MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+        };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
 
@@ -175,7 +221,23 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_EqualSpread_OpensBothPositions()
     {
-        var config = DefaultConfig(AllocationStrategy.EqualSpread, topN: 2, maxPositions: 5);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId, IsEnabled = true,
+                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true, MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+        };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
 

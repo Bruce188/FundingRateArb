@@ -15,6 +15,12 @@ public class UserConfigurationRepository : IUserConfigurationRepository
         _context.UserConfigurations
             .FirstOrDefaultAsync(c => c.UserId == userId);
 
+    public Task<List<string>> GetAllEnabledUserIdsAsync() =>
+        _context.UserConfigurations
+            .Where(c => c.IsEnabled)
+            .Select(c => c.UserId)
+            .ToListAsync();
+
     public void Add(UserConfiguration config) =>
         _context.UserConfigurations.Add(config);
 

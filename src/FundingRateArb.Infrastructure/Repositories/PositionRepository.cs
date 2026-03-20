@@ -28,6 +28,15 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == PositionStatus.Open)
             .ToListAsync();
 
+    public Task<List<ArbitragePosition>> GetOpenByUserAsync(string userId) =>
+        _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Open && p.UserId == userId)
+            .ToListAsync();
+
     public Task<List<ArbitragePosition>> GetOpenTrackedAsync() =>
         _context.ArbitragePositions
             .Include(p => p.Asset)

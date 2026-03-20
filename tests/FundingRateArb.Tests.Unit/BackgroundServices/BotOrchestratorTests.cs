@@ -17,6 +17,8 @@ namespace FundingRateArb.Tests.Unit.BackgroundServices;
 
 public class BotOrchestratorTests
 {
+    private const string TestUserId = "test-user-id";
+
     private readonly Mock<IServiceScopeFactory> _mockScopeFactory = new();
     private readonly Mock<IServiceScope> _mockScope = new();
     private readonly Mock<IServiceProvider> _mockScopeProvider = new();
@@ -24,10 +26,12 @@ public class BotOrchestratorTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IPositionRepository> _mockPositions = new();
     private readonly Mock<IAlertRepository> _mockAlerts = new();
+    private readonly Mock<IUserConfigurationRepository> _mockUserConfigs = new();
     private readonly Mock<ISignalEngine> _mockSignalEngine = new();
     private readonly Mock<IPositionSizer> _mockPositionSizer = new();
     private readonly Mock<IExecutionEngine> _mockExecEngine = new();
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
+    private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
@@ -52,6 +56,21 @@ public class BotOrchestratorTests
         IsEnabled = false,
     };
 
+    private static readonly UserConfiguration EnabledUserConfig = new()
+    {
+        UserId = TestUserId,
+        IsEnabled = true,
+        MaxConcurrentPositions = 1,
+        DefaultLeverage = 5,
+        AllocationStrategy = AllocationStrategy.Concentrated,
+        AllocationTopN = 3,
+        TotalCapitalUsdc = 1000m,
+        MaxCapitalPerPosition = 0.5m,
+        OpenThreshold = 0.0001m,
+        DailyDrawdownPausePct = 0.05m,
+        ConsecutiveLossPause = 3,
+    };
+
     public BotOrchestratorTests()
     {
         // Wire scope factory
@@ -63,11 +82,13 @@ public class BotOrchestratorTests
         _mockScopeProvider.Setup(p => p.GetService(typeof(IPositionSizer))).Returns(_mockPositionSizer.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IExecutionEngine))).Returns(_mockExecEngine.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IPositionHealthMonitor))).Returns(_mockHealthMonitor.Object);
+        _mockScopeProvider.Setup(p => p.GetService(typeof(IUserSettingsService))).Returns(_mockUserSettings.Object);
 
         // Wire UoW
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
+        _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
 
         // Default mock for health monitor — returns empty close list
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
@@ -85,6 +106,20 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync(new List<ArbitragePosition>());
 
+        // Default: no enabled users (tests that need users configure this explicitly)
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string>());
+
+        // Default user settings mocks for tests that configure an enabled user
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(EnabledUserConfig);
+        _mockUserSettings.Setup(s => s.HasValidCredentialsAsync(TestUserId))
+            .ReturnsAsync(true);
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2, 3 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
+
         // Wire hub — Clients.All for dashboard/position/notification broadcasts
         _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
         _mockHubClients.Setup(c => c.All).Returns(_mockDashboardClient.Object);
@@ -99,11 +134,19 @@ public class BotOrchestratorTests
         _mockGroupClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<List<ArbitrageOpportunityDto>>())).Returns(Task.CompletedTask);
+        _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
             _mockHubContext.Object,
             NullLogger<BotOrchestrator>.Instance);
+    }
+
+    /// <summary>Sets up mocks so RunCycleAsync finds one enabled user.</summary>
+    private void SetupEnabledUser()
+    {
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
     }
 
     // ── Kill switch ────────────────────────────────────────────────────────────
@@ -150,10 +193,11 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_WhenMaxPositionsReached_DoesNotOpenNew()
     {
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
-        // MaxConcurrentPositions = 1, already have 1 open
+        // MaxConcurrentPositions = 1 (user config), already have 1 open for this user
         _mockPositions.Setup(p => p.GetOpenAsync())
-            .ReturnsAsync([new ArbitragePosition { Status = Domain.Enums.PositionStatus.Open }]);
+            .ReturnsAsync([new ArbitragePosition { UserId = TestUserId, Status = PositionStatus.Open }]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new List<ArbitrageOpportunityDto>());
 
         await _sut.RunCycleAsync(CancellationToken.None);
@@ -169,6 +213,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_OpensAtMostOnePositionPerCycle()
     {
+        SetupEnabledUser();
         // Concentrated strategy takes only 1 candidate
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
@@ -195,15 +240,28 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_SkipsAlreadyOpenPositions()
     {
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 2,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+            });
+
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
             MaxConcurrentPositions = 2, // allow more
         });
 
-        // ETH Hyperliquid/Lighter already open
+        // ETH Hyperliquid/Lighter already open for this user
         _mockPositions.Setup(p => p.GetOpenAsync())
-            .ReturnsAsync([new ArbitragePosition { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2 }]);
+            .ReturnsAsync([new ArbitragePosition { UserId = TestUserId, AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2 }]);
 
         var opp = new ArbitrageOpportunityDto
         {
@@ -220,11 +278,12 @@ public class BotOrchestratorTests
             Times.Never);
     }
 
-    // ── Zero size → skip ──────────────────────────────────────────────────────
+    // ── Zero size -> skip ──────────────────────────────────────────────────────
 
     [Fact]
     public async Task RunCycle_WhenSizeIsZero_DoesNotOpenPosition()
     {
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -317,7 +376,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_OnPositionOpen_SendsNotification_ToUserGroupAndAdmins_NotClientsAll()
     {
-        // H7: ReceiveNotification on position open must NOT go to Clients.All
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -359,7 +418,6 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_PushesOpportunityUpdate_ToMarketDataGroup()
     {
-        // H8: Opportunity push moved from FundingRateFetcher to BotOrchestrator
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -392,8 +450,6 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_FetchesOpenPositions_AfterHealthMonitor_NotBefore()
     {
-        // M6: Positions fetched before health monitor may include already-closed positions.
-        // The call to GetOpenAsync must happen AFTER CheckAndActAsync completes.
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
@@ -423,8 +479,6 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AlertPush_UsesRollingCutoff_NotFixed2MinuteWindow()
     {
-        // M7: Two consecutive cycles must not replay the same alerts.
-        // The second cycle's GetRecentUnreadAsync window must start from when the first cycle ran.
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -444,8 +498,6 @@ public class BotOrchestratorTests
 
         capturedWindows.Should().HaveCount(2, "GetRecentUnreadAsync should be called once per cycle");
 
-        // The second window should reflect time since the first call, not a fixed 2 minutes.
-        // It must be significantly less than 2 minutes (which would be the fixed-window bug).
         capturedWindows[1].Should().BeLessThan(TimeSpan.FromMinutes(1),
             "the second cycle's window should be the elapsed time since the first alert push, not a fixed 2-min window");
     }
@@ -455,7 +507,6 @@ public class BotOrchestratorTests
     [Fact]
     public void BotOrchestrator_Dispose_DoesNotThrow()
     {
-        // Verifies that Dispose() works correctly (SemaphoreSlim is disposed)
         var act = () => _sut.Dispose();
         act.Should().NotThrow();
     }
@@ -465,7 +516,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AfterFailure_SuppressesRetryOnNextCycle()
     {
-        // C3: After OpenPositionAsync fails, the same opportunity should NOT be retried next cycle
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -484,7 +535,7 @@ public class BotOrchestratorTests
 
         // Cycle 1: fails
         await _sut.RunCycleAsync(CancellationToken.None);
-        // Cycle 2: same opportunity should be skipped due to cooldown (no candidates → no batch call)
+        // Cycle 2: same opportunity should be skipped due to cooldown
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockExecEngine.Verify(
@@ -495,7 +546,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AfterCooldownExpires_RetriesOpportunity()
     {
-        // C3: After cooldown expires, the opportunity should be retried
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -515,8 +566,8 @@ public class BotOrchestratorTests
         // Cycle 1: fails — registers cooldown
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Manually expire the cooldown for testing
-        var key = "1_1_2";
+        // Manually expire the cooldown for testing (per-user key)
+        var key = $"{TestUserId}:1_1_2";
         var entry = _sut.FailedOpCooldowns[key];
         _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
 
@@ -531,7 +582,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_SuccessfulOpen_ClearsCooldown()
     {
-        // C3: A successful open must clear the cooldown for that opportunity
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -553,7 +604,7 @@ public class BotOrchestratorTests
 
         // Cycle 1: fails
         await _sut.RunCycleAsync(CancellationToken.None);
-        var key = "1_1_2";
+        var key = $"{TestUserId}:1_1_2";
         _sut.FailedOpCooldowns.ContainsKey(key).Should().BeTrue("cooldown must be registered after failure");
 
         // Expire cooldown so cycle 2 retries
@@ -568,7 +619,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_ExponentialBackoff_IncreasesWithConsecutiveFailures()
     {
-        // C3: After multiple consecutive failures, cooldown duration increases exponentially
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -585,7 +636,7 @@ public class BotOrchestratorTests
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange error"));
 
-        var key = "1_1_2";
+        var key = $"{TestUserId}:1_1_2";
 
         // Failure 1: cooldown = BaseCooldown (5 min)
         await _sut.RunCycleAsync(CancellationToken.None);
@@ -593,21 +644,18 @@ public class BotOrchestratorTests
         cooldown1.Failures.Should().Be(1);
 
         // Expire and fail again
-        _sut.ConsecutiveLosses = 0; // Reset to avoid M6 circuit breaker interference
         _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown1.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
         var cooldown2 = _sut.FailedOpCooldowns[key];
         cooldown2.Failures.Should().Be(2);
 
         // Expire and fail a third time
-        _sut.ConsecutiveLosses = 0; // Reset to avoid M6 circuit breaker interference
         _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown2.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
         var cooldown3 = _sut.FailedOpCooldowns[key];
         cooldown3.Failures.Should().Be(3);
 
         // After 3 failures, cooldown should be longer than after 1 failure
-        // Failure 1: 5 min, Failure 2: 10 min, Failure 3: 20 min
         var duration1 = BotOrchestrator.BaseCooldown; // 5 min
         var duration3 = TimeSpan.FromTicks(
             Math.Min(BotOrchestrator.BaseCooldown.Ticks * (1L << 2), BotOrchestrator.MaxCooldown.Ticks)); // 20 min
@@ -619,7 +667,6 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_WhenDisabled_StillCallsHealthMonitor()
     {
-        // H1: Health monitor must always run, even when the kill switch is off
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -635,7 +682,6 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AlertDedup_DoesNotPushSameAlertTwice()
     {
-        // H6: Same alert pushed in two cycles must only be sent once
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
@@ -668,25 +714,26 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_WhenDailyDrawdownExceeded_DoesNotOpenPositions()
     {
-        // H7: If daily PnL loss exceeds threshold, no new positions should be opened
+        SetupEnabledUser();
         var config = new BotConfiguration
         {
             IsEnabled = true,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
-            DailyDrawdownPausePct = 0.05m, // 5% = $50 limit
+            DailyDrawdownPausePct = 0.05m,
             UpdatedByUserId = "admin-user-id",
-            AllocationStrategy = Domain.Enums.AllocationStrategy.Concentrated,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Closed positions today with -$60 realized loss (exceeds $50 limit)
+        // Closed positions today with -$60 realized loss for this user
         var closedPosition = new ArbitragePosition
         {
+            UserId = TestUserId,
             RealizedPnl = -60m,
-            Status = Domain.Enums.PositionStatus.Closed,
+            Status = PositionStatus.Closed,
         };
         _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync([closedPosition]);
@@ -695,7 +742,6 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Execution engine must NOT be called
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never,
@@ -705,15 +751,15 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_WhenDailyDrawdownWithinLimit_AllowsPositionOpens()
     {
-        // H7: If daily PnL loss is within threshold, positions should still be opened normally
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Closed position today with -$10 loss (within $50 limit for TotalCapitalUsdc=1000 * 0.05)
         var closedPosition = new ArbitragePosition
         {
+            UserId = TestUserId,
             RealizedPnl = -10m,
-            Status = Domain.Enums.PositionStatus.Closed,
+            Status = PositionStatus.Closed,
         };
         _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync([closedPosition]);
@@ -744,30 +790,32 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AfterConsecutiveLosses_PausesPositionOpens()
     {
-        // M6: Circuit breaker activates when _consecutiveLosses (set by RecordCloseResult) reaches limit
-        var config = new BotConfiguration
-        {
-            IsEnabled = true,
-            MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m,
-            ConsecutiveLossPause = 2,
-            UpdatedByUserId = "admin-user-id",
-            AllocationStrategy = Domain.Enums.AllocationStrategy.EqualSpread,
-            AllocationTopN = 3,
-        };
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                ConsecutiveLossPause = 2,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+            });
 
-        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Pre-set consecutive losses at the pause threshold
-        _sut.ConsecutiveLosses = 2;
+        // Pre-set per-user consecutive losses at the pause threshold
+        _sut.UserConsecutiveLosses[TestUserId] = 2;
 
         var opp = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Circuit breaker fires before the open loop — no positions attempted
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never,
@@ -777,12 +825,12 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_SuccessfulOpen_DoesNotResetConsecutiveLosses()
     {
-        // M6: Successful opens do NOT reset the counter — only RecordCloseResult with positive PnL resets it
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Pre-set consecutive losses
-        _sut.ConsecutiveLosses = 2;
+        // Pre-set per-user consecutive losses (below pause threshold of 3)
+        _sut.UserConsecutiveLosses[TestUserId] = 2;
 
         var opp = new ArbitrageOpportunityDto
         {
@@ -799,29 +847,31 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.ConsecutiveLosses.Should().Be(2, "consecutive losses are only reset by RecordCloseResult, not by a successful open");
+        _sut.UserConsecutiveLosses[TestUserId].Should().Be(2, "consecutive losses are only reset by RecordCloseResult, not by a successful open");
     }
 
     [Fact]
     public async Task RunCycle_ConsecutiveLossPausePreventsNextCycle()
     {
-        // M6: Once consecutive loss limit is reached, next cycle should also skip position opens
-        var config = new BotConfiguration
-        {
-            IsEnabled = true,
-            MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m,
-            ConsecutiveLossPause = 2,
-            UpdatedByUserId = "admin-user-id",
-            AllocationStrategy = Domain.Enums.AllocationStrategy.Concentrated,
-        };
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                ConsecutiveLossPause = 2,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+            });
 
-        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
-        // Pre-set consecutive losses at limit
-        _sut.ConsecutiveLosses = 2;
+        _sut.UserConsecutiveLosses[TestUserId] = 2;
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -836,26 +886,27 @@ public class BotOrchestratorTests
     [Fact]
     public void RecordCloseResult_NegativePnl_IncrementsCounter()
     {
-        _sut.RecordCloseResult(-5m);
-        _sut.RecordCloseResult(-5m);
-        _sut.RecordCloseResult(-5m);
+        _sut.RecordCloseResult(-5m, TestUserId);
+        _sut.RecordCloseResult(-5m, TestUserId);
+        _sut.RecordCloseResult(-5m, TestUserId);
 
-        _sut.ConsecutiveLosses.Should().Be(3);
+        _sut.UserConsecutiveLosses[TestUserId].Should().Be(3);
     }
 
     [Fact]
     public void RecordCloseResult_PositivePnl_ResetsCounter()
     {
-        _sut.RecordCloseResult(-1m);
-        _sut.RecordCloseResult(-1m);
-        _sut.RecordCloseResult(1m);
+        _sut.RecordCloseResult(-1m, TestUserId);
+        _sut.RecordCloseResult(-1m, TestUserId);
+        _sut.RecordCloseResult(1m, TestUserId);
 
-        _sut.ConsecutiveLosses.Should().Be(0);
+        _sut.UserConsecutiveLosses[TestUserId].Should().Be(0);
     }
 
     [Fact]
     public async Task OpenFails_DoesNotIncrementConsecutiveLosses()
     {
+        SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -874,7 +925,7 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.ConsecutiveLosses.Should().Be(0,
+        _sut.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(0,
             "open failures do not count as realized losses — only RecordCloseResult increments the counter");
     }
 
@@ -883,27 +934,33 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_DuplicateCheck_IncludesOpeningStatus()
     {
-        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
-        {
-            IsEnabled = true,
-            MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m,
-            UpdatedByUserId = "admin-user-id",
-            AllocationStrategy = AllocationStrategy.Concentrated,
-            AllocationTopN = 3,
-        });
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+            });
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Existing Opening position for asset 1 on exchanges 1/2
+        // Existing Opening position for asset 1 on exchanges 1/2 owned by test user
         var openingPos = new ArbitragePosition
         {
+            UserId = TestUserId,
             AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
             Status = PositionStatus.Opening,
         };
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync([openingPos]);
 
-        // Signal engine returns opportunity for same asset/exchange combo
         var opp = new ArbitrageOpportunityDto
         {
             AssetId = 1, AssetSymbol = "ETH",
@@ -915,7 +972,6 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Should be skipped as duplicate (Opening status included in check)
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never, "Opening-status position should block duplicate opportunity");
@@ -946,11 +1002,10 @@ public class BotOrchestratorTests
             .Callback(() => { pos.Status = PositionStatus.Closing; })
             .Returns(Task.CompletedTask);
 
-        _sut.ConsecutiveLosses = 0;
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // RecordCloseResult should NOT have been called since pos is not Closed
-        _sut.ConsecutiveLosses.Should().Be(0,
+        _sut.UserConsecutiveLosses.GetValueOrDefault("admin-user-id", 0).Should().Be(0,
             "RecordCloseResult should only be called when position.Status == Closed");
     }
 
@@ -959,18 +1014,23 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_BalanceExhaustion_BreaksLoop()
     {
-        var config = new BotConfiguration
-        {
-            IsEnabled = true,
-            MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m,
-            UpdatedByUserId = "admin-user-id",
-            AllocationStrategy = AllocationStrategy.EqualSpread,
-            AllocationTopN = 3,
-            MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m,
-        };
-        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+            });
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
         var opp1 = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
@@ -979,13 +1039,11 @@ public class BotOrchestratorTests
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m, 100m]);
 
-        // First attempt fails with balance error
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Insufficient margin for order"));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Only first attempted — balance error breaks the loop
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once, "Balance exhaustion should break the position-opening loop");
@@ -1000,7 +1058,6 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
 
-        // Alert created 3 minutes before orchestrator start
         var startupAlert = new Alert
         {
             Id = 99,
