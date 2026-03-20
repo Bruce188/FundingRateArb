@@ -58,14 +58,18 @@ try
                 "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}{NewLine}" +
                 "  {Message:lj}{NewLine}{Exception}")
 
-            // Rolling daily file sink (30-day retention)
-            .WriteTo.File(
+            ;
+
+        if (isDevelopment)
+        {
+            lc.WriteTo.File(
                 path: "logs/fundingratearb-.log",
                 rollingInterval: RollingInterval.Day,
                 retainedFileCountLimit: 30,
                 outputTemplate:
                     "{Timestamp:yyyy-MM-dd HH:mm:ss.fff} [{Level:u3}] " +
                     "{SourceContext} | {Message:lj} | {Properties:j}{NewLine}{Exception}");
+        }
 
         // SQL Server audit sink — only when a real SQL Server is available (not LocalDB on Linux)
         if (!isDevelopment)
@@ -85,7 +89,12 @@ try
 
     // --- Database ---
     builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+        options.UseSqlServer(
+            builder.Configuration.GetConnectionString("DefaultConnection"),
+            sqlOpts => sqlOpts.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: null)));
 
     // --- Identity ---
     builder.Services.AddDefaultIdentity<ApplicationUser>(options =>
@@ -268,6 +277,12 @@ try
             opt.PermitLimit = 20;
             opt.QueueLimit = 5;
         });
+        options.AddFixedWindowLimiter("general", opt =>
+        {
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.PermitLimit = 60;
+            opt.QueueLimit = 0;
+        });
     });
 
     // --- Background Services ---
@@ -277,7 +292,11 @@ try
         sp.GetServices<IHostedService>().OfType<BotOrchestrator>().Single());
 
     // --- MVC ---
-    builder.Services.AddControllersWithViews();
+    builder.Services.AddControllersWithViews(options =>
+        options.Filters.Add(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute()));
+
+    builder.Services.AddHealthChecks()
+        .AddDbContextCheck<AppDbContext>();
 
     var app = builder.Build();
 
@@ -326,9 +345,12 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
+    app.MapHealthChecks("/health");
 
-    app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}");
-    app.MapControllerRoute("default", "{controller=Dashboard}/{action=Index}/{id?}");
+    app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}")
+        .RequireRateLimiting("general");
+    app.MapControllerRoute("default", "{controller=Dashboard}/{action=Index}/{id?}")
+        .RequireRateLimiting("general");
     app.MapRazorPages()
         .RequireRateLimiting("auth");
     app.MapHub<DashboardHub>("/hubs/dashboard")
