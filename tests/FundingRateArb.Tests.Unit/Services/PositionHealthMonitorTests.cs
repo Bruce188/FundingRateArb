@@ -19,7 +19,6 @@ public class PositionHealthMonitorTests
     private readonly Mock<IExchangeConnectorFactory> _mockFactory = new();
     private readonly Mock<IExchangeConnector> _mockLongConnector = new();
     private readonly Mock<IExchangeConnector> _mockShortConnector = new();
-    private readonly Mock<IExecutionEngine> _mockExecEngine = new();
     private readonly PositionHealthMonitor _sut;
 
     private static readonly BotConfiguration DefaultConfig = new()
@@ -48,7 +47,7 @@ public class PositionHealthMonitorTests
         _mockPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>()))
             .ReturnsAsync([]);
 
-        _sut = new PositionHealthMonitor(_mockUow.Object, _mockExecEngine.Object,
+        _sut = new PositionHealthMonitor(_mockUow.Object,
             _mockFactory.Object, NullLogger<PositionHealthMonitor>.Instance);
     }
 
@@ -123,11 +122,9 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m); // spread = -0.0002
         SetupMarkPrices();
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
-            Times.Once);
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
     }
 
     // ── Auto-close: max hold time ──────────────────────────────────────────────
@@ -140,11 +137,9 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
         SetupMarkPrices();
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.MaxHoldTimeReached, It.IsAny<CancellationToken>()),
-            Times.Once);
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.MaxHoldTimeReached);
     }
 
     // ── Auto-close: stop loss ──────────────────────────────────────────────────
@@ -164,11 +159,9 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
         SetupMarkPrices(longMark: 2500m, shortMark: 3001m); // asymmetric move → net loss
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.StopLoss, It.IsAny<CancellationToken>()),
-            Times.Once);
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
     // ── No close: healthy spread ───────────────────────────────────────────────
@@ -181,11 +174,9 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // spread = 0.0005 (healthy)
         SetupMarkPrices();
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        result.Should().BeEmpty();
     }
 
     // ── Alerts: spread warning (with duplicate suppression) ────────────────────
@@ -256,11 +247,9 @@ public class PositionHealthMonitorTests
     {
         _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        result.Should().BeEmpty();
     }
 
     // ── C-PR1: Uses GetOpenTrackedAsync (not GetOpenAsync) ─────────────────────
@@ -330,13 +319,11 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m);
         SetupMarkPrices();
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        // One save for the spread update batch, then close is called
+        // One save for the spread update batch, then close list returned
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
-            Times.Once);
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
     }
 
     // ── M5: Stop-loss uses net unrealized PnL ─────────────────────────────────
@@ -344,17 +331,6 @@ public class PositionHealthMonitorTests
     [Fact]
     public async Task CheckAndAct_StopLossTriggered_WhenUnrealizedPnlExceedsThreshold()
     {
-        // Entry: long=3000, short=3001, sizeUsdc=100, leverage=5
-        // MarginUsdc = 100 (after C2 fix)
-        // avgEntry = 3000.5, estimatedQty = 100*5/3000.5 ≈ 0.16664
-        // Current: long drops to 2700, short drops to 2701
-        // longPnl  = (2700 - 3000) * 0.16664 ≈ -49.99
-        // shortPnl = (3001 - 2701) * 0.16664 ≈ +49.99
-        // unrealizedPnl ≈ -49.99 + 49.99 ≈ 0 → won't trigger
-        // For asymmetric loss: long drops to 2500, short stays at 3001
-        // longPnl  = (2500 - 3000) * 0.16664 ≈ -83.32
-        // shortPnl = (3001 - 3001) * 0.16664 ≈ 0
-        // unrealizedPnl ≈ -83.32, |unrealizedPnl| = 83.32 > 15% * 100 = 15 → triggers
         var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
         pos.MarginUsdc = 100m;
         _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
@@ -362,11 +338,9 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
         SetupMarkPrices(longMark: 2500m, shortMark: 3001m); // long dropped significantly
 
-        await _sut.CheckAndActAsync();
+        var result = await _sut.CheckAndActAsync();
 
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(pos, CloseReason.StopLoss, It.IsAny<CancellationToken>()),
-            Times.Once);
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
     // ── M4: Stale state reaper ──────────────────────────────────────────────────
@@ -451,15 +425,15 @@ public class PositionHealthMonitorTests
             .ReturnsAsync(3001m);
 
         // Act — must not throw
-        var act = async () => await _sut.CheckAndActAsync();
+        IReadOnlyList<(ArbitragePosition Position, CloseReason Reason)>? result = null;
+        var act = async () => { result = await _sut.CheckAndActAsync(); };
         await act.Should().NotThrowAsync();
 
         // pos1's spread is updated (happens before the try/catch)
         pos1.CurrentSpreadPerHour.Should().Be(0.0005m); // shortRate - longRate = 0.0006 - 0.0001
         // pos2 was fully processed — no close triggered (spread is healthy)
-        _mockExecEngine.Verify(
-            e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+        result.Should().NotBeNull();
+        result!.Should().BeEmpty("neither position needs closing with healthy spreads");
         // SaveAsync still called once
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }

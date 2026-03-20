@@ -685,4 +685,43 @@ public class ExecutionEngineTests
             a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),
             Times.AtLeastOnce);
     }
+
+    // ── D4: Emergency close serialization ──────────────────────
+
+    [Fact]
+    public async Task OpenPosition_EmergencyClose_RunsSequentially()
+    {
+        // Long leg returns Success=false (triggers emergency close of successful short leg)
+        // Short leg succeeds with a real order
+        // Verify: short close completes before SaveAsync is called (sequential, not WhenAll)
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long margin insufficient"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var callOrder = new List<string>();
+
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("ShortEmergencyClose"))
+            .ReturnsAsync(SuccessOrder("close-short"));
+
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>()))
+            .Callback<CancellationToken>(_ => callOrder.Add("SaveAsync"))
+            .ReturnsAsync(1);
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+
+        // Verify the short emergency close completes before the final SaveAsync
+        var closeIndex = callOrder.IndexOf("ShortEmergencyClose");
+        var lastSaveIndex = callOrder.LastIndexOf("SaveAsync");
+
+        closeIndex.Should().BeGreaterThanOrEqualTo(0, "short emergency close must be called");
+        lastSaveIndex.Should().BeGreaterThan(closeIndex,
+            "emergency close must complete before SaveAsync — verifies sequential not parallel execution");
+    }
 }

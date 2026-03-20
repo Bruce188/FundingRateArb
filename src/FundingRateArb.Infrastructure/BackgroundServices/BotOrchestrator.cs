@@ -105,6 +105,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // C6: Cancel the timer wait to trigger an immediate cycle
     public void TriggerImmediateCycle() => _immediateCts.Cancel();
 
+    public void RecordCloseResult(decimal realizedPnl)
+    {
+        if (realizedPnl < 0)
+            _consecutiveLosses++;
+        else
+            _consecutiveLosses = 0;
+    }
+
     /// <summary>Exposes cooldown state for unit testing.</summary>
     internal ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> FailedOpCooldowns => _failedOpCooldowns;
 
@@ -134,7 +142,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
 
         // H1: Always run health monitor — positions must be monitored even when kill switch is off
-        await healthMonitor.CheckAndActAsync(ct);
+        var positionsToClose = await healthMonitor.CheckAndActAsync(ct);
+        foreach (var (pos, reason) in positionsToClose)
+        {
+            await executionEngine.ClosePositionAsync(pos, reason, ct);
+            RecordCloseResult(pos.RealizedPnl ?? 0m);
+        }
 
         // M6: Fetch open positions AFTER health monitor so closed positions are excluded
         var openPositions = await uow.Positions.GetOpenAsync();
@@ -242,7 +255,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 slotsAvailable--;
                 _failedOpCooldowns.TryRemove(key, out _);
-                _consecutiveLosses = 0; // M6: Reset on successful open
 
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{config.UpdatedByUserId}").ReceiveNotification(msg);
@@ -260,14 +272,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
             else
             {
-                // M6: Track consecutive failures for circuit breaker
-                _consecutiveLosses++;
-                if (_consecutiveLosses >= config.ConsecutiveLossPause)
-                {
-                    _logger.LogWarning("Consecutive loss limit reached ({Count}). Pausing.", _consecutiveLosses);
-                    break;
-                }
-
                 // Register exponential cooldown and continue to next opportunity
                 var failures = _failedOpCooldowns.GetValueOrDefault(key).Failures + 1;
                 var delay = TimeSpan.FromTicks(

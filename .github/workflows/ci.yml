@@ -1,8 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
+  # Main branch builds handled by deploy.yml
   pull_request:
     branches: [main]
 
@@ -70,7 +69,7 @@ jobs:
             -e ASPNETCORE_ENVIRONMENT=Development \
             -e "ConnectionStrings__DefaultConnection=Server=localhost;Database=test;User Id=SA;Password=Unused@12345;TrustServerCertificate=True" \
             -e "Seed__AdminPassword=Test@12345678!" \
-            fundingratearb:${{ github.sha }} || true
+            fundingratearb:${{ github.sha }}
           sleep 5
           docker logs smoke-test 2>&1 | head -20
           docker stop smoke-test 2>/dev/null || true

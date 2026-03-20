@@ -5,6 +5,7 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Hubs;
 using Microsoft.AspNetCore.SignalR;
@@ -68,6 +69,10 @@ public class BotOrchestratorTests
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
 
+        // Default mock for health monitor — returns empty close list
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+
         // M12: Default mock for GetRecentUnreadAsync (returns empty list)
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync(new List<Alert>());
@@ -126,7 +131,7 @@ public class BotOrchestratorTests
         var callOrder = new List<string>();
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("health"))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
         _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("signal"))
             .ReturnsAsync([]);
@@ -392,7 +397,7 @@ public class BotOrchestratorTests
 
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("health"))
-            .Returns(Task.CompletedTask);
+            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
 
         _mockPositions.Setup(p => p.GetOpenAsync())
             .Callback(() => callOrder.Add("GetOpen"))
@@ -735,7 +740,7 @@ public class BotOrchestratorTests
     [Fact]
     public async Task RunCycle_AfterConsecutiveLosses_PausesPositionOpens()
     {
-        // M6: After ConsecutiveLossPause consecutive failures, should pause
+        // M6: Circuit breaker activates when _consecutiveLosses (set by RecordCloseResult) reaches limit
         var config = new BotConfiguration
         {
             IsEnabled = true,
@@ -750,31 +755,25 @@ public class BotOrchestratorTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        var opp1 = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
-        var opp2 = new ArbitrageOpportunityDto { AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
-        var opp3 = new ArbitrageOpportunityDto { AssetId = 3, AssetSymbol = "SOL", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+        // Pre-set consecutive losses at the pause threshold
+        _sut.ConsecutiveLosses = 2;
 
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp1, opp2, opp3]);
-        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
-            .ReturnsAsync([100m, 100m, 100m]);
-
-        // All fail
-        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((false, "Exchange error"));
+        var opp = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // After 2 consecutive failures (ConsecutiveLossPause=2), should break — third not attempted
+        // Circuit breaker fires before the open loop — no positions attempted
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
-            Times.Exactly(2),
-            "Should stop attempting after ConsecutiveLossPause failures");
+            Times.Never,
+            "Position opens must be paused when consecutive loss limit is reached");
     }
 
     [Fact]
-    public async Task RunCycle_SuccessResetsConsecutiveLosses()
+    public async Task RunCycle_SuccessfulOpen_DoesNotResetConsecutiveLosses()
     {
-        // M6: A successful open should reset the consecutive loss counter
+        // M6: Successful opens do NOT reset the counter — only RecordCloseResult with positive PnL resets it
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
@@ -796,7 +795,7 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.ConsecutiveLosses.Should().Be(0, "successful open must reset consecutive loss counter");
+        _sut.ConsecutiveLosses.Should().Be(2, "consecutive losses are only reset by RecordCloseResult, not by a successful open");
     }
 
     [Fact]
@@ -826,5 +825,52 @@ public class BotOrchestratorTests
             e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never,
             "Position opens must be paused when consecutive loss limit is reached");
+    }
+
+    // ── D2: Consecutive loss tracking via RecordCloseResult ──────────────────
+
+    [Fact]
+    public void RecordCloseResult_NegativePnl_IncrementsCounter()
+    {
+        _sut.RecordCloseResult(-5m);
+        _sut.RecordCloseResult(-5m);
+        _sut.RecordCloseResult(-5m);
+
+        _sut.ConsecutiveLosses.Should().Be(3);
+    }
+
+    [Fact]
+    public void RecordCloseResult_PositivePnl_ResetsCounter()
+    {
+        _sut.RecordCloseResult(-1m);
+        _sut.RecordCloseResult(-1m);
+        _sut.RecordCloseResult(1m);
+
+        _sut.ConsecutiveLosses.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task OpenFails_DoesNotIncrementConsecutiveLosses()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "API timeout"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.ConsecutiveLosses.Should().Be(0,
+            "open failures do not count as realized losses — only RecordCloseResult increments the counter");
     }
 }

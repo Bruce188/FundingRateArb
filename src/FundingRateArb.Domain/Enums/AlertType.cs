@@ -9,5 +9,6 @@ public enum AlertType
     PositionClosed,
     LegFailed,
     BotError,
-    MarginWarning
+    MarginWarning,
+    PriceFeedFailure
 }

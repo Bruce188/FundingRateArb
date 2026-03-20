@@ -1,0 +1,112 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  APP_NAME: 'fundingratearb'
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Test@12345678!"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U SA -P 'Test@12345678!' -C -Q 'SELECT 1' || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test tests/FundingRateArb.Tests.Unit --no-build -c Release --logger "trx;LogFileName=unit.trx"
+
+      - name: Integration tests
+        run: dotnet test tests/FundingRateArb.Tests.Integration --no-build -c Release --logger "trx;LogFileName=integration.trx"
+        env:
+          ConnectionStrings__DefaultConnection: "Server=localhost,1433;Database=FundingRateArbTestDb;User Id=SA;Password=Test@12345678!;TrustServerCertificate=True"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: "**/TestResults/*.trx"
+
+      - name: Publish
+        run: dotnet publish src/FundingRateArb.Web/FundingRateArb.Web.csproj -c Release -o ./publish --no-build
+
+      - name: Generate EF migration bundle
+        run: |
+          dotnet tool install --global dotnet-ef
+          dotnet ef migrations bundle \
+            --project src/FundingRateArb.Infrastructure/FundingRateArb.Infrastructure.csproj \
+            --startup-project src/FundingRateArb.Web/FundingRateArb.Web.csproj \
+            --self-contained \
+            --no-build \
+            --force \
+            -c Release \
+            -o ./publish/efbundle
+
+      - name: Upload deploy package
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-package
+          path: ./publish
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-package
+          path: ./publish
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run EF migrations
+        run: |
+          chmod +x ./publish/efbundle
+          ./publish/efbundle --connection "$SQL_CONN"
+        env:
+          SQL_CONN: ${{ secrets.SQL_CONNECTION_STRING }}
+
+      - name: Deploy to App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.APP_NAME }}
+          package: ./publish

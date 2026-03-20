@@ -162,15 +162,11 @@ public class ExecutionEngine : IExecutionEngine
             longSuccess  ? "OK" : $"FAILED: {longError}",
             shortSuccess ? "OK" : $"FAILED: {shortError}");
 
-        // Emergency close any leg that succeeded — run both legs in parallel (M2)
-        var emergencyTasks = new List<Task>();
+        // Emergency close any leg that succeeded — run sequentially to avoid concurrent exchange state issues
         if (longSuccess)
-            emergencyTasks.Add(TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, config.UpdatedByUserId, ct));
+            await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, config.UpdatedByUserId, ct);
         if (shortSuccess)
-            emergencyTasks.Add(TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, config.UpdatedByUserId, ct));
-
-        if (emergencyTasks.Count > 0)
-            await Task.WhenAll(emergencyTasks);
+            await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, config.UpdatedByUserId, ct);
 
         _uow.Alerts.Add(new Alert
         {
@@ -267,12 +263,6 @@ public class ExecutionEngine : IExecutionEngine
             _logger.LogCritical(failedEx,
                 "CLOSE PARTIALLY FAILED — {FailedLeg} leg threw for position #{PositionId} {Asset}: {Message}",
                 failedLegName, position.Id, assetSymbol, failedEx?.Message);
-
-            // Persist the successful leg's fill data if available
-            if (!longFailed && longCloseTask.IsCompletedSuccessfully)
-                position.LongEntryPrice = longCloseTask.Result.FilledPrice;  // reuse field as close price record
-            if (!shortFailed && shortCloseTask.IsCompletedSuccessfully)
-                position.ShortEntryPrice = shortCloseTask.Result.FilledPrice;
 
             // Leave position.Status = Closing — do NOT mark Closed or EmergencyClosed
             _uow.Positions.Update(position);

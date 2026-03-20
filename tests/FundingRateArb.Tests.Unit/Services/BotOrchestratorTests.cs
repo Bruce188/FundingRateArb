@@ -50,6 +50,10 @@ public class BotOrchestratorTests
         _mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync([]);
 
+        // Default mock for health monitor — returns empty close list
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+
         // H7: Default mock for GetClosedSinceAsync (returns empty list — no drawdown)
         _mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync(new List<ArbitragePosition>());

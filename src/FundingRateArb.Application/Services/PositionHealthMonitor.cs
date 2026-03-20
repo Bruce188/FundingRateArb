@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
@@ -9,23 +10,21 @@ namespace FundingRateArb.Application.Services;
 public class PositionHealthMonitor : IPositionHealthMonitor
 {
     private readonly IUnitOfWork _uow;
-    private readonly IExecutionEngine _executionEngine;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly ILogger<PositionHealthMonitor> _logger;
+    private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
-        IExecutionEngine executionEngine,
         IExchangeConnectorFactory connectorFactory,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
-        _executionEngine = executionEngine;
         _connectorFactory = connectorFactory;
         _logger = logger;
     }
 
-    public async Task CheckAndActAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<(ArbitragePosition Position, CloseReason Reason)>> CheckAndActAsync(CancellationToken ct = default)
     {
         // M4: Reap stale Opening positions (stuck > 5 minutes)
         await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
@@ -34,7 +33,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
-        if (openPositions.Count == 0) return;
+        if (openPositions.Count == 0) return Array.Empty<(ArbitragePosition, CloseReason)>();
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
@@ -128,21 +127,35 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                         });
                     }
                 }
+
+                _priceFetchFailures.TryRemove(pos.Id, out _);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to check health for position #{Id}: {Message}", pos.Id, ex.Message);
+                var failures = _priceFetchFailures.AddOrUpdate(pos.Id, 1, (_, v) => v + 1);
+                _logger.LogWarning(ex, "Failed to check health for position #{Id} ({Failures} consecutive): {Message}",
+                    pos.Id, failures, ex.Message);
+
+                if (failures >= 5)
+                {
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = pos.UserId,
+                        ArbitragePositionId = pos.Id,
+                        Type = AlertType.PriceFeedFailure,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Price feed failed {failures} consecutive times for " +
+                                  $"{pos.Asset?.Symbol ?? "unknown"}. " +
+                                  "Stop-loss protection is INACTIVE. Consider manual close.",
+                    });
+                }
             }
         }
 
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);
 
-        // Execute closes after the batch save (spread update is persisted before close)
-        foreach (var (pos, reason) in toClose)
-        {
-            await _executionEngine.ClosePositionAsync(pos, reason, ct);
-        }
+        return toClose;
     }
 
     private async Task ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)

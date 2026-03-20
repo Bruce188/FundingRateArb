@@ -18,8 +18,6 @@ public static class DbSeeder
         var roleMgr = services.GetRequiredService<RoleManager<IdentityRole>>();
         var userMgr = services.GetRequiredService<UserManager<ApplicationUser>>();
 
-        await context.Database.MigrateAsync();
-
         var config = services.GetRequiredService<IConfiguration>();
         await SeedRolesAsync(roleMgr);
         await SeedAdminUserAsync(userMgr, config);
