@@ -81,8 +81,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
         var ratesTask = _httpClient.GetAsync("funding-rates", ct);
         var statsTask = _httpClient.GetAsync("exchangeStats", ct);
+        var assetsTask = _httpClient.GetAsync("assetDetails", ct);
 
-        await Task.WhenAll(ratesTask, statsTask);
+        await Task.WhenAll(ratesTask, statsTask, assetsTask);
 
         var ratesHttpResponse = await ratesTask;
         ratesHttpResponse.EnsureSuccessStatusCode();
@@ -100,6 +101,30 @@ public class LighterConnector : IExchangeConnector, IDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to fetch exchange stats from Lighter; volume data will be unavailable");
+        }
+
+        var indexPriceBySymbol = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var assetsHttpResponse = await assetsTask;
+            assetsHttpResponse.EnsureSuccessStatusCode();
+            var assetsResponse = await assetsHttpResponse.Content
+                .ReadFromJsonAsync<LighterAssetDetailsResponse>(JsonOptions, ct);
+            if (assetsResponse?.AssetDetails is not null)
+            {
+                foreach (var a in assetsResponse.AssetDetails)
+                {
+                    if (decimal.TryParse(a.IndexPrice, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out var price) && price > 0)
+                    {
+                        indexPriceBySymbol[a.Symbol] = price;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch asset details from Lighter; mark prices will be unavailable");
         }
 
         var allRates = ratesResponse?.FundingRates;
@@ -123,6 +148,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
                 RawRate      = r.Rate,
                 RatePerHour  = r.Rate,
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
+                MarkPrice    = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
             }).ToList();
     }
 

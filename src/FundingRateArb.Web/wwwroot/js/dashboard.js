@@ -111,7 +111,9 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
         row.appendChild(tdAsset);
 
         const tdPrice = document.createElement("td");
-        const avgPrice = ((opp.longMarkPrice || 0) + (opp.shortMarkPrice || 0)) / 2;
+        const lp = opp.longMarkPrice || 0;
+        const sp = opp.shortMarkPrice || 0;
+        const avgPrice = (lp > 0 && sp > 0) ? (lp + sp) / 2 : Math.max(lp, sp);
         tdPrice.textContent = "$" + avgPrice.toFixed(2);
         row.appendChild(tdPrice);
 

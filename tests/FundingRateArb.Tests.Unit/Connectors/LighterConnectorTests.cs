@@ -178,6 +178,17 @@ public class LighterConnectorTests
         }
         """;
 
+    private static readonly string AssetDetailsJson = """
+        {
+            "code": 200,
+            "asset_details": [
+                { "asset_id": 0, "symbol": "USDC", "index_price": "1.000000" },
+                { "asset_id": 1, "symbol": "ETH", "index_price": "2130.500000" },
+                { "asset_id": 2, "symbol": "BTC", "index_price": "69750.000000" }
+            ]
+        }
+        """;
+
     private static readonly string OrderBookDetailsJson = """
         {
             "code": 200,
@@ -286,6 +297,7 @@ public class LighterConnectorTests
         {
             h.AddRoute("funding-rates", FundingRatesJson);
             h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
         });
 
         var rates = await sut.GetFundingRatesAsync();
@@ -364,6 +376,42 @@ public class LighterConnectorTests
         var rates = await sut.GetFundingRatesAsync();
 
         rates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetFundingRates_PopulatesMarkPriceFromAssetDetails()
+    {
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", FundingRatesJson);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
+        });
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var eth = rates.First(r => r.Symbol == "ETH");
+        eth.MarkPrice.Should().Be(2130.500000m, "ETH index_price from assetDetails should populate MarkPrice");
+
+        var btc = rates.First(r => r.Symbol == "BTC");
+        btc.MarkPrice.Should().Be(69750.000000m, "BTC index_price from assetDetails should populate MarkPrice");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_WhenAssetDetailsFails_StillReturnsRatesWithZeroMarkPrice()
+    {
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", FundingRatesJson);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", "Internal Server Error", HttpStatusCode.InternalServerError);
+        });
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(2, "rates must still be returned when assetDetails fails");
+        rates.Should().AllSatisfy(r => r.MarkPrice.Should().Be(0m,
+            "mark price must be zero when assetDetails endpoint fails"));
     }
 
     // ── GetMarkPriceAsync ─────────────────────────────────────────

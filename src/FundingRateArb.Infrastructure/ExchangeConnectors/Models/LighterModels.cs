@@ -189,6 +189,29 @@ public class LighterOrderBookDetailsResponse
     public List<LighterOrderBookDetail>? OrderBookDetails { get; set; }
 }
 
+// ── Asset Details models (/api/v1/assetDetails) ──
+
+public class LighterAssetDetail
+{
+    [JsonPropertyName("asset_id")]
+    public int AssetId { get; set; }
+
+    [JsonPropertyName("symbol")]
+    public string Symbol { get; set; } = "";
+
+    [JsonPropertyName("index_price")]
+    public string IndexPrice { get; set; } = "0";
+}
+
+public class LighterAssetDetailsResponse
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("asset_details")]
+    public List<LighterAssetDetail>? AssetDetails { get; set; }
+}
+
 // ── Nonce API model (/api/v1/nextNonce) ──
 
 public class LighterNonceResponse

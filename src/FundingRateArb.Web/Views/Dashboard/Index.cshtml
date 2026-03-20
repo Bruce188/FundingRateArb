@@ -152,7 +152,10 @@
                                     var constrained = IsVolumeConstrained(opp);
                                     <tr class="@(constrained ? "table-warning" : "")">
                                         <td><strong>@opp.AssetSymbol</strong></td>
-                                        <td>$@(((opp.LongMarkPrice + opp.ShortMarkPrice) / 2).ToString("F2"))</td>
+                                        @{ var displayPrice = opp.LongMarkPrice > 0 && opp.ShortMarkPrice > 0
+                                                ? (opp.LongMarkPrice + opp.ShortMarkPrice) / 2
+                                                : Math.Max(opp.LongMarkPrice, opp.ShortMarkPrice); }
+                                        <td>$@displayPrice.ToString("F2")</td>
                                         <td>@opp.LongExchangeName</td>
                                         <td>@opp.ShortExchangeName</td>
                                         <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
