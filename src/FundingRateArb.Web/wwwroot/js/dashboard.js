@@ -1,5 +1,85 @@
 "use strict";
 
+// B2: Track last-known best spread to avoid resetting to 0
+let lastKnownBestSpread = 0;
+
+// B1: Dynamic decimal formatting for small prices
+function formatPrice(price) {
+    if (price === 0) return "$0.00";
+    if (price >= 1) return "$" + price.toFixed(2);
+    if (price >= 0.01) return "$" + price.toFixed(4);
+    return "$" + parseFloat(price.toFixed(8)).toPrecision(4);
+}
+
+// B5: Centralized toast creation using Bootstrap 5 Toast API
+function showToast(message, cssClass, delay) {
+    cssClass = cssClass || "text-bg-primary";
+    delay = delay || 4000;
+
+    var container = document.getElementById("notification-toast-container");
+    if (!container) return;
+
+    var toastEl = document.createElement("div");
+    toastEl.className = "toast align-items-center " + cssClass + " border-0";
+    toastEl.setAttribute("role", "alert");
+
+    var dFlex = document.createElement("div");
+    dFlex.className = "d-flex";
+
+    var toastBody = document.createElement("div");
+    toastBody.className = "toast-body";
+    toastBody.textContent = message;
+    dFlex.appendChild(toastBody);
+
+    toastEl.appendChild(dFlex);
+    container.appendChild(toastEl);
+
+    var toast = new bootstrap.Toast(toastEl, {
+        animation: true,
+        autohide: true,
+        delay: delay
+    });
+    toast.show();
+
+    toastEl.addEventListener("hidden.bs.toast", function () { toastEl.remove(); });
+}
+
+// B5: Alert toasts keep close button and have longer delay
+function showAlertToast(message, severityClass) {
+    var container = document.getElementById("notification-toast-container");
+    if (!container) return;
+
+    var toastEl = document.createElement("div");
+    toastEl.className = "toast align-items-center " + severityClass + " border-0";
+    toastEl.setAttribute("role", "alert");
+
+    var dFlex = document.createElement("div");
+    dFlex.className = "d-flex";
+
+    var toastBody = document.createElement("div");
+    toastBody.className = "toast-body";
+    toastBody.textContent = message;
+    dFlex.appendChild(toastBody);
+
+    var closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "btn-close btn-close-white me-2 m-auto";
+    closeBtn.setAttribute("data-bs-dismiss", "toast");
+    dFlex.appendChild(closeBtn);
+
+    toastEl.appendChild(dFlex);
+    container.appendChild(toastEl);
+
+    var toast = new bootstrap.Toast(toastEl, {
+        animation: true,
+        autohide: true,
+        delay: 5000
+    });
+    toast.show();
+
+    toastEl.addEventListener("hidden.bs.toast", function () { toastEl.remove(); });
+}
+
 const connection = new signalR.HubConnectionBuilder()
     .withUrl("/hubs/dashboard")
     .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
@@ -18,8 +98,19 @@ connection.on("ReceiveDashboardUpdate", (data) => {
     const totalPnl = document.getElementById("total-pnl");
     if (totalPnl) totalPnl.textContent = "$" + (data.totalPnl ?? 0).toFixed(2);
 
+    // B2: Only update best spread if incoming value > 0, otherwise show last known or N/A
     const bestSpread = document.getElementById("best-spread");
-    if (bestSpread) bestSpread.textContent = ((data.bestSpread ?? 0) * 100).toFixed(4) + "%";
+    if (bestSpread) {
+        const spread = data.bestSpread ?? 0;
+        if (spread > 0) {
+            lastKnownBestSpread = spread;
+            bestSpread.textContent = (spread * 100).toFixed(4) + "%";
+        } else if (lastKnownBestSpread > 0) {
+            bestSpread.textContent = (lastKnownBestSpread * 100).toFixed(4) + "%";
+        } else {
+            bestSpread.textContent = "N/A";
+        }
+    }
 });
 
 connection.on("ReceivePositionUpdate", (position) => {
@@ -38,33 +129,9 @@ connection.on("ReceivePositionUpdate", (position) => {
     }
 });
 
-// C1 fix: replaced innerHTML with createElement + textContent for notification message
+// B5: Use centralized showToast for notification toasts (no close button, 4s delay)
 connection.on("ReceiveNotification", (message) => {
-    const container = document.getElementById("notification-toast-container");
-    if (!container) return;
-
-    const toast = document.createElement("div");
-    toast.className = "toast align-items-center text-bg-primary border-0 show";
-    toast.setAttribute("role", "alert");
-
-    const dFlex = document.createElement("div");
-    dFlex.className = "d-flex";
-
-    const toastBody = document.createElement("div");
-    toastBody.className = "toast-body";
-    toastBody.textContent = message;
-    dFlex.appendChild(toastBody);
-
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.className = "btn-close btn-close-white me-2 m-auto";
-    closeBtn.setAttribute("data-bs-dismiss", "toast");
-    dFlex.appendChild(closeBtn);
-
-    toast.appendChild(dFlex);
-    container.appendChild(toast);
-
-    setTimeout(() => toast.remove(), 5000);
+    showToast(message, "text-bg-primary", 4000);
 });
 
 // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
@@ -110,11 +177,12 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
         tdAsset.appendChild(strong);
         row.appendChild(tdAsset);
 
+        // B1: Use formatPrice for mark prices
         const tdPrice = document.createElement("td");
         const lp = opp.longMarkPrice || 0;
         const sp = opp.shortMarkPrice || 0;
         const avgPrice = (lp > 0 && sp > 0) ? (lp + sp) / 2 : Math.max(lp, sp);
-        tdPrice.textContent = "$" + avgPrice.toFixed(2);
+        tdPrice.textContent = formatPrice(avgPrice);
         row.appendChild(tdPrice);
 
         const tdLong = document.createElement("td");
@@ -153,6 +221,7 @@ connection.on("ReceiveOpportunityUpdate", (opportunities) => {
     });
 });
 
+// B5: Alert toasts use showAlertToast (with close button, 5s delay)
 connection.on("ReceiveAlert", (alert) => {
     const badge = document.getElementById("alert-badge");
     if (badge) {
@@ -161,34 +230,33 @@ connection.on("ReceiveAlert", (alert) => {
         badge.classList.remove("d-none");
     }
 
-    const container = document.getElementById("notification-toast-container");
-    if (!container || !alert.message) return;
+    if (!alert.message) return;
 
     const severityClass = alert.severity === 1 ? "text-bg-danger"
         : alert.severity === 2 ? "text-bg-warning"
         : "text-bg-info";
 
-    const toast = document.createElement("div");
-    toast.className = "toast align-items-center " + severityClass + " border-0 show";
-    toast.setAttribute("role", "alert");
+    showAlertToast(alert.message, severityClass);
+});
 
-    const dFlex = document.createElement("div");
-    dFlex.className = "d-flex";
+// B4: Handle status explanations — show toast AND update persistent status area
+connection.on("ReceiveStatusExplanation", (message, severity) => {
+    const cssClass = severity === "danger" ? "text-bg-danger"
+        : severity === "warning" ? "text-bg-warning"
+        : "text-bg-info";
 
-    const toastBody = document.createElement("div");
-    toastBody.className = "toast-body";
-    toastBody.textContent = alert.message;
-    dFlex.appendChild(toastBody);
+    showToast(message, cssClass, 4000);
 
-    const closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.className = "btn-close btn-close-white me-2 m-auto";
-    closeBtn.setAttribute("data-bs-dismiss", "toast");
-    dFlex.appendChild(closeBtn);
-
-    toast.appendChild(dFlex);
-    container.appendChild(toast);
-    setTimeout(() => toast.remove(), 8000);
+    // Update persistent status area
+    const statusArea = document.getElementById("status-explanation");
+    if (statusArea) {
+        const alertClass = severity === "danger" ? "alert-danger"
+            : severity === "warning" ? "alert-warning"
+            : "alert-info";
+        statusArea.className = "alert " + alertClass + " mb-0 py-2 px-3 small";
+        statusArea.textContent = message;
+        statusArea.style.display = "block";
+    }
 });
 
 connection.onreconnecting(() => {

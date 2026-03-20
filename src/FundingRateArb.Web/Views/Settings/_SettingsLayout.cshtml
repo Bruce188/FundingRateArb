@@ -1,0 +1,11 @@
+<ul class="nav nav-tabs mb-4">
+    <li class="nav-item">
+        <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "ApiKeys" ? "active" : "")" href="/Settings/ApiKeys">API Keys</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Configuration" ? "active" : "")" href="/Settings/Configuration">Configuration</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link @(ViewContext.RouteData.Values["action"]?.ToString() == "Preferences" ? "active" : "")" href="/Settings/Preferences">Exchanges &amp; Coins</a>
+    </li>
+</ul>

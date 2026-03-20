@@ -1,0 +1,163 @@
+@model FundingRateArb.Web.ViewModels.ApiKeyViewModel
+@{
+    ViewData["Title"] = "API Keys";
+    ViewData["ActiveTab"] = "ApiKeys";
+}
+
+<h2 class="mb-3">Settings</h2>
+
+@await Html.PartialAsync("_SettingsNav")
+
+<div class="alert alert-info d-flex align-items-center mb-4" role="alert">
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor"
+         class="bi bi-shield-lock-fill me-2 flex-shrink-0" viewBox="0 0 16 16">
+        <path fill-rule="evenodd"
+              d="M8 0c-.69 0-1.843.265-2.928.56-1.11.3-2.229.655-2.887.87a1.54 1.54 0 0 0-1.044 1.262c-.596 4.477.787 7.795 2.465 9.99a11.777 11.777 0 0 0 2.517 2.453c.386.273.744.482 1.048.625.28.132.581.208.829.208s.548-.076.829-.208a7.198 7.198 0 0 0 1.048-.625 11.777 11.777 0 0 0 2.517-2.453c1.678-2.195 3.061-5.513 2.465-9.99a1.541 1.541 0 0 0-1.044-1.263 62.467 62.467 0 0 0-2.887-.87C9.843.266 8.69 0 8 0zm0 5a1.5 1.5 0 0 1 .5 2.915l.385 1.99a.5.5 0 0 1-.491.595h-.788a.5.5 0 0 1-.49-.595l.384-1.99A1.5 1.5 0 0 1 8 5z" />
+    </svg>
+    <span>Your API keys are encrypted at rest using the Data Protection API. They are never stored in plain text.</span>
+</div>
+
+@if (!Model.Exchanges.Any())
+{
+    <div class="alert alert-warning">
+        No exchanges are currently enabled by the administrator. Contact your admin to enable exchanges.
+    </div>
+}
+else
+{
+    <div class="row g-4">
+        @foreach (var exchange in Model.Exchanges)
+        {
+            <div class="col-12 col-lg-6">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0 fw-semibold">@exchange.ExchangeName</h5>
+                        @if (exchange.IsConfigured)
+                        {
+                            <span class="badge bg-success">Configured</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">Not Set</span>
+                        }
+                    </div>
+                    <div class="card-body">
+
+                        @* Save form *@
+                        <form asp-controller="Settings" asp-action="SaveApiKey" method="post">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="exchangeId" value="@exchange.ExchangeId" />
+
+                            @if (!exchange.RequiresWallet)
+                            {
+                                @* CEX-style: API Key + API Secret (e.g. Aster) *@
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">API Key</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedApiKey is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedApiKey
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing key.</div>
+                                    }
+                                    <input type="password" class="form-control" name="apiKey"
+                                           autocomplete="new-password"
+                                           placeholder="@(exchange.IsConfigured ? "Enter new API key to replace" : "Enter API key")" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">API Secret</label>
+                                    @if (exchange.IsConfigured)
+                                    {
+                                        <div class="form-text mb-1">Leave blank to keep the existing secret.</div>
+                                    }
+                                    <input type="password" class="form-control" name="apiSecret"
+                                           autocomplete="new-password"
+                                           placeholder="@(exchange.IsConfigured ? "Enter new API secret to replace" : "Enter API secret")" />
+                                </div>
+                            }
+                            else
+                            {
+                                @* DEX-style: Wallet Address + Private Key (e.g. Lighter, HyperLiquid) *@
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Wallet Address</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedWalletAddress
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing address.</div>
+                                    }
+                                    <input type="password" class="form-control" name="walletAddress"
+                                           autocomplete="new-password"
+                                           placeholder="@(exchange.IsConfigured ? "Enter new wallet address to replace" : "Enter wallet address (0x...)")" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Private Key</label>
+                                    @if (exchange.IsConfigured)
+                                    {
+                                        <div class="form-text mb-1">Leave blank to keep the existing private key.</div>
+                                    }
+                                    <input type="password" class="form-control" name="privateKey"
+                                           autocomplete="new-password"
+                                           placeholder="@(exchange.IsConfigured ? "Enter new private key to replace" : "Enter private key")" />
+                                </div>
+                            }
+
+                            <div class="d-flex gap-2 mt-3">
+                                <button type="submit" class="btn btn-primary btn-sm">
+                                    @(exchange.IsConfigured ? "Update Keys" : "Save Keys")
+                                </button>
+
+                                @if (exchange.IsConfigured)
+                                {
+                                    @* Delete button triggers confirmation modal *@
+                                    <button type="button" class="btn btn-outline-danger btn-sm"
+                                            data-bs-toggle="modal"
+                                            data-bs-target="#deleteModal-@exchange.ExchangeId">
+                                        Delete
+                                    </button>
+                                }
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            @* Delete confirmation modal (outside the save form) *@
+            @if (exchange.IsConfigured)
+            {
+                <div class="modal fade" id="deleteModal-@exchange.ExchangeId" tabindex="-1"
+                     aria-labelledby="deleteModalLabel-@exchange.ExchangeId" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title" id="deleteModalLabel-@exchange.ExchangeId">
+                                    Delete @exchange.ExchangeName Keys
+                                </h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p>Are you sure you want to delete your API keys for <strong>@exchange.ExchangeName</strong>?</p>
+                                <p class="text-danger mb-0">
+                                    This action cannot be undone. The bot will stop trading on this exchange until new keys are provided.
+                                </p>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <form asp-controller="Settings" asp-action="DeleteApiKey" method="post" class="d-inline">
+                                    @Html.AntiForgeryToken()
+                                    <input type="hidden" name="exchangeId" value="@exchange.ExchangeId" />
+                                    <button type="submit" class="btn btn-danger">Delete Keys</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            }
+        }
+    </div>
+}

@@ -34,6 +34,12 @@
                                 <span id="alert-badge" class="badge bg-danger d-none ms-1"></span>
                             </a>
                         </li>
+                        @if (User.Identity?.IsAuthenticated == true)
+                        {
+                            <li class="nav-item">
+                                <a class="nav-link" asp-area="" asp-controller="Settings" asp-action="ApiKeys">Settings</a>
+                            </li>
+                        }
                         @if (User.IsInRole("Admin"))
                         {
                             <li class="nav-item dropdown">
@@ -42,6 +48,13 @@
                                     Admin
                                 </a>
                                 <ul class="dropdown-menu dropdown-menu-dark">
+                                    <li>
+                                        <a class="dropdown-item" asp-area="Admin"
+                                           asp-controller="Overview" asp-action="Index">
+                                            Overview
+                                        </a>
+                                    </li>
+                                    <li><hr class="dropdown-divider" /></li>
                                     <li>
                                         <a class="dropdown-item" asp-area="Admin"
                                            asp-controller="BotConfig" asp-action="Index">
