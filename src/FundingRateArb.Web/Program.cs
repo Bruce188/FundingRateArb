@@ -325,9 +325,13 @@ try
             "Database password not configured. Update the connection string via User Secrets.");
     }
 
-    // --- Seed Database ---
+    // --- Apply Pending Migrations ---
     using (var scope = app.Services.CreateScope())
+    {
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        await db.Database.MigrateAsync();
         await DbSeeder.SeedAsync(scope.ServiceProvider);
+    }
 
     // --- Middleware Pipeline ---
     if (!app.Environment.IsDevelopment())
