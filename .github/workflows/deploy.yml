@@ -64,14 +64,12 @@ jobs:
 
       - name: Generate EF migration bundle
         run: |
-          dotnet tool install --global dotnet-ef
+          dotnet tool install --global dotnet-ef --version 8.*
           dotnet ef migrations bundle \
             --project src/FundingRateArb.Infrastructure/FundingRateArb.Infrastructure.csproj \
             --startup-project src/FundingRateArb.Web/FundingRateArb.Web.csproj \
             --self-contained \
-            --no-build \
             --force \
-            -c Release \
             -o ./publish/efbundle
 
       - name: Upload deploy package
