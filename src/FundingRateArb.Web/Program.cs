@@ -257,6 +257,17 @@ try
     builder.Services.AddScoped<AsterConnector>();
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
+    // --- WebSocket Market Data Streaming ---
+    builder.Services.AddSingleton<MarketDataCache>();
+    builder.Services.AddSingleton<IMarketDataCache>(sp => sp.GetRequiredService<MarketDataCache>());
+    builder.Services.AddSingleton<AsterMarketDataStream>();
+    builder.Services.AddSingleton<HyperliquidMarketDataStream>();
+    builder.Services.AddSingleton<LighterWebSocketClient>();
+    builder.Services.AddSingleton<LighterMarketDataStream>();
+    builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<AsterMarketDataStream>());
+    builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<HyperliquidMarketDataStream>());
+    builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<LighterMarketDataStream>());
+
     // --- SignalR ---
     builder.Services.AddSignalR(options =>
     {
@@ -288,6 +299,7 @@ try
     });
 
     // --- Background Services ---
+    builder.Services.AddHostedService<MarketDataStreamManager>();
     builder.Services.AddHostedService<FundingRateFetcher>();
     builder.Services.AddHostedService<BotOrchestrator>();
     builder.Services.AddSingleton<IBotControl>(sp =>
