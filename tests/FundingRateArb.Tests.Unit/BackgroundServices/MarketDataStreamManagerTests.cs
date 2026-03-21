@@ -85,6 +85,7 @@ public class MarketDataStreamManagerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
         await sut.StartAsync(cts.Token);
+        await sut.StopAsync(CancellationToken.None);
 
         // The healthy stream's StartAsync should have been called despite the other failing
         healthyStream.Verify(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()), Times.Once);
