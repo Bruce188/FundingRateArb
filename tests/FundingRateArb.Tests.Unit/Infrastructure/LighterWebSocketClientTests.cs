@@ -24,4 +24,18 @@ public class LighterWebSocketClientTests
         var client = new LighterWebSocketClient(NullLogger<LighterWebSocketClient>.Instance);
         client.IsConnected.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task DisposeAsync_DoesNotThrow_WhenCalledMultipleTimes()
+    {
+        var client = new LighterWebSocketClient(NullLogger<LighterWebSocketClient>.Instance);
+
+        var act = async () =>
+        {
+            await client.DisposeAsync();
+            await client.DisposeAsync();
+        };
+
+        await act.Should().NotThrowAsync();
+    }
 }

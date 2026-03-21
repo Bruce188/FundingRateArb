@@ -95,6 +95,10 @@ public class FundingRateFetcher : BackgroundService
                     var rates = await c.GetFundingRatesAsync(ct);
                     _logger.LogDebug("Fetched {Count} rates from {Exchange} via REST", rates.Count, c.ExchangeName);
                     allRates.AddRange(rates);
+
+                    // Seed cache with REST data so volume survives subsequent WS updates
+                    foreach (var rate in rates)
+                        _cache.Update(rate);
                 }
                 catch (Exception ex)
                 {
