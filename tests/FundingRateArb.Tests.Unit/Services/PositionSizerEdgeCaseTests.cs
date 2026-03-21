@@ -21,8 +21,11 @@ public class PositionSizerEdgeCaseTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator());
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), mockBalanceAggregator.Object);
     }
 
     private static BotConfiguration MakeConfig(
@@ -66,7 +69,7 @@ public class PositionSizerEdgeCaseTests
             }
         };
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m);
     }
@@ -94,7 +97,7 @@ public class PositionSizerEdgeCaseTests
             }
         };
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().BeGreaterThan(0m);
     }

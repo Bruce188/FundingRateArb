@@ -29,6 +29,7 @@ public class BotOrchestratorTests
     private readonly Mock<IUserConfigurationRepository> _mockUserConfigs = new();
     private readonly Mock<ISignalEngine> _mockSignalEngine = new();
     private readonly Mock<IPositionSizer> _mockPositionSizer = new();
+    private readonly Mock<IBalanceAggregator> _mockBalanceAggregator = new();
     private readonly Mock<IExecutionEngine> _mockExecutionEngine = new();
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
@@ -44,6 +45,10 @@ public class BotOrchestratorTests
         _mockSp.Setup(sp => sp.GetService(typeof(IUnitOfWork))).Returns(_mockUow.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(ISignalEngine))).Returns(_mockSignalEngine.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(IPositionSizer))).Returns(_mockPositionSizer.Object);
+        _mockSp.Setup(sp => sp.GetService(typeof(IBalanceAggregator))).Returns(_mockBalanceAggregator.Object);
+
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
         _mockSp.Setup(sp => sp.GetService(typeof(IExecutionEngine))).Returns(_mockExecutionEngine.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(IPositionHealthMonitor))).Returns(_mockHealthMonitor.Object);
         _mockSp.Setup(sp => sp.GetService(typeof(IUserSettingsService))).Returns(_mockUserSettings.Object);
@@ -149,7 +154,7 @@ public class BotOrchestratorTests
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
-        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([100m, 100m]);
 
         // First opp fails with generic error, second succeeds
@@ -193,7 +198,7 @@ public class BotOrchestratorTests
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
-        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([100m, 100m]);
 
         // First opp fails with balance error
@@ -246,7 +251,7 @@ public class BotOrchestratorTests
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
-        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([250m, 250m]);
 
         _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))

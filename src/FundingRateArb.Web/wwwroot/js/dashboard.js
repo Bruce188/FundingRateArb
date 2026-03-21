@@ -175,9 +175,20 @@ connection.on("ReceiveOpportunityUpdate", (data) => {
             } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByVolume > 0 && diagnostics.pairsFilteredByThreshold === 0) {
                 alertDiv.className += " alert alert-info";
                 alertDiv.textContent = diagnostics.pairsFilteredByVolume + " pairs filtered \u2014 volume below $" + diagnostics.minVolumeThreshold.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " on one or both legs.";
-            } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByThreshold > 0) {
+            } else if (diagnostics.pairsPassing === 0 && (diagnostics.pairsFilteredByThreshold > 0 || diagnostics.netPositiveBelowThreshold > 0)) {
                 alertDiv.className += " alert alert-info";
-                alertDiv.textContent = diagnostics.pairsFilteredByThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
+                const totalBelowThreshold = diagnostics.pairsFilteredByThreshold + (diagnostics.netPositiveBelowThreshold || 0);
+                let thresholdText = totalBelowThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. ";
+                if (diagnostics.netPositiveBelowThreshold > 0) {
+                    const bold = document.createElement("strong");
+                    bold.textContent = diagnostics.netPositiveBelowThreshold + " profitable (adaptive eligible).";
+                    alertDiv.textContent = thresholdText;
+                    alertDiv.appendChild(bold);
+                    const trailing = document.createTextNode(" Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.");
+                    alertDiv.appendChild(trailing);
+                } else {
+                    alertDiv.textContent = thresholdText + "Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
+                }
             } else {
                 const span = document.createElement("span");
                 span.className = "text-muted";
@@ -286,6 +297,30 @@ connection.on("ReceiveAlert", (alert) => {
         : "text-bg-info";
 
     showAlertToast(alert.message, severityClass);
+});
+
+// Balance update from BalanceAggregator
+connection.on("ReceiveBalanceUpdate", (snapshot) => {
+    const row = document.getElementById("exchange-balances-row");
+    const container = document.getElementById("exchange-balances");
+    const totalEl = document.getElementById("balance-total");
+    if (!row || !container) return;
+
+    container.innerHTML = "";
+    const balances = snapshot.balances || [];
+
+    balances.forEach(b => {
+        const span = document.createElement("span");
+        span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
+        span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
+        container.appendChild(span);
+    });
+
+    if (totalEl) {
+        totalEl.textContent = "Total: $" + (snapshot.totalAvailableUsdc || 0).toFixed(2);
+    }
+
+    row.style.display = balances.length > 0 ? "block" : "none";
 });
 
 // B4: Handle status explanations — show toast AND update persistent status area

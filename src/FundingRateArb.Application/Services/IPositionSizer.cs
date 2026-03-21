@@ -7,5 +7,7 @@ public interface IPositionSizer
 {
     Task<decimal[]> CalculateBatchSizesAsync(
         IReadOnlyList<ArbitrageOpportunityDto> opportunities,
-        AllocationStrategy strategy);
+        AllocationStrategy strategy,
+        string userId,
+        CancellationToken ct = default);
 }
