@@ -63,7 +63,7 @@ public class AsterMarketDataStream : IMarketDataStream
                 RatePerHour  = (item.FundingRate ?? 0m) / 4m, // 4h → per-hour
                 MarkPrice    = item.MarkPrice,
                 IndexPrice   = item.IndexPrice,
-                Volume24hUsd = 0m, // Not available in mark price stream
+                Volume24hUsd = 0m, // Mark price stream excludes volume — cache preserves REST-fetched value
             };
 
             _cache.Update(dto);

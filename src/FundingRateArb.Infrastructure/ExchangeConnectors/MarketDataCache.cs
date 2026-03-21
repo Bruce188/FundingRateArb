@@ -13,6 +13,11 @@ public class MarketDataCache : IMarketDataCache
     public void Update(FundingRateDto rate)
     {
         var key = Key(rate.ExchangeName, rate.Symbol);
+
+        // Preserve existing volume when the incoming update has 0 (e.g. WS stream without volume data)
+        if (rate.Volume24hUsd == 0m && _rates.TryGetValue(key, out var existing) && existing.Rate.Volume24hUsd > 0m)
+            rate.Volume24hUsd = existing.Rate.Volume24hUsd; // N.B. mutates caller's dto
+
         _rates[key] = (rate, DateTime.UtcNow);
     }
 
