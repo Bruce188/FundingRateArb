@@ -116,6 +116,10 @@ public class SignalEngine : ISignalEngine
                 {
                     diagnostics.PairsFilteredByThreshold++;
                 }
+                else
+                {
+                    diagnostics.PairsFilteredByThreshold++;
+                }
             }
         }
 
