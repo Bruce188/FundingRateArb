@@ -76,15 +76,19 @@ public class MarketDataStreamManagerTests
         failingStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Connection failed"));
 
+        var healthyCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var healthyStream = new Mock<IMarketDataStream>();
         healthyStream.Setup(s => s.ExchangeName).Returns("Healthy");
         healthyStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback(() => healthyCalled.TrySetResult(true))
             .Returns(Task.CompletedTask);
 
         var sut = CreateSut(failingStream.Object, healthyStream.Object);
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         await sut.StartAsync(cts.Token);
+        await healthyCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await sut.StopAsync(CancellationToken.None);
 
         // The healthy stream's StartAsync should have been called despite the other failing

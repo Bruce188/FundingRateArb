@@ -16,8 +16,8 @@ set -euo pipefail
 # ============================================================================
 
 # --- Configuration (edit these) ---
-RESOURCE_GROUP="rg-fundingratearb"
-LOCATION="westeurope"
+RESOURCE_GROUP="rg-fundingratearb1"
+LOCATION="germanywestcentral"
 APP_NAME="fundingratearb"
 SQL_SERVER_NAME="sql-fundingratearb"
 SQL_DB_NAME="FundingRateArbDb"
@@ -64,7 +64,7 @@ az sql server firewall-rule create \
   --end-ip-address 0.0.0.0 \
   -o none
 
-SQL_CONN="Server=tcp:${SQL_SERVER_NAME}.database.windows.net,1433;Database=${SQL_DB_NAME};User Id=${SQL_ADMIN_USER};Password=${SQL_ADMIN_PASSWORD};Encrypt=True;TrustServerCertificate=False;"
+SQL_CONN="Server=tcp:${SQL_SERVER_NAME}.database.windows.net,1433;Database=${SQL_DB_NAME};User ID=${SQL_ADMIN_USER};Password=${SQL_ADMIN_PASSWORD};Encrypt=True;TrustServerCertificate=False;"
 
 # --- App Service ---
 echo "==> Creating App Service Plan (Linux, B1)..."
