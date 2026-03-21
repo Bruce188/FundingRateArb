@@ -99,8 +99,7 @@ jobs:
       - name: Run EF migrations
         run: |
           chmod +x ./publish/efbundle
-          CLEAN_CONN="${SQL_CONN//$'\n'/}"
-          CLEAN_CONN="${CLEAN_CONN//$'\r'/}"
+          CLEAN_CONN=$(printf '%s' "$SQL_CONN" | tr -d '\r\n' | tr -s ' ')
           ./publish/efbundle --connection "$CLEAN_CONN"
         env:
           SQL_CONN: ${{ secrets.SQL_CONNECTION_STRING }}
