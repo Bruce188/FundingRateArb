@@ -135,7 +135,10 @@ public class LighterMarketDataStream : IMarketDataStream
         var markPrice = GetDecimalProperty(el, "mark_price") ?? indexPrice;
         var volume = GetDecimalProperty(el, "volume_24h")
                   ?? GetDecimalProperty(el, "daily_quote_token_volume")
-                  ?? 0m;
+                  ?? 0m; // Cache preserves REST-fetched volume when this is 0
+
+        if (volume == 0m)
+            _logger.LogDebug("No volume in WS payload for {Symbol} — cache will preserve REST value", symbol);
 
         var dto = new FundingRateDto
         {
