@@ -255,7 +255,7 @@ public class FundingRateFetcherTests
         await _sut.FetchAllAsync(CancellationToken.None);
 
         _mockDashboardClient.Verify(
-            d => d.ReceiveOpportunityUpdate(It.IsAny<List<ArbitrageOpportunityDto>>()),
+            d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>()),
             Times.Never,
             "FundingRateFetcher must not call ReceiveOpportunityUpdate — that responsibility belongs to BotOrchestrator");
     }

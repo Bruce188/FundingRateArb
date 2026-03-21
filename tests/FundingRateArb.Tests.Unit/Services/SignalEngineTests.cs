@@ -529,4 +529,132 @@ public class SignalEngineTests
 
         result.Should().HaveCount(1);
     }
+
+    // ── Pipeline diagnostics ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_NoRates_ReturnsZeroTotalLoaded()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.TotalRatesLoaded.Should().Be(0);
+        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Opportunities.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_AllRatesStale_ReturnsZeroAfterStaleness()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, recordedAt: DateTime.UtcNow.AddMinutes(-30)),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, recordedAt: DateTime.UtcNow.AddMinutes(-30)),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics.RatesAfterStalenessFilter.Should().Be(0);
+        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Opportunities.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_AllPairsBelowVolume_ReportsVolumeFiltered()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 10_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 10_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.TotalPairsEvaluated.Should().Be(1);
+        result.Diagnostics.PairsFilteredByVolume.Should().Be(1);
+        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Opportunities.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_AllPairsBelowThreshold_ReportsThresholdFiltered()
+    {
+        // Spread = 0.0002, fees make net < 0.001 threshold
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0003m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.PairsFilteredByThreshold.Should().BeGreaterThan(0);
+        result.Diagnostics.BestRawSpread.Should().BeGreaterThan(0);
+        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Opportunities.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_PassingPairs_ReportsCorrectCounts()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics.RatesAfterStalenessFilter.Should().Be(2);
+        result.Diagnostics.TotalPairsEvaluated.Should().Be(1);
+        result.Diagnostics.PairsFilteredByVolume.Should().Be(0);
+        result.Diagnostics.PairsPassing.Should().Be(1);
+        result.Opportunities.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_ReportsConfigValues()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                OpenThreshold = 0.0005m,
+                MinVolume24hUsdc = 75_000m,
+                RateStalenessMinutes = 20
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.StalenessMinutes.Should().Be(20);
+        result.Diagnostics.MinVolumeThreshold.Should().Be(75_000m);
+        result.Diagnostics.OpenThreshold.Should().Be(0.0005m);
+    }
 }

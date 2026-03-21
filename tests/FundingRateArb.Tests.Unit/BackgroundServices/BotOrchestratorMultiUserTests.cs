@@ -83,7 +83,7 @@ public class BotOrchestratorMultiUserTests
         _mockGroupClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<List<ArbitrageOpportunityDto>>())).Returns(Task.CompletedTask);
+        _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
         _sut = new BotOrchestrator(
@@ -130,7 +130,7 @@ public class BotOrchestratorMultiUserTests
             ShortExchangeId = 2, ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m]);
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
@@ -171,7 +171,7 @@ public class BotOrchestratorMultiUserTests
             AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -192,13 +192,13 @@ public class BotOrchestratorMultiUserTests
         _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
             .ReturnsAsync(new List<string>());
 
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Health monitor and signal engine still run (global)
         _mockHealthMonitor.Verify(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()), Times.Once);
-        _mockSignalEngine.Verify(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockSignalEngine.Verify(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()), Times.Once);
 
         // No user config loads
         _mockUserSettings.Verify(s => s.GetOrCreateConfigAsync(It.IsAny<string>()), Times.Never);
@@ -214,7 +214,7 @@ public class BotOrchestratorMultiUserTests
         _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
             .ReturnsAsync(new List<string> { UserA });
 
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -250,7 +250,7 @@ public class BotOrchestratorMultiUserTests
             ShortExchangeId = 2, ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m]);
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
@@ -326,7 +326,7 @@ public class BotOrchestratorMultiUserTests
             ShortExchangeId = 2, ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m]);
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
@@ -369,7 +369,7 @@ public class BotOrchestratorMultiUserTests
             ShortExchangeId = 3, ShortExchangeName = "ExC", // not in user's enabled list
             NetYieldPerHour = 0.001m,
         };
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([opp]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -394,7 +394,7 @@ public class BotOrchestratorMultiUserTests
             ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
         var statusSentToUserGroup = false;
         _mockGroupClient

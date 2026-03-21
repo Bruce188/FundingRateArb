@@ -146,8 +146,8 @@ public class BotOrchestratorTests
 
         var opp1 = MakeOpp(1, "ETH");
         var opp2 = MakeOpp(2, "BTC");
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([opp1, opp2]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m, 100m]);
@@ -190,8 +190,8 @@ public class BotOrchestratorTests
 
         var opp1 = MakeOpp(1, "ETH");
         var opp2 = MakeOpp(2, "BTC");
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([opp1, opp2]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([100m, 100m]);
@@ -243,8 +243,8 @@ public class BotOrchestratorTests
 
         var opp1 = MakeOpp(1, "ETH");
         var opp2 = MakeOpp(2, "BTC");
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([opp1, opp2]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
 
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>()))
             .ReturnsAsync([250m, 250m]);
