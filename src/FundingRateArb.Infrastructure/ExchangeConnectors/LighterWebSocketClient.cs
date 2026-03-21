@@ -239,7 +239,8 @@ public class LighterWebSocketClient : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        _cts?.Cancel();
+        try { _cts?.Cancel(); }
+        catch (ObjectDisposedException) { /* CTS already disposed during reconnect */ }
 
         if (_ws?.State == WebSocketState.Open)
         {
@@ -251,6 +252,8 @@ public class LighterWebSocketClient : IAsyncDisposable
         }
 
         _ws?.Dispose();
-        _cts?.Dispose();
+
+        try { _cts?.Dispose(); }
+        catch (ObjectDisposedException) { /* Already disposed */ }
     }
 }
