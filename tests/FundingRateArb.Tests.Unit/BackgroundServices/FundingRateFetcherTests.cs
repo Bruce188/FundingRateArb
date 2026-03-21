@@ -5,6 +5,7 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
+using FundingRateArb.Infrastructure.ExchangeConnectors;
 using FundingRateArb.Infrastructure.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -475,6 +476,44 @@ public class FundingRateFetcherTests
         _mockHyperliquid.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
         _mockLighter.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
         _mockAster.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public void FetchAll_CachePreservesVolume_WhenWebSocketSendsZero()
+    {
+        // Simulates the real pipeline: REST populates cache with volume, then
+        // WebSocket updates overwrite with 0 volume (Aster mark price stream).
+        // The cache fix should preserve the REST-fetched volume.
+        var realCache = new MarketDataCache();
+
+        // Step 1: REST fetch populates cache with real volume
+        realCache.Update(new FundingRateDto
+        {
+            ExchangeName = "Aster", Symbol = "ETH",
+            RatePerHour = 0.0005m, RawRate = 0.002m,
+            MarkPrice = 3000m, IndexPrice = 3000m,
+            Volume24hUsd = 100_000m,
+        });
+
+        // Step 2: WebSocket update overwrites rate/price but has 0 volume
+        realCache.Update(new FundingRateDto
+        {
+            ExchangeName = "Aster", Symbol = "ETH",
+            RatePerHour = 0.0006m, RawRate = 0.0024m,
+            MarkPrice = 3050m, IndexPrice = 3050m,
+            Volume24hUsd = 0m,
+        });
+
+        // Step 3: FundingRateFetcher reads from cache (fresh, not stale)
+        var cached = realCache.GetAllForExchange("Aster");
+        cached.Should().HaveCount(1);
+
+        var dto = cached[0];
+        // Rate and price should be updated to WebSocket values
+        dto.RatePerHour.Should().Be(0.0006m);
+        dto.MarkPrice.Should().Be(3050m);
+        // Volume should be preserved from the REST fetch
+        dto.Volume24hUsd.Should().Be(100_000m);
     }
 
     [Fact]

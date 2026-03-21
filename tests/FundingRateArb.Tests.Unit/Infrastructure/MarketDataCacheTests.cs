@@ -9,7 +9,7 @@ public class MarketDataCacheTests
     private readonly MarketDataCache _sut = new();
 
     private static FundingRateDto MakeDto(string exchange = "Aster", string symbol = "BTC",
-        decimal rate = 0.0005m, decimal markPrice = 50000m) => new()
+        decimal rate = 0.0005m, decimal markPrice = 50000m, decimal volume = 1_000_000m) => new()
     {
         ExchangeName = exchange,
         Symbol = symbol,
@@ -17,7 +17,7 @@ public class MarketDataCacheTests
         RawRate = rate,
         MarkPrice = markPrice,
         IndexPrice = markPrice,
-        Volume24hUsd = 1_000_000m,
+        Volume24hUsd = volume,
     };
 
     [Fact]
@@ -115,5 +115,43 @@ public class MarketDataCacheTests
     {
         _sut.Update(MakeDto("Aster", "BTC"));
         _sut.GetAllForExchange("aster").Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Update_PreservesVolume_WhenNewVolumeIsZero()
+    {
+        _sut.Update(MakeDto("Aster", "BTC", volume: 1_000_000m));
+        _sut.Update(new FundingRateDto
+        {
+            ExchangeName = "Aster", Symbol = "BTC",
+            RatePerHour = 0.001m, RawRate = 0.001m,
+            MarkPrice = 52000m, IndexPrice = 52000m,
+            Volume24hUsd = 0m,
+        });
+
+        _sut.GetLatest("Aster", "BTC")!.Volume24hUsd.Should().Be(1_000_000m);
+    }
+
+    [Fact]
+    public void Update_OverwritesVolume_WhenNewVolumeIsPositive()
+    {
+        _sut.Update(MakeDto("Aster", "BTC", volume: 1_000_000m));
+        _sut.Update(MakeDto("Aster", "BTC", volume: 2_000_000m));
+
+        _sut.GetLatest("Aster", "BTC")!.Volume24hUsd.Should().Be(2_000_000m);
+    }
+
+    [Fact]
+    public void Update_AllowsZeroVolume_WhenNoPreviousEntry()
+    {
+        _sut.Update(new FundingRateDto
+        {
+            ExchangeName = "Aster", Symbol = "NEW",
+            RatePerHour = 0.001m, RawRate = 0.001m,
+            MarkPrice = 100m, IndexPrice = 100m,
+            Volume24hUsd = 0m,
+        });
+
+        _sut.GetLatest("Aster", "NEW")!.Volume24hUsd.Should().Be(0m);
     }
 }
