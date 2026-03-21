@@ -517,6 +517,53 @@ public class FundingRateFetcherTests
     }
 
     [Fact]
+    public async Task FetchAll_SeedsCacheFromRest_SoVolumeIsPreserved()
+    {
+        // Verifies the FundingRateFetcher writes REST results to the cache,
+        // which is critical: without this, the cache volume-preservation fix
+        // has nothing to preserve when WebSocket updates arrive with volume=0.
+        var realCache = new MarketDataCache();
+
+        var sut = new FundingRateFetcher(
+            _mockScopeFactory.Object, realCache,
+            _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
+
+        var restRates = new List<FundingRateDto>
+        {
+            new() { ExchangeName = "Aster", Symbol = "ETH",
+                     RatePerHour = 0.0005m, RawRate = 0.002m,
+                     MarkPrice = 3000m, IndexPrice = 3000m,
+                     Volume24hUsd = 100_000m },
+        };
+
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(restRates);
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // REST fetch should seed the cache
+        await sut.FetchAllAsync(CancellationToken.None);
+
+        var cached = realCache.GetLatest("Aster", "ETH");
+        cached.Should().NotBeNull();
+        cached!.Volume24hUsd.Should().Be(100_000m);
+
+        // Simulate WebSocket update with 0 volume
+        realCache.Update(new FundingRateDto
+        {
+            ExchangeName = "Aster", Symbol = "ETH",
+            RatePerHour = 0.0006m, RawRate = 0.0024m,
+            MarkPrice = 3050m, IndexPrice = 3050m,
+            Volume24hUsd = 0m,
+        });
+
+        // Volume should be preserved from the REST-seeded entry
+        realCache.GetLatest("Aster", "ETH")!.Volume24hUsd.Should().Be(100_000m);
+    }
+
+    [Fact]
     public async Task FetchAll_MixedMode_SomeCachedSomeRest()
     {
         var cachedHyperliquid = MakeRates("Hyperliquid", "ETH");
