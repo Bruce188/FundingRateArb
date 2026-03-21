@@ -193,7 +193,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, allOpportunities, allOpenPositions, uow, signalEngine, executionEngine, userSettings, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, ct);
             }
             catch (Exception ex)
             {
@@ -208,7 +208,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
     private async Task ExecuteUserCycleAsync(
         string userId,
         BotConfiguration globalConfig,
-        List<ArbitrageOpportunityDto> allOpportunities,
+        OpportunityResultDto opportunityResult,
         List<ArbitragePosition> allOpenPositions,
         IUnitOfWork uow,
         ISignalEngine signalEngine,
@@ -216,6 +216,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         IUserSettingsService userSettings,
         CancellationToken ct)
     {
+        var allOpportunities = opportunityResult.Opportunities;
         var userConfig = await userSettings.GetOrCreateConfigAsync(userId);
         if (!userConfig.IsEnabled) return;
 
@@ -313,32 +314,81 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         if (candidates.Count == 0)
         {
-            if (userOpportunities.Count == 0 && allOpportunities.Count == 0)
+            // Adaptive threshold fallback: when user has 0 open positions, try net-positive opportunities below threshold
+            if (userOpenPositions.Count == 0 && opportunityResult.AllNetPositive.Count > 0)
             {
-                await PushStatusExplanationAsync(userId, "No arbitrage opportunities detected this cycle", "info");
+                var adaptiveCandidates = opportunityResult.AllNetPositive
+                    .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
+                    .Where(o => enabledAssetSet.Contains(o.AssetId))
+                    .Where(opp =>
+                    {
+                        var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                        if (allActiveKeys.Contains(key)) return false;
+                        var cooldownKey = $"{userId}:{key}";
+                        if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+                            return false;
+                        return true;
+                    })
+                    .Take(1)
+                    .ToList();
+
+                if (adaptiveCandidates.Count > 0)
+                {
+                    var bestAdaptive = adaptiveCandidates[0];
+                    _logger.LogInformation(
+                        "Adaptive threshold for user {UserId}: {Asset} at {Net:F6}/hr (below normal threshold {Threshold:F6})",
+                        userId, bestAdaptive.AssetSymbol, bestAdaptive.NetYieldPerHour, userConfig.OpenThreshold);
+                    await PushStatusExplanationAsync(userId,
+                        $"Adaptive threshold: opening {bestAdaptive.AssetSymbol} at {bestAdaptive.NetYieldPerHour * 100:F4}%/hr (below normal threshold)", "info");
+
+                    // Use the normal execution path with the adaptive candidate
+                    candidates = adaptiveCandidates;
+                    // Fall through to sizing + execution below
+                }
             }
-            else if (userOpportunities.Count == 0)
+
+            if (candidates.Count == 0)
             {
-                await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges and coins", "info");
+                if (userOpportunities.Count == 0 && allOpportunities.Count == 0)
+                {
+                    await PushStatusExplanationAsync(userId, "No arbitrage opportunities detected this cycle", "info");
+                }
+                else if (userOpportunities.Count == 0)
+                {
+                    await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges and coins", "info");
+                }
+                else if (cooldownSkips.Count > 0)
+                {
+                    var first = cooldownSkips[0];
+                    var minutes = (int)Math.Ceiling(first.Remaining.TotalMinutes);
+                    await PushStatusExplanationAsync(userId,
+                        $"{first.Asset} cooling down — retry in {minutes} minutes", "info");
+                }
+                else
+                {
+                    var bestOpp = userOpportunities.OrderByDescending(o => o.SpreadPerHour).First();
+                    await PushStatusExplanationAsync(userId,
+                        $"Best spread {(bestOpp.SpreadPerHour * 100):F2}%/hr — all opportunities have active positions", "info");
+                }
+                return;
             }
-            else if (cooldownSkips.Count > 0)
-            {
-                var first = cooldownSkips[0];
-                var minutes = (int)Math.Ceiling(first.Remaining.TotalMinutes);
-                await PushStatusExplanationAsync(userId,
-                    $"{first.Asset} cooling down — retry in {minutes} minutes", "info");
-            }
-            else
-            {
-                var bestOpp = userOpportunities.OrderByDescending(o => o.SpreadPerHour).First();
-                await PushStatusExplanationAsync(userId,
-                    $"Best spread {(bestOpp.SpreadPerHour * 100):F2}%/hr — all opportunities have active positions", "info");
-            }
-            return;
         }
 
-        var positionSizer = _scopeFactory.CreateScope().ServiceProvider.GetRequiredService<IPositionSizer>();
-        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy);
+        using var sizerScope = _scopeFactory.CreateScope();
+        var positionSizer = sizerScope.ServiceProvider.GetRequiredService<IPositionSizer>();
+        var balanceAggregator = sizerScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
+        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy, userId, ct);
+
+        // Push balance snapshot to user's dashboard
+        try
+        {
+            var balanceSnapshot = await balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
+            await _hubContext.Clients.Group($"user-{userId}").ReceiveBalanceUpdate(balanceSnapshot);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to push balance update for user {UserId}", userId);
+        }
         var slotsAvailable = userConfig.MaxConcurrentPositions - userOpenPositions.Count - userOpeningPositions.Count;
 
         for (int idx = 0; idx < candidates.Count; idx++)

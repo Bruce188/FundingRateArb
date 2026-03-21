@@ -608,7 +608,8 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.PairsFilteredByThreshold.Should().BeGreaterThan(0);
+        // Net yield is positive but below threshold — goes to NetPositiveBelowThreshold
+        (result.Diagnostics.PairsFilteredByThreshold + result.Diagnostics.NetPositiveBelowThreshold).Should().BeGreaterThan(0);
         result.Diagnostics.BestRawSpread.Should().BeGreaterThan(0);
         result.Diagnostics.PairsPassing.Should().Be(0);
         result.Opportunities.Should().BeEmpty();
@@ -656,5 +657,98 @@ public class SignalEngineTests
         result.Diagnostics.StalenessMinutes.Should().Be(20);
         result.Diagnostics.MinVolumeThreshold.Should().Be(75_000m);
         result.Diagnostics.OpenThreshold.Should().Be(0.0005m);
+    }
+
+    // ── AllNetPositive tests ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task AllNetPositive_ContainsOpportunitiesBelowThresholdButAboveZero()
+    {
+        // Spread = 0.0003 - 0.0001 = 0.0002
+        // Fees: Lighter=0, Hyperliquid=0.00090/24 = 0.0000375
+        // Net = 0.0002 - 0.0000375 = 0.0001625 → positive but below threshold 0.001
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0003m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty();
+        result.AllNetPositive.Should().HaveCount(1);
+        result.AllNetPositive[0].NetYieldPerHour.Should().BeGreaterThan(0);
+        result.Diagnostics.NetPositiveBelowThreshold.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AllNetPositive_DoesNotContainOpportunitiesAboveThreshold()
+    {
+        // Big spread → passes threshold → goes to Opportunities, not AllNetPositive
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().HaveCount(1);
+        result.AllNetPositive.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AllNetPositive_DoesNotContainNegativeNetYield()
+    {
+        // Very small spread → net becomes negative after fees → neither list
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Aster",       1, "ETH", 0.00011m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty();
+        result.AllNetPositive.Should().BeEmpty();
+        result.Diagnostics.PairsFilteredByThreshold.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task AllNetPositive_SortedByNetYieldDescending()
+    {
+        // Two net-positive opportunities with different yields
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0003m, volume: 100_000m),
+            MakeRate(1, "Hyperliquid", 2, "BTC", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     2, "BTC", 0.0004m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.01m, MinVolume24hUsdc = 50_000m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.AllNetPositive.Should().HaveCountGreaterOrEqualTo(2);
+        result.AllNetPositive[0].NetYieldPerHour.Should().BeGreaterThanOrEqualTo(result.AllNetPositive[1].NetYieldPerHour);
     }
 }

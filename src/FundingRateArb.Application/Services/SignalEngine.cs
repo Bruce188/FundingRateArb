@@ -45,6 +45,7 @@ public class SignalEngine : ISignalEngine
         diagnostics.RatesAfterStalenessFilter = rates.Count;
 
         var opportunities = new List<ArbitrageOpportunityDto>();
+        var netPositiveList = new List<ArbitrageOpportunityDto>();
 
         foreach (var group in rates.Where(r => r.Asset?.Symbol is not null).GroupBy(r => r.Asset!.Symbol))
         {
@@ -83,26 +84,33 @@ public class SignalEngine : ISignalEngine
                 var feePerHour = (longFee + shortFee) / amortHours;
                 var net = diff - feePerHour;
 
+                var dto = new ArbitrageOpportunityDto
+                {
+                    AssetSymbol = symbol,
+                    AssetId = longR.AssetId,
+                    LongExchangeName = longR.Exchange.Name,
+                    LongExchangeId = longR.ExchangeId,
+                    ShortExchangeName = shortR.Exchange.Name,
+                    ShortExchangeId = shortR.ExchangeId,
+                    LongRatePerHour = longR.RatePerHour,
+                    ShortRatePerHour = shortR.RatePerHour,
+                    SpreadPerHour = diff,
+                    NetYieldPerHour = net,
+                    AnnualizedYield = net * 24m * 365m,
+                    LongVolume24h = longR.Volume24hUsd,
+                    ShortVolume24h = shortR.Volume24hUsd,
+                    LongMarkPrice = longR.MarkPrice,
+                    ShortMarkPrice = shortR.MarkPrice,
+                };
+
                 if (net >= config.OpenThreshold)
                 {
-                    opportunities.Add(new ArbitrageOpportunityDto
-                    {
-                        AssetSymbol = symbol,
-                        AssetId = longR.AssetId,
-                        LongExchangeName = longR.Exchange.Name,
-                        LongExchangeId = longR.ExchangeId,
-                        ShortExchangeName = shortR.Exchange.Name,
-                        ShortExchangeId = shortR.ExchangeId,
-                        LongRatePerHour = longR.RatePerHour,
-                        ShortRatePerHour = shortR.RatePerHour,
-                        SpreadPerHour = diff,
-                        NetYieldPerHour = net,
-                        AnnualizedYield = net * 24m * 365m,
-                        LongVolume24h = longR.Volume24hUsd,
-                        ShortVolume24h = shortR.Volume24hUsd,
-                        LongMarkPrice = longR.MarkPrice,
-                        ShortMarkPrice = shortR.MarkPrice,
-                    });
+                    opportunities.Add(dto);
+                }
+                else if (net > 0)
+                {
+                    netPositiveList.Add(dto);
+                    diagnostics.NetPositiveBelowThreshold++;
                 }
                 else
                 {
@@ -117,6 +125,7 @@ public class SignalEngine : ISignalEngine
         return new OpportunityResultDto
         {
             Opportunities = sorted,
+            AllNetPositive = netPositiveList.OrderByDescending(o => o.NetYieldPerHour).Take(26).ToList(),
             Diagnostics = diagnostics
         };
     }
