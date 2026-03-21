@@ -23,6 +23,7 @@ SQL_SERVER_NAME="sql-fundingratearb"
 SQL_DB_NAME="FundingRateArbDb"
 SQL_ADMIN_USER="sqladmin"
 APP_SERVICE_PLAN="plan-fundingratearb"
+KEY_VAULT_NAME="kv-fundingratearb"
 GITHUB_REPO="Bruce188/FundingRateArb"        # owner/repo
 
 # --- Prompt for secrets ---
@@ -97,21 +98,73 @@ az webapp config set \
   --always-on true \
   -o none
 
+# --- Azure Key Vault ---
+echo "==> Creating Key Vault..."
+az keyvault create \
+  --name "$KEY_VAULT_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --enable-rbac-authorization true \
+  -o none
+
+echo "==> Enabling managed identity on App Service..."
+IDENTITY_PRINCIPAL_ID=$(az webapp identity assign \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$APP_NAME" \
+  --query principalId -o tsv)
+
+echo "==> Granting Key Vault Secrets User role to App Service..."
+KV_RESOURCE_ID=$(az keyvault show \
+  --name "$KEY_VAULT_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query id -o tsv)
+az role assignment create \
+  --assignee "$IDENTITY_PRINCIPAL_ID" \
+  --role "Key Vault Secrets User" \
+  --scope "$KV_RESOURCE_ID" \
+  -o none
+
+echo "==> Granting Key Vault Secrets Officer role to current user..."
+CURRENT_USER_ID=$(az ad signed-in-user show --query id -o tsv)
+az role assignment create \
+  --assignee "$CURRENT_USER_ID" \
+  --role "Key Vault Secrets Officer" \
+  --scope "$KV_RESOURCE_ID" \
+  -o none
+
+echo "==> Waiting for RBAC propagation..."
+for i in {1..12}; do
+  if az keyvault secret list --vault-name "$KEY_VAULT_NAME" --maxresults 1 -o none 2>/dev/null; then
+    echo "  RBAC propagated."
+    break
+  fi
+  if [ "$i" -eq 12 ]; then
+    echo "ERROR: RBAC propagation timed out after 3 minutes. Re-run the script or wait and retry manually."
+    exit 1
+  fi
+  echo "  Attempt $i/12 — waiting 15s..."
+  sleep 15
+done
+
+echo "==> Populating Key Vault secrets..."
+az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "ConnectionStrings--DefaultConnection" --value "$SQL_CONN" -o none
+az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Seed--AdminPassword" --value "$SEED_ADMIN_PASSWORD" -o none
+
+# Exchange API keys — add these manually after running the script:
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Hyperliquid--WalletAddress" --value "0x..."
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Hyperliquid--PrivateKey" --value "..."
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Aster--ApiKey" --value "..."
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Aster--ApiSecret" --value "..."
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Lighter--ApiKey" --value "..."
+#   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Lighter--SignerPrivateKey" --value "..."
+
 echo "==> Configuring app settings..."
 az webapp config appsettings set \
   --resource-group "$RESOURCE_GROUP" \
   --name "$APP_NAME" \
   --settings \
     "ASPNETCORE_ENVIRONMENT=Production" \
-    "Seed__AdminPassword=${SEED_ADMIN_PASSWORD}" \
-  -o none
-
-az webapp config connection-string set \
-  --resource-group "$RESOURCE_GROUP" \
-  --name "$APP_NAME" \
-  --connection-string-type SQLAzure \
-  --settings \
-    "DefaultConnection=${SQL_CONN}" \
+    "KeyVaultName=${KEY_VAULT_NAME}" \
   -o none
 
 # --- OIDC Federation for GitHub Actions ---
@@ -162,12 +215,13 @@ echo "  Resource Group:  $RESOURCE_GROUP"
 echo "  App Service:     https://${APP_NAME}.azurewebsites.net"
 echo "  SQL Server:      ${SQL_SERVER_NAME}.database.windows.net"
 echo "  Database:        $SQL_DB_NAME"
+echo "  Key Vault:       $KEY_VAULT_NAME"
 echo "  GitHub OIDC:     configured for ${GITHUB_REPO}:main"
 echo ""
 echo "  Next steps:"
-echo "    1. Add exchange API keys via App Service Configuration:"
-echo "       az webapp config appsettings set -g $RESOURCE_GROUP -n $APP_NAME \\"
-echo "         --settings Exchanges__Hyperliquid__WalletAddress=0x..."
+echo "    1. Add exchange API keys via Key Vault:"
+echo "       az keyvault secret set --vault-name $KEY_VAULT_NAME \\"
+echo "         --name \"Exchanges--Hyperliquid--WalletAddress\" --value \"0x...\""
 echo "    2. Push to main — GitHub Actions will build, test, and deploy."
 echo "    3. (Optional) Create a 'production' environment in GitHub"
 echo "       with required reviewers for deploy approval gate."

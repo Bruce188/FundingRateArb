@@ -21,6 +21,7 @@ using Polly.Timeout;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using CryptoExchange.Net.Authentication;
+using Azure.Identity;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.MSSqlServer;
@@ -39,6 +40,15 @@ try
     Log.Information("Starting FundingRateArb application");
 
     var builder = WebApplication.CreateBuilder(args);
+
+    // --- Azure Key Vault (production secrets) ---
+    var keyVaultName = builder.Configuration["KeyVaultName"];
+    if (!string.IsNullOrEmpty(keyVaultName))
+    {
+        builder.Configuration.AddAzureKeyVault(
+            new Uri($"https://{keyVaultName}.vault.azure.net/"),
+            new DefaultAzureCredential());
+    }
 
     // --- Serilog (replaces default ILogger) ---
     var isDevelopment = builder.Environment.IsDevelopment();
