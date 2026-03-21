@@ -116,6 +116,21 @@
     </div>
 </div>
 
+<!-- Exchange Balances -->
+<div class="row mb-3" id="exchange-balances-row" style="display:none;">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body py-2 px-3">
+                <div class="d-flex align-items-center">
+                    <span class="text-muted small me-3">Balances:</span>
+                    <div id="exchange-balances" class="d-flex flex-wrap gap-3 small"></div>
+                    <span class="text-muted small ms-auto" id="balance-total"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- B4: Persistent status explanation area -->
 <div class="row mb-3">
     <div class="col-12">
@@ -185,10 +200,14 @@
                                                     @dx.PairsFilteredByVolume pairs filtered &mdash; volume below $@dx.MinVolumeThreshold.ToString("N0") on one or both legs.
                                                 </div>
                                             }
-                                            else if (dx.PairsPassing == 0 && dx.PairsFilteredByThreshold > 0)
+                                            else if (dx.PairsPassing == 0 && (dx.PairsFilteredByThreshold > 0 || dx.NetPositiveBelowThreshold > 0))
                                             {
                                                 <div class="alert alert-info mb-0 d-inline-block">
-                                                    @dx.PairsFilteredByThreshold pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
+                                                    @(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold) pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
+                                                    @if (dx.NetPositiveBelowThreshold > 0)
+                                                    {
+                                                        <strong>@dx.NetPositiveBelowThreshold profitable (adaptive eligible).</strong>
+                                                    }
                                                     Best raw spread: @((dx.BestRawSpread * 100).ToString("F4"))%.
                                                 </div>
                                             }

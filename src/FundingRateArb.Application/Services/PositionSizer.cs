@@ -8,16 +8,20 @@ public class PositionSizer : IPositionSizer
 {
     private readonly IUnitOfWork _uow;
     private readonly IYieldCalculator _yieldCalculator;
+    private readonly IBalanceAggregator _balanceAggregator;
 
-    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator)
+    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator, IBalanceAggregator balanceAggregator)
     {
         _uow = uow;
         _yieldCalculator = yieldCalculator;
+        _balanceAggregator = balanceAggregator;
     }
 
     public async Task<decimal[]> CalculateBatchSizesAsync(
         IReadOnlyList<ArbitrageOpportunityDto> opportunities,
-        AllocationStrategy strategy)
+        AllocationStrategy strategy,
+        string userId,
+        CancellationToken ct = default)
     {
         if (opportunities.Count == 0)
             return [];
@@ -25,7 +29,11 @@ public class PositionSizer : IPositionSizer
         var config = await _uow.BotConfig.GetActiveAsync();
         var openPositions = await _uow.Positions.GetOpenAsync();
         var allocatedCapital = openPositions.Sum(p => p.SizeUsdc);
-        var availableCapital = Math.Max(0, config.TotalCapitalUsdc - allocatedCapital);
+
+        // Use real exchange balance, capped by configured TotalCapitalUsdc
+        var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
+        var realCapital = Math.Min(balanceSnapshot.TotalAvailableUsdc, config.TotalCapitalUsdc);
+        var availableCapital = Math.Max(0, realCapital - allocatedCapital);
         var totalCapital = availableCapital * config.MaxCapitalPerPosition;
         var sizes = new decimal[opportunities.Count];
 

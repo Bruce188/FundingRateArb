@@ -12,6 +12,7 @@ public class PositionSizerTests
 {
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
+    private readonly Mock<IBalanceAggregator> _mockBalanceAggregator = new();
     private readonly PositionSizer _sut;
 
     private readonly Mock<IPositionRepository> _mockPositions = new();
@@ -21,8 +22,11 @@ public class PositionSizerTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        // Default balance: high enough that config cap applies
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator());
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object);
     }
 
     private static ArbitrageOpportunityDto DefaultOpp(
@@ -130,7 +134,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m), (0.0005m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().BeGreaterThan(0);
         sizes[1].Should().Be(0);
@@ -145,7 +149,7 @@ public class PositionSizerTests
         // First has 3x the yield of second
         var opps = MakeOpps((0.003m, 100_000_000m), (0.001m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.WeightedSpread);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.WeightedSpread, "test-user");
 
         sizes[0].Should().BeGreaterThan(sizes[1]);
         // First should get ~75%, second ~25%
@@ -160,7 +164,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m), (0.002m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.EqualSpread);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.EqualSpread, "test-user");
 
         sizes[0].Should().Be(sizes[1]);
         // Total = 107 * 0.80 = 85.6, each = 42.8
@@ -176,7 +180,7 @@ public class PositionSizerTests
         // Same yield, but first has much lower volume
         var opps = MakeOpps((0.001m, 1_000m), (0.001m, 1_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.RiskAdjusted);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.RiskAdjusted, "test-user");
 
         // Low volume opp should get less capital
         sizes[0].Should().BeLessThan(sizes[1]);
@@ -210,7 +214,7 @@ public class PositionSizerTests
             }
         };
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         // liquidityLimit = 400 * 0.001 = 0.4, margin = 0.4 / 5 = 0.08
         sizes[0].Should().Be(0.08m);
@@ -242,7 +246,7 @@ public class PositionSizerTests
             }
         };
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m, "breakeven hours (19) exceeds BreakevenHoursMax (6)");
     }
@@ -258,7 +262,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().BeGreaterThan(0m);
     }
@@ -282,7 +286,7 @@ public class PositionSizerTests
             }
         };
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m, "negative entryFeeRate means corrupted opportunity");
     }
@@ -301,7 +305,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m, "position size 8 < MinPositionSizeUsdc 10");
     }
@@ -315,7 +319,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(80m, "position size 80 >= MinPositionSizeUsdc 10");
     }
@@ -344,7 +348,7 @@ public class PositionSizerTests
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated);
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(400m, "availableCapital = (1000-500)*0.8 = 400");
     }
@@ -355,8 +359,38 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
 
         var sizes = await _sut.CalculateBatchSizesAsync(
-            new List<ArbitrageOpportunityDto>(), AllocationStrategy.Concentrated);
+            new List<ArbitrageOpportunityDto>(), AllocationStrategy.Concentrated, "test-user");
 
         sizes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_RealBalanceBelowConfigCap_UsesRealBalance()
+    {
+        // Real balance = 80, config cap = 107 → uses 80
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 80m, FetchedAt = DateTime.UtcNow });
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available = min(80, 107) * 0.80 = 64
+        sizes[0].Should().Be(64m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_RealBalanceAboveConfigCap_UsesConfigCap()
+    {
+        // Real balance = 200, config cap = 107 → uses 107
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 200m, FetchedAt = DateTime.UtcNow });
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available = min(200, 107) * 0.80 = 85.6
+        sizes[0].Should().Be(85.6m);
     }
 }
