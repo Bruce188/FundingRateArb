@@ -49,10 +49,6 @@
 
                 @foreach (var exchange in Model.Exchanges)
                 {
-                    @* Hidden field ensures a value is always submitted for every exchange.
-                       When the checkbox is checked, its value ("true") takes precedence in the form post. *@
-                    <input type="hidden" name="exchangePreferences[@exchange.ExchangeId]" value="false" />
-
                     <div class="d-flex align-items-center justify-content-between py-2 border-bottom">
                         <div class="d-flex align-items-center gap-3 flex-wrap">
                             <div class="form-check form-switch mb-0">
@@ -60,8 +56,8 @@
                                        type="checkbox"
                                        role="switch"
                                        id="exchange-@exchange.ExchangeId"
-                                       name="exchangePreferences[@exchange.ExchangeId]"
-                                       value="true"
+                                       name="enabledExchangeIds"
+                                       value="@exchange.ExchangeId"
                                        @(exchange.IsEnabled ? "checked" : "") />
                                 <label class="form-check-label fw-semibold" for="exchange-@exchange.ExchangeId">
                                     @exchange.ExchangeName
@@ -110,17 +106,14 @@
                 <div class="row g-2">
                     @foreach (var asset in Model.Assets)
                     {
-                        @* Hidden field ensures a value is always submitted for every asset. *@
-                        <input type="hidden" name="assetPreferences[@asset.AssetId]" value="false" />
-
                         <div class="col-12 col-sm-6 col-md-4 col-lg-3">
                             <div class="form-check form-switch mb-0 py-1">
                                 <input class="form-check-input asset-toggle"
                                        type="checkbox"
                                        role="switch"
                                        id="asset-@asset.AssetId"
-                                       name="assetPreferences[@asset.AssetId]"
-                                       value="true"
+                                       name="enabledAssetIds"
+                                       value="@asset.AssetId"
                                        @(asset.IsEnabled ? "checked" : "") />
                                 <label class="form-check-label" for="asset-@asset.AssetId">
                                     <span class="fw-semibold">@asset.Symbol</span>

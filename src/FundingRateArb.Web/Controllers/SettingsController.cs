@@ -192,32 +192,38 @@ public class SettingsController : Controller
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> Preferences(
-        Dictionary<int, bool> exchangePreferences,
-        Dictionary<int, bool> assetPreferences)
+        List<int> enabledExchangeIds,
+        List<int> enabledAssetIds)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null) return Unauthorized();
 
-        var enabledExchangeCount = exchangePreferences.Count(kvp => kvp.Value);
-        var enabledAssetCount = assetPreferences.Count(kvp => kvp.Value);
+        enabledExchangeIds ??= [];
+        enabledAssetIds ??= [];
 
-        if (enabledExchangeCount < 2)
+        if (enabledExchangeIds.Count < 2)
         {
             TempData["Error"] = "At least 2 exchanges must be enabled for arbitrage.";
             return RedirectToAction(nameof(Preferences));
         }
 
-        if (enabledAssetCount < 1)
+        if (enabledAssetIds.Count < 1)
         {
             TempData["Error"] = "At least 1 coin must be enabled to trade.";
             return RedirectToAction(nameof(Preferences));
         }
 
-        // Batch all preference upserts into a single SaveAsync call
+        // Build full dictionaries from available items so disabled ones are explicitly set to false
+        var allExchanges = await _settings.GetAvailableExchangesAsync();
+        var exchangePreferences = allExchanges.ToDictionary(e => e.Id, e => enabledExchangeIds.Contains(e.Id));
+
+        var allAssets = await _settings.GetAvailableAssetsAsync();
+        var assetPreferences = allAssets.ToDictionary(a => a.Id, a => enabledAssetIds.Contains(a.Id));
+
         await _settings.SavePreferencesAsync(userId, exchangePreferences, assetPreferences);
 
         _logger.LogInformation("User {UserId} saved preferences: {Exchanges} exchanges, {Assets} assets enabled",
-            userId, enabledExchangeCount, enabledAssetCount);
+            userId, enabledExchangeIds.Count, enabledAssetIds.Count);
 
         TempData["Success"] = "Preferences saved successfully.";
         return RedirectToAction(nameof(Preferences));
