@@ -294,7 +294,7 @@ try
         options.AddFixedWindowLimiter("general", opt =>
         {
             opt.Window = TimeSpan.FromMinutes(1);
-            opt.PermitLimit = 60;
+            opt.PermitLimit = 200;
             opt.QueueLimit = 0;
         });
     });

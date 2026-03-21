@@ -45,21 +45,21 @@
             <div class="row g-3 mb-4">
                 <div class="col-md-4">
                     <label asp-for="OpenThreshold" class="form-label"></label>
-                    <input asp-for="OpenThreshold" class="form-control" type="number" step="0.0001" />
+                    <input asp-for="OpenThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Minimum rate difference to open position</div>
                     <span asp-validation-for="OpenThreshold" class="text-danger"></span>
                 </div>
 
                 <div class="col-md-4">
                     <label asp-for="CloseThreshold" class="form-label"></label>
-                    <input asp-for="CloseThreshold" class="form-control" type="number" step="0.00001" />
+                    <input asp-for="CloseThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to close position</div>
                     <span asp-validation-for="CloseThreshold" class="text-danger"></span>
                 </div>
 
                 <div class="col-md-4">
                     <label asp-for="AlertThreshold" class="form-label"></label>
-                    <input asp-for="AlertThreshold" class="form-control" type="number" step="0.0001" />
+                    <input asp-for="AlertThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to trigger alerts</div>
                     <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                 </div>
@@ -69,7 +69,7 @@
             <div class="row g-3 mb-4">
                 <div class="col-md-4">
                     <label asp-for="TotalCapitalUsdc" class="form-label"></label>
-                    <input asp-for="TotalCapitalUsdc" class="form-control" type="number" step="0.01" />
+                    <input asp-for="TotalCapitalUsdc" class="form-control" type="number" step="any" />
                     <span asp-validation-for="TotalCapitalUsdc" class="text-danger"></span>
                 </div>
 
@@ -81,7 +81,7 @@
 
                 <div class="col-md-4">
                     <label asp-for="MaxCapitalPerPosition" class="form-label"></label>
-                    <input asp-for="MaxCapitalPerPosition" class="form-control" type="number" step="0.01" />
+                    <input asp-for="MaxCapitalPerPosition" class="form-control" type="number" step="any" />
                     <div class="form-text">Fraction of total capital (0.01 - 1.0)</div>
                     <span asp-validation-for="MaxCapitalPerPosition" class="text-danger"></span>
                 </div>
@@ -119,7 +119,7 @@
 
                 <div class="col-md-4">
                     <label asp-for="StopLossPct" class="form-label"></label>
-                    <input asp-for="StopLossPct" class="form-control" type="number" step="0.01" />
+                    <input asp-for="StopLossPct" class="form-control" type="number" step="any" />
                     <div class="form-text">Fraction (e.g. 0.15 = 15%)</div>
                     <span asp-validation-for="StopLossPct" class="text-danger"></span>
                 </div>
@@ -128,6 +128,20 @@
                     <label asp-for="MaxHoldTimeHours" class="form-label"></label>
                     <input asp-for="MaxHoldTimeHours" class="form-control" type="number" min="1" max="168" />
                     <span asp-validation-for="MaxHoldTimeHours" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="VolumeFraction" class="form-label"></label>
+                    <input asp-for="VolumeFraction" class="form-control" type="number" step="any" min="0.00001" max="0.1" />
+                    <div class="form-text">Max fraction of 24h volume per order</div>
+                    <span asp-validation-for="VolumeFraction" class="text-danger"></span>
+                </div>
+
+                <div class="col-md-4">
+                    <label asp-for="BreakevenHoursMax" class="form-label"></label>
+                    <input asp-for="BreakevenHoursMax" class="form-control" type="number" min="1" max="168" />
+                    <div class="form-text">Max hours to break even on fees</div>
+                    <span asp-validation-for="BreakevenHoursMax" class="text-danger"></span>
                 </div>
             </div>
 
@@ -142,14 +156,14 @@
 
                 <div class="col-md-4">
                     <label asp-for="MinPositionSizeUsdc" class="form-label"></label>
-                    <input asp-for="MinPositionSizeUsdc" class="form-control" type="number" step="1" min="1" />
+                    <input asp-for="MinPositionSizeUsdc" class="form-control" type="number" step="any" min="1" />
                     <div class="form-text">Minimum margin per position (exchange minimums)</div>
                     <span asp-validation-for="MinPositionSizeUsdc" class="text-danger"></span>
                 </div>
 
                 <div class="col-md-4">
                     <label asp-for="MinVolume24hUsdc" class="form-label"></label>
-                    <input asp-for="MinVolume24hUsdc" class="form-control" type="number" step="1000" min="0" />
+                    <input asp-for="MinVolume24hUsdc" class="form-control" type="number" step="any" min="0" />
                     <div class="form-text">Minimum 24h volume to consider an asset</div>
                     <span asp-validation-for="MinVolume24hUsdc" class="text-danger"></span>
                 </div>
@@ -165,7 +179,7 @@
 
                 <div class="col-md-4">
                     <label asp-for="DailyDrawdownPausePct" class="form-label"></label>
-                    <input asp-for="DailyDrawdownPausePct" class="form-control" type="number" step="0.01" min="0.01" max="1" />
+                    <input asp-for="DailyDrawdownPausePct" class="form-control" type="number" step="any" min="0.01" max="1" />
                     <div class="form-text">Fraction of capital (e.g. 0.05 = 5%) — pauses new opens when hit</div>
                     <span asp-validation-for="DailyDrawdownPausePct" class="text-danger"></span>
                 </div>
