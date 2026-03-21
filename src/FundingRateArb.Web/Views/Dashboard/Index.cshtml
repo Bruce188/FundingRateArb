@@ -123,6 +123,18 @@
     </div>
 </div>
 
+@if (Model.Diagnostics is not null)
+{
+    var d = Model.Diagnostics;
+    <div class="row mb-2">
+        <div class="col-12">
+            <small class="text-muted">
+                Pipeline: @d.TotalRatesLoaded rates loaded | @d.RatesAfterStalenessFilter fresh | @d.TotalPairsEvaluated pairs evaluated | @d.PairsPassing passing
+            </small>
+        </div>
+    </div>
+}
+
 <!-- Opportunities Table -->
 <div class="row mb-4">
     <div class="col-12">
@@ -151,10 +163,50 @@
                             @if (Model.Opportunities.Count == 0)
                             {
                                 <tr>
-                                    <td colspan="7" class="text-center text-muted py-5">
-                                        No arbitrage opportunities detected at this time.
-                                        <br />
-                                        <small>Rates are fetched every minute. Check back shortly.</small>
+                                    <td colspan="7" class="text-center py-4">
+                                        @if (Model.Diagnostics is not null)
+                                        {
+                                            var dx = Model.Diagnostics;
+                                            if (dx.TotalRatesLoaded == 0)
+                                            {
+                                                <div class="alert alert-warning mb-0 d-inline-block">
+                                                    No funding rate data available. Background services may not be running.
+                                                </div>
+                                            }
+                                            else if (dx.RatesAfterStalenessFilter == 0)
+                                            {
+                                                <div class="alert alert-warning mb-0 d-inline-block">
+                                                    All @dx.TotalRatesLoaded rates are older than @dx.StalenessMinutes minutes. Exchange connections may be down.
+                                                </div>
+                                            }
+                                            else if (dx.PairsPassing == 0 && dx.PairsFilteredByVolume > 0 && dx.PairsFilteredByThreshold == 0)
+                                            {
+                                                <div class="alert alert-info mb-0 d-inline-block">
+                                                    @dx.PairsFilteredByVolume pairs filtered &mdash; volume below $@dx.MinVolumeThreshold.ToString("N0") on one or both legs.
+                                                </div>
+                                            }
+                                            else if (dx.PairsPassing == 0 && dx.PairsFilteredByThreshold > 0)
+                                            {
+                                                <div class="alert alert-info mb-0 d-inline-block">
+                                                    @dx.PairsFilteredByThreshold pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
+                                                    Best raw spread: @((dx.BestRawSpread * 100).ToString("F4"))%.
+                                                </div>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">
+                                                    No arbitrage opportunities detected at this time.
+                                                    <br /><small>Rates are fetched every minute. Check back shortly.</small>
+                                                </span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="text-muted">
+                                                No arbitrage opportunities detected at this time.
+                                                <br /><small>Rates are fetched every minute. Check back shortly.</small>
+                                            </span>
+                                        }
                                     </td>
                                 </tr>
                             }

@@ -96,7 +96,7 @@ connection.on("ReceiveDashboardUpdate", (data) => {
     if (openPositions) openPositions.textContent = data.openPositionCount;
 
     const totalPnl = document.getElementById("total-pnl");
-    if (totalPnl) totalPnl.textContent = "$" + (data.totalPnl ?? 0).toFixed(2);
+    if (totalPnl) totalPnl.textContent = (data.totalPnl ?? 0).toFixed(4);
 
     // B2: Only update best spread if incoming value > 0, otherwise show last known or N/A
     const bestSpread = document.getElementById("best-spread");
@@ -135,21 +135,70 @@ connection.on("ReceiveNotification", (message) => {
 });
 
 // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
-connection.on("ReceiveOpportunityUpdate", (opportunities) => {
+connection.on("ReceiveOpportunityUpdate", (data) => {
     const tbody = document.getElementById("opportunities-table-body");
     if (!tbody) return;
+
+    const opportunities = data.opportunities || [];
+    const diagnostics = data.diagnostics;
 
     // Update count badge
     const countBadge = document.querySelector(".badge.bg-primary");
     if (countBadge) countBadge.textContent = opportunities.length + " found";
+
+    // Update Best Spread KPI from diagnostics when no opportunities pass threshold
+    if (diagnostics && diagnostics.bestRawSpread > 0) {
+        const bestSpread = document.getElementById("best-spread");
+        if (bestSpread) {
+            lastKnownBestSpread = diagnostics.bestRawSpread;
+            bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
+        }
+    }
 
     tbody.innerHTML = "";
     if (opportunities.length === 0) {
         const emptyRow = document.createElement("tr");
         const emptyCell = document.createElement("td");
         emptyCell.colSpan = 7;
-        emptyCell.className = "text-center text-muted py-5";
-        emptyCell.textContent = "No arbitrage opportunities detected at this time. Rates are fetched every minute. Check back shortly.";
+        emptyCell.className = "text-center py-4";
+
+        if (diagnostics) {
+            const alertDiv = document.createElement("div");
+            alertDiv.className = "mb-0 d-inline-block";
+
+            if (diagnostics.totalRatesLoaded === 0) {
+                alertDiv.className += " alert alert-warning";
+                alertDiv.textContent = "No funding rate data available. Background services may not be running.";
+            } else if (diagnostics.ratesAfterStalenessFilter === 0) {
+                alertDiv.className += " alert alert-warning";
+                alertDiv.textContent = "All " + diagnostics.totalRatesLoaded + " rates are older than " + diagnostics.stalenessMinutes + " minutes. Exchange connections may be down.";
+            } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByVolume > 0 && diagnostics.pairsFilteredByThreshold === 0) {
+                alertDiv.className += " alert alert-info";
+                alertDiv.textContent = diagnostics.pairsFilteredByVolume + " pairs filtered \u2014 volume below $" + diagnostics.minVolumeThreshold.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " on one or both legs.";
+            } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByThreshold > 0) {
+                alertDiv.className += " alert alert-info";
+                alertDiv.textContent = diagnostics.pairsFilteredByThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
+            } else {
+                const span = document.createElement("span");
+                span.className = "text-muted";
+                span.textContent = "No arbitrage opportunities detected at this time.";
+                const br = document.createElement("br");
+                const small = document.createElement("small");
+                small.textContent = "Rates are fetched every minute. Check back shortly.";
+                span.appendChild(br);
+                span.appendChild(small);
+                emptyCell.appendChild(span);
+                emptyRow.appendChild(emptyCell);
+                tbody.appendChild(emptyRow);
+                return;
+            }
+
+            emptyCell.appendChild(alertDiv);
+        } else {
+            emptyCell.className += " text-muted py-5";
+            emptyCell.textContent = "No arbitrage opportunities detected at this time. Rates are fetched every minute. Check back shortly.";
+        }
+
         emptyRow.appendChild(emptyCell);
         tbody.appendChild(emptyRow);
         return;
