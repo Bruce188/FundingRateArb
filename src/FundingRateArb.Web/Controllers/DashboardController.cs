@@ -51,7 +51,8 @@ public class DashboardController : Controller
             ? allOpenPositions
             : allOpenPositions.Where(p => p.UserId == userId).ToList();
         var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId, unreadOnly: true);
-        var allOpportunities = await _signalEngine.GetOpportunitiesAsync(ct);
+        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var allOpportunities = result.Opportunities;
 
         // Filter opportunities by user's enabled exchanges and assets (non-admin)
         List<ArbitrageOpportunityDto> opportunities;
@@ -91,7 +92,9 @@ public class DashboardController : Controller
         var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
         var bestSpread = positionSummaries.Count > 0
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
-            : (opportunities.Count > 0 ? opportunities.Max(o => o.SpreadPerHour) : 0m);
+            : opportunities.Count > 0
+                ? opportunities.Max(o => o.SpreadPerHour)
+                : result.Diagnostics.BestRawSpread;
 
         var vm = new DashboardViewModel
         {
@@ -102,6 +105,7 @@ public class DashboardController : Controller
             TotalUnreadAlerts = unreadAlerts.Count,
             OpenPositions = positionSummaries,
             Opportunities = opportunities,
+            Diagnostics = result.Diagnostics,
         };
 
         if (User.IsInRole("Admin") && botConfig is not null)

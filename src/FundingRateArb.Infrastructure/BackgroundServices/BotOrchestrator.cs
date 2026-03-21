@@ -158,10 +158,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
         await PushNewAlertsAsync(uow);
 
         // Step 2: Compute + push opportunities globally (always, regardless of bot state)
-        var allOpportunities = await signalEngine.GetOpportunitiesAsync(ct);
+        var opportunityResult = await signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var allOpportunities = opportunityResult.Opportunities;
         try
         {
-            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(allOpportunities);
+            await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunityResult);
         }
         catch (Exception ex)
         {

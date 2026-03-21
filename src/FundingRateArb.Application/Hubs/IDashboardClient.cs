@@ -13,6 +13,6 @@ public interface IDashboardClient
     Task ReceivePositionUpdate(PositionSummaryDto position);
     Task ReceiveNotification(string message);
     Task ReceiveAlert(AlertDto alert);
-    Task ReceiveOpportunityUpdate(List<ArbitrageOpportunityDto> opportunities);
+    Task ReceiveOpportunityUpdate(OpportunityResultDto result);
     Task ReceiveStatusExplanation(string message, string severity);
 }

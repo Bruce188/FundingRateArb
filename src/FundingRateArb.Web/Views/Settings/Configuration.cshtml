@@ -44,6 +44,7 @@
                     <label asp-for="OpenThreshold" class="form-label"></label>
                     <input asp-for="OpenThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Minimum rate difference to open a position</div>
+                    <small id="open-threshold-pct" class="text-info"></small>
                     <span asp-validation-for="OpenThreshold" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
@@ -192,4 +193,17 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <script>
+        (function() {
+            var otInput = document.getElementById('OpenThreshold');
+            var otPct = document.getElementById('open-threshold-pct');
+            if (!otInput || !otPct) return;
+            function update() {
+                var val = parseFloat(otInput.value);
+                otPct.textContent = isNaN(val) || val === 0 ? '' : '= ' + (val * 100).toFixed(3) + '%/hr';
+            }
+            otInput.addEventListener('input', update);
+            update();
+        })();
+    </script>
 }

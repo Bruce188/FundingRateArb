@@ -10,6 +10,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.Controllers;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Web.ViewModels;
 
 namespace FundingRateArb.Tests.Unit.Controllers;
@@ -59,8 +60,8 @@ public class DashboardControllerTests
             .ReturnsAsync([]);
         _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
             .ReturnsAsync([]);
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.OpportunityResultDto());
 
         _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object);
 
@@ -176,5 +177,37 @@ public class DashboardControllerTests
         // Assert
         _mockBotControl.Verify(b => b.ClearCooldowns(), Times.Once);
         _mockBotControl.Verify(b => b.TriggerImmediateCycle(), Times.Once);
+    }
+
+    [Fact]
+    public async Task Index_WhenNoOpportunities_BestSpreadFallsToDiagnosticRawSpread()
+    {
+        // Arrange
+        var diagnostics = new PipelineDiagnosticsDto
+        {
+            TotalRatesLoaded = 50,
+            RatesAfterStalenessFilter = 45,
+            TotalPairsEvaluated = 32,
+            PairsFilteredByThreshold = 32,
+            PairsPassing = 0,
+            BestRawSpread = 0.000926m,
+            OpenThreshold = 0.005m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = [],
+                Diagnostics = diagnostics,
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.BestSpread.Should().Be(0.000926m);
+        model.Diagnostics.Should().NotBeNull();
+        model.Diagnostics!.BestRawSpread.Should().Be(0.000926m);
     }
 }

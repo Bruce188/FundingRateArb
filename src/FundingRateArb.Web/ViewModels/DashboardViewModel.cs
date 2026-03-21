@@ -13,4 +13,5 @@ public class DashboardViewModel
     public List<ArbitrageOpportunityDto> Opportunities { get; set; } = [];
     public decimal NotionalPerLeg { get; set; }
     public decimal VolumeFraction { get; set; }
+    public PipelineDiagnosticsDto? Diagnostics { get; set; }
 }
