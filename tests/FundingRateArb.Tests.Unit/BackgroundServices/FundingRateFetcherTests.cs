@@ -29,6 +29,7 @@ public class FundingRateFetcherTests
     private readonly Mock<IExchangeConnector> _mockHyperliquid = new();
     private readonly Mock<IExchangeConnector> _mockLighter = new();
     private readonly Mock<IExchangeConnector> _mockAster = new();
+    private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
@@ -93,6 +94,7 @@ public class FundingRateFetcherTests
         _sut = new FundingRateFetcher(
             _mockScopeFactory.Object,
             mockCache.Object,
+            _mockReadinessSignal.Object,
             _mockHubContext.Object,
             NullLogger<FundingRateFetcher>.Instance);
     }
@@ -446,7 +448,7 @@ public class FundingRateFetcherTests
         mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(false);
 
         var sut = new FundingRateFetcher(
-            _mockScopeFactory.Object, mockCache.Object,
+            _mockScopeFactory.Object, mockCache.Object, _mockReadinessSignal.Object,
             _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
 
         await sut.FetchAllAsync(CancellationToken.None);
@@ -465,7 +467,7 @@ public class FundingRateFetcherTests
         mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(true);
 
         var sut = new FundingRateFetcher(
-            _mockScopeFactory.Object, mockCache.Object,
+            _mockScopeFactory.Object, mockCache.Object, _mockReadinessSignal.Object,
             _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
 
         _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
@@ -530,7 +532,7 @@ public class FundingRateFetcherTests
         var realCache = new MarketDataCache();
 
         var sut = new FundingRateFetcher(
-            _mockScopeFactory.Object, realCache,
+            _mockScopeFactory.Object, realCache, _mockReadinessSignal.Object,
             _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
 
         var restRates = new List<FundingRateDto>
@@ -584,7 +586,7 @@ public class FundingRateFetcherTests
         mockCache.Setup(c => c.IsStaleForExchange("Aster", It.IsAny<TimeSpan>())).Returns(true);
 
         var sut = new FundingRateFetcher(
-            _mockScopeFactory.Object, mockCache.Object,
+            _mockScopeFactory.Object, mockCache.Object, _mockReadinessSignal.Object,
             _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
 
         _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
@@ -799,6 +801,35 @@ public class FundingRateFetcherTests
         result.Should().Be(0m);
     }
 
+    // ── Readiness signal test ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task FetchAll_SignalsReadyAfterFirstSuccessfulFetch()
+    {
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var signalCalled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mockReadinessSignal.Setup(r => r.SignalReady()).Callback(() => signalCalled.TrySetResult(true));
+
+        // Start the background service — ExecuteAsync calls FetchAllAsync then SignalReadyOnce
+        using var cts = new CancellationTokenSource();
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+        await _sut.StartAsync(cts.Token);
+
+        // Wait for SignalReady to be called (deterministic, no Task.Delay)
+        await signalCalled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Verify SignalReady was called on the mock readiness signal
+        _mockReadinessSignal.Verify(r => r.SignalReady(), Times.Once);
+
+        await _sut.StopAsync(CancellationToken.None);
+    }
+
     /// <summary>
     /// Helper to create a FundingRateFetcher with pre-seeded settlement state for testing.
     /// </summary>
@@ -809,7 +840,7 @@ public class FundingRateFetcherTests
         mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(true);
 
         var sut = new FundingRateFetcher(
-            _mockScopeFactory.Object, mockCache.Object,
+            _mockScopeFactory.Object, mockCache.Object, _mockReadinessSignal.Object,
             _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
 
         // Seed the internal settlement tracking state via reflection

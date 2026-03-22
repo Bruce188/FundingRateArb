@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
@@ -31,8 +32,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     // M4: Extract magic polling intervals to named constants
     private const int CycleIntervalSeconds = 60;
-    // M8: 65s gives FundingRateFetcher one full 60s cycle + 5s margin to complete its first fetch
-    private const int StartupDelaySeconds = 65;
 
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
     private DateTime _lastAlertPushUtc = DateTime.UtcNow.AddMinutes(-5);
@@ -43,23 +42,26 @@ public class BotOrchestrator : BackgroundService, IBotControl
     internal static readonly TimeSpan MaxCooldown = TimeSpan.FromMinutes(60);
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
     private readonly ILogger<BotOrchestrator> _logger;
 
     public BotOrchestrator(
         IServiceScopeFactory scopeFactory,
+        IFundingRateReadinessSignal readinessSignal,
         IHubContext<DashboardHub, IDashboardClient> hubContext,
         ILogger<BotOrchestrator> logger)
     {
-        _scopeFactory = scopeFactory;
-        _hubContext   = hubContext;
-        _logger       = logger;
+        _scopeFactory    = scopeFactory;
+        _readinessSignal = readinessSignal;
+        _hubContext      = hubContext;
+        _logger          = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        // Wait for first FundingRateFetcher cycle to complete
-        await Task.Delay(TimeSpan.FromSeconds(StartupDelaySeconds), ct);
+        // Wait for first FundingRateFetcher cycle to complete (with 120s timeout)
+        await _readinessSignal.WaitForReadyAsync(ct);
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
 

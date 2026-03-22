@@ -63,6 +63,7 @@ try
             .Enrich.WithMachineName()
             .Enrich.WithThreadId()
             .Enrich.WithProperty("Application", "FundingRateArb")
+            .Enrich.With<FundingRateArb.Infrastructure.Logging.SensitiveDataMaskingEnricher>()
 
             // Console sink
             .WriteTo.Console(outputTemplate:
@@ -97,6 +98,9 @@ try
                 restrictedToMinimumLevel: LogEventLevel.Warning);
         }
     });
+
+    // --- Application Insights (auto-collects when ConnectionString is configured) ---
+    builder.Services.AddApplicationInsightsTelemetry();
 
     // --- Database ---
     builder.Services.AddDbContext<AppDbContext>(options =>
@@ -160,14 +164,27 @@ try
     });
 
     // --- Data Protection (for IApiKeyVault) ---
-    var dpKeysDir = new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "dp-keys"));
-    if (!dpKeysDir.Exists) dpKeysDir.Create();
-    if (!OperatingSystem.IsWindows())
-        dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
-    builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(dpKeysDir)
+    var dataProtection = builder.Services.AddDataProtection()
         .SetApplicationName("FundingRateArb");
+
+    if (isDevelopment)
+    {
+        var dpKeysDir = new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "dp-keys"));
+        if (!dpKeysDir.Exists) dpKeysDir.Create();
+        if (!OperatingSystem.IsWindows())
+            dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        dataProtection.PersistKeysToFileSystem(dpKeysDir);
+    }
+    else
+    {
+        var dpBlobConn = builder.Configuration["DataProtection:BlobStorageConnection"];
+        if (!string.IsNullOrEmpty(dpBlobConn))
+            dataProtection.PersistKeysToAzureBlobStorage(dpBlobConn, "dataprotection", "keys.xml");
+    }
     builder.Services.AddScoped<IApiKeyVault, ApiKeyVault>();
+
+    // --- Caching ---
+    builder.Services.AddMemoryCache();
 
     // --- Unit of Work (cursus BankingApp pattern) ---
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
@@ -338,6 +355,7 @@ try
     });
 
     // --- Background Services ---
+    builder.Services.AddSingleton<IFundingRateReadinessSignal, FundingRateReadinessSignal>();
     builder.Services.AddHostedService<MarketDataStreamManager>();
     builder.Services.AddHostedService<FundingRateFetcher>();
     builder.Services.AddHostedService<BotOrchestrator>();

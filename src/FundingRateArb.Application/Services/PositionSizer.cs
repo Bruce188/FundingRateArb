@@ -72,6 +72,49 @@ public class PositionSizer : IPositionSizer
             }
         }
 
+        // Exposure limit enforcement: cap by per-asset and per-exchange limits
+        // Track batch-allocated exposure so multiple opportunities for the same asset/exchange
+        // don't exceed limits in aggregate
+        var batchAssetExposure = new Dictionary<int, decimal>();
+        var batchExchangeExposure = new Dictionary<int, decimal>();
+
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            if (sizes[i] <= 0) continue;
+            var opp = opportunities[i];
+
+            // Per-asset exposure: sum SizeUsdc of all open positions for this asset + batch allocations
+            var currentAssetExposure = openPositions
+                .Where(p => p.AssetId == opp.AssetId)
+                .Sum(p => p.SizeUsdc);
+            var batchAsset = batchAssetExposure.GetValueOrDefault(opp.AssetId, 0m);
+            var maxNewAsset = (config.MaxExposurePerAsset * realCapital) - currentAssetExposure - batchAsset;
+            if (maxNewAsset <= 0) { sizes[i] = 0; continue; }
+            sizes[i] = Math.Min(sizes[i], maxNewAsset);
+
+            // Per-exchange exposure: check both long and short exchanges + batch allocations
+            var currentLongExposure = openPositions
+                .Where(p => p.LongExchangeId == opp.LongExchangeId || p.ShortExchangeId == opp.LongExchangeId)
+                .Sum(p => p.SizeUsdc);
+            var batchLong = batchExchangeExposure.GetValueOrDefault(opp.LongExchangeId, 0m);
+            var maxNewLong = (config.MaxExposurePerExchange * realCapital) - currentLongExposure - batchLong;
+            if (maxNewLong <= 0) { sizes[i] = 0; continue; }
+            sizes[i] = Math.Min(sizes[i], maxNewLong);
+
+            var currentShortExposure = openPositions
+                .Where(p => p.LongExchangeId == opp.ShortExchangeId || p.ShortExchangeId == opp.ShortExchangeId)
+                .Sum(p => p.SizeUsdc);
+            var batchShort = batchExchangeExposure.GetValueOrDefault(opp.ShortExchangeId, 0m);
+            var maxNewShort = (config.MaxExposurePerExchange * realCapital) - currentShortExposure - batchShort;
+            if (maxNewShort <= 0) { sizes[i] = 0; continue; }
+            sizes[i] = Math.Min(sizes[i], maxNewShort);
+
+            // Update batch tracking with this opportunity's final allocation
+            batchAssetExposure[opp.AssetId] = batchAsset + sizes[i];
+            batchExchangeExposure[opp.LongExchangeId] = batchLong + sizes[i];
+            batchExchangeExposure[opp.ShortExchangeId] = batchShort + sizes[i];
+        }
+
         // C2: Cap each position by its liquidity limit (compare notional, not margin)
         for (int i = 0; i < sizes.Length; i++)
         {

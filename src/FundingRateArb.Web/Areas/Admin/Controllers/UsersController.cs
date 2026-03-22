@@ -15,13 +15,16 @@ public class UsersController : Controller
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RoleManager<IdentityRole> _roleManager;
+    private readonly ILogger<UsersController> _logger;
 
     public UsersController(
         UserManager<ApplicationUser> userManager,
-        RoleManager<IdentityRole> roleManager)
+        RoleManager<IdentityRole> roleManager,
+        ILogger<UsersController> logger)
     {
         _userManager = userManager;
         _roleManager = roleManager;
+        _logger = logger;
     }
 
     public async Task<IActionResult> Index()
@@ -92,6 +95,10 @@ public class UsersController : Controller
 
         if (filteredRoles.Count > 0)
             await _userManager.AddToRolesAsync(user, filteredRoles);
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser} — roles changed from [{OldRoles}] to [{NewRoles}]",
+            "RoleChanged", "User", model.UserId, User.Identity?.Name ?? "unknown",
+            string.Join(", ", currentRoles), string.Join(", ", filteredRoles));
 
         TempData["Success"] = $"Role updated for {user.Email}.";
         return RedirectToAction(nameof(Index));

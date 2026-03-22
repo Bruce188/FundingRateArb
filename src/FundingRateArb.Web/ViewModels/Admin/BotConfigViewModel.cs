@@ -70,4 +70,10 @@ public class BotConfigViewModel
 
     [Required, Range(1, 60), Display(Name = "Funding Window (minutes)")]
     public int? FundingWindowMinutes { get; set; } = 10;
+
+    [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Asset (%)")]
+    public decimal? MaxExposurePerAsset { get; set; } = 0.5m;
+
+    [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Exchange (%)")]
+    public decimal? MaxExposurePerExchange { get; set; } = 0.7m;
 }

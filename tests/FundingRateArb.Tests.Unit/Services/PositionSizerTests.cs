@@ -64,7 +64,9 @@ public class PositionSizerTests
         MaxConcurrentPositions = maxConcurrentPositions,
         IsEnabled = true,
         OpenThreshold = 0.0003m,
-        BreakevenHoursMax = 6
+        BreakevenHoursMax = 6,
+        MaxExposurePerAsset = 1.0m,
+        MaxExposurePerExchange = 1.0m,
     };
 
     // -----------------------------------------------------------------------
@@ -392,5 +394,151 @@ public class PositionSizerTests
 
         // Available = min(200, 107) * 0.80 = 85.6
         sizes[0].Should().Be(85.6m);
+    }
+
+    // ── Exposure limit tests ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_CappedByAssetExposureLimit()
+    {
+        // Config: MaxExposurePerAsset = 0.3 (30% of 100 = 30 USDC max per asset)
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m);
+        config.MaxExposurePerAsset = 0.3m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Existing open position for asset 1 with 20 USDC
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        {
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 20m }
+        });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available = (100 - 20) * 1.0 = 80 from capital, but asset limit = 30 - 20 = 10
+        sizes[0].Should().Be(10m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_CappedByExchangeExposureLimit()
+    {
+        // Config: MaxExposurePerExchange = 0.4 (40% of 100 = 40 USDC max per exchange)
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m);
+        config.MaxExposurePerAsset = 1.0m;
+        config.MaxExposurePerExchange = 0.4m;
+        config.MinPositionSizeUsdc = 1m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Existing open position on exchange 1 with 35 USDC
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        {
+            new() { AssetId = 2, LongExchangeId = 1, ShortExchangeId = 3, SizeUsdc = 35m }
+        });
+
+        // New opportunity uses exchange 1 as long
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Capital available = (100 - 35) * 1.0 = 65, but exchange limit = 40 - 35 = 5
+        sizes[0].Should().Be(5m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_WithinLimits_NoReduction()
+    {
+        // Config: generous limits, should not cap
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 0.8m);
+        config.MaxExposurePerAsset = 1.0m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Full capital allocation: 100 * 0.8 = 80
+        sizes[0].Should().Be(80m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_TwoOpportunitiesSameAsset_CombinedRespectAssetLimit()
+    {
+        // Config: MaxExposurePerAsset = 0.3 (30% of 100 = 30 USDC max per asset)
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m);
+        config.MaxExposurePerAsset = 0.3m;
+        config.MaxExposurePerExchange = 1.0m;
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        // Two opportunities for the same asset on different exchanges
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.001m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            },
+            new()
+            {
+                AssetId = 1, LongExchangeId = 3, ShortExchangeId = 4,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.001m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            },
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.EqualSpread, "test-user");
+
+        // Combined allocation for asset 1 must not exceed 30 USDC
+        (sizes[0] + sizes[1]).Should().BeLessOrEqualTo(30m,
+            "combined batch allocation for the same asset must respect MaxExposurePerAsset");
+        // Both should get some allocation (equal spread: 50 each, but capped by asset limit)
+        sizes[0].Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_LowBalance_ExposureLimitUsesRealCapital()
+    {
+        // Config: TotalCapitalUsdc=107, MaxExposurePerAsset=0.5
+        // Balance: 50 USDC → realCapital = min(50, 107) = 50
+        // Exposure cap = 0.5 * 50 = 25 USDC (not 0.5 * 107 = 53.5)
+        var config = DefaultConfig(totalCapital: 107m, maxCapitalPerPos: 1.0m);
+        config.MaxExposurePerAsset = 0.5m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 50m, FetchedAt = DateTime.UtcNow });
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available capital = 50 * 1.0 = 50, but asset exposure cap = 0.5 * 50 = 25
+        sizes[0].Should().Be(25m, "exposure limit should use realCapital, not config.TotalCapitalUsdc");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_ExposureAlreadyAtLimit_ReturnsZero()
+    {
+        // Config: MaxExposurePerAsset = 0.5 (50 USDC for 100 total)
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m);
+        config.MaxExposurePerAsset = 0.5m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Existing positions already at the 50 USDC asset limit
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        {
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 50m }
+        });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        sizes[0].Should().Be(0m, "asset exposure limit already reached");
     }
 }

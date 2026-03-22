@@ -63,6 +63,14 @@ public class BotConfiguration
     [Range(1, 60)]
     public int FundingWindowMinutes { get; set; } = 10;
 
+    /// <summary>Max fraction of TotalCapitalUsdc in any single asset (e.g., 0.5 = 50%).</summary>
+    [Range(0.01, 1.0)]
+    public decimal MaxExposurePerAsset { get; set; } = 0.5m;
+
+    /// <summary>Max fraction of TotalCapitalUsdc on any single exchange (e.g., 0.7 = 70%).</summary>
+    [Range(0.01, 1.0)]
+    public decimal MaxExposurePerExchange { get; set; } = 0.7m;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

@@ -3,6 +3,7 @@ using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace FundingRateArb.Tests.Integration.Repositories;
 
@@ -42,7 +43,7 @@ public class TestDbFixture : IDisposable
         Context.Assets.Add(TestAsset);
         Context.SaveChanges();
 
-        UnitOfWork = new UnitOfWork(Context);
+        UnitOfWork = new UnitOfWork(Context, new MemoryCache(new MemoryCacheOptions()));
     }
 
     public void Dispose()
