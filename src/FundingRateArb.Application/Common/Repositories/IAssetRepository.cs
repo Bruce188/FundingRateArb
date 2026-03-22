@@ -11,4 +11,5 @@ public interface IAssetRepository
     void Add(Asset asset);
     void Update(Asset asset);
     void Remove(Asset asset);
+    void InvalidateCache();
 }

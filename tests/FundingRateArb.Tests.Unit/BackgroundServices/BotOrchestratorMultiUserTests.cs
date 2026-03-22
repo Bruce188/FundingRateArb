@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
@@ -33,6 +34,7 @@ public class BotOrchestratorMultiUserTests
     private readonly Mock<IExecutionEngine> _mockExecEngine = new();
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
+    private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockGroupClient = new();
@@ -91,8 +93,12 @@ public class BotOrchestratorMultiUserTests
         _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
+        _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
+            _mockReadinessSignal.Object,
             _mockHubContext.Object,
             NullLogger<BotOrchestrator>.Instance);
     }

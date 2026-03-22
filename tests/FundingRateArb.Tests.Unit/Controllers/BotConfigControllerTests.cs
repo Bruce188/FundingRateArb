@@ -10,6 +10,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.Areas.Admin.Controllers;
 using FundingRateArb.Web.ViewModels.Admin;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Tests.Unit.Controllers;
 
@@ -28,7 +29,8 @@ public class BotConfigControllerTests
 
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfigRepo.Object);
 
-        _controller = new BotConfigController(_mockUow.Object, _mockValidator.Object);
+        _controller = new BotConfigController(
+            _mockUow.Object, _mockValidator.Object, Mock.Of<ILogger<BotConfigController>>());
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {

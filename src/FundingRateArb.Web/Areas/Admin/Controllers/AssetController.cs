@@ -11,8 +11,13 @@ namespace FundingRateArb.Web.Areas.Admin.Controllers;
 public class AssetController : Controller
 {
     private readonly IUnitOfWork _uow;
+    private readonly ILogger<AssetController> _logger;
 
-    public AssetController(IUnitOfWork uow) => _uow = uow;
+    public AssetController(IUnitOfWork uow, ILogger<AssetController> logger)
+    {
+        _uow = uow;
+        _logger = logger;
+    }
 
     public async Task<IActionResult> Index()
     {
@@ -40,6 +45,10 @@ public class AssetController : Controller
 
         _uow.Assets.Add(asset);
         await _uow.SaveAsync();
+        _uow.Assets.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            "Created", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
 
         TempData["Success"] = $"Asset '{asset.Symbol}' created successfully.";
         return RedirectToAction(nameof(Index));
@@ -81,6 +90,10 @@ public class AssetController : Controller
 
         _uow.Assets.Update(asset);
         await _uow.SaveAsync();
+        _uow.Assets.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            "Updated", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
 
         TempData["Success"] = $"Asset '{asset.Symbol}' updated successfully.";
         return RedirectToAction(nameof(Index));
@@ -106,6 +119,10 @@ public class AssetController : Controller
         {
             _uow.Assets.Remove(asset);
             await _uow.SaveAsync();
+            _uow.Assets.InvalidateCache();
+
+            _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+                "Deleted", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
         }
         catch (Microsoft.EntityFrameworkCore.DbUpdateException)
         {
