@@ -97,15 +97,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
-                // Determine close reason (priority: stop-loss > max hold > spread collapsed)
-                CloseReason? reason = null;
-
-                if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
-                    reason = CloseReason.StopLoss;
-                else if (hoursOpen >= config.MaxHoldTimeHours)
-                    reason = CloseReason.MaxHoldTimeReached;
-                else if (spread < config.CloseThreshold)
-                    reason = CloseReason.SpreadCollapsed;
+                // Determine close reason (priority: stop-loss > PnL target > max hold > spread collapsed)
+                var reason = DetermineCloseReason(pos, config, unrealizedPnl, hoursOpen, spread);
 
                 if (reason.HasValue)
                 {
@@ -206,5 +199,67 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         if (reaped)
             await _uow.SaveAsync(ct);
+    }
+
+    public static CloseReason? DetermineCloseReason(
+        ArbitragePosition pos, BotConfiguration config,
+        decimal unrealizedPnl, decimal hoursOpen, decimal spread)
+    {
+        // Priority: StopLoss > PnlTargetReached > MaxHoldTime > SpreadCollapsed
+        if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
+            return CloseReason.StopLoss;
+
+        if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
+        {
+            var entryFee = pos.EntryFeesUsdc > 0
+                ? pos.EntryFeesUsdc
+                : pos.LongExchange is not null && pos.ShortExchange is not null
+                    ? pos.SizeUsdc * pos.Leverage * 2m * GetTakerFeeRate(
+                        pos.LongExchange.Name, pos.ShortExchange.Name,
+                        pos.LongExchange.TakerFeeRate, pos.ShortExchange.TakerFeeRate)
+                    : 0m;
+            if (entryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * entryFee)
+                return CloseReason.PnlTargetReached;
+        }
+
+        if (hoursOpen >= config.MaxHoldTimeHours)
+            return CloseReason.MaxHoldTimeReached;
+
+        if (spread < config.CloseThreshold)
+            return CloseReason.SpreadCollapsed;
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the combined taker fee rate from both exchanges (sum, not max).
+    /// Each exchange fee is per-trade; the sum represents the fee for one leg pair.
+    /// Callers use <c>SizeUsdc * Leverage * 2 * GetTakerFeeRate()</c> for the round-trip fee
+    /// of one position (open + close = 4 trades across 2 exchanges).
+    /// When DB-stored fee rates are available (via Exchange.TakerFeeRate), pass them
+    /// to avoid reliance on the hardcoded fallback table.
+    /// </summary>
+    public static decimal GetTakerFeeRate(
+        string? longExchange, string? shortExchange,
+        decimal? longTakerFeeRate = null, decimal? shortTakerFeeRate = null)
+    {
+        return GetExchangeTakerFee(longExchange, longTakerFeeRate)
+             + GetExchangeTakerFee(shortExchange, shortTakerFeeRate);
+    }
+
+    private static decimal GetExchangeTakerFee(string? exchangeName, decimal? dbFeeRate = null)
+    {
+        // Prefer DB-stored fee rate when available
+        if (dbFeeRate.HasValue)
+            return dbFeeRate.Value;
+
+        // Hardcoded fallback for when DB rate is not loaded
+        return exchangeName switch
+        {
+            "Hyperliquid" => 0.00045m,
+            "Lighter" => 0.0m,
+            "Aster" => 0.0004m,
+            _ => 0.0005m, // conservative default
+        };
     }
 }

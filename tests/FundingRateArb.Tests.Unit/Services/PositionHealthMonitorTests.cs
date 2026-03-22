@@ -1,9 +1,11 @@
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.BackgroundServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -565,5 +567,414 @@ public class PositionHealthMonitorTests
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PriceFeedFailure && al.Severity == AlertSeverity.Critical)),
             Times.Once);
+    }
+
+    // ── PnL-Target Exit ──────────────────────────────────────────
+
+    [Fact]
+    public void DetermineCloseReason_PnlTargetReached_ReturnsPnlTargetReached()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 10m; // high accumulated funding
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045 + 0.0 = 0.00045
+        // Estimated entry fee: 100 * 5 * 2 * 0.00045 = 0.45 (SizeUsdc * Leverage * 2 * fee)
+        // Target: 2.0 * 0.45 = 0.90
+        // AccumulatedFunding (10) >= 0.90 → PnlTargetReached
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlBelowTarget_NoClose()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 0.1m; // small accumulated funding
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045
+        // Estimated entry fee: 100 * 5 * 2 * 0.00045 = 0.45 (SizeUsdc * Leverage * 2 * fee)
+        // Target: 2.0 * 0.45 = 0.90
+        // AccumulatedFunding (0.1) < 0.90 → no PnL close
+        // hoursOpen=2 < 72, spread=0.001 > -0.00005 → no close
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetermineCloseReason_AdaptiveHoldDisabled_PnlTargetSkipped()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 100m; // would exceed any PnL target
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = false, // disabled
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Despite high accumulated funding, adaptive hold is disabled
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlExactlyAtTarget_ReturnsPnlTargetReached()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045 + 0.0 = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = 2.0 * 0.45 = 0.90
+        // AccumulatedFunding exactly at target
+        pos.AccumulatedFunding = 0.90m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_ZeroAccumulatedFunding_PnlTargetSkipped()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 0m;
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void GetTakerFeeRate_KnownExchanges_ReturnsSumOfFees()
+    {
+        // GetTakerFeeRate returns the sum of both exchange fees (not max)
+        PositionHealthMonitor.GetTakerFeeRate("Hyperliquid", "Lighter").Should().Be(0.00045m); // 0.00045 + 0.0
+        PositionHealthMonitor.GetTakerFeeRate("Lighter", "Aster").Should().Be(0.0004m);        // 0.0 + 0.0004
+        PositionHealthMonitor.GetTakerFeeRate("Hyperliquid", "Aster").Should().Be(0.00085m);   // 0.00045 + 0.0004
+    }
+
+    // ── F15: StopLoss priority over PnlTarget ────────────────────
+
+    [Fact]
+    public void DetermineCloseReason_StopLossAndPnlTargetBothMet_ReturnsStopLoss()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        pos.AccumulatedFunding = 100m; // exceeds any PnL target
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // unrealizedPnl of -20 exceeds StopLoss threshold (0.15 * 100 = 15)
+        // AccumulatedFunding of 100 also exceeds PnL target
+        // StopLoss should win because it has higher priority
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, -20m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.StopLoss);
+    }
+
+    // ── F10: DetermineCloseReason edge cases ─────────────────────
+
+    [Fact]
+    public void DetermineCloseReason_ZeroSizeUsdc_PnlTargetSkipped()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 0m; // zero size
+        pos.AccumulatedFunding = 100m; // would trigger if fee calculation wasn't zero
+        pos.MarginUsdc = 0m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 100,
+            CloseThreshold = -0.001m,
+        };
+
+        // estimatedEntryFee = 0 * leverage * 2 * feeRate = 0 → PnL target skipped
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetermineCloseReason_NegativeAccumulatedFunding_PnlTargetSkipped()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = -0.5m; // negative funding
+        pos.MarginUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 100,
+            CloseThreshold = -0.001m,
+        };
+
+        // AccumulatedFunding <= 0 → PnL target check guard skips
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().BeNull();
+    }
+
+    // ── F16: GetTakerFeeRate null/unknown exchange names ─────────
+
+    [Fact]
+    public void GetTakerFeeRate_UnknownExchanges_ReturnsConservativeDefault()
+    {
+        // Unknown exchange should return 0.0005 per exchange (conservative default)
+        PositionHealthMonitor.GetTakerFeeRate("Unknown", "Unknown").Should().Be(0.001m); // 0.0005 + 0.0005
+    }
+
+    [Fact]
+    public void GetTakerFeeRate_NullExchangeNames_ReturnsConservativeDefault()
+    {
+        // Null exchange names should fall through to default case
+        PositionHealthMonitor.GetTakerFeeRate(null, null).Should().Be(0.001m); // 0.0005 + 0.0005
+    }
+
+    [Fact]
+    public void GetTakerFeeRate_MixedNullAndKnown_ReturnsCorrectSum()
+    {
+        // One null (default 0.0005) + one known (Hyperliquid 0.00045)
+        PositionHealthMonitor.GetTakerFeeRate(null, "Hyperliquid").Should().Be(0.00095m);
+    }
+
+    // ── F12: PnlProgress warning thresholds ──────────────────────
+
+    [Fact]
+    public void DetermineCloseReason_UsesEntryFeesUsdc_WhenPositive()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.EntryFeesUsdc = 1.0m; // actual recorded entry fees
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Target = 2.0 * 1.0 = 2.0 (uses EntryFeesUsdc, not estimated)
+        // AccumulatedFunding = 2.0 >= 2.0 → PnlTargetReached
+        pos.AccumulatedFunding = 2.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_FallsBackToEstimate_WhenEntryFeesUsdcIsZero()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.EntryFeesUsdc = 0m; // not recorded
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // Target = 2.0 * 0.45 = 0.90
+        pos.AccumulatedFunding = 0.90m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_NullExchanges_StillUseEntryFeesUsdc()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.EntryFeesUsdc = 0.5m;
+        pos.LongExchange = null;
+        pos.ShortExchange = null;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Target = 2.0 * 0.5 = 1.0
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void ComputeWarnings_PnlProgressAbove90Pct_CriticalWarning()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 0.95m; // > 90% of target
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+        };
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = 2.0 * 0.45 = 0.90
+        // progress = 0.95 / 0.90 > 1.0 → > 90% → Critical
+        var dto = new PositionSummaryDto();
+        BotOrchestrator.ComputeWarnings(dto, pos, config);
+
+        dto.WarningTypes.Should().Contain(WarningType.PnlProgress);
+        dto.WarningLevel.Should().Be(WarningLevel.Critical);
+    }
+
+    [Fact]
+    public void ComputeWarnings_PnlProgressAbove70Pct_Warning()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+        };
+
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = 2.0 * 0.45 = 0.90
+        // Set funding so progress is 75%: 0.75 * 0.90 = 0.675
+        pos.AccumulatedFunding = 0.675m;
+
+        var dto = new PositionSummaryDto();
+        BotOrchestrator.ComputeWarnings(dto, pos, config);
+
+        dto.WarningTypes.Should().Contain(WarningType.PnlProgress);
+        dto.WarningLevel.Should().BeOneOf(WarningLevel.Warning, WarningLevel.Critical);
+    }
+
+    [Fact]
+    public void ComputeWarnings_PnlProgressBelow70Pct_NoPnlWarning()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 0.1m; // low funding
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+        };
+
+        var dto = new PositionSummaryDto();
+        BotOrchestrator.ComputeWarnings(dto, pos, config);
+
+        dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
+    }
+
+    [Fact]
+    public void ComputeWarnings_AdaptiveHoldDisabled_NoPnlProgressWarning()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 10m; // high funding, would trigger
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = false,
+            TargetPnlMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+        };
+
+        var dto = new PositionSummaryDto();
+        BotOrchestrator.ComputeWarnings(dto, pos, config);
+
+        dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
     }
 }

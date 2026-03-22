@@ -14,4 +14,11 @@ public class DashboardViewModel
     public decimal NotionalPerLeg { get; set; }
     public decimal VolumeFraction { get; set; }
     public PipelineDiagnosticsDto? Diagnostics { get; set; }
+
+    // Trading intelligence display flags
+    public bool AdaptiveHoldEnabled { get; set; }
+    public bool RebalanceEnabled { get; set; }
+
+    // Per-position PnL progress: keyed by position ID
+    public Dictionary<int, decimal> PnlProgressByPosition { get; set; } = new();
 }

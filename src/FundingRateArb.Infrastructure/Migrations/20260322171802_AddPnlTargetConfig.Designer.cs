@@ -4,6 +4,7 @@ using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260322171802_AddPnlTargetConfig")]
+    partial class AddPnlTargetConfig
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -326,11 +329,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<int>("MaxHoldTimeHours")
                         .HasColumnType("int");
 
-                    b.Property<int>("MaxRebalancesPerCycle")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(2);
-
                     b.Property<decimal>("MinPositionSizeUsdc")
                         .HasColumnType("decimal(18,2)");
 
@@ -342,16 +340,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<int>("RateStalenessMinutes")
                         .HasColumnType("int");
-
-                    b.Property<bool>("RebalanceEnabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bit")
-                        .HasDefaultValue(false);
-
-                    b.Property<decimal>("RebalanceMinImprovement")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,6)")
-                        .HasDefaultValue(0.0002m);
 
                     b.Property<decimal>("StopLossPct")
                         .HasColumnType("decimal(18,4)");

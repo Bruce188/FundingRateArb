@@ -1,5 +1,6 @@
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FluentAssertions;
@@ -878,5 +879,183 @@ public class SignalEngineTests
         // (each asset group has only 1 rate, so inner loop never runs)
         result.Diagnostics.TotalRatesLoaded.Should().Be(2);
         result.Diagnostics.TotalPairsEvaluated.Should().Be(0);
+    }
+
+    // ── F5: Prediction integration tests ──────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_WithPredictionService_EnrichesDtoWithPredictions()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Application.DTOs.RatePredictionDto>
+            {
+                new(1, "ETH", 1, "Hyperliquid", 0.00012m, 0.85m, "rising"),
+                new(1, "ETH", 2, "Lighter", 0.00095m, 0.90m, "stable"),
+            });
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].PredictedLongRate.Should().Be(0.00012m);
+        result[0].PredictedShortRate.Should().Be(0.00095m);
+        result[0].PredictedSpread.Should().Be(0.00095m - 0.00012m);
+        result[0].PredictionConfidence.Should().Be(0.85m); // min of 0.85 and 0.90
+        result[0].PredictedTrend.Should().Be("stable"); // uses short leg's trend
+    }
+
+    [Fact]
+    public async Task GetOpportunities_PredictionServiceThrows_StillReturnsOpportunities()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("DB error"));
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].PredictedLongRate.Should().BeNull();
+        result[0].PredictedShortRate.Should().BeNull();
+        result[0].PredictedSpread.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_OneLegMissingPrediction_SpreadAndConfidenceAreNull()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        // Only provide prediction for one exchange (Hyperliquid), not Lighter
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Application.DTOs.RatePredictionDto>
+            {
+                new(1, "ETH", 1, "Hyperliquid", 0.00012m, 0.85m, "rising"),
+            });
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].PredictedLongRate.Should().Be(0.00012m);
+        result[0].PredictedShortRate.Should().BeNull();
+        result[0].PredictedSpread.Should().BeNull("both legs needed for spread");
+        result[0].PredictionConfidence.Should().BeNull("both legs needed for confidence");
+    }
+
+    // ── F2: OperationCanceledException propagation ────────────
+
+    [Fact]
+    public async Task GetOpportunities_PredictionServiceThrowsOperationCanceled_Propagates()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            });
+
+        var act = () => sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_PredictionServiceReturnsDuplicateKeys_DeduplicatesAndUseFirst()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<RatePredictionDto>
+            {
+                new(1, "ETH", 1, "Hyperliquid", 0.001m, 0.8m, "stable"),
+                new(1, "ETH", 1, "Hyperliquid", 0.002m, 0.9m, "rising"), // duplicate key — silently deduped
+                new(1, "ETH", 2, "Lighter", 0.0009m, 0.75m, "falling"),
+            });
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+            });
+
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        // GroupBy deduplication keeps first entry: 0.001m for Hyperliquid
+        result[0].PredictedLongRate.Should().Be(0.001m);
+        result[0].PredictedShortRate.Should().Be(0.0009m);
+        result[0].PredictedSpread.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_PredictionServiceThrowsGenericException_ContinuesWithoutPredictions()
+    {
+        var mockPredictionService = new Mock<IRatePredictionService>();
+        mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("db error"));
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+            });
+
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Should still produce opportunities without prediction data
+        result.Should().HaveCount(1);
+        result[0].PredictedSpread.Should().BeNull();
     }
 }

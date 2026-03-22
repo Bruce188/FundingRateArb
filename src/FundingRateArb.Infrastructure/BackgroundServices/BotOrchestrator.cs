@@ -168,6 +168,48 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _logger.LogWarning(ex, "Failed to push opportunity update via SignalR");
         }
 
+        // Step 2b: Portfolio rebalancing — close positions that should be replaced by better opportunities
+        // Uses already-fetched positions and opportunities to avoid duplicate signal engine calls
+        if (globalConfig.RebalanceEnabled)
+        {
+            try
+            {
+                var rebalancer = scope.ServiceProvider.GetRequiredService<IPortfolioRebalancer>();
+                var recommendations = await rebalancer.EvaluateAsync(allOpenPositions, allOpportunities, globalConfig, ct);
+
+                var closedIds = new HashSet<int>();
+                foreach (var rec in recommendations)
+                {
+                    if (closedIds.Count >= globalConfig.MaxRebalancesPerCycle)
+                    {
+                        _logger.LogInformation(
+                            "Rebalancing: per-cycle cap ({Cap}) reached, skipping remaining {Remaining} recommendations",
+                            globalConfig.MaxRebalancesPerCycle, recommendations.Count - closedIds.Count);
+                        break;
+                    }
+
+                    var posToClose = allOpenPositions.FirstOrDefault(p => p.Id == rec.PositionId);
+                    if (posToClose is not null)
+                    {
+                        _logger.LogInformation(
+                            "Rebalancing: closing position #{PositionId} ({Asset}) for better opportunity {NewAsset} on {NewLong}/{NewShort}",
+                            rec.PositionId, rec.PositionAsset, rec.ReplacementAsset,
+                            rec.ReplacementLongExchange, rec.ReplacementShortExchange);
+                        await executionEngine.ClosePositionAsync(posToClose, CloseReason.Rebalanced, ct);
+                        closedIds.Add(rec.PositionId);
+                    }
+                }
+
+                // Filter only actually closed positions so unclosed ones still get health monitoring
+                if (closedIds.Count > 0)
+                    allOpenPositions = allOpenPositions.Where(p => !closedIds.Contains(p.Id)).ToList();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Portfolio rebalancing failed — continuing with normal cycle");
+            }
+        }
+
         // Step 3: Push global dashboard KPI update
         await PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled);
 
@@ -742,6 +784,30 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 warningTypes.Add(WarningType.Loss);
                 warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Warning);
+            }
+        }
+
+        // PnlProgress warnings (when adaptive hold is enabled)
+        if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
+        {
+            var entryFee = pos.EntryFeesUsdc > 0
+                ? pos.EntryFeesUsdc
+                : pos.SizeUsdc * pos.Leverage * 2m * PositionHealthMonitor.GetTakerFeeRate(
+                    pos.LongExchange?.Name, pos.ShortExchange?.Name,
+                    pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
+            if (entryFee > 0 && config.TargetPnlMultiplier > 0)
+            {
+                var pnlProgress = pos.AccumulatedFunding / (config.TargetPnlMultiplier * entryFee);
+                if (pnlProgress > 0.9m)
+                {
+                    warningTypes.Add(WarningType.PnlProgress);
+                    warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Critical);
+                }
+                else if (pnlProgress > 0.7m)
+                {
+                    warningTypes.Add(WarningType.PnlProgress);
+                    warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Warning);
+                }
             }
         }
 

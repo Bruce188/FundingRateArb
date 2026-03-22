@@ -94,4 +94,43 @@ public class FundingRateRepository : IFundingRateRepository
             .AsNoTracking()
             .ToListAsync(ct);
     }
+
+    public async Task<List<FundingRateHourlyAggregate>> GetLatestAggregatePerAssetExchangeAsync(CancellationToken ct = default)
+    {
+        // F9: Single GroupBy pass — avoids self-join double-scan.
+        // EF Core 8+ translates OrderByDescending + First inside GroupBy to ROW_NUMBER().
+        return await _context.FundingRateHourlyAggregates
+            .GroupBy(a => new { a.AssetId, a.ExchangeId })
+            .Select(g => g.OrderByDescending(a => a.HourUtc).First())
+            .AsNoTracking()
+            .ToListAsync(ct);
+    }
+
+    public async Task<List<(int AssetId, int ExchangeId, decimal Mean, decimal StdDev)>> GetAggregateStatsByPairAsync(
+        DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        var stats = await _context.FundingRateHourlyAggregates
+            .Where(a => a.HourUtc >= from && a.HourUtc <= to)
+            .GroupBy(a => new { a.AssetId, a.ExchangeId })
+            .Where(g => g.Count() >= 2)
+            .Select(g => new
+            {
+                g.Key.AssetId,
+                g.Key.ExchangeId,
+                Mean = g.Average(a => a.AvgRatePerHour),
+                Count = g.Count(),
+                SumSquaredDiffs = g.Sum(a =>
+                    (a.AvgRatePerHour - g.Average(x => x.AvgRatePerHour))
+                    * (a.AvgRatePerHour - g.Average(x => x.AvgRatePerHour)))
+            })
+            .AsNoTracking()
+            .ToListAsync(ct);
+
+        return stats.Select(s =>
+        {
+            var variance = s.SumSquaredDiffs / (s.Count - 1);
+            var stdDev = (decimal)Math.Sqrt((double)variance);
+            return (s.AssetId, s.ExchangeId, s.Mean, stdDev);
+        }).ToList();
+    }
 }

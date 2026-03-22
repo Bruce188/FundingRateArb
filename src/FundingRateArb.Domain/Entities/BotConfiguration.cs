@@ -71,6 +71,24 @@ public class BotConfiguration
     [Range(0.01, 1.0)]
     public decimal MaxExposurePerExchange { get; set; } = 0.7m;
 
+    /// <summary>Close position when AccumulatedFunding >= TargetPnlMultiplier * estimated_entry_fees.</summary>
+    [Range(0.5, 100.0)]
+    public decimal TargetPnlMultiplier { get; set; } = 2.0m;
+
+    /// <summary>Enable PnL-target exit (when false, only MaxHoldTimeHours applies).</summary>
+    public bool AdaptiveHoldEnabled { get; set; }
+
+    /// <summary>Enable automatic portfolio rebalancing.</summary>
+    public bool RebalanceEnabled { get; set; }
+
+    /// <summary>Minimum spread improvement (per hour) to justify closing an existing position.</summary>
+    [Range(0.0, 0.01)]
+    public decimal RebalanceMinImprovement { get; set; } = 0.0002m;
+
+    /// <summary>Maximum number of rebalance closes per bot cycle to prevent runaway liquidation.</summary>
+    [Range(1, 20)]
+    public int MaxRebalancesPerCycle { get; set; } = 2;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }
