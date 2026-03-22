@@ -56,6 +56,13 @@ public class BotConfiguration
     [Range(1, 20)]
     public int ConsecutiveLossPause { get; set; } = 3;
 
+    /// <summary>
+    /// Minutes before next funding settlement to boost opportunity scoring.
+    /// Opportunities within this window receive a 20% effective yield boost for allocation.
+    /// </summary>
+    [Range(1, 60)]
+    public int FundingWindowMinutes { get; set; } = 10;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

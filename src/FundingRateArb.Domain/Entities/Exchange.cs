@@ -18,6 +18,7 @@ public class Exchange
 
     public FundingInterval FundingInterval { get; set; }
     public int FundingIntervalHours { get; set; } = 1;
+    public FundingSettlementType FundingSettlementType { get; set; } = FundingSettlementType.Continuous;
     public bool SupportsSubAccounts { get; set; }
     public bool IsActive { get; set; } = true;
 

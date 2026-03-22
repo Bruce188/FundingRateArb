@@ -697,6 +697,34 @@ public class LighterConnector : IExchangeConnector, IDisposable
             ?? new Dictionary<string, LighterOrderBookDetail>(StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <inheritdoc />
+    /// <remarks>Lighter settles funding hourly on the hour.</remarks>
+    public Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var nextHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+        return Task.FromResult<DateTime?>(nextHour);
+    }
+
+    public async Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var market = await GetMarketDetailAsync(asset, ct);
+            if (market is null || market.MinInitialMarginFraction <= 0)
+                return null;
+
+            // maxLeverage = 1 / (MinInitialMarginFraction / 10000)
+            // The MinInitialMarginFraction is stored as basis points (e.g., 1000 = 10%)
+            var maxLeverage = (int)(10_000m / market.MinInitialMarginFraction);
+            return maxLeverage > 0 ? maxLeverage : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         _cacheLock.Dispose();

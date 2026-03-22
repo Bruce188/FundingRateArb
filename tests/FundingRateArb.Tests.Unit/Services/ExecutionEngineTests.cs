@@ -916,4 +916,150 @@ public class ExecutionEngineTests
                 al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
             Times.Once);
     }
+
+    // ── Pre-flight leverage validation ───────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_LeverageClamped_UsesReducedLeverage()
+    {
+        // Long exchange max leverage is 3x (less than configured 5x)
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int?)null);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // Verify orders were placed with clamped leverage (3x, not 5x)
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 3, It.IsAny<CancellationToken>()), Times.Once);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 3, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_LeverageClamped_CreatesLeverageReducedAlert()
+    {
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int?)null);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LeverageReduced &&
+                al.Severity == AlertSeverity.Warning &&
+                al.Message!.Contains("5x to 3x"))),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_NullMaxLeverage_UsesConfiguredLeverage()
+    {
+        // Both exchanges return null — cannot determine max leverage
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int?)null);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int?)null);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // Configured leverage (5x) should be used since max is unknown
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()), Times.Once);
+
+        // No LeverageReduced alert should have been created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LeverageReduced)),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_LeverageCheckThrows_UsesConfiguredLeverage()
+    {
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange unreachable"));
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange unreachable"));
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // Falls back to configured leverage (5x) when check fails
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothExchangesClampLeverage_BothAlertsShowOriginalLeverage()
+    {
+        // Configured leverage = 5x, long max = 3x, short max = 2x
+        // Both alerts should say "from 5x" (original), not "from 3x" (intermediate)
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 2, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+
+        // Both alerts should reference the original configured leverage (5x)
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LeverageReduced &&
+                al.Message!.Contains("from 5x to 3x"))),
+            Times.Once);
+
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LeverageReduced &&
+                al.Message!.Contains("from 5x to 2x"))),
+            Times.Once);
+    }
 }

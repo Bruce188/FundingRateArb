@@ -60,6 +60,18 @@ public class UserConfigViewModel
     [Required, Range(1, 20), Display(Name = "Consecutive Loss Pause")]
     public int? ConsecutiveLossPause { get; set; }
 
+    [Required, Range(1, 60), Display(Name = "Funding Window (minutes)")]
+    public int? FundingWindowMinutes { get; set; }
+
+    [Display(Name = "Enable Email Notifications")]
+    public bool EmailNotificationsEnabled { get; set; }
+
+    [Display(Name = "Email on Critical Alerts")]
+    public bool EmailCriticalAlerts { get; set; }
+
+    [Display(Name = "Email Daily Summary")]
+    public bool EmailDailySummary { get; set; }
+
     // Dropdown options for AllocationStrategy
     public List<SelectListItem> AllocationStrategyOptions { get; set; } = [];
 

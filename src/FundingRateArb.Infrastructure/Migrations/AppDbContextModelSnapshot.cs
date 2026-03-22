@@ -297,6 +297,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<int>("FeeAmortizationHours")
                         .HasColumnType("int");
 
+                    b.Property<int>("FundingWindowMinutes")
+                        .HasColumnType("int");
+
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("bit");
 
@@ -365,6 +368,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<int>("FundingIntervalHours")
                         .HasColumnType("int");
 
+                    b.Property<int>("FundingSettlementType")
+                        .HasColumnType("int");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
@@ -429,6 +435,60 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.ToTable("ExchangeAssetConfigs");
                 });
 
+            modelBuilder.Entity("FundingRateArb.Domain.Entities.FundingRateHourlyAggregate", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AssetId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("AvgMarkPrice")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
+
+                    b.Property<decimal>("AvgRatePerHour")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<decimal>("AvgVolume24hUsd")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("ExchangeId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("HourUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<decimal>("LastRate")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<decimal>("MaxRate")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<decimal>("MinRate")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<int>("SampleCount")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssetId");
+
+                    b.HasIndex("ExchangeId", "AssetId", "HourUtc")
+                        .IsUnique();
+
+                    b.ToTable("FundingRateHourlyAggregates");
+                });
+
             modelBuilder.Entity("FundingRateArb.Domain.Entities.FundingRateSnapshot", b =>
                 {
                     b.Property<int>("Id")
@@ -468,6 +528,62 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.HasIndex("ExchangeId", "AssetId", "RecordedAt");
 
                     b.ToTable("FundingRateSnapshots");
+                });
+
+            modelBuilder.Entity("FundingRateArb.Domain.Entities.OpportunitySnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AssetId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("LongExchangeId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("LongVolume24h")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("NetYieldPerHour")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("ShortExchangeId")
+                        .HasColumnType("int");
+
+                    b.Property<decimal>("ShortVolume24h")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("SkipReason")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<decimal>("SpreadPerHour")
+                        .HasPrecision(18, 10)
+                        .HasColumnType("decimal(18,10)");
+
+                    b.Property<bool>("WasOpened")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LongExchangeId");
+
+                    b.HasIndex("RecordedAt");
+
+                    b.HasIndex("ShortExchangeId");
+
+                    b.HasIndex("AssetId", "RecordedAt");
+
+                    b.ToTable("OpportunitySnapshots");
                 });
 
             modelBuilder.Entity("FundingRateArb.Domain.Entities.UserAssetPreference", b =>
@@ -530,8 +646,20 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<int>("DefaultLeverage")
                         .HasColumnType("int");
 
+                    b.Property<bool>("EmailCriticalAlerts")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("EmailDailySummary")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("EmailNotificationsEnabled")
+                        .HasColumnType("bit");
+
                     b.Property<decimal>("FeeAmortizationHours")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int>("FundingWindowMinutes")
+                        .HasColumnType("int");
 
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("bit");
@@ -861,6 +989,25 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Navigation("Exchange");
                 });
 
+            modelBuilder.Entity("FundingRateArb.Domain.Entities.FundingRateHourlyAggregate", b =>
+                {
+                    b.HasOne("FundingRateArb.Domain.Entities.Asset", "Asset")
+                        .WithMany()
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("FundingRateArb.Domain.Entities.Exchange", "Exchange")
+                        .WithMany()
+                        .HasForeignKey("ExchangeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Asset");
+
+                    b.Navigation("Exchange");
+                });
+
             modelBuilder.Entity("FundingRateArb.Domain.Entities.FundingRateSnapshot", b =>
                 {
                     b.HasOne("FundingRateArb.Domain.Entities.Asset", "Asset")
@@ -878,6 +1025,33 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Navigation("Asset");
 
                     b.Navigation("Exchange");
+                });
+
+            modelBuilder.Entity("FundingRateArb.Domain.Entities.OpportunitySnapshot", b =>
+                {
+                    b.HasOne("FundingRateArb.Domain.Entities.Asset", "Asset")
+                        .WithMany()
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("FundingRateArb.Domain.Entities.Exchange", "LongExchange")
+                        .WithMany()
+                        .HasForeignKey("LongExchangeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("FundingRateArb.Domain.Entities.Exchange", "ShortExchange")
+                        .WithMany()
+                        .HasForeignKey("ShortExchangeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Asset");
+
+                    b.Navigation("LongExchange");
+
+                    b.Navigation("ShortExchange");
                 });
 
             modelBuilder.Entity("FundingRateArb.Domain.Entities.UserAssetPreference", b =>

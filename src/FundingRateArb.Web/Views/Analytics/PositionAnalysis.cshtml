@@ -1,0 +1,141 @@
+@model FundingRateArb.Application.DTOs.PositionAnalyticsDto
+
+@{
+    ViewData["Title"] = $"Position #{Model.PositionId} Analysis";
+}
+
+<h2>Position #@Model.PositionId Analysis</h2>
+<a asp-action="Index" class="btn btn-sm btn-outline-secondary mb-3">Back to Analytics</a>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <strong>@Model.AssetSymbol</strong>
+                <span class="text-muted">@Model.LongExchangeName / @Model.ShortExchangeName</span>
+            </div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Status</dt>
+                    <dd class="col-sm-6">
+                        @if (Model.IsClosed)
+                        {
+                            <span class="badge bg-secondary">Closed</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-success">Open</span>
+                        }
+                    </dd>
+
+                    <dt class="col-sm-6">Opened</dt>
+                    <dd class="col-sm-6">@Model.OpenedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+
+                    @if (Model.ClosedAt.HasValue)
+                    {
+                        <dt class="col-sm-6">Closed</dt>
+                        <dd class="col-sm-6">@Model.ClosedAt.Value.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                    }
+
+                    <dt class="col-sm-6">Hours Held</dt>
+                    <dd class="col-sm-6">@Model.HoursHeld.ToString("F1")</dd>
+
+                    <dt class="col-sm-6">Size</dt>
+                    <dd class="col-sm-6">@Model.SizeUsdc.ToString("F2") USDC</dd>
+
+                    <dt class="col-sm-6">Entry Spread/hr</dt>
+                    <dd class="col-sm-6">@((Model.EntrySpreadPerHour * 100).ToString("F4"))%</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">PnL Comparison</div>
+            <div class="card-body">
+                @{
+                    var diffClass = Model.PnlDifference >= 0 ? "text-success" : "text-danger";
+                    var maxPnl = Math.Max(Math.Abs(Model.ActualPnl), Math.Abs(Model.ProjectedPnl));
+                    var actualBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ActualPnl) / maxPnl * 100) : 0;
+                    var projectedBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ProjectedPnl) / maxPnl * 100) : 0;
+                    var actualBarColor = Model.ActualPnl >= 0 ? "bg-success" : "bg-danger";
+                    var projectedBarColor = Model.ProjectedPnl >= 0 ? "bg-primary" : "bg-warning";
+                }
+
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Actual PnL</span>
+                        <strong class="@(Model.ActualPnl >= 0 ? "text-success" : "text-danger")">
+                            @Model.ActualPnl.ToString("F2") USDC
+                        </strong>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar @actualBarColor" role="progressbar"
+                             style="width: @(actualBarPct)%"></div>
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Projected PnL</span>
+                        <strong>@Model.ProjectedPnl.ToString("F2") USDC</strong>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar @projectedBarColor" role="progressbar"
+                             style="width: @(projectedBarPct)%"></div>
+                    </div>
+                </div>
+
+                <hr />
+                <div class="d-flex justify-content-between">
+                    <span>Difference</span>
+                    <strong class="@diffClass">@Model.PnlDifference.ToString("F2") USDC</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (Model.SpreadHistory.Any())
+{
+    <div class="card mb-4">
+        <div class="card-header">Spread History (Hourly)</div>
+        <div class="card-body">
+            <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-sm table-striped">
+                    <thead class="table-dark sticky-top">
+                        <tr>
+                            <th>Hour (UTC)</th>
+                            <th class="text-end">Spread/hr</th>
+                            <th>Bar</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{
+                            var maxSpread = Model.SpreadHistory.Max(p => Math.Abs(p.SpreadPerHour));
+                        }
+                        @foreach (var point in Model.SpreadHistory)
+                        {
+                            var barPct = maxSpread > 0 ? (int)(Math.Abs(point.SpreadPerHour) / maxSpread * 100) : 0;
+                            var barColor = point.SpreadPerHour >= 0 ? "bg-success" : "bg-danger";
+                            <tr>
+                                <td>@point.HourUtc.ToString("MM-dd HH:mm")</td>
+                                <td class="text-end">@((point.SpreadPerHour * 100).ToString("F4"))%</td>
+                                <td style="width: 40%;">
+                                    <div class="progress" style="height: 14px;">
+                                        <div class="progress-bar @barColor" style="width: @(barPct)%"></div>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info">No hourly spread history available. Aggregates are generated hourly and retained for 30 days.</div>
+}

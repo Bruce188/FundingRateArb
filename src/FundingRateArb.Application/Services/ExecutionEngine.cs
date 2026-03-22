@@ -77,6 +77,53 @@ public class ExecutionEngine : IExecutionEngine
             "Opening position: {Asset} Long={LongExchange} Short={ShortExchange} Size={Size} USDC",
             opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
 
+        // Pre-flight leverage validation: clamp to exchange maximum if configured leverage exceeds it
+        var originalLeverage = config.DefaultLeverage;
+        var effectiveLeverage = config.DefaultLeverage;
+        try
+        {
+            var longMaxTask = longConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
+            var shortMaxTask = shortConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
+            await Task.WhenAll(longMaxTask, shortMaxTask);
+
+            var longMax = longMaxTask.Result;
+            var shortMax = shortMaxTask.Result;
+
+            if (longMax.HasValue && effectiveLeverage > longMax.Value)
+            {
+                _logger.LogWarning(
+                    "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
+                    originalLeverage, longMax.Value, opp.AssetSymbol, opp.LongExchangeName);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId   = config.UpdatedByUserId,
+                    Type     = AlertType.LeverageReduced,
+                    Severity = AlertSeverity.Warning,
+                    Message  = $"Leverage reduced from {originalLeverage}x to {longMax.Value}x for {opp.AssetSymbol} on {opp.LongExchangeName} (exchange maximum)",
+                });
+                effectiveLeverage = longMax.Value;
+            }
+
+            if (shortMax.HasValue && effectiveLeverage > shortMax.Value)
+            {
+                _logger.LogWarning(
+                    "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
+                    originalLeverage, shortMax.Value, opp.AssetSymbol, opp.ShortExchangeName);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId   = config.UpdatedByUserId,
+                    Type     = AlertType.LeverageReduced,
+                    Severity = AlertSeverity.Warning,
+                    Message  = $"Leverage reduced from {originalLeverage}x to {shortMax.Value}x for {opp.AssetSymbol} on {opp.ShortExchangeName} (exchange maximum)",
+                });
+                effectiveLeverage = shortMax.Value;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Pre-flight leverage check failed for {Asset}, using configured leverage", opp.AssetSymbol);
+        }
+
         // C-EE2: Persist a sentinel record BEFORE firing legs so that a crash after one leg
         // succeeds leaves a recoverable audit trail.
         var position = new ArbitragePosition
@@ -87,7 +134,7 @@ public class ExecutionEngine : IExecutionEngine
             ShortExchangeId      = opp.ShortExchangeId,
             SizeUsdc             = sizeUsdc,
             MarginUsdc           = sizeUsdc,
-            Leverage             = config.DefaultLeverage,
+            Leverage             = effectiveLeverage,
             EntrySpreadPerHour   = opp.SpreadPerHour,
             CurrentSpreadPerHour = opp.SpreadPerHour,
             Status               = PositionStatus.Opening,
@@ -98,8 +145,8 @@ public class ExecutionEngine : IExecutionEngine
         await _uow.SaveAsync(ct);
 
         // Place both legs concurrently
-        var longTask  = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long,  sizeUsdc, config.DefaultLeverage, ct);
-        var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, config.DefaultLeverage, ct);
+        var longTask  = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long,  sizeUsdc, effectiveLeverage, ct);
+        var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, ct);
 
         // C1: Wrap Task.WhenAll in try/catch — SDK connectors (Hyperliquid, Aster) throw
         // InvalidOperationException/HttpRequestException on errors. If one task faults, WhenAll

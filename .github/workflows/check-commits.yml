@@ -1,0 +1,15 @@
+name: Check Commits
+on: pull_request
+
+jobs:
+  check-co-authored-by:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for Co-authored-by trailers
+        run: |
+          if git log origin/main..HEAD --format='%b' | grep -qi 'co-authored-by'; then
+            echo "::warning::PR contains commits with Co-authored-by trailers. These will be removed on squash merge."
+          fi

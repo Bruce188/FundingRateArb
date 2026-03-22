@@ -21,6 +21,7 @@ using Polly.Timeout;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using CryptoExchange.Net.Authentication;
+using AspNet.Security.OAuth.GitHub;
 using Azure.Identity;
 using Serilog;
 using Serilog.Events;
@@ -122,6 +123,30 @@ try
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<AppDbContext>();
 
+    // --- External OAuth Providers ---
+    var googleClientId = builder.Configuration["Authentication:Google:ClientId"];
+    var googleClientSecret = builder.Configuration["Authentication:Google:ClientSecret"];
+    var githubClientId = builder.Configuration["Authentication:GitHub:ClientId"];
+    var githubClientSecret = builder.Configuration["Authentication:GitHub:ClientSecret"];
+
+    var authBuilder = builder.Services.AddAuthentication();
+    if (!string.IsNullOrEmpty(googleClientId) && !string.IsNullOrEmpty(googleClientSecret))
+    {
+        authBuilder.AddGoogle(options =>
+        {
+            options.ClientId = googleClientId;
+            options.ClientSecret = googleClientSecret;
+        });
+    }
+    if (!string.IsNullOrEmpty(githubClientId) && !string.IsNullOrEmpty(githubClientSecret))
+    {
+        authBuilder.AddGitHub(options =>
+        {
+            options.ClientId = githubClientId;
+            options.ClientSecret = githubClientSecret;
+        });
+    }
+
     // --- Cookie security ---
     builder.Services.ConfigureApplicationCookie(options =>
     {
@@ -156,6 +181,8 @@ try
     builder.Services.AddSingleton<IConfigValidator, ConfigValidator>();
     builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();
     builder.Services.AddScoped<IBalanceAggregator, BalanceAggregator>();
+    builder.Services.AddScoped<ITradeAnalyticsService, TradeAnalyticsService>();
+    builder.Services.AddSingleton<IEmailService, EmailService>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
@@ -316,6 +343,7 @@ try
     builder.Services.AddHostedService<BotOrchestrator>();
     builder.Services.AddSingleton<IBotControl>(sp =>
         sp.GetServices<IHostedService>().OfType<BotOrchestrator>().Single());
+    builder.Services.AddHostedService<DailySummaryService>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>
