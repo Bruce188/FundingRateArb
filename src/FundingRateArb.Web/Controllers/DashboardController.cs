@@ -96,6 +96,23 @@ public class DashboardController : Controller
                 ? opportunities.Max(o => o.SpreadPerHour)
                 : result.Diagnostics.BestRawSpread;
 
+        // Compute PnL progress for positions when adaptive hold is enabled
+        var pnlProgress = new Dictionary<int, decimal>();
+        if (botConfig is not null && botConfig.AdaptiveHoldEnabled)
+        {
+            foreach (var pos in openPositions)
+            {
+                if (pos.AccumulatedFunding > 0 && pos.SizeUsdc > 0)
+                {
+                    var fee = pos.SizeUsdc * pos.Leverage * 2m * Application.Services.PositionHealthMonitor.GetTakerFeeRate(
+                        pos.LongExchange?.Name, pos.ShortExchange?.Name);
+                    var target = botConfig.TargetPnlMultiplier * fee;
+                    if (target > 0)
+                        pnlProgress[pos.Id] = Math.Min(pos.AccumulatedFunding / target, 2.0m);
+                }
+            }
+        }
+
         var vm = new DashboardViewModel
         {
             BotEnabled = botConfig?.IsEnabled ?? false,
@@ -106,6 +123,9 @@ public class DashboardController : Controller
             OpenPositions = positionSummaries,
             Opportunities = opportunities,
             Diagnostics = result.Diagnostics,
+            AdaptiveHoldEnabled = botConfig?.AdaptiveHoldEnabled ?? false,
+            RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
+            PnlProgressByPosition = pnlProgress,
         };
 
         if (User.IsInRole("Admin") && botConfig is not null)

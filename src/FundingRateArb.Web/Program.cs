@@ -199,6 +199,9 @@ try
     builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();
     builder.Services.AddScoped<IBalanceAggregator, BalanceAggregator>();
     builder.Services.AddScoped<ITradeAnalyticsService, TradeAnalyticsService>();
+    builder.Services.AddScoped<IRateAnalyticsService, RateAnalyticsService>();
+    builder.Services.AddScoped<IRatePredictionService, RatePredictionService>();
+    builder.Services.AddScoped<IPortfolioRebalancer, PortfolioRebalancer>();
     builder.Services.AddSingleton<IEmailService, EmailService>();
 
     // --- Polly Resilience Pipelines ---
@@ -405,9 +408,12 @@ try
         ctx.Response.Headers["X-Content-Type-Options"]  = "nosniff";
         ctx.Response.Headers["Referrer-Policy"]         = "strict-origin-when-cross-origin";
         ctx.Response.Headers["Permissions-Policy"]      = "geolocation=(), microphone=(), camera=()";
+        // F5: CSP URLs are pinned to CDN script versions in Views/Analytics/RateAnalytics.cshtml.
+        // When bumping chart.js or adapter versions, update BOTH the CSP URLs here AND the script tags in the view.
+        // SRI integrity hashes in the HTML provide an additional verification layer.
         ctx.Response.Headers["Content-Security-Policy"] =
             "default-src 'self'; " +
-            "script-src 'self'; " +
+            "script-src 'self' https://cdn.jsdelivr.net/npm/chart.js@4.5.1 https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0; " +
             "style-src 'self' 'unsafe-inline'; " +
             "connect-src 'self' wss: ws:; " +
             "img-src 'self' data:; " +

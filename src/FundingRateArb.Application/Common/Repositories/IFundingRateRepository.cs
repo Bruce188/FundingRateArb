@@ -21,4 +21,7 @@ public interface IFundingRateRepository
     /// </summary>
     Task<List<FundingRateSnapshot>> GetSnapshotsInRangeAsync(
         DateTime from, DateTime to, CancellationToken ct = default);
+
+    // Analytics query methods
+    Task<List<FundingRateHourlyAggregate>> GetLatestAggregatePerAssetExchangeAsync(CancellationToken ct = default);
 }

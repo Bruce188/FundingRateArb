@@ -94,4 +94,15 @@ public class FundingRateRepository : IFundingRateRepository
             .AsNoTracking()
             .ToListAsync(ct);
     }
+
+    public async Task<List<FundingRateHourlyAggregate>> GetLatestAggregatePerAssetExchangeAsync(CancellationToken ct = default)
+    {
+        // F9: Single GroupBy pass — avoids self-join double-scan.
+        // EF Core 8+ translates OrderByDescending + First inside GroupBy to ROW_NUMBER().
+        return await _context.FundingRateHourlyAggregates
+            .GroupBy(a => new { a.AssetId, a.ExchangeId })
+            .Select(g => g.OrderByDescending(a => a.HourUtc).First())
+            .AsNoTracking()
+            .ToListAsync(ct);
+    }
 }

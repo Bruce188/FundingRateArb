@@ -178,6 +178,10 @@
                                     </div>
                                     <small class="text-muted">Long: @opp.LongExchangeName | Short: @opp.ShortExchangeName</small>
                                     <div class="small">Spread: @((opp.SpreadPerHour * 100).ToString("F4"))%/hr | Net: @((opp.NetYieldPerHour * 100).ToString("F4"))%/hr</div>
+                                    @if (opp.PredictedSpread.HasValue)
+                                    {
+                                        <div class="small">Predicted: @((opp.PredictedSpread.Value * 100).ToString("F4"))%/hr (@(opp.PredictedTrend ?? "n/a"))</div>
+                                    }
                                     @if (opp.LongVolume24h > 0 || opp.ShortVolume24h > 0)
                                     {
                                         <div><small class="text-muted">Vol: $@opp.LongVolume24h.ToString("N0") / $@opp.ShortVolume24h.ToString("N0")</small></div>
@@ -198,6 +202,7 @@
                                 <th>Short Exchange</th>
                                 <th>Spread/hr</th>
                                 <th>Net Yield/hr</th>
+                                <th>Predicted</th>
                                 <th>APR</th>
                                 <th>Next</th>
                             </tr>
@@ -208,7 +213,7 @@
                             @if (Model.Opportunities.Count == 0)
                             {
                                 <tr>
-                                    <td colspan="8" class="text-center py-4">
+                                    <td colspan="9" class="text-center py-4">
                                         @if (Model.Diagnostics is not null)
                                         {
                                             var dx = Model.Diagnostics;
@@ -279,6 +284,24 @@
                                         <td>@opp.ShortExchangeName</td>
                                         <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
                                         <td>@((opp.NetYieldPerHour * 100).ToString("F4"))%</td>
+                                        <td>
+                                            @if (opp.PredictedSpread.HasValue)
+                                            {
+                                                var predictedTrend = opp.PredictedTrend ?? "n/a";
+                                                var trendArrow = predictedTrend == "rising" ? "^" : predictedTrend == "falling" ? "v" : "-";
+                                                var confClass = opp.PredictionConfidence >= 0.7m ? "text-success"
+                                                    : opp.PredictionConfidence >= 0.4m ? "text-warning"
+                                                    : "text-danger";
+                                                <span>@((opp.PredictedSpread.Value * 100).ToString("F4"))%</span>
+                                                <span class="trend-arrow @(predictedTrend == "rising" ? "text-success" : predictedTrend == "falling" ? "text-danger" : "text-muted")"
+                                                      title="Trend: @predictedTrend">@trendArrow</span>
+                                                <span class="prediction-confidence @confClass" title="Confidence: @(((opp.PredictionConfidence ?? 0) * 100).ToString("F0"))%"></span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">&mdash;</span>
+                                            }
+                                        </td>
                                         <td class="@apyClass">
                                             @((opp.AnnualizedYield * 100).ToString("F1"))%
                                             @if (constrained)
@@ -330,11 +353,12 @@
                                             @foreach (var wt in pos.WarningTypes)
                                             {
                                                 <span class="warning-icon warning-@wt.ToString().ToLower()" title="@wt">@(wt switch {
-                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk => "\u25B2",
-                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased  => "\u23F0",
-                                                    FundingRateArb.Domain.Enums.WarningType.Loss       => "\u2193",
-                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity  => "\u2248",
-                                                    FundingRateArb.Domain.Enums.WarningType.Leverage   => "\u26BF",
+                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk   => "\u25B2",
+                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased    => "\u23F0",
+                                                    FundingRateArb.Domain.Enums.WarningType.Loss         => "\u2193",
+                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity    => "\u2248",
+                                                    FundingRateArb.Domain.Enums.WarningType.Leverage     => "\u26BF",
+                                                    FundingRateArb.Domain.Enums.WarningType.PnlProgress  => "\u25CE",
                                                     _ => ""
                                                 })</span>
                                             }
@@ -345,6 +369,17 @@
                                     @if (pos.AccumulatedFunding != 0)
                                     {
                                         <div class="small">Funding: $@pos.AccumulatedFunding.ToString("F4")</div>
+                                    }
+                                    @if (Model.AdaptiveHoldEnabled && Model.PnlProgressByPosition.TryGetValue(pos.Id, out var mobileProgress))
+                                    {
+                                        var mPct = Math.Min(mobileProgress * 100, 100);
+                                        var mBarClass = mPct > 95 ? "pnl-fill-pulse" : mPct > 80 ? "pnl-fill-gold" : "pnl-fill-green";
+                                        <div class="mt-1">
+                                            <div class="pnl-progress-bar">
+                                                <div class="pnl-progress-fill @mBarClass" style="width: @(mPct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                            </div>
+                                            <small class="text-muted">PnL Target: @mPct.ToString("F0")%</small>
+                                        </div>
                                     }
                                     <div><small class="text-muted">Opened @pos.OpenedAt.ToString("MMM dd HH:mm")</small></div>
                                 </div>
@@ -363,6 +398,10 @@
                                     <th>Entry Spread/hr</th>
                                     <th>Current Spread/hr</th>
                                     <th>Accumulated Funding</th>
+                                    @if (Model.AdaptiveHoldEnabled)
+                                    {
+                                        <th>PnL Target</th>
+                                    }
                                     <th>Opened At</th>
                                 </tr>
                             </thead>
@@ -381,11 +420,12 @@
                                             @foreach (var wt in pos.WarningTypes)
                                             {
                                                 <span class="warning-icon warning-@wt.ToString().ToLower()" title="@wt">@(wt switch {
-                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk => "\u25B2",
-                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased  => "\u23F0",
-                                                    FundingRateArb.Domain.Enums.WarningType.Loss       => "\u2193",
-                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity  => "\u2248",
-                                                    FundingRateArb.Domain.Enums.WarningType.Leverage   => "\u26BF",
+                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk   => "\u25B2",
+                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased    => "\u23F0",
+                                                    FundingRateArb.Domain.Enums.WarningType.Loss         => "\u2193",
+                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity    => "\u2248",
+                                                    FundingRateArb.Domain.Enums.WarningType.Leverage     => "\u26BF",
+                                                    FundingRateArb.Domain.Enums.WarningType.PnlProgress  => "\u25CE",
                                                     _ => ""
                                                 })</span>
                                             }
@@ -398,6 +438,24 @@
                                             @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%
                                         </td>
                                         <td class="position-pnl text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        @if (Model.AdaptiveHoldEnabled)
+                                        {
+                                            <td>
+                                                @if (Model.PnlProgressByPosition.TryGetValue(pos.Id, out var progress))
+                                                {
+                                                    var pct = Math.Min(progress * 100, 100);
+                                                    var barClass = pct > 95 ? "pnl-fill-pulse" : pct > 80 ? "pnl-fill-gold" : "pnl-fill-green";
+                                                    <div class="pnl-progress-bar">
+                                                        <div class="pnl-progress-fill @barClass" style="width: @(pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                                                    </div>
+                                                    <small class="text-muted">@pct.ToString("F0")%</small>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">&mdash;</span>
+                                                }
+                                            </td>
+                                        }
                                         <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
                                     </tr>
                                 }
