@@ -55,6 +55,7 @@
                     <label asp-for="CloseThreshold" class="form-label"></label>
                     <input asp-for="CloseThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to close position</div>
+                    <small id="close-threshold-pct" class="text-info"></small>
                     <span asp-validation-for="CloseThreshold" class="text-danger"></span>
                 </div>
 
@@ -62,6 +63,7 @@
                     <label asp-for="AlertThreshold" class="form-label"></label>
                     <input asp-for="AlertThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to trigger alerts</div>
+                    <small id="alert-threshold-pct" class="text-info"></small>
                     <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                 </div>
             </div>
@@ -193,6 +195,15 @@
                 </div>
             </div>
 
+            <div class="row g-3 mb-4">
+                <div class="col-md-4">
+                    <label asp-for="FundingWindowMinutes" class="form-label"></label>
+                    <input asp-for="FundingWindowMinutes" class="form-control" type="number" min="1" max="60" />
+                    <div class="form-text">Minutes before settlement to boost opportunity scoring</div>
+                    <span asp-validation-for="FundingWindowMinutes" class="text-danger"></span>
+                </div>
+            </div>
+
             <div class="mt-2">
                 <button type="submit" class="btn btn-primary">Save Configuration</button>
             </div>
@@ -203,16 +214,8 @@
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
     <script>
-        (function() {
-            var otInput = document.getElementById('OpenThreshold');
-            var otPct = document.getElementById('open-threshold-pct');
-            if (!otInput || !otPct) return;
-            function update() {
-                var val = parseFloat(otInput.value);
-                otPct.textContent = isNaN(val) || val === 0 ? '' : '= ' + (val * 100).toFixed(3) + '%/hr';
-            }
-            otInput.addEventListener('input', update);
-            update();
-        })();
+        wireThresholdHelper('OpenThreshold', 'open-threshold-pct');
+        wireThresholdHelper('CloseThreshold', 'close-threshold-pct');
+        wireThresholdHelper('AlertThreshold', 'alert-threshold-pct');
     </script>
 }

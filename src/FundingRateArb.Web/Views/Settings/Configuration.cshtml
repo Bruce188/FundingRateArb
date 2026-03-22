@@ -51,12 +51,14 @@
                     <label asp-for="CloseThreshold" class="form-label"></label>
                     <input asp-for="CloseThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to close a position</div>
+                    <small id="close-threshold-pct" class="text-info"></small>
                     <span asp-validation-for="CloseThreshold" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
                     <label asp-for="AlertThreshold" class="form-label"></label>
                     <input asp-for="AlertThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Rate at which to trigger alerts</div>
+                    <small id="alert-threshold-pct" class="text-info"></small>
                     <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                 </div>
             </div>
@@ -168,6 +170,31 @@
                     <div class="form-text">Max age for funding rates before considered stale</div>
                     <span asp-validation-for="RateStalenessMinutes" class="text-danger"></span>
                 </div>
+                <div class="col-md-4">
+                    <label asp-for="FundingWindowMinutes" class="form-label"></label>
+                    <input asp-for="FundingWindowMinutes" class="form-control" type="number" min="1" max="60" />
+                    <div class="form-text">Minutes before settlement to boost opportunity scoring</div>
+                    <span asp-validation-for="FundingWindowMinutes" class="text-danger"></span>
+                </div>
+            </div>
+
+            @* Notifications *@
+            <h5 class="card-title mb-3">Email Notifications</h5>
+            <div class="mb-4">
+                <div class="form-check form-switch mb-2">
+                    <input asp-for="EmailNotificationsEnabled" class="form-check-input" type="checkbox" role="switch" id="emailNotificationsSwitch" />
+                    <label class="form-check-label" for="emailNotificationsSwitch">Enable Email Notifications</label>
+                </div>
+                <div class="form-check form-switch mb-2 ms-3">
+                    <input asp-for="EmailCriticalAlerts" class="form-check-input" type="checkbox" role="switch" id="emailCriticalSwitch" />
+                    <label class="form-check-label" for="emailCriticalSwitch">Critical Alert Emails</label>
+                    <div class="form-text">Receive an email when a critical alert is triggered (max 1 per 15 min)</div>
+                </div>
+                <div class="form-check form-switch mb-2 ms-3">
+                    <input asp-for="EmailDailySummary" class="form-check-input" type="checkbox" role="switch" id="emailDailySummarySwitch" />
+                    <label class="form-check-label" for="emailDailySummarySwitch">Daily PnL Summary</label>
+                    <div class="form-text">Receive a daily email summarizing your positions and PnL</div>
+                </div>
             </div>
 
             @* Action buttons *@
@@ -194,16 +221,8 @@
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
     <script>
-        (function() {
-            var otInput = document.getElementById('OpenThreshold');
-            var otPct = document.getElementById('open-threshold-pct');
-            if (!otInput || !otPct) return;
-            function update() {
-                var val = parseFloat(otInput.value);
-                otPct.textContent = isNaN(val) || val === 0 ? '' : '= ' + (val * 100).toFixed(3) + '%/hr';
-            }
-            otInput.addEventListener('input', update);
-            update();
-        })();
+        wireThresholdHelper('OpenThreshold', 'open-threshold-pct');
+        wireThresholdHelper('CloseThreshold', 'close-threshold-pct');
+        wireThresholdHelper('AlertThreshold', 'alert-threshold-pct');
     </script>
 }

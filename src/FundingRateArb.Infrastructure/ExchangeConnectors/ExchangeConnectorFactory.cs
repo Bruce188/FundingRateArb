@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using HyperLiquid.Net.Clients;
@@ -12,6 +13,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 public class ExchangeConnectorFactory : IExchangeConnectorFactory
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ConcurrentDictionary<string, KeyPool> _keyPools = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly Dictionary<string, Type> ConnectorTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -23,8 +25,25 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     public ExchangeConnectorFactory(IServiceProvider serviceProvider)
         => _serviceProvider = serviceProvider;
 
+    /// <summary>
+    /// Registers additional infrastructure connectors for an exchange, enabling round-robin key rotation.
+    /// </summary>
+    public void RegisterInfraConnectors(string exchangeName, IReadOnlyList<IExchangeConnector> connectors)
+    {
+        if (connectors.Count == 0) return;
+        _keyPools[exchangeName] = new KeyPool(connectors);
+    }
+
     public IExchangeConnector GetConnector(string exchangeName)
     {
+        // If a key pool exists, use round-robin; otherwise fall back to DI singleton
+        if (_keyPools.TryGetValue(exchangeName, out var pool))
+        {
+            var connector = pool.GetNext();
+            if (connector is not null) return connector;
+            // All keys in cooldown — fall through to DI singleton
+        }
+
         if (!ConnectorTypes.TryGetValue(exchangeName, out var type))
             throw new ArgumentException($"Unknown exchange: '{exchangeName}'. Valid values: {string.Join(", ", ConnectorTypes.Keys)}", nameof(exchangeName));
 
@@ -32,7 +51,34 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     }
 
     public IEnumerable<IExchangeConnector> GetAllConnectors()
-        => ConnectorTypes.Values.Select(t => (IExchangeConnector)_serviceProvider.GetRequiredService(t));
+    {
+        foreach (var kvp in ConnectorTypes)
+        {
+            if (_keyPools.TryGetValue(kvp.Key, out var pool))
+            {
+                var connector = pool.GetNext();
+                if (connector is not null)
+                {
+                    yield return connector;
+                    continue;
+                }
+            }
+            yield return (IExchangeConnector)_serviceProvider.GetRequiredService(kvp.Value);
+        }
+    }
+
+    /// <summary>
+    /// Marks a key as rate-limited. The connector will be skipped for the cooldown duration.
+    /// </summary>
+    public void MarkRateLimited(string exchangeName, IExchangeConnector connector, TimeSpan? cooldown = null)
+    {
+        if (_keyPools.TryGetValue(exchangeName, out var pool))
+            pool.MarkCooldown(connector, cooldown ?? TimeSpan.FromSeconds(60));
+    }
+
+    /// <summary>Exposes key pool internals for testing.</summary>
+    internal KeyPool? GetKeyPool(string exchangeName) =>
+        _keyPools.TryGetValue(exchangeName, out var pool) ? pool : null;
 
     public Task<IExchangeConnector?> CreateForUserAsync(
         string exchangeName,
@@ -123,5 +169,61 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var logger = _serviceProvider.GetRequiredService<ILogger<LighterConnector>>();
         return new LighterConnector(httpClient, logger, userConfig);
+    }
+
+    /// <summary>
+    /// Manages a pool of connectors for a single exchange with round-robin rotation and cooldown tracking.
+    /// </summary>
+    internal class KeyPool
+    {
+        private readonly IReadOnlyList<IExchangeConnector> _connectors;
+        private readonly ConcurrentDictionary<IExchangeConnector, DateTime> _cooldowns = new();
+        private int _index = -1;
+
+        public KeyPool(IReadOnlyList<IExchangeConnector> connectors)
+        {
+            _connectors = connectors;
+        }
+
+        /// <summary>
+        /// Returns the next non-cooled-down connector in round-robin order.
+        /// If all connectors are cooled down, returns the one with the shortest remaining cooldown.
+        /// Returns null only if the pool is empty.
+        /// </summary>
+        public IExchangeConnector? GetNext()
+        {
+            if (_connectors.Count == 0) return null;
+
+            var now = DateTime.UtcNow;
+
+            // Try round-robin: find next non-cooled-down connector
+            for (int i = 0; i < _connectors.Count; i++)
+            {
+                var idx = (Interlocked.Increment(ref _index) & 0x7FFFFFFF) % _connectors.Count;
+                var connector = _connectors[idx];
+
+                if (!_cooldowns.TryGetValue(connector, out var expiresAt) || now >= expiresAt)
+                {
+                    // Clean up expired cooldown
+                    _cooldowns.TryRemove(connector, out _);
+                    return connector;
+                }
+            }
+
+            // All in cooldown — return the one expiring soonest
+            return _connectors
+                .OrderBy(c => _cooldowns.GetValueOrDefault(c, DateTime.MinValue))
+                .First();
+        }
+
+        public void MarkCooldown(IExchangeConnector connector, TimeSpan duration)
+        {
+            _cooldowns[connector] = DateTime.UtcNow + duration;
+        }
+
+        /// <summary>Expose for testing.</summary>
+        internal int Count => _connectors.Count;
+        internal bool IsInCooldown(IExchangeConnector connector) =>
+            _cooldowns.TryGetValue(connector, out var exp) && DateTime.UtcNow < exp;
     }
 }

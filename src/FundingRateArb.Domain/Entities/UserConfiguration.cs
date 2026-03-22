@@ -24,6 +24,10 @@ public class UserConfiguration
     public int RateStalenessMinutes { get; set; } = 15;
     public decimal DailyDrawdownPausePct { get; set; } = 0.1m;
     public int ConsecutiveLossPause { get; set; } = 3;
+    public int FundingWindowMinutes { get; set; } = 10;
+    public bool EmailNotificationsEnabled { get; set; } = false;
+    public bool EmailCriticalAlerts { get; set; } = false;
+    public bool EmailDailySummary { get; set; } = false;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastUpdatedAt { get; set; }
 

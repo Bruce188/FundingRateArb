@@ -83,7 +83,30 @@
         }
         else
         {
-            <div class="table-responsive">
+            @* Mobile card view (< 576px) *@
+            <div class="d-sm-none p-2">
+                @foreach (var user in Model.Users)
+                {
+                    <div class="card mb-2 mobile-card">
+                        <div class="card-body p-2">
+                            <div class="d-flex justify-content-between">
+                                <strong>@user.Email</strong>
+                                @if (user.BotEnabled)
+                                {
+                                    <span class="badge bg-success">Enabled</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-danger">Disabled</span>
+                                }
+                            </div>
+                            <div class="small">Positions: @user.OpenPositions | PnL: <span class="@(user.RealizedPnl >= 0 ? "text-success" : "text-danger")">@(user.RealizedPnl >= 0 ? "+" : "")@user.RealizedPnl.ToString("F2")</span></div>
+                        </div>
+                    </div>
+                }
+            </div>
+            @* Desktop table view (>= 576px) *@
+            <div class="table-responsive d-none d-sm-block">
                 <table class="table table-hover mb-0">
                     <thead class="table-dark">
                         <tr>

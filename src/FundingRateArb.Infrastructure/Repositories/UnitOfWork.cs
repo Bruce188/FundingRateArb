@@ -20,6 +20,7 @@ public class UnitOfWork : IUnitOfWork
         UserCredentials = new UserExchangeCredentialRepository(context);
         UserConfigurations = new UserConfigurationRepository(context);
         UserPreferences = new UserPreferenceRepository(context);
+        OpportunitySnapshots = new OpportunitySnapshotRepository(context);
     }
 
     public IExchangeRepository Exchanges { get; }
@@ -32,6 +33,7 @@ public class UnitOfWork : IUnitOfWork
     public IUserExchangeCredentialRepository UserCredentials { get; }
     public IUserConfigurationRepository UserConfigurations { get; }
     public IUserPreferenceRepository UserPreferences { get; }
+    public IOpportunitySnapshotRepository OpportunitySnapshots { get; }
 
     public Task<int> SaveAsync(CancellationToken ct = default) =>
         _context.SaveChangesAsync(ct);

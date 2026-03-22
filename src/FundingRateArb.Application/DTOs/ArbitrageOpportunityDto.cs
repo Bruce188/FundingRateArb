@@ -17,4 +17,10 @@ public class ArbitrageOpportunityDto
     public decimal ShortVolume24h { get; set; }
     public decimal LongMarkPrice { get; set; }
     public decimal ShortMarkPrice { get; set; }
+
+    /// <summary>
+    /// Minutes until the next funding settlement for either leg (minimum of the two).
+    /// Null if settlement time is unknown for both legs.
+    /// </summary>
+    public int? MinutesToNextSettlement { get; set; }
 }

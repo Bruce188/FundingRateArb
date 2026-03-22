@@ -107,6 +107,31 @@ body {
     background: #f0fff4;
 }
 
+/* ── Mobile card styles ──────────────────────────────── */
+.mobile-card {
+    font-size: 0.9rem;
+}
+.mobile-card .card-body {
+    line-height: 1.5;
+}
+.mobile-card.border-danger { border-left: 4px solid #dc3545 !important; }
+.mobile-card.border-warning { border-left: 4px solid #ffc107 !important; }
+.mobile-card.border-info { border-left: 4px solid #0dcaf0 !important; }
+
+/* ── Position warning icons ───────────────────────────── */
+.warning-icon {
+    display: inline-block;
+    margin-left: 0.25rem;
+    font-size: 0.85rem;
+    vertical-align: middle;
+    cursor: help;
+}
+.warning-spreadrisk { color: #dc3545; } /* red — spread risk */
+.warning-liquidity  { color: #0dcaf0; } /* cyan — liquidity */
+.warning-timebased  { color: #fd7e14; } /* orange — time */
+.warning-leverage   { color: #6c757d; } /* gray — leverage */
+.warning-loss       { color: #dc3545; } /* red — loss */
+
 /* ── Responsive tweaks ────────────────────────────────── */
 @media (max-width: 575.98px) {
     .kpi-value { font-size: 1.4rem; }

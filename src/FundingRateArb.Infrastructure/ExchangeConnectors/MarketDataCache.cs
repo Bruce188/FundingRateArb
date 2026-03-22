@@ -47,6 +47,12 @@ public class MarketDataCache : IMarketDataCache
         return _rates.TryGetValue(key, out var entry) ? entry.Rate.MarkPrice : 0m;
     }
 
+    public DateTime? GetNextSettlement(string exchangeName, string symbol)
+    {
+        var key = Key(exchangeName, symbol);
+        return _rates.TryGetValue(key, out var entry) ? entry.Rate.NextSettlementUtc : null;
+    }
+
     public bool IsStale(string exchangeName, string symbol, TimeSpan maxAge)
     {
         var key = Key(exchangeName, symbol);

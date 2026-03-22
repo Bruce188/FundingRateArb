@@ -1,0 +1,95 @@
+@model FundingRateArb.Web.ViewModels.PositionAnalyticsIndexViewModel
+
+@{
+    ViewData["Title"] = "Trade Analytics";
+}
+
+<h2>Trade Analytics</h2>
+<p class="text-muted">Comparison of actual PnL vs. projected PnL at entry time for all positions.</p>
+
+<div class="mb-3">
+    <a asp-action="PassedOpportunities" class="btn btn-sm btn-outline-secondary">Passed Opportunities</a>
+</div>
+
+@if (!Model.Summaries.Any())
+{
+    <div class="alert alert-info">No positions found for analytics.</div>
+}
+else
+{
+    <div class="table-responsive">
+        <table class="table table-striped table-hover table-sm">
+            <thead class="table-dark">
+                <tr>
+                    <th>Position</th>
+                    <th>Asset</th>
+                    <th>Long / Short</th>
+                    <th>Status</th>
+                    <th class="text-end">Hours Held</th>
+                    <th class="text-end">Actual PnL</th>
+                    <th class="text-end">Projected PnL</th>
+                    <th class="text-end">Difference</th>
+                    <th class="text-end">Accuracy</th>
+                    <th>Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var s in Model.Summaries)
+                {
+                    var diffClass = s.PnlDifference >= 0 ? "text-success" : "text-danger";
+                    <tr>
+                        <td>#@s.PositionId</td>
+                        <td>@s.AssetSymbol</td>
+                        <td>@s.LongExchangeName / @s.ShortExchangeName</td>
+                        <td>
+                            @if (s.IsClosed)
+                            {
+                                <span class="badge bg-secondary">Closed</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-success">Open</span>
+                            }
+                        </td>
+                        <td class="text-end">@s.HoursHeld.ToString("F1")</td>
+                        <td class="text-end">@s.ActualPnl.ToString("F2") USDC</td>
+                        <td class="text-end">@s.ProjectedPnl.ToString("F2") USDC</td>
+                        <td class="text-end @diffClass">@s.PnlDifference.ToString("F2")</td>
+                        <td class="text-end">
+                            @if (s.AccuracyPct.HasValue)
+                            {
+                                <span>@s.AccuracyPct.Value.ToString("F0")%</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">--</span>
+                            }
+                        </td>
+                        <td>
+                            <a asp-action="PositionAnalysis" asp-route-id="@s.PositionId" class="btn btn-sm btn-outline-primary">View</a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    <nav>
+        <ul class="pagination pagination-sm">
+            @if (Model.Skip > 0)
+            {
+                var prevSkip = Math.Max(0, Model.Skip - Model.Take);
+                <li class="page-item">
+                    <a class="page-link" href="?skip=@prevSkip&take=@Model.Take">Previous</a>
+                </li>
+            }
+            @if (Model.HasMore)
+            {
+                var nextSkip = Model.Skip + Model.Take;
+                <li class="page-item">
+                    <a class="page-link" href="?skip=@nextSkip&take=@Model.Take">Next</a>
+                </li>
+            }
+        </ul>
+    </nav>
+}

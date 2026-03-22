@@ -1,7 +1,5 @@
 "use strict";
 
-// B2: Track last-known best spread to avoid resetting to 0
-let lastKnownBestSpread = 0;
 
 // B1: Dynamic decimal formatting for small prices
 function formatPrice(price) {
@@ -98,18 +96,12 @@ connection.on("ReceiveDashboardUpdate", (data) => {
     const totalPnl = document.getElementById("total-pnl");
     if (totalPnl) totalPnl.textContent = (data.totalPnl ?? 0).toFixed(4);
 
-    // B2: Only update best spread if incoming value > 0, otherwise show last known or N/A
     const bestSpread = document.getElementById("best-spread");
     if (bestSpread) {
         const spread = data.bestSpread ?? 0;
-        if (spread > 0) {
-            lastKnownBestSpread = spread;
-            bestSpread.textContent = (spread * 100).toFixed(4) + "%";
-        } else if (lastKnownBestSpread > 0) {
-            bestSpread.textContent = (lastKnownBestSpread * 100).toFixed(4) + "%";
-        } else {
-            bestSpread.textContent = "N/A";
-        }
+        bestSpread.textContent = spread > 0
+            ? (spread * 100).toFixed(4) + "%"
+            : "N/A";
     }
 });
 
@@ -126,6 +118,31 @@ connection.on("ReceivePositionUpdate", (position) => {
         if (spreadEl) {
             spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(6) + "%";
         }
+
+        // Apply warning level row class
+        positionRow.classList.remove("table-danger", "table-warning", "table-info");
+        var warnLevel = position.warningLevel ?? 0;
+        if (warnLevel === 3) positionRow.classList.add("table-danger");
+        else if (warnLevel === 2) positionRow.classList.add("table-warning");
+        else if (warnLevel === 1) positionRow.classList.add("table-info");
+
+        // Update warning type icons in the first cell
+        var firstTd = positionRow.querySelector("td:first-child");
+        if (firstTd) {
+            var existing = firstTd.querySelectorAll(".warning-icon");
+            existing.forEach(function(el) { el.remove(); });
+
+            var warnTypes = position.warningTypes || [];
+            var iconMap = { 0: "\u25B2", 1: "\u2248", 2: "\u23F0", 3: "\u26BF", 4: "\u2193" };
+            var nameMap = { 0: "SpreadRisk", 1: "Liquidity", 2: "TimeBased", 3: "Leverage", 4: "Loss" };
+            warnTypes.forEach(function(wt) {
+                var span = document.createElement("span");
+                span.className = "warning-icon warning-" + (nameMap[wt] || "").toLowerCase();
+                span.title = nameMap[wt] || "";
+                span.textContent = iconMap[wt] || "";
+                firstTd.appendChild(span);
+            });
+        }
     }
 });
 
@@ -134,9 +151,57 @@ connection.on("ReceiveNotification", (message) => {
     showToast(message, "text-bg-primary", 4000);
 });
 
+var isMobile = window.matchMedia('(max-width: 575.98px)');
+
 // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
 connection.on("ReceiveOpportunityUpdate", (data) => {
-    const tbody = document.getElementById("opportunities-table-body");
+    var tbody = document.getElementById("opportunities-table-body");
+    var cardsContainer = document.getElementById("opportunities-cards");
+
+    // Rebuild mobile cards
+    if (cardsContainer && isMobile.matches) {
+        var opportunities = data.opportunities || [];
+        cardsContainer.innerHTML = "";
+        if (opportunities.length === 0) {
+            var p = document.createElement("p");
+            p.className = "text-muted text-center py-3 mb-0";
+            p.textContent = "No opportunities detected.";
+            cardsContainer.appendChild(p);
+        } else {
+            opportunities.forEach(function(opp) {
+                var card = document.createElement("div");
+                card.className = "card mb-2 mobile-card";
+                var body = document.createElement("div");
+                body.className = "card-body p-2";
+
+                var header = document.createElement("div");
+                header.className = "d-flex justify-content-between";
+                var strong = document.createElement("strong");
+                strong.textContent = opp.assetSymbol;
+                header.appendChild(strong);
+                var badge = document.createElement("span");
+                var apyVal = (opp.annualizedYield * 100).toFixed(0);
+                badge.className = "badge " + (opp.annualizedYield > 0.50 ? "bg-success" : opp.annualizedYield >= 0.20 ? "bg-warning text-dark" : "bg-secondary");
+                badge.textContent = apyVal + "% APY";
+                header.appendChild(badge);
+                body.appendChild(header);
+
+                var exchanges = document.createElement("small");
+                exchanges.className = "text-muted";
+                exchanges.textContent = "Long: " + opp.longExchangeName + " | Short: " + opp.shortExchangeName;
+                body.appendChild(exchanges);
+
+                var spread = document.createElement("div");
+                spread.className = "small";
+                spread.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + (opp.netYieldPerHour * 100).toFixed(4) + "%/hr";
+                body.appendChild(spread);
+
+                card.appendChild(body);
+                cardsContainer.appendChild(card);
+            });
+        }
+    }
+
     if (!tbody) return;
 
     const opportunities = data.opportunities || [];
@@ -146,11 +211,10 @@ connection.on("ReceiveOpportunityUpdate", (data) => {
     const countBadge = document.querySelector(".badge.bg-primary");
     if (countBadge) countBadge.textContent = opportunities.length + " found";
 
-    // Update Best Spread KPI from diagnostics when no opportunities pass threshold
+    // Update Best Spread KPI from diagnostics (raw spread includes all opportunities, not just above-threshold)
     if (diagnostics && diagnostics.bestRawSpread > 0) {
         const bestSpread = document.getElementById("best-spread");
         if (bestSpread) {
-            lastKnownBestSpread = diagnostics.bestRawSpread;
             bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
         }
     }
@@ -159,7 +223,7 @@ connection.on("ReceiveOpportunityUpdate", (data) => {
     if (opportunities.length === 0) {
         const emptyRow = document.createElement("tr");
         const emptyCell = document.createElement("td");
-        emptyCell.colSpan = 7;
+        emptyCell.colSpan = 8;
         emptyCell.className = "text-center py-4";
 
         if (diagnostics) {
@@ -276,6 +340,13 @@ connection.on("ReceiveOpportunityUpdate", (data) => {
             tdApr.textContent = aprText;
         }
         row.appendChild(tdApr);
+
+        var tdNext = document.createElement("td");
+        tdNext.className = "text-muted small";
+        if (opp.minutesToNextSettlement != null) {
+            tdNext.textContent = opp.minutesToNextSettlement + "m";
+        }
+        row.appendChild(tdNext);
 
         tbody.appendChild(row);
     });

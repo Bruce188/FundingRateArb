@@ -57,13 +57,14 @@ public class AsterMarketDataStream : IMarketDataStream
             var symbol = NormalizeSymbol(item.Symbol);
             var dto = new FundingRateDto
             {
-                ExchangeName = ExchangeName,
-                Symbol       = symbol,
-                RawRate      = item.FundingRate ?? 0m,
-                RatePerHour  = (item.FundingRate ?? 0m) / 4m, // 4h → per-hour
-                MarkPrice    = item.MarkPrice,
-                IndexPrice   = item.IndexPrice,
-                Volume24hUsd = 0m, // Mark price stream excludes volume — cache preserves REST-fetched value
+                ExchangeName      = ExchangeName,
+                Symbol            = symbol,
+                RawRate           = item.FundingRate ?? 0m,
+                RatePerHour       = (item.FundingRate ?? 0m) / 8m, // 8h → per-hour
+                MarkPrice         = item.MarkPrice,
+                IndexPrice        = item.IndexPrice,
+                Volume24hUsd      = 0m, // Mark price stream excludes volume — cache preserves REST-fetched value
+                NextSettlementUtc = item.NextFundingTime,
             };
 
             _cache.Update(dto);

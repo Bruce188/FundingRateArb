@@ -9,4 +9,16 @@ public interface IFundingRateRepository
     void Add(FundingRateSnapshot snapshot);
     void AddRange(IEnumerable<FundingRateSnapshot> snapshots);
     Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
+
+    // Hourly aggregate methods (30-day retention)
+    Task<List<FundingRateHourlyAggregate>> GetHourlyAggregatesAsync(
+        int? assetId, int? exchangeId, DateTime from, DateTime to, CancellationToken ct = default);
+    void AddAggregateRange(IEnumerable<FundingRateHourlyAggregate> aggregates);
+    Task<int> PurgeAggregatesOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns raw snapshots within a time range for aggregation.
+    /// </summary>
+    Task<List<FundingRateSnapshot>> GetSnapshotsInRangeAsync(
+        DateTime from, DateTime to, CancellationToken ct = default);
 }

@@ -11,8 +11,9 @@ using Polly.Registry;
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 
 /// <summary>
-/// Aster DEX connector. Aster publishes 4-hour funding rates; all rates are
-/// normalised to per-hour before being returned (<see cref="FundingRateDto.RatePerHour"/> = rawRate / 4).
+/// Aster DEX connector. Aster publishes 8-hour funding rates; all rates are
+/// normalised to per-hour before being returned (<see cref="FundingRateDto.RatePerHour"/> = rawRate / 8).
+/// Funding is settled periodically at 8-hour boundaries (00:00, 08:00, 16:00 UTC).
 /// </summary>
 public class AsterConnector : IExchangeConnector, IDisposable
 {
@@ -37,9 +38,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
     /// <inheritdoc />
     /// <remarks>
     /// Calls <c>UsdFuturesApi.ExchangeData.GetMarkPricesAsync</c> which returns the current
-    /// mark price, index price and 4-hour funding rate for every symbol.
-    /// Aster uses 4-hour funding intervals — rates are divided by 4 to normalise to per-hour.
+    /// mark price, index price and 8-hour funding rate for every symbol.
+    /// Aster uses 8-hour funding intervals — rates are divided by 8 to normalise to per-hour.
     /// The original (undivided) value is preserved in <see cref="FundingRateDto.RawRate"/>.
+    /// NextFundingTime from the API is carried through as NextSettlementUtc for settlement-aware accumulation.
     /// Symbol names are normalised: "ETHUSDT" → "ETH".
     /// </remarks>
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
@@ -66,13 +68,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
         return markPrices.Data!
             .Select(mp => new FundingRateDto
             {
-                ExchangeName = ExchangeName,
-                Symbol       = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
-                RawRate      = mp.FundingRate ?? 0m,
-                RatePerHour  = (mp.FundingRate ?? 0m) / 4m,
-                MarkPrice    = mp.MarkPrice,
-                IndexPrice   = mp.IndexPrice,
-                Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                ExchangeName     = ExchangeName,
+                Symbol           = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
+                RawRate          = mp.FundingRate ?? 0m,
+                RatePerHour      = (mp.FundingRate ?? 0m) / 8m, // 8-hour rate normalised to per-hour
+                MarkPrice        = mp.MarkPrice,
+                IndexPrice       = mp.IndexPrice,
+                Volume24hUsd     = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                NextSettlementUtc = mp.NextFundingTime,
             })
             .ToList();
     }
@@ -242,6 +245,44 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }, ct);
     }
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// Fetches the next funding settlement time from Aster's mark price endpoint.
+    /// The API response includes NextFundingTime per symbol.
+    /// Aster settles every 8 hours at 00:00, 08:00, 16:00 UTC.
+    /// </remarks>
+    public async Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t), ct);
+
+            if (!result.Success || result.Data is null)
+                return ComputeNextSettlement8h();
+
+            var mp = result.Data.FirstOrDefault(m => m.Symbol == symbol);
+            if (mp is null)
+                return ComputeNextSettlement8h();
+
+            return mp.NextFundingTime;
+        }
+        catch
+        {
+            return ComputeNextSettlement8h();
+        }
+    }
+
+    /// <summary>Computes the next 8-hour settlement boundary (00:00, 08:00, 16:00 UTC).</summary>
+    private static DateTime ComputeNextSettlement8h()
+    {
+        var now = DateTime.UtcNow;
+        var flooredHour = now.Hour - (now.Hour % 8);
+        return new DateTime(now.Year, now.Month, now.Day, flooredHour, 0, 0, DateTimeKind.Utc).AddHours(8);
+    }
+
     public void Dispose()
     {
         _markPriceCache.Dispose();
@@ -262,6 +303,31 @@ public class AsterConnector : IExchangeConnector, IDisposable
         return result.Data!
             .Where(b => b.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase))
             .Sum(b => b.AvailableBalance);
+    }
+
+    public async Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default)
+    {
+        var symbol = asset + "USDT";
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token), ct);
+
+            if (!result.Success || result.Data is null)
+                return null;
+
+            var symbolBracket = result.Data.FirstOrDefault();
+            if (symbolBracket?.Brackets is null || symbolBracket.Brackets.Length == 0)
+                return null;
+
+            // The first bracket (lowest notional) has the highest allowed leverage
+            return symbolBracket.Brackets.Max(b => b.InitialLeverage);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<int> GetQuantityPrecisionAsync(string symbol, CancellationToken ct)

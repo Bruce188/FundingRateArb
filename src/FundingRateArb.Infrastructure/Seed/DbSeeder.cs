@@ -97,11 +97,12 @@ public static class DbSeeder
                 Name = "Aster",
                 ApiBaseUrl = "https://fapi.asterdex.com",
                 WsBaseUrl = "wss://fstream.asterdex.com",
-                FundingInterval = FundingInterval.FourHourly,
-                FundingIntervalHours = 4,
+                FundingInterval = FundingInterval.EightHourly,
+                FundingIntervalHours = 8,
+                FundingSettlementType = FundingSettlementType.Periodic,
                 SupportsSubAccounts = false,
                 IsActive = true,
-                Description = "Aster DEX — HMAC-SHA256, USDT collateral, 4-hour funding"
+                Description = "Aster DEX — HMAC-SHA256, USDT collateral, 8-hour funding"
             }
         );
         await context.SaveChangesAsync();

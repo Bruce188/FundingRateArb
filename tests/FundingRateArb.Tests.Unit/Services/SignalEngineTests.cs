@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
@@ -11,13 +12,14 @@ public class SignalEngineTests
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IFundingRateRepository> _mockFundingRates = new();
+    private readonly Mock<IMarketDataCache> _mockCache = new();
     private readonly SignalEngine _sut;
 
     public SignalEngineTests()
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.FundingRates).Returns(_mockFundingRates.Object);
-        _sut = new SignalEngine(_mockUow.Object);
+        _sut = new SignalEngine(_mockUow.Object, _mockCache.Object);
     }
 
     private static FundingRateSnapshot MakeRate(
@@ -727,6 +729,102 @@ public class SignalEngineTests
         result.Opportunities.Should().BeEmpty();
         result.AllNetPositive.Should().BeEmpty();
         result.Diagnostics.PairsFilteredByThreshold.Should().BeGreaterThan(0);
+    }
+
+    // ── Funding window boost tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_WithinFundingWindow_BoostsNetYield()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Settlement in 5 minutes (within window of 10)
+        var settlementTime = DateTime.UtcNow.AddMinutes(5);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(settlementTime);
+        _mockCache.Setup(c => c.GetNextSettlement("Lighter", "ETH")).Returns((DateTime?)null);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        var opp = result.Opportunities.Should().HaveCount(1).And.Subject.First();
+
+        // Net yield should be boosted by 20%
+        var spread = 0.0009m;
+        var feePerHour = (0.00090m + 0.00000m) / 24m;
+        var rawNet = spread - feePerHour;
+        var boostedNet = rawNet * 1.2m;
+
+        opp.NetYieldPerHour.Should().BeApproximately(boostedNet, 0.0000001m);
+        // AnnualizedYield should use original net (not boosted)
+        opp.AnnualizedYield.Should().BeApproximately(rawNet * 24m * 365m, 0.001m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_OutsideFundingWindow_NoBoost()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Settlement in 30 minutes (outside window of 10)
+        var settlementTime = DateTime.UtcNow.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(settlementTime);
+        _mockCache.Setup(c => c.GetNextSettlement("Lighter", "ETH")).Returns((DateTime?)null);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        var opp = result.Opportunities.Should().HaveCount(1).And.Subject.First();
+
+        var spread = 0.0009m;
+        var feePerHour = (0.00090m + 0.00000m) / 24m;
+        var rawNet = spread - feePerHour;
+
+        // No boost — NetYieldPerHour equals raw net
+        opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_NullSettlement_NoBoost()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, volume: 100_000m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // No settlement data
+        _mockCache.Setup(c => c.GetNextSettlement(It.IsAny<string>(), It.IsAny<string>())).Returns((DateTime?)null);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        var opp = result.Opportunities.Should().HaveCount(1).And.Subject.First();
+
+        var spread = 0.0009m;
+        var feePerHour = (0.00090m + 0.00000m) / 24m;
+        var rawNet = spread - feePerHour;
+
+        // No boost — NetYieldPerHour equals raw net
+        opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
     }
 
     [Fact]

@@ -19,6 +19,8 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<UserConfiguration> UserConfigurations => Set<UserConfiguration>();
     public DbSet<UserExchangePreference> UserExchangePreferences => Set<UserExchangePreference>();
     public DbSet<UserAssetPreference> UserAssetPreferences => Set<UserAssetPreference>();
+    public DbSet<FundingRateHourlyAggregate> FundingRateHourlyAggregates => Set<FundingRateHourlyAggregate>();
+    public DbSet<OpportunitySnapshot> OpportunitySnapshots => Set<OpportunitySnapshot>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

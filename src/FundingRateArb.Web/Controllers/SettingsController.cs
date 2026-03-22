@@ -261,6 +261,10 @@ public class SettingsController : Controller
             RateStalenessMinutes = config.RateStalenessMinutes,
             DailyDrawdownPausePct = config.DailyDrawdownPausePct,
             ConsecutiveLossPause = config.ConsecutiveLossPause,
+            FundingWindowMinutes = config.FundingWindowMinutes,
+            EmailNotificationsEnabled = config.EmailNotificationsEnabled,
+            EmailCriticalAlerts = config.EmailCriticalAlerts,
+            EmailDailySummary = config.EmailDailySummary,
             AllocationStrategyOptions = BuildAllocationStrategyOptions(config.AllocationStrategy),
             StatusMessage = TempData["Success"] as string
         };
@@ -301,6 +305,10 @@ public class SettingsController : Controller
         config.RateStalenessMinutes = model.RateStalenessMinutes!.Value;
         config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
         config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
+        config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
+        config.EmailNotificationsEnabled = model.EmailNotificationsEnabled;
+        config.EmailCriticalAlerts = model.EmailCriticalAlerts;
+        config.EmailDailySummary = model.EmailDailySummary;
         config.LastUpdatedAt = DateTime.UtcNow;
 
         await _settings.UpdateConfigAsync(userId, config);
@@ -337,6 +345,7 @@ public class SettingsController : Controller
         userConfig.RateStalenessMinutes = globalConfig.RateStalenessMinutes;
         userConfig.DailyDrawdownPausePct = globalConfig.DailyDrawdownPausePct;
         userConfig.ConsecutiveLossPause = globalConfig.ConsecutiveLossPause;
+        userConfig.FundingWindowMinutes = globalConfig.FundingWindowMinutes;
         userConfig.LastUpdatedAt = DateTime.UtcNow;
 
         await _settings.UpdateConfigAsync(userId, userConfig);
