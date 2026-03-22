@@ -158,6 +158,50 @@ az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Seed--AdminPasswor
 #   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Lighter--ApiKey" --value "..."
 #   az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "Exchanges--Lighter--SignerPrivateKey" --value "..."
 
+# --- Application Insights ---
+echo "==> Creating Application Insights resource..."
+az monitor app-insights component create \
+  --app "${APP_NAME}-insights" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --kind web \
+  --application-type web \
+  -o none
+
+AI_CONN_STRING=$(az monitor app-insights component show \
+  --app "${APP_NAME}-insights" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query connectionString -o tsv)
+
+echo "==> Storing Application Insights connection string in Key Vault..."
+az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "ApplicationInsights--ConnectionString" --value "$AI_CONN_STRING" -o none
+
+# --- Data Protection Key Storage ---
+DP_STORAGE_NAME="${APP_NAME}dpkeys"
+# Storage account names must be 3-24 chars, lowercase, alphanumeric
+DP_STORAGE_NAME=$(echo "$DP_STORAGE_NAME" | tr -cd '[:alnum:]' | cut -c1-24 | tr '[:upper:]' '[:lower:]')
+echo "==> Creating storage account for Data Protection keys..."
+az storage account create \
+  --name "$DP_STORAGE_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --location "$LOCATION" \
+  --sku Standard_LRS \
+  --kind StorageV2 \
+  -o none
+
+echo "==> Creating 'dataprotection' container..."
+DP_STORAGE_CONN=$(az storage account show-connection-string \
+  --name "$DP_STORAGE_NAME" \
+  --resource-group "$RESOURCE_GROUP" \
+  --query connectionString -o tsv)
+az storage container create \
+  --name dataprotection \
+  --connection-string "$DP_STORAGE_CONN" \
+  -o none
+
+echo "==> Storing Data Protection connection string in Key Vault..."
+az keyvault secret set --vault-name "$KEY_VAULT_NAME" --name "DataProtection--BlobStorageConnection" --value "$DP_STORAGE_CONN" -o none
+
 echo "==> Configuring app settings..."
 az webapp config appsettings set \
   --resource-group "$RESOURCE_GROUP" \

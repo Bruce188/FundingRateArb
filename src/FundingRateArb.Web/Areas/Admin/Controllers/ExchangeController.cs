@@ -13,8 +13,13 @@ namespace FundingRateArb.Web.Areas.Admin.Controllers;
 public class ExchangeController : Controller
 {
     private readonly IUnitOfWork _uow;
+    private readonly ILogger<ExchangeController> _logger;
 
-    public ExchangeController(IUnitOfWork uow) => _uow = uow;
+    public ExchangeController(IUnitOfWork uow, ILogger<ExchangeController> logger)
+    {
+        _uow = uow;
+        _logger = logger;
+    }
 
     public async Task<IActionResult> Index()
     {
@@ -64,6 +69,10 @@ public class ExchangeController : Controller
 
         _uow.Exchanges.Add(exchange);
         await _uow.SaveAsync();
+        _uow.Exchanges.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            "Created", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
 
         TempData["Success"] = $"Exchange '{exchange.Name}' created successfully.";
         return RedirectToAction(nameof(Index));
@@ -130,6 +139,10 @@ public class ExchangeController : Controller
 
         _uow.Exchanges.Update(exchange);
         await _uow.SaveAsync();
+        _uow.Exchanges.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            "Updated", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
 
         TempData["Success"] = $"Exchange '{exchange.Name}' updated successfully.";
         return RedirectToAction(nameof(Index));
@@ -155,6 +168,10 @@ public class ExchangeController : Controller
         {
             _uow.Exchanges.Remove(exchange);
             await _uow.SaveAsync();
+            _uow.Exchanges.InvalidateCache();
+
+            _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+                "Deleted", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
         }
         catch (Microsoft.EntityFrameworkCore.DbUpdateException)
         {

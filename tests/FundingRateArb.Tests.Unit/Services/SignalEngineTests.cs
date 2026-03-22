@@ -849,4 +849,34 @@ public class SignalEngineTests
         result.AllNetPositive.Should().HaveCountGreaterOrEqualTo(2);
         result.AllNetPositive[0].NetYieldPerHour.Should().BeGreaterThanOrEqualTo(result.AllNetPositive[1].NetYieldPerHour);
     }
+
+    // ── Partial exchange data (only 1 of 3 exchanges has rates) ──────────────
+
+    [Fact]
+    public async Task GetOpportunitiesAsync_OnlyOneExchangeHasRates_ReturnsEmpty()
+    {
+        // Only Hyperliquid has rate data — Aster and Lighter returned nothing
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "BTC", 0.0005m),
+            MakeRate(1, "Hyperliquid", 2, "ETH", 0.0003m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act — should not throw
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: no cross-exchange pairs with only 1 exchange
+        result.Opportunities.Should().BeEmpty(
+            "cannot form cross-exchange pairs when only 1 exchange has data");
+
+        // Diagnostics should show rates were loaded but 0 pairs evaluated
+        // (each asset group has only 1 rate, so inner loop never runs)
+        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics.TotalPairsEvaluated.Should().Be(0);
+    }
 }

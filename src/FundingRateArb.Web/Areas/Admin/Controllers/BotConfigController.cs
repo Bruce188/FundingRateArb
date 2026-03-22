@@ -12,11 +12,13 @@ public class BotConfigController : Controller
 {
     private readonly IUnitOfWork _uow;
     private readonly IConfigValidator _configValidator;
+    private readonly ILogger<BotConfigController> _logger;
 
-    public BotConfigController(IUnitOfWork uow, IConfigValidator configValidator)
+    public BotConfigController(IUnitOfWork uow, IConfigValidator configValidator, ILogger<BotConfigController> logger)
     {
         _uow = uow;
         _configValidator = configValidator;
+        _logger = logger;
     }
 
     public async Task<IActionResult> Index()
@@ -45,7 +47,9 @@ public class BotConfigController : Controller
             RateStalenessMinutes = config.RateStalenessMinutes,
             DailyDrawdownPausePct = config.DailyDrawdownPausePct,
             ConsecutiveLossPause = config.ConsecutiveLossPause,
-            FundingWindowMinutes = config.FundingWindowMinutes
+            FundingWindowMinutes = config.FundingWindowMinutes,
+            MaxExposurePerAsset = config.MaxExposurePerAsset,
+            MaxExposurePerExchange = config.MaxExposurePerExchange
         };
 
         return View(model);
@@ -80,6 +84,8 @@ public class BotConfigController : Controller
         config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
         config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
         config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
+        config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
+        config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)
@@ -94,6 +100,10 @@ public class BotConfigController : Controller
 
         _uow.BotConfig.Update(config);
         await _uow.SaveAsync();
+        _uow.BotConfig.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            "Updated", "BotConfiguration", config.Id, User.Identity?.Name ?? "unknown");
 
         TempData["Success"] = "Bot configuration saved successfully.";
         return RedirectToAction(nameof(Index));
@@ -109,6 +119,10 @@ public class BotConfigController : Controller
 
         _uow.BotConfig.Update(config);
         await _uow.SaveAsync();
+        _uow.BotConfig.InvalidateCache();
+
+        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
+            config.IsEnabled ? "Enabled" : "Disabled", "BotConfiguration", config.Id, User.Identity?.Name ?? "unknown");
 
         var status = config.IsEnabled ? "enabled" : "disabled";
         TempData["Success"] = $"Bot {status} successfully.";

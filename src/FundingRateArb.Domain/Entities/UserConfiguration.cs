@@ -25,6 +25,8 @@ public class UserConfiguration
     public decimal DailyDrawdownPausePct { get; set; } = 0.1m;
     public int ConsecutiveLossPause { get; set; } = 3;
     public int FundingWindowMinutes { get; set; } = 10;
+    public decimal MaxExposurePerAsset { get; set; } = 0.5m;
+    public decimal MaxExposurePerExchange { get; set; } = 0.7m;
     public bool EmailNotificationsEnabled { get; set; } = false;
     public bool EmailCriticalAlerts { get; set; } = false;
     public bool EmailDailySummary { get; set; } = false;

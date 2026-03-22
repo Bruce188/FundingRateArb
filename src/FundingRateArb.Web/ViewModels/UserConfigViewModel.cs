@@ -63,6 +63,12 @@ public class UserConfigViewModel
     [Required, Range(1, 60), Display(Name = "Funding Window (minutes)")]
     public int? FundingWindowMinutes { get; set; }
 
+    [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Asset (%)")]
+    public decimal? MaxExposurePerAsset { get; set; }
+
+    [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Exchange (%)")]
+    public decimal? MaxExposurePerExchange { get; set; }
+
     [Display(Name = "Enable Email Notifications")]
     public bool EmailNotificationsEnabled { get; set; }
 

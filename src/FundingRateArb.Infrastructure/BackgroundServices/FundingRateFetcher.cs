@@ -32,19 +32,23 @@ public class FundingRateFetcher : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMarketDataCache _cache;
+    private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
     private readonly ILogger<FundingRateFetcher> _logger;
+    private bool _hasSignaled;
 
     public FundingRateFetcher(
         IServiceScopeFactory scopeFactory,
         IMarketDataCache cache,
+        IFundingRateReadinessSignal readinessSignal,
         IHubContext<DashboardHub, IDashboardClient> hubContext,
         ILogger<FundingRateFetcher> logger)
     {
-        _scopeFactory = scopeFactory;
-        _cache        = cache;
-        _hubContext   = hubContext;
-        _logger       = logger;
+        _scopeFactory    = scopeFactory;
+        _cache           = cache;
+        _readinessSignal = readinessSignal;
+        _hubContext      = hubContext;
+        _logger          = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -53,6 +57,7 @@ public class FundingRateFetcher : BackgroundService
         try
         {
             await FetchAllAsync(ct);
+            SignalReadyOnce();
         }
         catch (Exception ex)
         {
@@ -66,6 +71,7 @@ public class FundingRateFetcher : BackgroundService
             try
             {
                 await FetchAllAsync(ct);
+                SignalReadyOnce();
             }
             catch (Exception ex)
             {
@@ -330,6 +336,14 @@ public class FundingRateFetcher : BackgroundService
 
         // Continuous settlement (Hyperliquid, Lighter): pro-rata per ~60s cycle
         return notional * ratePerHour / 60m;
+    }
+
+    private void SignalReadyOnce()
+    {
+        if (_hasSignaled) return;
+        _hasSignaled = true;
+        _readinessSignal.SignalReady();
+        _logger.LogInformation("Funding rate readiness signal fired — BotOrchestrator may proceed");
     }
 
     /// <summary>

@@ -11,4 +11,5 @@ public interface IExchangeRepository
     void Add(Exchange exchange);
     void Update(Exchange exchange);
     void Remove(Exchange exchange);
+    void InvalidateCache();
 }

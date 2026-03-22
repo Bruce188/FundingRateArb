@@ -8,7 +8,9 @@
   <ItemGroup>
     <PackageReference Include="AspNet.Security.OAuth.GitHub" Version="8.0.*" />
     <PackageReference Include="Azure.Extensions.AspNetCore.Configuration.Secrets" Version="1.*" />
+    <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Blobs" Version="1.*" />
     <PackageReference Include="Azure.Identity" Version="1.*" />
+    <PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.*" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="8.0.*" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.UI" Version="8.0.*" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.EntityFrameworkCore" Version="8.0.*" />

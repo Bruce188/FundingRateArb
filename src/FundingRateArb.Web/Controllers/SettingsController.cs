@@ -262,6 +262,8 @@ public class SettingsController : Controller
             DailyDrawdownPausePct = config.DailyDrawdownPausePct,
             ConsecutiveLossPause = config.ConsecutiveLossPause,
             FundingWindowMinutes = config.FundingWindowMinutes,
+            MaxExposurePerAsset = config.MaxExposurePerAsset,
+            MaxExposurePerExchange = config.MaxExposurePerExchange,
             EmailNotificationsEnabled = config.EmailNotificationsEnabled,
             EmailCriticalAlerts = config.EmailCriticalAlerts,
             EmailDailySummary = config.EmailDailySummary,
@@ -306,6 +308,8 @@ public class SettingsController : Controller
         config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
         config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
         config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
+        config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
+        config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
         config.EmailNotificationsEnabled = model.EmailNotificationsEnabled;
         config.EmailCriticalAlerts = model.EmailCriticalAlerts;
         config.EmailDailySummary = model.EmailDailySummary;
@@ -346,6 +350,8 @@ public class SettingsController : Controller
         userConfig.DailyDrawdownPausePct = globalConfig.DailyDrawdownPausePct;
         userConfig.ConsecutiveLossPause = globalConfig.ConsecutiveLossPause;
         userConfig.FundingWindowMinutes = globalConfig.FundingWindowMinutes;
+        userConfig.MaxExposurePerAsset = globalConfig.MaxExposurePerAsset;
+        userConfig.MaxExposurePerExchange = globalConfig.MaxExposurePerExchange;
         userConfig.LastUpdatedAt = DateTime.UtcNow;
 
         await _settings.UpdateConfigAsync(userId, userConfig);

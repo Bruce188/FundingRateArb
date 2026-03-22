@@ -1062,4 +1062,108 @@ public class ExecutionEngineTests
                 al.Message!.Contains("from 5x to 2x"))),
             Times.Once);
     }
+
+    // ── ClosePositionAsync — partial failure ─────────────────────────────────
+
+    [Fact]
+    public async Task ClosePositionAsync_ShortLegThrows_CreatesAlertAndLeavesInClosing()
+    {
+        // Arrange: open position with nav properties loaded
+        var position = new ArbitragePosition
+        {
+            Id = 42,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            MarginUsdc = 20m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0003m,
+            AccumulatedFunding = 0.5m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            UserId = "test-user",
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+
+        // Long leg closes successfully
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long-1", 3100m, 0.1m));
+
+        // Short leg throws an exception
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange API unavailable"));
+
+        // Act — should not throw
+        await _sut.ClosePositionAsync(position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        // Assert: position stays in Closing (not Closed, not EmergencyClosed)
+        position.Status.Should().Be(PositionStatus.Closing,
+            "partial failure should leave position in Closing for manual intervention");
+
+        // Assert: a LegFailed alert was created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("short") &&
+                al.ArbitragePositionId == 42)),
+            Times.Once);
+
+        // Assert: SaveAsync was called (at least for the alert + position update)
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_ShortLegReturnsFailed_CreatesAlertForPartialFailure()
+    {
+        // Arrange: test the non-throwing failure path (Success=false instead of exception)
+        var position = new ArbitragePosition
+        {
+            Id = 43,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            MarginUsdc = 20m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0003m,
+            AccumulatedFunding = 0m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            UserId = "test-user",
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+
+        // Long leg succeeds
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long-2", 3100m, 0.1m));
+
+        // Short leg returns failure (no exception)
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Insufficient margin for close order"));
+
+        // Act
+        await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
+
+        // Assert: alert created for partial close failure
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.ArbitragePositionId == 43)),
+            Times.Once);
+
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
+    }
 }

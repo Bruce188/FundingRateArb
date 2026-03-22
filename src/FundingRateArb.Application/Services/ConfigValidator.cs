@@ -52,6 +52,12 @@ public class ConfigValidator : IConfigValidator
         if (config.MaxHoldTimeHours < 1)
             errors.Add("MaxHoldTimeHours must be at least 1 hour.");
 
+        if (config.MaxExposurePerAsset <= 0 || config.MaxExposurePerAsset > 1)
+            errors.Add("MaxExposurePerAsset must be between 0 (exclusive) and 1 (inclusive).");
+
+        if (config.MaxExposurePerExchange <= 0 || config.MaxExposurePerExchange > 1)
+            errors.Add("MaxExposurePerExchange must be between 0 (exclusive) and 1 (inclusive).");
+
         if (config.AllocationStrategy != AllocationStrategy.Concentrated
             && config.MaxCapitalPerPosition * config.MaxConcurrentPositions > 1.5m)
             errors.Add("MaxCapitalPerPosition × MaxConcurrentPositions exceeds 150% — risk of capital over-allocation.");
