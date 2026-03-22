@@ -96,6 +96,29 @@ public class AnalyticsController : Controller
     }
 
     /// <summary>
+    /// Returns the user's scope with resolved names for filtering DTOs that contain string identifiers.
+    /// Avoids redundant DB round-trips by loading assets/exchanges once and mapping IDs to names.
+    /// </summary>
+    private async Task<(HashSet<int>? AssetIds, HashSet<int>? ExchangeIds, HashSet<string>? AssetSymbols, HashSet<string>? ExchangeNames)> GetUserScopeWithNamesAsync()
+    {
+        var (assetIds, exchangeIds) = await GetUserScopeAsync();
+        if (assetIds is null && exchangeIds is null)
+            return (null, null, null, null);
+
+        var assets = await _uow.Assets.GetActiveAsync();
+        var exchanges = await _uow.Exchanges.GetActiveAsync();
+
+        var assetSymbols = assetIds is not null
+            ? assets.Where(a => assetIds.Contains(a.Id)).Select(a => a.Symbol).ToHashSet()
+            : null;
+        var exchangeNames = exchangeIds is not null
+            ? exchanges.Where(e => exchangeIds.Contains(e.Id)).Select(e => e.Name).ToHashSet()
+            : null;
+
+        return (assetIds, exchangeIds, assetSymbols, exchangeNames);
+    }
+
+    /// <summary>
     /// F6: Validates that the given assetId is within the user's enabled scope.
     /// Returns true if valid (or admin), false if out of scope.
     /// </summary>
@@ -138,7 +161,7 @@ public class AnalyticsController : Controller
 
         if (assetId.HasValue)
         {
-            var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, ct);
+            var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, ct: ct);
             if (scopeExchangeIds is not null)
                 trends = trends.Where(t => scopeExchangeIds.Contains(t.ExchangeId)).ToList();
             vm.Trends = trends;
@@ -156,15 +179,14 @@ public class AnalyticsController : Controller
         var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
 
         if (!IsAssetInScope(assetId, scopeAssetIds))
-            return Forbid();
+            return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
 
         // F17: Validate exchangeId against scope before calling service
         if (exchangeId.HasValue && !IsExchangeInScope(exchangeId.Value, scopeExchangeIds))
-            return Forbid();
+            return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
 
-        var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, ct);
-        if (exchangeId.HasValue)
-            trends = trends.Where(t => t.ExchangeId == exchangeId.Value).ToList();
+        // Pass exchangeId to service for server-side filtering (avoids fetching all exchanges)
+        var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, exchangeId, ct);
         if (scopeExchangeIds is not null)
             trends = trends.Where(t => scopeExchangeIds.Contains(t.ExchangeId)).ToList();
 
@@ -175,7 +197,7 @@ public class AnalyticsController : Controller
     public async Task<IActionResult> Correlation(int assetId, int days = 7, CancellationToken ct = default)
     {
         days = Math.Clamp(days, 1, 30);
-        var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
+        var (scopeAssetIds, _, _, scopeExchangeNames) = await GetUserScopeWithNamesAsync();
 
         // F6: Validate asset scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
@@ -184,13 +206,12 @@ public class AnalyticsController : Controller
         var correlations = await _rateAnalytics.GetCrossExchangeCorrelationAsync(assetId, days, ct);
         var asset = await _uow.Assets.GetByIdAsync(assetId);
 
-        // Filter correlations to only include user-enabled exchanges
-        if (scopeExchangeIds is not null)
+        // Filter correlations using resolved exchange names — single DB call via scope helper
+        if (scopeExchangeNames is not null)
         {
-            var exchangeLookup = (await _uow.Exchanges.GetActiveAsync()).ToDictionary(e => e.Name, e => e.Id);
             correlations = correlations
-                .Where(c => exchangeLookup.TryGetValue(c.Exchange1, out var e1Id) && scopeExchangeIds.Contains(e1Id)
-                         && exchangeLookup.TryGetValue(c.Exchange2, out var e2Id) && scopeExchangeIds.Contains(e2Id))
+                .Where(c => scopeExchangeNames.Contains(c.Exchange1)
+                         && scopeExchangeNames.Contains(c.Exchange2))
                 .ToList();
         }
 
@@ -213,9 +234,9 @@ public class AnalyticsController : Controller
 
         // F6: Validate both asset and exchange scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
-            return Forbid();
+            return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
         if (!IsExchangeInScope(exchangeId, scopeExchangeIds))
-            return Forbid();
+            return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
 
         var patterns = await _rateAnalytics.GetTimeOfDayPatternsAsync(assetId, exchangeId, days, ct);
         return Json(patterns);
@@ -226,20 +247,16 @@ public class AnalyticsController : Controller
     {
         // F15: Clamp threshold to prevent unbounded values
         threshold = Math.Clamp(threshold, 0.5m, 10.0m);
-        var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
+        var (_, _, scopeAssetSymbols, scopeExchangeNames) = await GetUserScopeWithNamesAsync();
 
         var alerts = await _rateAnalytics.GetZScoreAlertsAsync(threshold, ct);
 
-        // F6: Filter Z-score alerts by user scope
-        if (scopeAssetIds is not null || scopeExchangeIds is not null)
+        // Filter by scope using resolved names — single DB call via GetUserScopeWithNamesAsync
+        if (scopeAssetSymbols is not null || scopeExchangeNames is not null)
         {
-            var allAssets = await _uow.Assets.GetActiveAsync();
-            var allExchanges = await _uow.Exchanges.GetActiveAsync();
-            var assetLookup = allAssets.ToDictionary(a => a.Symbol, a => a.Id);
-            var exchangeLookup = allExchanges.ToDictionary(e => e.Name, e => e.Id);
             alerts = alerts
-                .Where(a => scopeAssetIds is null || (assetLookup.TryGetValue(a.AssetSymbol, out var aid) && scopeAssetIds.Contains(aid)))
-                .Where(a => scopeExchangeIds is null || (exchangeLookup.TryGetValue(a.ExchangeName, out var eid) && scopeExchangeIds.Contains(eid)))
+                .Where(a => scopeAssetSymbols is null || scopeAssetSymbols.Contains(a.AssetSymbol))
+                .Where(a => scopeExchangeNames is null || scopeExchangeNames.Contains(a.ExchangeName))
                 .ToList();
         }
 

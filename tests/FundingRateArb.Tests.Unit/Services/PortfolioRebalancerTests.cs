@@ -182,6 +182,66 @@ public class PortfolioRebalancerTests
         replacementAssets.Should().HaveCount(2, "each position should get a different opportunity");
     }
 
+    // ── NB5: MaxRebalancesPerCycle cap verification ──────────────
+
+    [Fact]
+    public async Task EvaluateAsync_ProducesMoreRecommendationsThanCap_OrchestratorMustCap()
+    {
+        // 3 positions with low spreads, 3 distinct high-yield opportunities
+        // Rebalancer should recommend all 3; BotOrchestrator caps at MaxRebalancesPerCycle (default 2)
+        var pos1 = MakePosition(id: 1, currentSpread: 0.00001m);
+        var pos2 = MakePosition(id: 2, currentSpread: 0.00002m);
+        pos2.AssetId = 2; pos2.Asset = new Asset { Id = 2, Symbol = "BTC" };
+        pos2.LongExchangeId = 1; pos2.ShortExchangeId = 2;
+        var pos3 = MakePosition(id: 3, currentSpread: 0.00003m);
+        pos3.AssetId = 3; pos3.Asset = new Asset { Id = 3, Symbol = "SOL" };
+        pos3.LongExchangeId = 1; pos3.ShortExchangeId = 2;
+
+        var opp1 = MakeOpportunity(asset: "AVAX", assetId: 4, netYield: 0.001m);
+        var opp2 = MakeOpportunity(asset: "DOGE", assetId: 5, netYield: 0.0009m);
+        opp2.LongExchangeId = 2; opp2.ShortExchangeId = 3;
+        opp2.LongExchangeName = "Lighter"; opp2.ShortExchangeName = "Aster";
+        var opp3 = MakeOpportunity(asset: "LINK", assetId: 6, netYield: 0.0008m);
+        opp3.LongExchangeId = 3; opp3.ShortExchangeId = 1;
+        opp3.LongExchangeName = "Aster"; opp3.ShortExchangeName = "Hyperliquid";
+
+        var config = MakeConfig();
+
+        var result = await _sut.EvaluateAsync([pos1, pos2, pos3], [opp1, opp2, opp3], config);
+
+        // Rebalancer returns all valid recommendations (> 2, which is the default cap)
+        result.Should().HaveCountGreaterOrEqualTo(3,
+            "rebalancer should return all recommendations; orchestrator applies MaxRebalancesPerCycle cap");
+    }
+
+    // ── NB2: Null navigation property guard ──────────────────────
+
+    [Fact]
+    public async Task EvaluateAsync_NullLongExchange_SkipsPosition()
+    {
+        var pos = MakePosition(currentSpread: 0.00001m);
+        pos.LongExchange = null!; // simulate unloaded nav property
+        var opp = MakeOpportunity(netYield: 0.01m);
+        var config = MakeConfig();
+
+        var result = await _sut.EvaluateAsync([pos], [opp], config);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task EvaluateAsync_NullShortExchange_SkipsPosition()
+    {
+        var pos = MakePosition(currentSpread: 0.00001m);
+        pos.ShortExchange = null!; // simulate unloaded nav property
+        var opp = MakeOpportunity(netYield: 0.01m);
+        var config = MakeConfig();
+
+        var result = await _sut.EvaluateAsync([pos], [opp], config);
+
+        result.Should().BeEmpty();
+    }
+
     // ── F9: Edge case tests ───────────────────────────────────────
 
     [Fact]

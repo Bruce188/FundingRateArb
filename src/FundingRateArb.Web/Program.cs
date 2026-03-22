@@ -413,7 +413,7 @@ try
         // SRI integrity hashes in the HTML provide an additional verification layer.
         ctx.Response.Headers["Content-Security-Policy"] =
             "default-src 'self'; " +
-            "script-src 'self' https://cdn.jsdelivr.net/npm/chart.js@4.5.1 https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0; " +
+            "script-src 'self' https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js; " +
             "style-src 'self' 'unsafe-inline'; " +
             "connect-src 'self' wss: ws:; " +
             "img-src 'self' data:; " +

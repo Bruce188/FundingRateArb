@@ -104,8 +104,11 @@ public class DashboardController : Controller
             {
                 if (pos.AccumulatedFunding > 0 && pos.SizeUsdc > 0)
                 {
-                    var fee = pos.SizeUsdc * pos.Leverage * 2m * Application.Services.PositionHealthMonitor.GetTakerFeeRate(
-                        pos.LongExchange?.Name, pos.ShortExchange?.Name);
+                    var fee = pos.EntryFeesUsdc > 0
+                        ? pos.EntryFeesUsdc
+                        : pos.SizeUsdc * pos.Leverage * 2m * Application.Services.PositionHealthMonitor.GetTakerFeeRate(
+                            pos.LongExchange?.Name, pos.ShortExchange?.Name,
+                            pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
                     var target = botConfig.TargetPnlMultiplier * fee;
                     if (target > 0)
                         pnlProgress[pos.Id] = Math.Min(pos.AccumulatedFunding / target, 2.0m);

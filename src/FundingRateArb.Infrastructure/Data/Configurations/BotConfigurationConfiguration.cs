@@ -24,5 +24,6 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.AdaptiveHoldEnabled).HasDefaultValue(false);
         builder.Property(b => b.RebalanceEnabled).HasDefaultValue(false);
         builder.Property(b => b.RebalanceMinImprovement).HasColumnType("decimal(18,6)").HasDefaultValue(0.0002m);
+        builder.Property(b => b.MaxRebalancesPerCycle).HasDefaultValue(2);
     }
 }

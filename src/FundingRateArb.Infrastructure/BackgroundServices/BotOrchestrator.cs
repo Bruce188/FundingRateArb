@@ -177,8 +177,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 var rebalancer = scope.ServiceProvider.GetRequiredService<IPortfolioRebalancer>();
                 var recommendations = await rebalancer.EvaluateAsync(allOpenPositions, allOpportunities, globalConfig, ct);
 
+                var closedIds = new HashSet<int>();
                 foreach (var rec in recommendations)
                 {
+                    if (closedIds.Count >= globalConfig.MaxRebalancesPerCycle)
+                    {
+                        _logger.LogInformation(
+                            "Rebalancing: per-cycle cap ({Cap}) reached, skipping remaining {Remaining} recommendations",
+                            globalConfig.MaxRebalancesPerCycle, recommendations.Count - closedIds.Count);
+                        break;
+                    }
+
                     var posToClose = allOpenPositions.FirstOrDefault(p => p.Id == rec.PositionId);
                     if (posToClose is not null)
                     {
@@ -187,15 +196,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
                             rec.PositionId, rec.PositionAsset, rec.ReplacementAsset,
                             rec.ReplacementLongExchange, rec.ReplacementShortExchange);
                         await executionEngine.ClosePositionAsync(posToClose, CloseReason.Rebalanced, ct);
+                        closedIds.Add(rec.PositionId);
                     }
                 }
 
-                // F13: Filter closed positions in memory instead of re-querying DB
-                if (recommendations.Count > 0)
-                {
-                    var closedIds = recommendations.Select(r => r.PositionId).ToHashSet();
+                // Filter only actually closed positions so unclosed ones still get health monitoring
+                if (closedIds.Count > 0)
                     allOpenPositions = allOpenPositions.Where(p => !closedIds.Contains(p.Id)).ToList();
-                }
             }
             catch (Exception ex)
             {
@@ -783,11 +790,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // PnlProgress warnings (when adaptive hold is enabled)
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
         {
-            var estimatedEntryFee = pos.SizeUsdc * pos.Leverage * 2m * PositionHealthMonitor.GetTakerFeeRate(
-                pos.LongExchange?.Name, pos.ShortExchange?.Name);
-            if (estimatedEntryFee > 0 && config.TargetPnlMultiplier > 0)
+            var entryFee = pos.EntryFeesUsdc > 0
+                ? pos.EntryFeesUsdc
+                : pos.SizeUsdc * pos.Leverage * 2m * PositionHealthMonitor.GetTakerFeeRate(
+                    pos.LongExchange?.Name, pos.ShortExchange?.Name,
+                    pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
+            if (entryFee > 0 && config.TargetPnlMultiplier > 0)
             {
-                var pnlProgress = pos.AccumulatedFunding / (config.TargetPnlMultiplier * estimatedEntryFee);
+                var pnlProgress = pos.AccumulatedFunding / (config.TargetPnlMultiplier * entryFee);
                 if (pnlProgress > 0.9m)
                 {
                     warningTypes.Add(WarningType.PnlProgress);

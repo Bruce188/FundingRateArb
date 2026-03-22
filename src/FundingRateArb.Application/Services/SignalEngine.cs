@@ -62,12 +62,14 @@ public class SignalEngine : ISignalEngine
             try
             {
                 var predictions = await _predictionService.GetPredictionsAsync(ct);
-                predictionLookup = predictions.ToDictionary(p => (p.AssetId, p.ExchangeId));
+                predictionLookup = predictions
+                    .GroupBy(p => (p.AssetId, p.ExchangeId))
+                    .ToDictionary(g => g.Key, g => g.First());
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Predictions are informational — don't block opportunity generation
-                _logger?.LogTrace(ex, "Failed to load rate predictions; continuing without prediction data");
+                _logger?.LogWarning(ex, "Failed to load rate predictions; continuing without prediction data");
             }
         }
 

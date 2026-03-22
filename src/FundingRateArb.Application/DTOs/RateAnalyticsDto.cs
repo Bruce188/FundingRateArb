@@ -6,7 +6,7 @@ public record RateTrendDto(
     int ExchangeId,
     string ExchangeName,
     decimal CurrentRate,
-    decimal Avg7d,
+    decimal AvgPeriod,
     decimal Avg24h,
     string TrendDirection,
     List<HourlyRatePoint> HourlyRates);

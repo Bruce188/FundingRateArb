@@ -157,17 +157,19 @@
                 }
                 alertsBody.innerHTML = '';
                 alerts.forEach(function (a) {
-                    var absZ = Math.abs(a.zScore);
-                    var badgeClass = absZ > 3 ? 'bg-danger' : 'bg-warning text-dark';
-                    var row = '<tr>'
-                        + '<td>' + a.assetSymbol + '</td>'
-                        + '<td>' + a.exchangeName + '</td>'
-                        + '<td>' + a.currentRate.toFixed(6) + '</td>'
-                        + '<td>' + a.mean7d.toFixed(6) + '</td>'
-                        + '<td>' + a.stdDev7d.toFixed(6) + '</td>'
-                        + '<td><span class="badge ' + badgeClass + '">' + a.zScore.toFixed(2) + '</span></td>'
-                        + '</tr>';
-                    alertsBody.insertAdjacentHTML('beforeend', row);
+                    var row = document.createElement('tr');
+                    [a.assetSymbol, a.exchangeName, a.currentRate.toFixed(6), a.mean7d.toFixed(6), a.stdDev7d.toFixed(6)].forEach(function (val) {
+                        var td = document.createElement('td');
+                        td.textContent = val;
+                        row.appendChild(td);
+                    });
+                    var zTd = document.createElement('td');
+                    var badge = document.createElement('span');
+                    badge.className = 'badge ' + (Math.abs(a.zScore) > 3 ? 'bg-danger' : 'bg-warning text-dark');
+                    badge.textContent = a.zScore.toFixed(2);
+                    zTd.appendChild(badge);
+                    row.appendChild(zTd);
+                    alertsBody.appendChild(row);
                 });
                 alertsCard.style.display = '';
             })
@@ -178,7 +180,7 @@
 
     if (alertsCard && alertsBody) {
         loadZScoreAlerts();
-        // Auto-refresh every 60 seconds
-        setInterval(loadZScoreAlerts, 60000);
+        // Auto-refresh every 5 minutes — data granularity is hourly, so more frequent polling is wasteful
+        setInterval(loadZScoreAlerts, 300000);
     }
 })();

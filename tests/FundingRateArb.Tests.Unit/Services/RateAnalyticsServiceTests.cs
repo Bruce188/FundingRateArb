@@ -34,6 +34,9 @@ public class RateAnalyticsServiceTests
         });
 
         _sut = new RateAnalyticsService(_mockUow.Object);
+
+        // Reset static Z-score cache between tests
+        RateAnalyticsService.ResetZScoreCache();
     }
 
     // ── Trend Detection ──────────────────────────────────────────
@@ -237,22 +240,6 @@ public class RateAnalyticsServiceTests
     public async Task GetZScoreAlertsAsync_AlertFires_WhenRateExceedsTwoSigma()
     {
         var now = DateTime.UtcNow;
-        var aggregates = new List<FundingRateHourlyAggregate>();
-
-        // Historical: 7 days of stable 0.001 rate
-        for (int i = 0; i < 168; i++)
-        {
-            aggregates.Add(new FundingRateHourlyAggregate
-            {
-                AssetId = 1, ExchangeId = 1,
-                HourUtc = now.AddHours(-168 + i),
-                AvgRatePerHour = 0.001m,
-                MinRate = 0.001m, MaxRate = 0.001m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
-                Asset = new Asset { Id = 1, Symbol = "ETH" },
-                Exchange = new Exchange { Id = 1, Name = "Hyperliquid" },
-            });
-        }
 
         // Latest: spike to 0.01 (outlier)
         var latestAggregate = new FundingRateHourlyAggregate
@@ -262,19 +249,18 @@ public class RateAnalyticsServiceTests
             AvgRatePerHour = 0.01m, // 10x normal
             MinRate = 0.01m, MaxRate = 0.01m,
             AvgVolume24hUsd = 1000000m, SampleCount = 10,
-            Asset = new Asset { Id = 1, Symbol = "ETH" },
-            Exchange = new Exchange { Id = 1, Name = "Hyperliquid" },
         };
 
-        SetupAggregates(aggregates);
+        // Stats: zero stddev → skip
         _mockFundingRateRepo.Setup(r => r.GetLatestAggregatePerAssetExchangeAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<FundingRateHourlyAggregate> { latestAggregate });
+        _mockFundingRateRepo.Setup(r => r.GetAggregateStatsByPairAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int, int, decimal, decimal)> { (1, 1, 0.001m, 0m) });
 
         var result = await _sut.GetZScoreAlertsAsync(2.0m);
 
-        // With all-same values, stddev of aggregates is 0 → the latest is an outlier
-        // But stddev of 168 identical values = 0, which would be skipped. Let's use varied data instead.
-        // This test validates the zero-stddev skip path.
+        // stddev = 0 → pair is skipped
         result.Should().BeEmpty();
     }
 
@@ -282,26 +268,8 @@ public class RateAnalyticsServiceTests
     public async Task GetZScoreAlertsAsync_AlertFires_WithVariedHistoricalData()
     {
         var now = DateTime.UtcNow;
-        var aggregates = new List<FundingRateHourlyAggregate>();
 
-        // Historical: 168 hours with small variation around 0.001
-        var rng = new Random(42);
-        for (int i = 0; i < 168; i++)
-        {
-            var rate = 0.001m + (decimal)(rng.NextDouble() * 0.0002 - 0.0001); // ±0.0001 noise
-            aggregates.Add(new FundingRateHourlyAggregate
-            {
-                AssetId = 1, ExchangeId = 1,
-                HourUtc = now.AddHours(-168 + i),
-                AvgRatePerHour = rate,
-                MinRate = rate - 0.00005m, MaxRate = rate + 0.00005m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
-                Asset = new Asset { Id = 1, Symbol = "ETH" },
-                Exchange = new Exchange { Id = 1, Name = "Hyperliquid" },
-            });
-        }
-
-        // Latest: 0.01 (massive spike, well beyond 2σ of ~0.001 ± 0.0001)
+        // Latest: 0.01 (massive spike, well beyond 2σ of ~0.001 ± 0.00006)
         var latestAggregate = new FundingRateHourlyAggregate
         {
             AssetId = 1, ExchangeId = 1,
@@ -309,13 +277,14 @@ public class RateAnalyticsServiceTests
             AvgRatePerHour = 0.01m,
             MinRate = 0.01m, MaxRate = 0.01m,
             AvgVolume24hUsd = 1000000m, SampleCount = 10,
-            Asset = new Asset { Id = 1, Symbol = "ETH" },
-            Exchange = new Exchange { Id = 1, Name = "Hyperliquid" },
         };
 
-        SetupAggregates(aggregates);
+        // Stats: mean=0.001, stddev=0.00006 → z = (0.01 - 0.001)/0.00006 ≈ 150
         _mockFundingRateRepo.Setup(r => r.GetLatestAggregatePerAssetExchangeAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<FundingRateHourlyAggregate> { latestAggregate });
+        _mockFundingRateRepo.Setup(r => r.GetAggregateStatsByPairAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int, int, decimal, decimal)> { (1, 1, 0.001m, 0.00006m) });
 
         var result = await _sut.GetZScoreAlertsAsync(2.0m);
 
@@ -359,9 +328,11 @@ public class RateAnalyticsServiceTests
     [Fact]
     public async Task GetZScoreAlertsAsync_EmptyData_ReturnsEmptyList()
     {
-        SetupAggregates([]);
         _mockFundingRateRepo.Setup(r => r.GetLatestAggregatePerAssetExchangeAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
+        _mockFundingRateRepo.Setup(r => r.GetAggregateStatsByPairAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<(int, int, decimal, decimal)>());
 
         var result = await _sut.GetZScoreAlertsAsync(2.0m);
 
@@ -461,7 +432,7 @@ public class RateAnalyticsServiceTests
     }
 
     [Fact]
-    public async Task GetRateTrendsAsync_NoDataInLast24h_FallsBackToAvg7d()
+    public async Task GetRateTrendsAsync_NoDataInLast24h_FallsBackToAvgPeriod()
     {
         var now = DateTime.UtcNow;
         var aggregates = new List<FundingRateHourlyAggregate>();
@@ -484,8 +455,212 @@ public class RateAnalyticsServiceTests
         var result = await _sut.GetRateTrendsAsync(1, 7);
 
         result.Should().HaveCount(1);
-        // avg24h should fall back to avg7d when no data in last 24h window
-        result[0].Avg24h.Should().Be(result[0].Avg7d);
+        // avg24h should fall back to avgPeriod when no data in last 24h window
+        result[0].Avg24h.Should().Be(result[0].AvgPeriod);
+    }
+
+    // ── NB13: ComputeTrendDirection Zero-Avg Branch ─────────────
+
+    [Fact]
+    public void ComputeTrendDirection_PreviousAvgZero_RecentPositive_ReturnsRising()
+    {
+        var now = DateTime.UtcNow;
+        var aggregates = new List<FundingRateHourlyAggregate>();
+
+        // First 6h: avg = 0 (all zero rates)
+        for (int i = 0; i < 6; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0m,
+                MinRate = 0m, MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+        }
+        // Last 6h: positive rates
+        for (int i = 6; i < 12; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0.001m,
+                MinRate = 0m, MaxRate = 0.002m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+        }
+
+        var result = RateAnalyticsService.ComputeTrendDirection(aggregates);
+
+        result.Should().Be("rising");
+    }
+
+    [Fact]
+    public void ComputeTrendDirection_PreviousAvgZero_RecentNegative_ReturnsFalling()
+    {
+        var now = DateTime.UtcNow;
+        var aggregates = new List<FundingRateHourlyAggregate>();
+
+        // First 6h: avg = 0
+        for (int i = 0; i < 6; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0m,
+                MinRate = 0m, MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+        }
+        // Last 6h: negative rates
+        for (int i = 6; i < 12; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = -0.001m,
+                MinRate = -0.002m, MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+        }
+
+        var result = RateAnalyticsService.ComputeTrendDirection(aggregates);
+
+        result.Should().Be("falling");
+    }
+
+    [Fact]
+    public void ComputeTrendDirection_PreviousAvgZero_RecentZero_ReturnsStable()
+    {
+        var now = DateTime.UtcNow;
+        var aggregates = new List<FundingRateHourlyAggregate>();
+
+        // All 12h: avg = 0
+        for (int i = 0; i < 12; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0m,
+                MinRate = 0m, MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+        }
+
+        var result = RateAnalyticsService.ComputeTrendDirection(aggregates);
+
+        result.Should().Be("stable");
+    }
+
+    // ── N10: Additional Pearson Correlation Edge Cases ──────────
+
+    [Fact]
+    public void ComputePearsonCorrelation_EmptyLists_ReturnsZero()
+    {
+        var x = new List<decimal>();
+        var y = new List<decimal>();
+
+        var r = RateAnalyticsService.ComputePearsonCorrelation(x, y);
+
+        r.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ComputePearsonCorrelation_LargeValues_NoOverflow()
+    {
+        // Values large enough that (sumX2 * sumY2) would overflow decimal if not cast to double first
+        var x = new List<decimal> { 1_000_000_000m, 2_000_000_000m, 3_000_000_000m, 4_000_000_000m };
+        var y = new List<decimal> { 2_000_000_000m, 4_000_000_000m, 6_000_000_000m, 8_000_000_000m };
+
+        var r = RateAnalyticsService.ComputePearsonCorrelation(x, y);
+
+        r.Should().BeApproximately(1.0m, 0.001m);
+    }
+
+    [Fact]
+    public void ComputePearsonCorrelation_NegativeCorrelation_ReturnsNegative()
+    {
+        var x = new List<decimal> { 1m, 2m, 3m, 4m, 5m };
+        var y = new List<decimal> { 10m, 8m, 6m, 4m, 2m };
+
+        var r = RateAnalyticsService.ComputePearsonCorrelation(x, y);
+
+        r.Should().BeApproximately(-1.0m, 0.001m);
+    }
+
+    [Fact]
+    public void ComputePearsonCorrelation_NearZeroValues_HandledCorrectly()
+    {
+        // Very small decimal values that should still produce meaningful correlation
+        var x = new List<decimal> { 0.000001m, 0.000002m, 0.000003m, 0.000004m };
+        var y = new List<decimal> { 0.000002m, 0.000004m, 0.000006m, 0.000008m };
+
+        var r = RateAnalyticsService.ComputePearsonCorrelation(x, y);
+
+        r.Should().BeApproximately(1.0m, 0.001m);
+    }
+
+    // ── NB8: null-assetId path ──────────────────────────────────
+
+    [Fact]
+    public async Task GetRateTrendsAsync_NullAssetId_ReturnsMultipleAssetTrends()
+    {
+        var now = DateTime.UtcNow;
+        var aggregates = new List<FundingRateHourlyAggregate>();
+
+        // Add data for two different assets
+        for (int i = 0; i < 12; i++)
+        {
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 1, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0.001m,
+                MinRate = 0.0009m, MaxRate = 0.0011m,
+                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            });
+            aggregates.Add(new FundingRateHourlyAggregate
+            {
+                AssetId = 2, ExchangeId = 1,
+                HourUtc = now.AddHours(-12 + i),
+                AvgRatePerHour = 0.002m,
+                MinRate = 0.0019m, MaxRate = 0.0021m,
+                AvgVolume24hUsd = 500000m, SampleCount = 10,
+            });
+        }
+
+        SetupAggregates(aggregates);
+
+        // Pass null assetId → should return trends for all assets
+        var result = await _sut.GetRateTrendsAsync(null, 7);
+
+        result.Should().HaveCount(2);
+        result.Select(r => r.AssetSymbol).Should().Contain("ETH");
+        result.Select(r => r.AssetSymbol).Should().Contain("BTC");
+    }
+
+    // ── NB10: Service-layer days clamping ──────────────────────
+
+    [Fact]
+    public async Task GetRateTrendsAsync_DaysAbove30_ClampedTo30()
+    {
+        SetupAggregates([]);
+
+        // Call with days=90, should be clamped to 30 internally
+        var result = await _sut.GetRateTrendsAsync(1, 90);
+
+        result.Should().BeEmpty();
+        // Verify the repo was called with a date range of ~30 days, not 90
+        _mockFundingRateRepo.Verify(r => r.GetHourlyAggregatesAsync(
+            1, null,
+            It.Is<DateTime>(d => (DateTime.UtcNow - d).TotalDays < 31),
+            It.IsAny<DateTime>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── Helpers ──────────────────────────────────────────────────

@@ -1003,14 +1003,15 @@ public class SignalEngineTests
     }
 
     [Fact]
-    public async Task GetOpportunities_PredictionServiceReturnsDuplicateKeys_ContinuesWithoutPredictions()
+    public async Task GetOpportunities_PredictionServiceReturnsDuplicateKeys_DeduplicatesAndUseFirst()
     {
         var mockPredictionService = new Mock<IRatePredictionService>();
         mockPredictionService.Setup(s => s.GetPredictionsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<RatePredictionDto>
             {
                 new(1, "ETH", 1, "Hyperliquid", 0.001m, 0.8m, "stable"),
-                new(1, "ETH", 1, "Hyperliquid", 0.002m, 0.9m, "rising"), // duplicate key
+                new(1, "ETH", 1, "Hyperliquid", 0.002m, 0.9m, "rising"), // duplicate key — silently deduped
+                new(1, "ETH", 2, "Lighter", 0.0009m, 0.75m, "falling"),
             });
 
         var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
@@ -1026,9 +1027,11 @@ public class SignalEngineTests
 
         var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
 
-        // Should still produce opportunities without prediction data
         result.Should().HaveCount(1);
-        result[0].PredictedSpread.Should().BeNull();
+        // GroupBy deduplication keeps first entry: 0.001m for Hyperliquid
+        result[0].PredictedLongRate.Should().Be(0.001m);
+        result[0].PredictedShortRate.Should().Be(0.0009m);
+        result[0].PredictedSpread.Should().NotBeNull();
     }
 
     [Fact]

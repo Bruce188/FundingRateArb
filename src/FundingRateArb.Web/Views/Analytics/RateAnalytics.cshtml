@@ -73,7 +73,7 @@
                                 @(trend.TrendDirection == "rising" ? "^" : trend.TrendDirection == "falling" ? "v" : "-") @trend.TrendDirection
                             </span>
                         </div>
-                        <small>7d avg: @trend.Avg7d.ToString("F6") | 24h avg: @trend.Avg24h.ToString("F6")</small>
+                        <small>@(Model.SelectedDays)d avg: @trend.AvgPeriod.ToString("F6") | 24h avg: @trend.Avg24h.ToString("F6")</small>
                     </div>
                 </div>
             </div>
@@ -130,10 +130,10 @@ else if (Model.SelectedAssetId.HasValue)
 </div>
 
 @section Scripts {
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
             integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
             crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0"
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
             integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
             crossorigin="anonymous"></script>
     @* F6: Trend data loaded via AJAX from RateTrendData endpoint instead of inline JSON *@
@@ -141,6 +141,6 @@ else if (Model.SelectedAssetId.HasValue)
          data-asset-id="@(Model.SelectedAssetId?.ToString() ?? "")"
          data-days="@Model.SelectedDays"
          style="display:none;"></div>
-    <script type="application/json" id="exchange-options-json">@Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.Trends.Select(t => new { t.ExchangeId, t.ExchangeName })))</script>
+    <script type="application/json" id="exchange-options-json">@Json.Serialize(Model.Trends.Select(t => new { t.ExchangeId, t.ExchangeName }))</script>
     <script src="~/js/rate-analytics.js" asp-append-version="true"></script>
 }

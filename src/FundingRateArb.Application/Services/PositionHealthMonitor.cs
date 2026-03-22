@@ -211,8 +211,14 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
         {
-            var estimatedEntryFee = pos.SizeUsdc * pos.Leverage * 2m * GetTakerFeeRate(pos.LongExchange?.Name, pos.ShortExchange?.Name);
-            if (estimatedEntryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * estimatedEntryFee)
+            var entryFee = pos.EntryFeesUsdc > 0
+                ? pos.EntryFeesUsdc
+                : pos.LongExchange is not null && pos.ShortExchange is not null
+                    ? pos.SizeUsdc * pos.Leverage * 2m * GetTakerFeeRate(
+                        pos.LongExchange.Name, pos.ShortExchange.Name,
+                        pos.LongExchange.TakerFeeRate, pos.ShortExchange.TakerFeeRate)
+                    : 0m;
+            if (entryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * entryFee)
                 return CloseReason.PnlTargetReached;
         }
 
@@ -230,17 +236,30 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     /// Each exchange fee is per-trade; the sum represents the fee for one leg pair.
     /// Callers use <c>SizeUsdc * Leverage * 2 * GetTakerFeeRate()</c> for the round-trip fee
     /// of one position (open + close = 4 trades across 2 exchanges).
+    /// When DB-stored fee rates are available (via Exchange.TakerFeeRate), pass them
+    /// to avoid reliance on the hardcoded fallback table.
     /// </summary>
-    public static decimal GetTakerFeeRate(string? longExchange, string? shortExchange)
+    public static decimal GetTakerFeeRate(
+        string? longExchange, string? shortExchange,
+        decimal? longTakerFeeRate = null, decimal? shortTakerFeeRate = null)
     {
-        return GetExchangeTakerFee(longExchange) + GetExchangeTakerFee(shortExchange);
+        return GetExchangeTakerFee(longExchange, longTakerFeeRate)
+             + GetExchangeTakerFee(shortExchange, shortTakerFeeRate);
     }
 
-    private static decimal GetExchangeTakerFee(string? exchangeName) => exchangeName switch
+    private static decimal GetExchangeTakerFee(string? exchangeName, decimal? dbFeeRate = null)
     {
-        "Hyperliquid" => 0.00045m,
-        "Lighter" => 0.0m,
-        "Aster" => 0.0004m,
-        _ => 0.0005m, // conservative default
-    };
+        // Prefer DB-stored fee rate when available
+        if (dbFeeRate.HasValue)
+            return dbFeeRate.Value;
+
+        // Hardcoded fallback for when DB rate is not loaded
+        return exchangeName switch
+        {
+            "Hyperliquid" => 0.00045m,
+            "Lighter" => 0.0m,
+            "Aster" => 0.0004m,
+            _ => 0.0005m, // conservative default
+        };
+    }
 }

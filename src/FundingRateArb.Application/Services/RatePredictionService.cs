@@ -44,15 +44,17 @@ public class RatePredictionService : IRatePredictionService
         var assetLookup = assets.ToDictionary(a => a.Id, a => a.Symbol);
         var exchangeLookup = exchanges.ToDictionary(e => e.Id, e => e.Name);
 
-        var groups = aggregates
-            .GroupBy(a => new { a.AssetId, a.ExchangeId })
-            .ToList();
+        // Pre-sort once, then group — avoids redundant OrderBy inside ComputePrediction
+        var ordered = aggregates.OrderBy(a => a.HourUtc).ToList();
+        var groups = ordered.GroupBy(a => new { a.AssetId, a.ExchangeId });
 
         var results = new List<RatePredictionDto>();
 
         foreach (var group in groups)
         {
-            var prediction = ComputePrediction(group.ToList(),
+            // Pass group directly as List — data is already sorted chronologically
+            var groupList = group.ToList();
+            var prediction = ComputePrediction(groupList,
                 group.Key.AssetId, group.Key.ExchangeId,
                 assetLookup, exchangeLookup);
             if (prediction is not null)
@@ -94,17 +96,20 @@ public class RatePredictionService : IRatePredictionService
         Dictionary<int, string> assetLookup,
         Dictionary<int, string> exchangeLookup)
     {
-        var ordered = aggregates
-            .OrderBy(a => a.HourUtc)
-            .ToList();
+        // Caller is responsible for providing chronologically ordered data.
+        // Fall back to sorting only if needed (single-pair queries from GetPredictionAsync).
+        var ordered = aggregates;
+        if (aggregates.Count > 1 && aggregates[0].HourUtc > aggregates[^1].HourUtc)
+            ordered = aggregates.OrderBy(a => a.HourUtc).ToList();
 
         if (ordered.Count < MinHoursRequired)
             return null;
 
-        // Compute EWMA
+        // Compute EWMA and one-step-ahead forecast
         var rates = ordered.Select(a => a.AvgRatePerHour).ToList();
         var ewmaValues = ComputeEwma(rates);
-        var predictedRate = ewmaValues[^1];
+        // One-step-ahead forecast: project beyond the last observation
+        var predictedRate = Alpha * rates[^1] + (1 - Alpha) * ewmaValues[^1];
 
         // Confidence calculation
         var confidence = ComputeConfidence(rates);
