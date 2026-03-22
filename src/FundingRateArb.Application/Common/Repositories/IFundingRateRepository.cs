@@ -21,4 +21,13 @@ public interface IFundingRateRepository
     /// </summary>
     Task<List<FundingRateSnapshot>> GetSnapshotsInRangeAsync(
         DateTime from, DateTime to, CancellationToken ct = default);
+
+    // Analytics query methods
+    Task<List<FundingRateHourlyAggregate>> GetLatestAggregatePerAssetExchangeAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Computes mean and standard deviation of AvgRatePerHour per (AssetId, ExchangeId) pair via SQL aggregation.
+    /// </summary>
+    Task<List<(int AssetId, int ExchangeId, decimal Mean, decimal StdDev)>> GetAggregateStatsByPairAsync(
+        DateTime from, DateTime to, CancellationToken ct = default);
 }

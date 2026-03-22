@@ -23,4 +23,11 @@ public class ArbitrageOpportunityDto
     /// Null if settlement time is unknown for both legs.
     /// </summary>
     public int? MinutesToNextSettlement { get; set; }
+
+    // Prediction fields (populated by SignalEngine when IRatePredictionService is available)
+    public decimal? PredictedLongRate { get; set; }
+    public decimal? PredictedShortRate { get; set; }
+    public decimal? PredictedSpread { get; set; }
+    public decimal? PredictionConfidence { get; set; }
+    public string? PredictedTrend { get; set; }
 }

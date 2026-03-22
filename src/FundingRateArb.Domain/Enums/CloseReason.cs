@@ -5,6 +5,8 @@ public enum CloseReason
     SpreadCollapsed,
     MaxHoldTimeReached,
     StopLoss,
+    PnlTargetReached,
+    Rebalanced,
     Manual,
     EmergencyLegFailed
 }

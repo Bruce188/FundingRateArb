@@ -1,6 +1,7 @@
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Application.Services;
 
@@ -8,6 +9,8 @@ public class SignalEngine : ISignalEngine
 {
     private readonly IUnitOfWork _uow;
     private readonly IMarketDataCache _cache;
+    private readonly IRatePredictionService? _predictionService;
+    private readonly ILogger<SignalEngine>? _logger;
 
     /// <summary>
     /// Fallback round-trip fee constants used when Exchange.TakerFeeRate is not set in the DB.
@@ -19,10 +22,12 @@ public class SignalEngine : ISignalEngine
         { "Aster",       0.00080m }
     };
 
-    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache)
+    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache, IRatePredictionService? predictionService = null, ILogger<SignalEngine>? logger = null)
     {
         _uow = uow;
         _cache = cache;
+        _predictionService = predictionService;
+        _logger = logger;
     }
 
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
@@ -49,6 +54,24 @@ public class SignalEngine : ISignalEngine
         var cutoff = DateTime.UtcNow.AddMinutes(-diagnostics.StalenessMinutes);
         rates = rates.Where(r => r.RecordedAt >= cutoff).ToList();
         diagnostics.RatesAfterStalenessFilter = rates.Count;
+
+        // Load predictions for enrichment (non-critical — null if service unavailable)
+        Dictionary<(int AssetId, int ExchangeId), RatePredictionDto>? predictionLookup = null;
+        if (_predictionService is not null)
+        {
+            try
+            {
+                var predictions = await _predictionService.GetPredictionsAsync(ct);
+                predictionLookup = predictions
+                    .GroupBy(p => (p.AssetId, p.ExchangeId))
+                    .ToDictionary(g => g.Key, g => g.First());
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Predictions are informational — don't block opportunity generation
+                _logger?.LogWarning(ex, "Failed to load rate predictions; continuing without prediction data");
+            }
+        }
 
         var opportunities = new List<ArbitrageOpportunityDto>();
         var netPositiveList = new List<ArbitrageOpportunityDto>();
@@ -110,6 +133,11 @@ public class SignalEngine : ISignalEngine
                     boostedNet = net * 1.2m;
                 }
 
+                // Look up predictions for both legs
+                RatePredictionDto? longPred = null, shortPred = null;
+                predictionLookup?.TryGetValue((longR.AssetId, longR.ExchangeId), out longPred);
+                predictionLookup?.TryGetValue((shortR.AssetId, shortR.ExchangeId), out shortPred);
+
                 var dto = new ArbitrageOpportunityDto
                 {
                     AssetSymbol = symbol,
@@ -128,6 +156,15 @@ public class SignalEngine : ISignalEngine
                     LongMarkPrice = longR.MarkPrice,
                     ShortMarkPrice = shortR.MarkPrice,
                     MinutesToNextSettlement = minutesToSettlement,
+                    PredictedLongRate = longPred?.PredictedRatePerHour,
+                    PredictedShortRate = shortPred?.PredictedRatePerHour,
+                    PredictedSpread = longPred is not null && shortPred is not null
+                        ? shortPred.PredictedRatePerHour - longPred.PredictedRatePerHour
+                        : null,
+                    PredictionConfidence = longPred is not null && shortPred is not null
+                        ? Math.Min(longPred.Confidence, shortPred.Confidence)
+                        : null,
+                    PredictedTrend = shortPred?.TrendDirection,
                 };
 
                 if (net >= config.OpenThreshold)

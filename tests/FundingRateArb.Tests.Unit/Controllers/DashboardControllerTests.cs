@@ -210,4 +210,143 @@ public class DashboardControllerTests
         model.Diagnostics.Should().NotBeNull();
         model.Diagnostics!.BestRawSpread.Should().Be(0.000926m);
     }
+
+    // ── NB12: PnL Progress Computation ──────────────────────────
+
+    [Fact]
+    public async Task Index_AdaptiveHoldDisabled_PnlProgressEmpty()
+    {
+        // Arrange
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = false });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.PnlProgressByPosition.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Index_ZeroFeeExchanges_PositionSkippedInPnlProgress()
+    {
+        // Arrange — both exchanges are Lighter (fee = 0), so target = 0, division skipped
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
+        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new()
+                {
+                    Id = 1, UserId = "test-user-id", Status = PositionStatus.Open,
+                    SizeUsdc = 100m, Leverage = 5, CurrentSpreadPerHour = 0.001m,
+                    AccumulatedFunding = 0.5m,
+                    LongExchange = new Exchange { Id = 2, Name = "Lighter" },
+                    ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.PnlProgressByPosition.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Index_NormalCase_PnlProgressComputedCorrectly()
+    {
+        // Arrange
+        // Hyperliquid fee = 0.00045, Lighter fee = 0.0
+        // entryFee = 100 * 5 * 2 * (0.00045 + 0.0) = 0.45
+        // target = 2.0 * 0.45 = 0.9
+        // progress = 0.45 / 0.9 = 0.5
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
+        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new()
+                {
+                    Id = 1, UserId = "test-user-id", Status = PositionStatus.Open,
+                    SizeUsdc = 100m, Leverage = 5, CurrentSpreadPerHour = 0.001m,
+                    AccumulatedFunding = 0.45m,
+                    LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+                    ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.PnlProgressByPosition.Should().ContainKey(1);
+        model.PnlProgressByPosition[1].Should().BeApproximately(0.5m, 0.01m);
+    }
+
+    [Fact]
+    public async Task Index_ZeroAccumulatedFunding_PositionExcludedFromPnlProgress()
+    {
+        // Arrange — AdaptiveHoldEnabled but position has zero accumulated funding
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
+        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new()
+                {
+                    Id = 1, UserId = "test-user-id", Status = PositionStatus.Open,
+                    SizeUsdc = 100m, Leverage = 5, CurrentSpreadPerHour = 0.001m,
+                    AccumulatedFunding = 0m, // zero funding → should be excluded
+                    LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+                    ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.PnlProgressByPosition.Should().BeEmpty("position with zero accumulated funding should be excluded");
+    }
+
+    [Fact]
+    public async Task Index_LargeAccumulatedFunding_PnlProgressCappedAt2()
+    {
+        // Arrange — accumulated funding far exceeds target, cap should apply
+        // entryFee = 100 * 5 * 2 * (0.00045 + 0.0) = 0.45
+        // target = 2.0 * 0.45 = 0.9
+        // raw progress = 10.0 / 0.9 ≈ 11.1 → capped to 2.0
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
+        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new()
+                {
+                    Id = 1, UserId = "test-user-id", Status = PositionStatus.Open,
+                    SizeUsdc = 100m, Leverage = 5, CurrentSpreadPerHour = 0.001m,
+                    AccumulatedFunding = 10.0m,
+                    LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+                    ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.PnlProgressByPosition.Should().ContainKey(1);
+        model.PnlProgressByPosition[1].Should().Be(2.0m);
+    }
 }

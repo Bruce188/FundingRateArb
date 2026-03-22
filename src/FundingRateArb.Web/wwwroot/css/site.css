@@ -171,3 +171,54 @@ body {
     background-color: #f8f9fa;
     font-size: .8rem;
 }
+
+/* ── PnL Progress Bar ──────────────────────────────────── */
+.pnl-progress-bar {
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+    min-width: 60px;
+}
+.pnl-progress-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+.pnl-fill-green { background: #198754; }
+.pnl-fill-gold { background: #ffc107; }
+.pnl-fill-pulse {
+    background: #ffc107;
+    animation: pnl-pulse 1.5s ease-in-out infinite;
+}
+@keyframes pnl-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ── Prediction Confidence Dot ─────────────────────────── */
+.prediction-confidence {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+/* ── Trend Arrow ───────────────────────────────────────── */
+.trend-arrow {
+    font-weight: bold;
+    margin-left: 2px;
+}
+
+/* ── Rebalance Badge ───────────────────────────────────── */
+.rebalance-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 0.7rem;
+    background: #fd7e14;
+    color: #fff;
+    border-radius: 3px;
+}

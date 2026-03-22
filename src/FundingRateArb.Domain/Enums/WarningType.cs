@@ -10,5 +10,6 @@ public enum WarningType
     Liquidity,
     TimeBased,
     Leverage,
-    Loss
+    Loss,
+    PnlProgress
 }

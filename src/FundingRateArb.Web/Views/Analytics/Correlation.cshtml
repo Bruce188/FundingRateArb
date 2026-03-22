@@ -1,0 +1,54 @@
+@model FundingRateArb.Web.ViewModels.CorrelationViewModel
+
+@{
+    ViewData["Title"] = $"Rate Correlation — {Model.AssetSymbol}";
+}
+
+<h4 class="mb-3">Cross-Exchange Correlation: @Model.AssetSymbol (@Model.Days-day)</h4>
+
+<a asp-action="RateAnalytics" asp-route-assetId="@Model.AssetId" asp-route-days="@Model.Days"
+   class="btn btn-sm btn-outline-secondary mb-3">
+    Back to Rate Analytics
+</a>
+
+@if (Model.Correlations.Count > 0)
+{
+    <div class="card bg-dark">
+        <div class="card-body p-0">
+            <table class="table table-dark table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Exchange 1</th>
+                        <th>Exchange 2</th>
+                        <th>Pearson r</th>
+                        <th>Samples</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var pair in Model.Correlations)
+                    {
+                        var bgClass = pair.PearsonR > 0.7m ? "text-success"
+                            : pair.PearsonR > 0.3m ? "text-warning"
+                            : "text-danger";
+                        <tr>
+                            <td>@pair.Exchange1</td>
+                            <td>@pair.Exchange2</td>
+                            <td>
+                                <span class="@bgClass fw-bold" title="Samples: @pair.SampleCount">
+                                    @pair.PearsonR.ToString("F4")
+                                </span>
+                            </td>
+                            <td>@pair.SampleCount</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info">
+        No correlation data available. Need at least 2 exchanges with overlapping data for this asset.
+    </div>
+}
