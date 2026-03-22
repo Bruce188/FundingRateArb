@@ -211,9 +211,9 @@ public class AsterConnectorTests
     // ── GetFundingRatesAsync ───────────────────────────────────────────────────
 
     [Fact]
-    public async Task GetFundingRates_DividesBy4ForHourlyNormalization()
+    public async Task GetFundingRates_DividesBy8ForHourlyNormalization()
     {
-        // Aster returns 4-hour funding rate; connector must divide by 4.
+        // Aster returns 8-hour funding rate; connector must divide by 8.
         var markPrice = MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m);
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
@@ -221,14 +221,14 @@ public class AsterConnectorTests
         var rates = await sut.GetFundingRatesAsync();
 
         rates.Should().ContainSingle();
-        rates[0].RatePerHour.Should().Be(0.0001m,
-            "4-hour rate of 0.0004 divided by 4 equals 0.0001 per hour");
+        rates[0].RatePerHour.Should().Be(0.00005m,
+            "8-hour rate of 0.0004 divided by 8 equals 0.00005 per hour");
     }
 
     [Fact]
     public async Task GetFundingRates_RawRate_IsOriginalUndivided()
     {
-        // RawRate must preserve the original 4-hour rate, not the normalised per-hour rate.
+        // RawRate must preserve the original 8-hour rate, not the normalised per-hour rate.
         var markPrice = MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m);
         var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
@@ -236,7 +236,7 @@ public class AsterConnectorTests
         var rates = await sut.GetFundingRatesAsync();
 
         rates[0].RawRate.Should().Be(0.0004m,
-            "RawRate must store the original (undivided) 4-hour funding rate");
+            "RawRate must store the original (undivided) 8-hour funding rate");
     }
 
     [Fact]
@@ -281,19 +281,19 @@ public class AsterConnectorTests
         rates.Should().HaveCount(3);
 
         var eth = rates.Single(r => r.Symbol == "ETH");
-        eth.RatePerHour.Should().Be(0.0001m);
+        eth.RatePerHour.Should().Be(0.00005m);
         eth.RawRate.Should().Be(0.0004m);
         eth.MarkPrice.Should().Be(3500m);
         eth.IndexPrice.Should().Be(3495m);
         eth.ExchangeName.Should().Be("Aster");
 
         var btc = rates.Single(r => r.Symbol == "BTC");
-        btc.RatePerHour.Should().Be(0.0002m);
+        btc.RatePerHour.Should().Be(0.0001m);
         btc.RawRate.Should().Be(0.0008m);
 
         var sol = rates.Single(r => r.Symbol == "SOL");
-        sol.RatePerHour.Should().Be(-0.0001m,
-            "negative rates must also be divided by 4");
+        sol.RatePerHour.Should().Be(-0.00005m,
+            "negative rates must also be divided by 8");
         sol.RawRate.Should().Be(-0.0004m);
     }
 

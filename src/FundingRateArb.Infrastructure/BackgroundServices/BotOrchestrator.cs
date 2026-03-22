@@ -37,9 +37,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // M7: Track when alerts were last pushed so each cycle uses only the elapsed window (no replays)
     private DateTime _lastAlertPushUtc = DateTime.UtcNow.AddMinutes(-5);
 
-    // B3: Cache previous best spread so it survives across cycles (avoids reset to 0 after Retry Now)
-    private decimal _cachedBestSpread;
-
     // Per-user cooldown for failed opportunities — keyed by (userId, oppKey)
     private readonly ConcurrentDictionary<string, (DateTime CooldownUntil, int Failures)> _failedOpCooldowns = new();
     internal static readonly TimeSpan BaseCooldown = TimeSpan.FromMinutes(5);
@@ -153,8 +150,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Fetch ALL open positions after health monitor so closed positions are excluded
         var allOpenPositions = await uow.Positions.GetOpenAsync();
 
-        // Push per-user position updates + alerts (always, regardless of bot state)
-        await PushPositionUpdatesAsync(allOpenPositions);
+        // Push per-user position updates with warning computation (always, regardless of bot state)
+        await PushPositionUpdatesAsync(allOpenPositions, globalConfig);
         await PushNewAlertsAsync(uow);
 
         // Step 2: Compute + push opportunities globally (always, regardless of bot state)
@@ -170,7 +167,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 3: Push global dashboard KPI update
-        await PushDashboardUpdateAsync(allOpenPositions, globalConfig.IsEnabled);
+        await PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled);
 
         // Step 4: Gate — skip position opening if global kill switch is off
         if (!globalConfig.IsEnabled)
@@ -189,17 +186,25 @@ public class BotOrchestrator : BackgroundService, IBotControl
             return;
         }
 
+        // Track which opportunities were opened (by any user) for snapshot recording
+        var openedOppKeys = new HashSet<string>();
+        var capitalExhaustedKeys = new HashSet<string>();
+        var maxPositionsKeys = new HashSet<string>();
+
         foreach (var userId in enabledUserIds)
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Cycle failed for user {UserId}", userId);
             }
         }
+
+        // Step 6: Persist opportunity snapshots and run 7-day purge
+        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
     }
 
     /// <summary>
@@ -214,6 +219,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         ISignalEngine signalEngine,
         IExecutionEngine executionEngine,
         IUserSettingsService userSettings,
+        HashSet<string> openedOppKeys,
+        HashSet<string> capitalExhaustedKeys,
+        HashSet<string> maxPositionsKeys,
         CancellationToken ct)
     {
         var allOpportunities = opportunityResult.Opportunities;
@@ -396,7 +404,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
             var opp = candidates[idx];
             var size = sizes[idx];
             if (size <= 0) continue;
-            if (slotsAvailable <= 0) break;
+            if (slotsAvailable <= 0)
+            {
+                // Track remaining candidates as skipped due to max positions
+                for (int remaining = idx; remaining < candidates.Count; remaining++)
+                {
+                    var remOpp = candidates[remaining];
+                    maxPositionsKeys.Add($"{remOpp.AssetId}_{remOpp.LongExchangeId}_{remOpp.ShortExchangeId}");
+                }
+                break;
+            }
 
             var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
             var cooldownKey = $"{userId}:{key}";
@@ -411,13 +428,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 slotsAvailable--;
                 _failedOpCooldowns.TryRemove(cooldownKey, out _);
+                openedOppKeys.Add(key);
 
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{userId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
                 var updatedPositions = await uow.Positions.GetOpenAsync();
-                await PushPositionUpdatesAsync(updatedPositions);
+                await PushPositionUpdatesAsync(updatedPositions, globalConfig);
                 await PushNewAlertsAsync(uow);
             }
             else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
@@ -426,6 +444,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 _logger.LogWarning("Balance exhausted for user {UserId}: {Error}", userId, error);
                 await PushStatusExplanationAsync(userId,
                     $"Insufficient balance on {opp.LongExchangeName}/{opp.ShortExchangeName} for {opp.AssetSymbol}", "warning");
+                // Track remaining candidates as skipped due to capital exhaustion
+                for (int remaining = idx + 1; remaining < candidates.Count; remaining++)
+                {
+                    var remOpp = candidates[remaining];
+                    capitalExhaustedKeys.Add($"{remOpp.AssetId}_{remOpp.LongExchangeId}_{remOpp.ShortExchangeId}");
+                }
                 break;
             }
             else
@@ -445,27 +469,96 @@ public class BotOrchestrator : BackgroundService, IBotControl
     }
 
     /// <summary>
+    /// Persists opportunity snapshots for retrospective analysis.
+    /// Determines SkipReason based on whether the opportunity was opened, had an active position, or was below threshold.
+    /// </summary>
+    private async Task PersistOpportunitySnapshotsAsync(
+        IUnitOfWork uow,
+        List<ArbitrageOpportunityDto> opportunities,
+        List<ArbitragePosition> allOpenPositions,
+        HashSet<string> openedOppKeys,
+        HashSet<string> capitalExhaustedKeys,
+        HashSet<string> maxPositionsKeys,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (opportunities.Count == 0) return;
+
+            var activeKeys = allOpenPositions
+                .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+                .ToHashSet();
+
+            var snapshots = opportunities.Select(opp =>
+            {
+                var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                var wasOpened = openedOppKeys.Contains(key);
+
+                string? skipReason = null;
+                if (!wasOpened)
+                {
+                    if (activeKeys.Contains(key))
+                        skipReason = "active_position";
+                    else if (_failedOpCooldowns.Any(cd => cd.Key.EndsWith($":{key}") && DateTime.UtcNow < cd.Value.CooldownUntil))
+                        skipReason = "cooldown";
+                    else if (capitalExhaustedKeys.Contains(key))
+                        skipReason = "capital_exhausted";
+                    else if (maxPositionsKeys.Contains(key))
+                        skipReason = "max_positions";
+                    else
+                        skipReason = "below_threshold";
+                }
+
+                return new OpportunitySnapshot
+                {
+                    AssetId = opp.AssetId,
+                    LongExchangeId = opp.LongExchangeId,
+                    ShortExchangeId = opp.ShortExchangeId,
+                    SpreadPerHour = opp.SpreadPerHour,
+                    NetYieldPerHour = opp.NetYieldPerHour,
+                    LongVolume24h = opp.LongVolume24h,
+                    ShortVolume24h = opp.ShortVolume24h,
+                    WasOpened = wasOpened,
+                    SkipReason = skipReason,
+                    RecordedAt = DateTime.UtcNow,
+                };
+            }).ToList();
+
+            await uow.OpportunitySnapshots.AddRangeAsync(snapshots, ct);
+
+            // 7-day purge
+            var cutoff = DateTime.UtcNow.AddDays(-7);
+            await uow.OpportunitySnapshots.PurgeOlderThanAsync(cutoff, ct);
+
+            await uow.SaveAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to persist opportunity snapshots");
+        }
+    }
+
+    /// <summary>
     /// Pushes a ReceiveDashboardUpdate to the MarketData group with current KPI values.
     /// </summary>
-    private async Task PushDashboardUpdateAsync(List<ArbitragePosition> openPositions, bool botEnabled)
+    private async Task PushDashboardUpdateAsync(
+        List<ArbitragePosition> openPositions,
+        List<ArbitrageOpportunityDto> opportunities,
+        bool botEnabled)
     {
         try
         {
             var totalPnl = openPositions.Sum(p => p.AccumulatedFunding);
-            var bestSpread = openPositions.Count > 0
-                ? openPositions.Max(p => p.CurrentSpreadPerHour)
+            var bestSpread = opportunities.Count > 0
+                ? opportunities.Max(o => o.SpreadPerHour)
                 : 0m;
-
-            // B3: Only overwrite cached spread when a real value arrives
-            if (bestSpread > 0)
-                _cachedBestSpread = bestSpread;
 
             var dto = new DashboardDto
             {
                 BotEnabled        = botEnabled,
                 OpenPositionCount = openPositions.Count,
                 TotalPnl          = totalPnl,
-                BestSpread        = bestSpread > 0 ? bestSpread : _cachedBestSpread,
+                BestSpread        = bestSpread,
             };
 
             await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveDashboardUpdate(dto);
@@ -479,13 +572,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// <summary>
     /// Pushes a ReceivePositionUpdate for each open position to the owning user's group.
     /// </summary>
-    private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions)
+    private async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions, BotConfiguration config)
     {
         var tasks = openPositions.Select(async pos =>
         {
             try
             {
-                var dto = MapPositionToDto(pos);
+                var dto = MapPositionToDto(pos, config);
                 await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);
             }
             catch (Exception ex)
@@ -571,9 +664,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
     }
 
-    private static PositionSummaryDto MapPositionToDto(ArbitragePosition pos)
+    internal static PositionSummaryDto MapPositionToDto(ArbitragePosition pos, BotConfiguration config)
     {
-        return new PositionSummaryDto
+        var dto = new PositionSummaryDto
         {
             Id                  = pos.Id,
             AssetSymbol         = pos.Asset?.Symbol ?? "?",
@@ -590,5 +683,67 @@ public class BotOrchestrator : BackgroundService, IBotControl
             OpenedAt            = pos.OpenedAt,
             ClosedAt            = pos.ClosedAt,
         };
+
+        ComputeWarnings(dto, pos, config);
+        return dto;
+    }
+
+    /// <summary>
+    /// Evaluates warning conditions for a position and populates WarningLevel + WarningTypes.
+    /// Conditions checked:
+    ///   - SpreadRisk: spread approaching or below close/alert thresholds
+    ///   - TimeBased:  position approaching MaxHoldTimeHours
+    ///   - Loss:       unrealized loss approaching StopLossPct
+    /// The highest WarningLevel across all conditions is used.
+    /// </summary>
+    internal static void ComputeWarnings(PositionSummaryDto dto, ArbitragePosition pos, BotConfiguration config)
+    {
+        var warningLevel = WarningLevel.None;
+        var warningTypes = new List<WarningType>();
+
+        // SpreadRisk warnings
+        if (pos.CurrentSpreadPerHour <= config.CloseThreshold)
+        {
+            warningTypes.Add(WarningType.SpreadRisk);
+            warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Critical);
+        }
+        else if (pos.CurrentSpreadPerHour <= config.AlertThreshold)
+        {
+            warningTypes.Add(WarningType.SpreadRisk);
+            warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Warning);
+        }
+
+        // TimeBased warnings
+        var hoursOpen = (DateTime.UtcNow - pos.OpenedAt).TotalHours;
+        if (hoursOpen > config.MaxHoldTimeHours * 0.95)
+        {
+            warningTypes.Add(WarningType.TimeBased);
+            warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Critical);
+        }
+        else if (hoursOpen > config.MaxHoldTimeHours * 0.8)
+        {
+            warningTypes.Add(WarningType.TimeBased);
+            warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Warning);
+        }
+
+        // Loss warnings (unrealized loss relative to margin and stop-loss)
+        var unrealizedLoss = -pos.AccumulatedFunding; // positive means position is losing
+        var stopLossAmount = config.StopLossPct * pos.MarginUsdc;
+        if (unrealizedLoss > 0 && stopLossAmount > 0)
+        {
+            if (unrealizedLoss > stopLossAmount * 0.9m)
+            {
+                warningTypes.Add(WarningType.Loss);
+                warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Critical);
+            }
+            else if (unrealizedLoss > stopLossAmount * 0.7m)
+            {
+                warningTypes.Add(WarningType.Loss);
+                warningLevel = (WarningLevel)Math.Max((int)warningLevel, (int)WarningLevel.Warning);
+            }
+        }
+
+        dto.WarningLevel = warningLevel;
+        dto.WarningTypes = warningTypes;
     }
 }

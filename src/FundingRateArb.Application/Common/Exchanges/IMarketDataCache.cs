@@ -9,6 +9,13 @@ public interface IMarketDataCache
     List<FundingRateDto> GetAllLatest();
     List<FundingRateDto> GetAllForExchange(string exchangeName);
     decimal GetMarkPrice(string exchangeName, string symbol);
+
+    /// <summary>
+    /// Returns the cached next funding settlement time for the given exchange and symbol.
+    /// Returns null if not available in cache.
+    /// </summary>
+    DateTime? GetNextSettlement(string exchangeName, string symbol);
+
     bool IsStale(string exchangeName, string symbol, TimeSpan maxAge);
     bool IsStaleForExchange(string exchangeName, TimeSpan maxAge);
 }

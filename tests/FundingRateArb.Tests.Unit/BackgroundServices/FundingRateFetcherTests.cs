@@ -65,6 +65,11 @@ public class FundingRateFetcherTests
         _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(Exchanges);
         _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(Assets);
+        // Default: no snapshots for hourly aggregation
+        _mockFundingRates.Setup(f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+        _mockFundingRates.Setup(f => f.PurgeAggregatesOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
 
         // Wire connectors
         _mockHyperliquid.Setup(c => c.ExchangeName).Returns("Hyperliquid");
@@ -594,5 +599,225 @@ public class FundingRateFetcherTests
         // Lighter + Aster: called (cache stale)
         _mockLighter.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
         _mockAster.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── Settlement-aware funding accumulation tests ──────────────────────────
+
+    [Theory]
+    [InlineData(2026, 3, 22, 7, 30, 0, 8, 2026, 3, 22, 0, 0, 0)]  // 07:30 floors to 00:00 (8h intervals)
+    [InlineData(2026, 3, 22, 8, 0, 0, 8, 2026, 3, 22, 8, 0, 0)]    // 08:00 floors to 08:00 exactly
+    [InlineData(2026, 3, 22, 15, 59, 59, 8, 2026, 3, 22, 8, 0, 0)]  // 15:59 floors to 08:00
+    [InlineData(2026, 3, 22, 16, 0, 0, 8, 2026, 3, 22, 16, 0, 0)]   // 16:00 floors to 16:00 exactly
+    [InlineData(2026, 3, 22, 3, 30, 0, 4, 2026, 3, 22, 0, 0, 0)]    // 03:30 floors to 00:00 (4h intervals)
+    [InlineData(2026, 3, 22, 4, 0, 0, 4, 2026, 3, 22, 4, 0, 0)]     // 04:00 floors to 04:00
+    [InlineData(2026, 3, 22, 0, 30, 0, 1, 2026, 3, 22, 0, 0, 0)]    // 00:30 floors to 00:00 (1h intervals)
+    public void FloorToSettlement_ReturnsCorrectBoundary(
+        int yr, int mo, int dy, int hr, int mn, int sc, int intervalHours,
+        int eyr, int emo, int edy, int ehr, int emn, int esc)
+    {
+        var input = new DateTime(yr, mo, dy, hr, mn, sc, DateTimeKind.Utc);
+        var expected = new DateTime(eyr, emo, edy, ehr, emn, esc, DateTimeKind.Utc);
+
+        var result = FundingRateFetcher.FloorToSettlement(input, intervalHours);
+
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public void ComputeLegFunding_ContinuousExchange_ReturnsProRata()
+    {
+        // Continuous exchange: funding = notional * rate / 60
+        var exchangeById = new Dictionary<int, Exchange>
+        {
+            [1] = new Exchange
+            {
+                Id = 1, Name = "Hyperliquid",
+                FundingSettlementType = FundingSettlementType.Continuous,
+                FundingIntervalHours = 1,
+            }
+        };
+
+        var result = _sut.ComputeLegFunding(
+            ratePerHour: 0.0005m,
+            notional: 1000m,
+            exchangeId: 1,
+            exchangeById: exchangeById,
+            now: DateTime.UtcNow);
+
+        // 1000 * 0.0005 / 60 = 0.008333...
+        result.Should().BeApproximately(0.00833m, 0.0001m);
+    }
+
+    [Fact]
+    public void ComputeLegFunding_PeriodicExchange_FirstCycle_ReturnsZero()
+    {
+        // First cycle for a periodic exchange: no prior reference, returns 0
+        var exchangeById = new Dictionary<int, Exchange>
+        {
+            [3] = new Exchange
+            {
+                Id = 3, Name = "Aster",
+                FundingSettlementType = FundingSettlementType.Periodic,
+                FundingIntervalHours = 8,
+            }
+        };
+
+        var result = _sut.ComputeLegFunding(
+            ratePerHour: 0.0005m,
+            notional: 1000m,
+            exchangeId: 3,
+            exchangeById: exchangeById,
+            now: DateTime.UtcNow);
+
+        result.Should().Be(0m, "first cycle should return zero to avoid double-counting");
+    }
+
+    [Fact]
+    public void ComputeLegFunding_PeriodicExchange_NoBoundaryCrossed_ReturnsZero()
+    {
+        // Periodic exchange: both last cycle and now are in the same settlement window
+        var exchangeById = new Dictionary<int, Exchange>
+        {
+            [3] = new Exchange
+            {
+                Id = 3, Name = "Aster",
+                FundingSettlementType = FundingSettlementType.Periodic,
+                FundingIntervalHours = 8,
+            }
+        };
+
+        // Simulate a previous cycle at 01:00 — settlement window is 00:00-08:00
+        var sut = CreateFetcherWithSettlementState(exchangeId: 3,
+            lastCycleTime: new DateTime(2026, 3, 22, 1, 0, 0, DateTimeKind.Utc));
+
+        // Now is 02:00 — same settlement window, no boundary crossed
+        var result = sut.ComputeLegFunding(
+            ratePerHour: 0.0005m,
+            notional: 1000m,
+            exchangeId: 3,
+            exchangeById: exchangeById,
+            now: new DateTime(2026, 3, 22, 2, 0, 0, DateTimeKind.Utc));
+
+        result.Should().Be(0m, "no settlement boundary was crossed");
+    }
+
+    [Fact]
+    public void ComputeLegFunding_PeriodicExchange_BoundaryCrossed_ReturnsFullInterval()
+    {
+        // Periodic exchange: settlement boundary crossed between last cycle and now
+        var exchangeById = new Dictionary<int, Exchange>
+        {
+            [3] = new Exchange
+            {
+                Id = 3, Name = "Aster",
+                FundingSettlementType = FundingSettlementType.Periodic,
+                FundingIntervalHours = 8,
+            }
+        };
+
+        // Last cycle at 07:59 (settlement window 00:00-08:00)
+        var sut = CreateFetcherWithSettlementState(exchangeId: 3,
+            lastCycleTime: new DateTime(2026, 3, 22, 7, 59, 0, DateTimeKind.Utc));
+
+        // Now is 08:01 — crossed the 08:00 boundary
+        var result = sut.ComputeLegFunding(
+            ratePerHour: 0.0005m,
+            notional: 1000m,
+            exchangeId: 3,
+            exchangeById: exchangeById,
+            now: new DateTime(2026, 3, 22, 8, 1, 0, DateTimeKind.Utc));
+
+        // Full interval payment = notional * ratePerHour * intervalHours = 1000 * 0.0005 * 8 = 4.0
+        result.Should().Be(4.0m);
+    }
+
+    [Fact]
+    public async Task UpdateAccumulatedFunding_MixedExchanges_PeriodicLegSkippedBeforeSettlement()
+    {
+        // Position: long on Hyperliquid (Continuous), short on Aster (Periodic/8h)
+        // When no settlement boundary has been crossed for Aster, only the Hyperliquid leg accumulates.
+        var exchangesWithSettlement = new List<Exchange>
+        {
+            new() { Id = 1, Name = "Hyperliquid", IsActive = true,
+                    FundingSettlementType = FundingSettlementType.Continuous, FundingIntervalHours = 1 },
+            new() { Id = 2, Name = "Lighter",     IsActive = true,
+                    FundingSettlementType = FundingSettlementType.Continuous, FundingIntervalHours = 1 },
+            new() { Id = 3, Name = "Aster",       IsActive = true,
+                    FundingSettlementType = FundingSettlementType.Periodic, FundingIntervalHours = 8 },
+        };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithSettlement);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 1, AssetId = 1,
+            LongExchangeId = 1,   // Hyperliquid (Continuous)
+            ShortExchangeId = 3,  // Aster (Periodic)
+            SizeUsdc = 100m, Leverage = 5,
+            AccumulatedFunding = 0m,
+            Status = PositionStatus.Open,
+        };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0002m },
+                new() { ExchangeId = 3, AssetId = 1, RatePerHour = 0.001m },
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        // First FetchAll: establishes settlement tracking, Aster returns 0 (first cycle)
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // After first cycle: only Hyperliquid continuous leg subtracts, Aster first-cycle returns 0
+        // Net = 0 (short/Aster first cycle) - (500 * 0.0002 / 60) = negative (long cost)
+        // longFunding = 500 * 0.0002 / 60 = 0.001667
+        // shortFunding = 0 (first cycle for periodic)
+        // accumulated = 0 - 0.001667 = -0.001667
+        pos.AccumulatedFunding.Should().BeApproximately(-0.00167m, 0.0001m);
+
+        // Second FetchAll (same settlement window): Aster still returns 0
+        pos.AccumulatedFunding = 0m; // Reset for clarity
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Both calls happen within the same 8h window, so Aster returns 0 again
+        // Only Hyperliquid continuous leg accumulates
+        pos.AccumulatedFunding.Should().BeApproximately(-0.00167m, 0.0001m);
+    }
+
+    [Fact]
+    public void ComputeLegFunding_UnknownExchange_ReturnsZero()
+    {
+        var exchangeById = new Dictionary<int, Exchange>();
+        var result = _sut.ComputeLegFunding(0.0005m, 1000m, 999, exchangeById, DateTime.UtcNow);
+        result.Should().Be(0m);
+    }
+
+    /// <summary>
+    /// Helper to create a FundingRateFetcher with pre-seeded settlement state for testing.
+    /// </summary>
+    private FundingRateFetcher CreateFetcherWithSettlementState(int exchangeId, DateTime lastCycleTime)
+    {
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetAllForExchange(It.IsAny<string>())).Returns(new List<FundingRateDto>());
+        mockCache.Setup(c => c.IsStaleForExchange(It.IsAny<string>(), It.IsAny<TimeSpan>())).Returns(true);
+
+        var sut = new FundingRateFetcher(
+            _mockScopeFactory.Object, mockCache.Object,
+            _mockHubContext.Object, NullLogger<FundingRateFetcher>.Instance);
+
+        // Seed the internal settlement tracking state via reflection
+        var field = typeof(FundingRateFetcher)
+            .GetField("_lastCycleTimePerExchange", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        var dict = (System.Collections.Concurrent.ConcurrentDictionary<int, DateTime>)field!.GetValue(sut)!;
+        dict[exchangeId] = lastCycleTime;
+
+        return sut;
     }
 }

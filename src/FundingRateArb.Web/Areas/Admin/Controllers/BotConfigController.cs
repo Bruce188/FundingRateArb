@@ -44,7 +44,8 @@ public class BotConfigController : Controller
             MinVolume24hUsdc = config.MinVolume24hUsdc,
             RateStalenessMinutes = config.RateStalenessMinutes,
             DailyDrawdownPausePct = config.DailyDrawdownPausePct,
-            ConsecutiveLossPause = config.ConsecutiveLossPause
+            ConsecutiveLossPause = config.ConsecutiveLossPause,
+            FundingWindowMinutes = config.FundingWindowMinutes
         };
 
         return View(model);
@@ -78,6 +79,7 @@ public class BotConfigController : Controller
         config.RateStalenessMinutes = model.RateStalenessMinutes!.Value;
         config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
         config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
+        config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)

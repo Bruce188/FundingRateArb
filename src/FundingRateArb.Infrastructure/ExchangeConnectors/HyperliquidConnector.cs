@@ -216,6 +216,38 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         }, ct);
     }
 
+    public async Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
+                ct);
+
+            if (!result.Success || result.Data.ExchangeInfo?.Symbols is null)
+                return null;
+
+            var symbol = result.Data.ExchangeInfo.Symbols
+                .FirstOrDefault(s => s.Name.Equals(asset, StringComparison.OrdinalIgnoreCase));
+
+            return symbol?.MaxLeverage;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>Hyperliquid settles funding hourly on the hour.</remarks>
+    public Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var nextHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+        return Task.FromResult<DateTime?>(nextHour);
+    }
+
     public void Dispose()
     {
         _markPriceCache.Dispose();

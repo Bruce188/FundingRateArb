@@ -159,7 +159,36 @@
                 <span class="badge bg-primary">@Model.Opportunities.Count found</span>
             </div>
             <div class="card-body p-0">
-                <div class="table-responsive">
+                @* Mobile card view (< 576px) *@
+                <div id="opportunities-cards" class="d-sm-none p-2">
+                    @if (Model.Opportunities.Count == 0)
+                    {
+                        <p class="text-muted text-center py-3 mb-0">No opportunities detected.</p>
+                    }
+                    else
+                    {
+                        @foreach (var opp in Model.Opportunities)
+                        {
+                            var apyBadge = opp.AnnualizedYield > 0.50m ? "bg-success" : opp.AnnualizedYield >= 0.20m ? "bg-warning text-dark" : "bg-secondary";
+                            <div class="card mb-2 mobile-card">
+                                <div class="card-body p-2">
+                                    <div class="d-flex justify-content-between">
+                                        <strong>@opp.AssetSymbol</strong>
+                                        <span class="badge @apyBadge">@((opp.AnnualizedYield * 100).ToString("F0"))% APY</span>
+                                    </div>
+                                    <small class="text-muted">Long: @opp.LongExchangeName | Short: @opp.ShortExchangeName</small>
+                                    <div class="small">Spread: @((opp.SpreadPerHour * 100).ToString("F4"))%/hr | Net: @((opp.NetYieldPerHour * 100).ToString("F4"))%/hr</div>
+                                    @if (opp.LongVolume24h > 0 || opp.ShortVolume24h > 0)
+                                    {
+                                        <div><small class="text-muted">Vol: $@opp.LongVolume24h.ToString("N0") / $@opp.ShortVolume24h.ToString("N0")</small></div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+                @* Desktop table view (>= 576px) *@
+                <div class="table-responsive d-none d-sm-block">
                     <table class="table table-hover mb-0">
                         <thead class="table-light">
                             <tr>
@@ -170,6 +199,7 @@
                                 <th>Spread/hr</th>
                                 <th>Net Yield/hr</th>
                                 <th>APR</th>
+                                <th>Next</th>
                             </tr>
                         </thead>
                         <tbody id="opportunities-table-body"
@@ -178,7 +208,7 @@
                             @if (Model.Opportunities.Count == 0)
                             {
                                 <tr>
-                                    <td colspan="7" class="text-center py-4">
+                                    <td colspan="8" class="text-center py-4">
                                         @if (Model.Diagnostics is not null)
                                         {
                                             var dx = Model.Diagnostics;
@@ -256,6 +286,12 @@
                                                 <span class="ms-1" title="Position size limited by liquidity">&#9888;</span>
                                             }
                                         </td>
+                                        <td class="text-muted small">
+                                            @if (opp.MinutesToNextSettlement.HasValue)
+                                            {
+                                                @(opp.MinutesToNextSettlement.Value + "m")
+                                            }
+                                        </td>
                                     </tr>
                                 }
                             }
@@ -276,7 +312,47 @@
                     <h5 class="mb-0">Open Positions</h5>
                 </div>
                 <div class="card-body p-0">
-                    <div class="table-responsive">
+                    @* Mobile card view (< 576px) *@
+                    <div id="positions-cards" class="d-sm-none p-2">
+                        @foreach (var pos in Model.OpenPositions)
+                        {
+                            var cardBorder = pos.WarningLevel switch {
+                                FundingRateArb.Domain.Enums.WarningLevel.Critical => "border-danger",
+                                FundingRateArb.Domain.Enums.WarningLevel.Warning  => "border-warning",
+                                FundingRateArb.Domain.Enums.WarningLevel.Info     => "border-info",
+                                _ => ""
+                            };
+                            <div class="card mb-2 mobile-card @cardBorder" id="position-card-@pos.Id">
+                                <div class="card-body p-2">
+                                    <div class="d-flex justify-content-between">
+                                        <strong>@pos.AssetSymbol</strong>
+                                        <span>
+                                            @foreach (var wt in pos.WarningTypes)
+                                            {
+                                                <span class="warning-icon warning-@wt.ToString().ToLower()" title="@wt">@(wt switch {
+                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk => "\u25B2",
+                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased  => "\u23F0",
+                                                    FundingRateArb.Domain.Enums.WarningType.Loss       => "\u2193",
+                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity  => "\u2248",
+                                                    FundingRateArb.Domain.Enums.WarningType.Leverage   => "\u26BF",
+                                                    _ => ""
+                                                })</span>
+                                            }
+                                        </span>
+                                    </div>
+                                    <small class="text-muted">@pos.LongExchangeName &rarr; @pos.ShortExchangeName</small>
+                                    <div class="small">Size: $@pos.SizeUsdc.ToString("F2") | Spread: @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%/hr</div>
+                                    @if (pos.AccumulatedFunding != 0)
+                                    {
+                                        <div class="small">Funding: $@pos.AccumulatedFunding.ToString("F4")</div>
+                                    }
+                                    <div><small class="text-muted">Opened @pos.OpenedAt.ToString("MMM dd HH:mm")</small></div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    @* Desktop table view (>= 576px) *@
+                    <div class="table-responsive d-none d-sm-block">
                         <table class="table table-hover mb-0">
                             <thead class="table-light">
                                 <tr>
@@ -293,8 +369,27 @@
                             <tbody>
                                 @foreach (var pos in Model.OpenPositions)
                                 {
-                                    <tr id="position-@pos.Id">
-                                        <td><strong>@pos.AssetSymbol</strong></td>
+                                    var warningRowClass = pos.WarningLevel switch {
+                                        FundingRateArb.Domain.Enums.WarningLevel.Critical => "table-danger",
+                                        FundingRateArb.Domain.Enums.WarningLevel.Warning  => "table-warning",
+                                        FundingRateArb.Domain.Enums.WarningLevel.Info     => "table-info",
+                                        _ => ""
+                                    };
+                                    <tr id="position-@pos.Id" class="@warningRowClass">
+                                        <td>
+                                            <strong>@pos.AssetSymbol</strong>
+                                            @foreach (var wt in pos.WarningTypes)
+                                            {
+                                                <span class="warning-icon warning-@wt.ToString().ToLower()" title="@wt">@(wt switch {
+                                                    FundingRateArb.Domain.Enums.WarningType.SpreadRisk => "\u25B2",
+                                                    FundingRateArb.Domain.Enums.WarningType.TimeBased  => "\u23F0",
+                                                    FundingRateArb.Domain.Enums.WarningType.Loss       => "\u2193",
+                                                    FundingRateArb.Domain.Enums.WarningType.Liquidity  => "\u2248",
+                                                    FundingRateArb.Domain.Enums.WarningType.Leverage   => "\u26BF",
+                                                    _ => ""
+                                                })</span>
+                                            }
+                                        </td>
                                         <td>@pos.LongExchangeName</td>
                                         <td>@pos.ShortExchangeName</td>
                                         <td>$@pos.SizeUsdc.ToString("F2")</td>

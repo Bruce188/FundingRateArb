@@ -12,5 +12,6 @@ public interface IUnitOfWork : IDisposable
     IUserExchangeCredentialRepository UserCredentials { get; }
     IUserConfigurationRepository UserConfigurations { get; }
     IUserPreferenceRepository UserPreferences { get; }
+    IOpportunitySnapshotRepository OpportunitySnapshots { get; }
     Task<int> SaveAsync(CancellationToken ct = default);
 }

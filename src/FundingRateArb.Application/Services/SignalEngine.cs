@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 
@@ -6,6 +7,7 @@ namespace FundingRateArb.Application.Services;
 public class SignalEngine : ISignalEngine
 {
     private readonly IUnitOfWork _uow;
+    private readonly IMarketDataCache _cache;
 
     /// <summary>
     /// Fallback round-trip fee constants used when Exchange.TakerFeeRate is not set in the DB.
@@ -17,7 +19,11 @@ public class SignalEngine : ISignalEngine
         { "Aster",       0.00080m }
     };
 
-    public SignalEngine(IUnitOfWork uow) => _uow = uow;
+    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache)
+    {
+        _uow = uow;
+        _cache = cache;
+    }
 
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
@@ -84,6 +90,26 @@ public class SignalEngine : ISignalEngine
                 var feePerHour = (longFee + shortFee) / amortHours;
                 var net = diff - feePerHour;
 
+                // Compute minutes to next settlement from either leg (use minimum)
+                int? minutesToSettlement = null;
+                var now = DateTime.UtcNow;
+                var longNext = _cache.GetNextSettlement(longR.Exchange.Name, symbol);
+                var shortNext = _cache.GetNextSettlement(shortR.Exchange.Name, symbol);
+                if (longNext.HasValue || shortNext.HasValue)
+                {
+                    var longMin = longNext.HasValue ? (int)Math.Max(0, (longNext.Value - now).TotalMinutes) : int.MaxValue;
+                    var shortMin = shortNext.HasValue ? (int)Math.Max(0, (shortNext.Value - now).TotalMinutes) : int.MaxValue;
+                    minutesToSettlement = Math.Min(longMin, shortMin);
+                    if (minutesToSettlement == int.MaxValue) minutesToSettlement = null;
+                }
+
+                // Apply funding window boost: 20% yield boost when settlement is imminent
+                var boostedNet = net;
+                if (minutesToSettlement.HasValue && minutesToSettlement.Value <= config.FundingWindowMinutes)
+                {
+                    boostedNet = net * 1.2m;
+                }
+
                 var dto = new ArbitrageOpportunityDto
                 {
                     AssetSymbol = symbol,
@@ -95,12 +121,13 @@ public class SignalEngine : ISignalEngine
                     LongRatePerHour = longR.RatePerHour,
                     ShortRatePerHour = shortR.RatePerHour,
                     SpreadPerHour = diff,
-                    NetYieldPerHour = net,
+                    NetYieldPerHour = boostedNet,
                     AnnualizedYield = net * 24m * 365m,
                     LongVolume24h = longR.Volume24hUsd,
                     ShortVolume24h = shortR.Volume24hUsd,
                     LongMarkPrice = longR.MarkPrice,
                     ShortMarkPrice = shortR.MarkPrice,
+                    MinutesToNextSettlement = minutesToSettlement,
                 };
 
                 if (net >= config.OpenThreshold)

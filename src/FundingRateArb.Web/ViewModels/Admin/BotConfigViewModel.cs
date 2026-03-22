@@ -67,4 +67,7 @@ public class BotConfigViewModel
 
     [Required, Range(1, 20), Display(Name = "Consecutive Loss Pause")]
     public int? ConsecutiveLossPause { get; set; } = 3;
+
+    [Required, Range(1, 60), Display(Name = "Funding Window (minutes)")]
+    public int? FundingWindowMinutes { get; set; } = 10;
 }

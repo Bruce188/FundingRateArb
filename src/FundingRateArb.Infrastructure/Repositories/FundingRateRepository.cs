@@ -56,4 +56,42 @@ public class FundingRateRepository : IFundingRateRepository
             .Where(s => s.RecordedAt < cutoff)
             .ExecuteDeleteAsync(ct);
     }
+
+    // ── Hourly Aggregate Methods ─────────────────────────────────
+
+    public async Task<List<FundingRateHourlyAggregate>> GetHourlyAggregatesAsync(
+        int? assetId, int? exchangeId, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        var query = _context.FundingRateHourlyAggregates
+            .Where(a => a.HourUtc >= from && a.HourUtc <= to);
+
+        if (assetId.HasValue)
+            query = query.Where(a => a.AssetId == assetId.Value);
+        if (exchangeId.HasValue)
+            query = query.Where(a => a.ExchangeId == exchangeId.Value);
+
+        return await query
+            .OrderBy(a => a.HourUtc)
+            .AsNoTracking()
+            .ToListAsync(ct);
+    }
+
+    public void AddAggregateRange(IEnumerable<FundingRateHourlyAggregate> aggregates) =>
+        _context.FundingRateHourlyAggregates.AddRange(aggregates);
+
+    public async Task<int> PurgeAggregatesOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        return await _context.FundingRateHourlyAggregates
+            .Where(a => a.HourUtc < cutoff)
+            .ExecuteDeleteAsync(ct);
+    }
+
+    public async Task<List<FundingRateSnapshot>> GetSnapshotsInRangeAsync(
+        DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        return await _context.FundingRateSnapshots
+            .Where(s => s.RecordedAt >= from && s.RecordedAt < to)
+            .AsNoTracking()
+            .ToListAsync(ct);
+    }
 }
