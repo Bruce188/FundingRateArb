@@ -7,24 +7,24 @@ public class BotConfiguration
 {
     public int Id { get; set; }
     public bool IsEnabled { get; set; } = false;
-    public decimal OpenThreshold { get; set; } = 0.0003m;
+    public decimal OpenThreshold { get; set; } = 0.0002m;
     public decimal AlertThreshold { get; set; } = 0.0001m;
     public decimal CloseThreshold { get; set; } = -0.00005m;
 
     [Range(0.01, 1.0)]
-    public decimal StopLossPct { get; set; } = 0.15m;
+    public decimal StopLossPct { get; set; } = 0.10m;
 
-    public int MaxHoldTimeHours { get; set; } = 72;
+    public int MaxHoldTimeHours { get; set; } = 48;
     public decimal VolumeFraction { get; set; } = 0.001m;
 
     [Range(0.01, 1.0)]
-    public decimal MaxCapitalPerPosition { get; set; } = 0.80m;
+    public decimal MaxCapitalPerPosition { get; set; } = 0.90m;
 
     [Range(1, 168)]
-    public int BreakevenHoursMax { get; set; } = 6;
+    public int BreakevenHoursMax { get; set; } = 8;
 
     [Range(0.01, (double)decimal.MaxValue)]
-    public decimal TotalCapitalUsdc { get; set; } = 107m;
+    public decimal TotalCapitalUsdc { get; set; } = 39m;
 
     [Range(1, 125)]
     public int DefaultLeverage { get; set; } = 5;
@@ -39,10 +39,10 @@ public class BotConfiguration
 
     // Risk management (decoupled from MaxHoldTimeHours)
     [Range(1, 168)]
-    public int FeeAmortizationHours { get; set; } = 24;
+    public int FeeAmortizationHours { get; set; } = 12;
 
     [Range(1, (double)decimal.MaxValue)]
-    public decimal MinPositionSizeUsdc { get; set; } = 10m;
+    public decimal MinPositionSizeUsdc { get; set; } = 5m;
 
     [Range(0, (double)decimal.MaxValue)]
     public decimal MinVolume24hUsdc { get; set; } = 50_000m;
@@ -51,7 +51,7 @@ public class BotConfiguration
     public int RateStalenessMinutes { get; set; } = 15;
 
     [Range(0.01, 1.0)]
-    public decimal DailyDrawdownPausePct { get; set; } = 0.05m;
+    public decimal DailyDrawdownPausePct { get; set; } = 0.08m;
 
     [Range(1, 20)]
     public int ConsecutiveLossPause { get; set; } = 3;
@@ -76,7 +76,7 @@ public class BotConfiguration
     public decimal TargetPnlMultiplier { get; set; } = 2.0m;
 
     /// <summary>Enable PnL-target exit (when false, only MaxHoldTimeHours applies).</summary>
-    public bool AdaptiveHoldEnabled { get; set; }
+    public bool AdaptiveHoldEnabled { get; set; } = true;
 
     /// <summary>Enable automatic portfolio rebalancing.</summary>
     public bool RebalanceEnabled { get; set; }

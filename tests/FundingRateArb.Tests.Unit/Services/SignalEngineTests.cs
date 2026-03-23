@@ -261,7 +261,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -744,7 +744,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -778,7 +778,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -809,7 +809,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10 });
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
