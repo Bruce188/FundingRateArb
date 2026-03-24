@@ -113,7 +113,7 @@ jobs:
           COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|(?<!//\s)(?<!#\s)Password\s*=\s*[^;"\x27]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
           # Known false positives: CI/test passwords, placeholder values
           ALLOWLIST='Password\s*=\s*"?[A-Za-z]+@[0-9]+!?"?|Password=Unused@[0-9]+|example\.com|placeholder'
-          MATCHES=$(printf '%s\n' "$DIFF" | grep -PiE "$COMBINED_PATTERN" | grep -PivE "$ALLOWLIST" || true)
+          MATCHES=$(printf '%s\n' "$DIFF" | grep -Pi "$COMBINED_PATTERN" | grep -Piv "$ALLOWLIST" || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::Potential secrets detected in diff:"
             printf '%s\n' "$MATCHES"
