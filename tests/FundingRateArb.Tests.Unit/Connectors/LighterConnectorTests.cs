@@ -742,7 +742,7 @@ public class LighterConnectorTests
             .GetField("_leverageCache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
         field.Should().NotBeNull("LighterConnector must have a _leverageCache field for M8 leverage caching");
-        field!.FieldType.Should().Be(typeof(System.Collections.Concurrent.ConcurrentDictionary<int, int>),
+        field!.FieldType.Should().Be<System.Collections.Concurrent.ConcurrentDictionary<int, int>>(
             "leverage cache must be ConcurrentDictionary<int, int> keyed by marketId");
     }
 }
