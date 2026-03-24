@@ -11,19 +11,19 @@ public class ConfigValidatorTests
 
     private static BotConfiguration ValidConfig() => new()
     {
-        OpenThreshold = 0.0003m,
+        OpenThreshold = 0.0002m,
         AlertThreshold = 0.0001m,
-        CloseThreshold = 0m,
-        FeeAmortizationHours = 24,
+        CloseThreshold = -0.00005m,
+        FeeAmortizationHours = 12,
         RateStalenessMinutes = 15,
-        MaxHoldTimeHours = 72,
+        MaxHoldTimeHours = 48,
         DefaultLeverage = 5,
-        MaxConcurrentPositions = 3,
-        MaxCapitalPerPosition = 0.5m,
+        MaxConcurrentPositions = 1,
+        MaxCapitalPerPosition = 0.90m,
         AllocationTopN = 3,
-        AllocationStrategy = AllocationStrategy.EqualSpread,
-        MinPositionSizeUsdc = 10m,
-        DailyDrawdownPausePct = 0.05m,
+        AllocationStrategy = AllocationStrategy.Concentrated,
+        MinPositionSizeUsdc = 5m,
+        DailyDrawdownPausePct = 0.08m,
         ConsecutiveLossPause = 3,
     };
 
@@ -92,6 +92,29 @@ public class ConfigValidatorTests
     {
         var config = ValidConfig();
         config.CloseThreshold = -0.002m; // below -0.001 floor
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("CloseThreshold"));
+    }
+
+    [Fact]
+    public void CloseThreshold_AtFloor_Valid()
+    {
+        var config = ValidConfig();
+        config.CloseThreshold = -0.001m; // exactly at floor, should be valid
+
+        var result = _sut.Validate(config);
+
+        result.Errors.Should().NotContain(e => e.Contains(">= -0.001"));
+    }
+
+    [Fact]
+    public void CloseThreshold_JustBelowFloor_Invalid()
+    {
+        var config = ValidConfig();
+        config.CloseThreshold = -0.00101m; // just below floor
 
         var result = _sut.Validate(config);
 

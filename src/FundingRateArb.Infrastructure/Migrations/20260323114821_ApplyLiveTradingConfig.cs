@@ -46,6 +46,13 @@ public partial class ApplyLiveTradingConfig : Migration
                 UPDATE Exchanges SET TakerFeeRate = 0 WHERE Name = 'Lighter';
                 UPDATE Exchanges SET TakerFeeRate = 0.0004 WHERE Name = 'Aster';
             ");
+
+        // Align DB column default with C# entity default (AdaptiveHoldEnabled = true)
+        migrationBuilder.AlterColumn<bool>(
+            name: "AdaptiveHoldEnabled",
+            table: "BotConfigurations",
+            nullable: false,
+            defaultValue: true);
     }
 
     /// <inheritdoc />
@@ -63,6 +70,8 @@ public partial class ApplyLiveTradingConfig : Migration
                     DailyDrawdownPausePct = 0.05,
                     MaxHoldTimeHours = 72,
                     FeeAmortizationHours = 24
+                WHERE TotalCapitalUsdc = 39
+                  AND OpenThreshold = 0.0002
             ");
 
         migrationBuilder.Sql(@"
@@ -75,6 +84,8 @@ public partial class ApplyLiveTradingConfig : Migration
                     MaxHoldTimeHours = 72,
                     FeeAmortizationHours = 24,
                     DailyDrawdownPausePct = 0.1
+                WHERE TotalCapitalUsdc = 39
+                  AND OpenThreshold = 0.0002
             ");
 
         migrationBuilder.Sql(@"

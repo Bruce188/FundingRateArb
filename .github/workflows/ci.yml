@@ -60,11 +60,13 @@ jobs:
             echo "::error::Failed to extract line-rate from coverage report"
             exit 1
           fi
-          PERCENTAGE=$(echo "$LINE_RATE * 100" | bc -l | xargs printf "%.1f")
+          PERCENTAGE=$(awk "BEGIN {printf \"%.1f\", $LINE_RATE * 100}")
           echo "Line coverage: ${PERCENTAGE}%"
+          # THRESHOLD is a ratio (0.15 = 15%)
           THRESHOLD=0.15
-          if (( $(echo "$LINE_RATE < $THRESHOLD" | bc -l) )); then
-            echo "::error::Code coverage ${PERCENTAGE}% is below the $(echo "$THRESHOLD * 100" | bc -l | xargs printf "%.0f")% threshold"
+          if awk "BEGIN {exit !($LINE_RATE < $THRESHOLD)}"; then
+            THRESHOLD_PCT=$(awk "BEGIN {printf \"%.0f\", $THRESHOLD * 100}")
+            echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD_PCT}% threshold"
             exit 1
           fi
 
@@ -93,7 +95,7 @@ jobs:
 
       - name: Scan for secrets in diff
         run: |
-          if ! DIFF=$(git diff origin/main...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' 2>&1); then
+          if ! DIFF=$(git diff origin/main...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' '*.sh' '*.txt' '*.env*' 'Dockerfile*' 2>&1); then
             echo "::warning::git diff failed — secret scanning skipped. Output: $DIFF"
             exit 0
           fi
@@ -112,9 +114,10 @@ jobs:
           fi
 
       - name: Check package licenses
+        continue-on-error: true
         run: |
           dotnet tool install --global dotnet-project-licenses --version 2.*
-          dotnet-project-licenses --input FundingRateArb.sln --allowed-license-types allowed-licenses.json --output table || true
+          dotnet-project-licenses --input FundingRateArb.sln --allowed-license-types allowed-licenses.json --output table
 
   docker:
     runs-on: ubuntu-latest

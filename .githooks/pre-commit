@@ -19,9 +19,10 @@ mapfile -t STAGED_ALL < <(git diff --cached --name-only --diff-filter=ACM 2>/dev
 if [ "${#STAGED_ALL[@]}" -gt 0 ]; then
   DIFF=$(git diff --cached -- "${STAGED_ALL[@]}")
   # Patterns aligned with CI scanner
-  COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|Password\s*=\s*[^;]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
-  # Known false positives: exact CI test password, placeholder values
-  ALLOWLIST='Test@12345678!|Password=Unused@12345|example\.com|placeholder'
+  # Password pattern excludes comment lines (// or #) and targets connection-string-style assignments
+  COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|(?<!//\s)(?<!#\s)Password\s*=\s*[^;"\x27]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
+  # Known false positives: exact known-safe values
+  ALLOWLIST='Password\s*=\s*"?Test@12345678!?"?|Password=Unused@12345|="placeholder"|="example'
   MATCHES=$(printf '%s\n' "$DIFF" | grep -PiE "$COMBINED_PATTERN" | grep -PivE "$ALLOWLIST" || true)
   if [ -n "$MATCHES" ]; then
     echo "ERROR: Potential secrets detected in staged changes:"
