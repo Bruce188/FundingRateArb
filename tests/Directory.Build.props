@@ -11,4 +11,10 @@
          CA1816: GC.SuppressFinalize in test helpers -->
     <NoWarn>$(NoWarn);CA1707;CA1001;CA2201;CA1859;CA1816</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pin vulnerable transitive packages to patched versions -->
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+    <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
+  </ItemGroup>
 </Project>
