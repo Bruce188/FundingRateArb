@@ -276,7 +276,7 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<bool>("AdaptiveHoldEnabled")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bit")
-                        .HasDefaultValue(false);
+                        .HasDefaultValue(true);
 
                     b.Property<decimal>("AlertThreshold")
                         .HasColumnType("decimal(18,10)");

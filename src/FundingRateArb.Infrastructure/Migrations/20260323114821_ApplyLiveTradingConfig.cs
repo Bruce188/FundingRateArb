@@ -10,7 +10,9 @@ public partial class ApplyLiveTradingConfig : Migration
     /// <inheritdoc />
     protected override void Up(MigrationBuilder migrationBuilder)
     {
-        // Only update rows that still have previous defaults, preserving user-customized values.
+        // Backfill changed defaults for existing installs. Only rows with previous default values
+        // are updated (WHERE clause), preserving any user-customized values.
+        // New installs pick up the updated defaults from the C# entity properties.
         migrationBuilder.Sql(@"
                 UPDATE BotConfigurations SET
                     TotalCapitalUsdc = 39,

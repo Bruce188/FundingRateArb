@@ -1058,4 +1058,38 @@ public class SignalEngineTests
         result.Should().HaveCount(1);
         result[0].PredictedSpread.Should().BeNull();
     }
+
+    // ── NB4: FeeAmortizationHours=12 default produces correct net yield ─────────
+
+    [Fact]
+    public async Task GetOpportunities_DefaultFeeAmortizationHours12_ProducesExpectedNetYield()
+    {
+        // Arrange — use new BotConfiguration() with all defaults (FeeAmortizationHours = 12)
+        var config = new BotConfiguration { OpenThreshold = 0.0001m };
+
+        // Hyperliquid (fallback fee 0.00090) + Lighter (fallback fee 0.00000)
+        // feePerHour = (0.00090 + 0.00000) / 12 = 0.000075  (vs /24 = 0.0000375 with old default)
+        // spread = 0.0010 - 0.0001 = 0.0009
+        // net = 0.0009 - 0.000075 = 0.000825
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var expectedSpread = 0.0009m;
+        var expectedFeePerHour = (0.00090m + 0.00000m) / 12m; // 0.000075
+        var expectedNet = expectedSpread - expectedFeePerHour;  // 0.000825
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert — verifies FeeAmortizationHours=12 is applied correctly
+        result.Should().HaveCount(1);
+        result[0].SpreadPerHour.Should().Be(expectedSpread);
+        result[0].NetYieldPerHour.Should().Be(expectedNet);
+    }
 }

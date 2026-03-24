@@ -999,6 +999,40 @@ public class PositionHealthMonitorTests
         dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
     }
 
+    // ── NB6: AdaptiveHoldEnabled=true tested through CheckAndActAsync ──────────
+
+    [Fact]
+    public async Task CheckAndActAsync_DefaultAdaptiveHold_ClosesWhenFundingExceedsTarget()
+    {
+        // Use default BotConfiguration (AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0)
+        var defaultConfig = new BotConfiguration
+        {
+            IsEnabled = true,
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.10m,
+            MaxHoldTimeHours = 48,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(defaultConfig);
+
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = 2.0 * 0.45 = 0.90
+        pos.AccumulatedFunding = 1.0m; // exceeds target of 0.90
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices();
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.PnlTargetReached);
+    }
+
     [Fact]
     public void ComputeWarnings_AdaptiveHoldDisabled_NoPnlProgressWarning()
     {

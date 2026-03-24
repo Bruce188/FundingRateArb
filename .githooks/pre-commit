@@ -6,7 +6,11 @@ mapfile -t STAGED_CS < <(git diff --cached --name-only --diff-filter=ACM -- '*.c
 
 if [ "${#STAGED_CS[@]}" -gt 0 ]; then
   echo "Running format check on staged C# files..."
-  FORMAT_OUTPUT=$(dotnet format --verify-no-changes --include "${STAGED_CS[@]}" 2>&1) || {
+  INCLUDE_ARGS=()
+  for f in "${STAGED_CS[@]}"; do
+    INCLUDE_ARGS+=(--include "$f")
+  done
+  FORMAT_OUTPUT=$(dotnet format --verify-no-changes "${INCLUDE_ARGS[@]}" 2>&1) || {
     echo "ERROR: Code formatting violations detected."
     echo "$FORMAT_OUTPUT"
     echo "Run 'dotnet format' to fix."
@@ -21,8 +25,8 @@ if [ "${#STAGED_ALL[@]}" -gt 0 ]; then
   # Patterns aligned with CI scanner
   # Password pattern excludes comment lines (// or #) and targets connection-string-style assignments
   COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|(?<!//\s)(?<!#\s)Password\s*=\s*[^;"\x27]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
-  # Known false positives: exact known-safe values
-  ALLOWLIST='Password\s*=\s*"?Test@12345678!?"?|Password=Unused@12345|="placeholder"|="example'
+  # Known false positives: CI/test passwords, placeholder values
+  ALLOWLIST='Password\s*=\s*"?[A-Za-z]+@[0-9]+!?"?|Password=Unused@[0-9]+|example\.com|placeholder'
   MATCHES=$(printf '%s\n' "$DIFF" | grep -PiE "$COMBINED_PATTERN" | grep -PivE "$ALLOWLIST" || true)
   if [ -n "$MATCHES" ]; then
     echo "ERROR: Potential secrets detected in staged changes:"

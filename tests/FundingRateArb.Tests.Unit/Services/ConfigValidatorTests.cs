@@ -107,7 +107,19 @@ public class ConfigValidatorTests
 
         var result = _sut.Validate(config);
 
+        result.IsValid.Should().BeTrue();
         result.Errors.Should().NotContain(e => e.Contains(">= -0.001"));
+    }
+
+    [Fact]
+    public void CloseThreshold_Zero_Valid()
+    {
+        var config = ValidConfig();
+        config.CloseThreshold = 0m;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeTrue();
     }
 
     [Fact]
