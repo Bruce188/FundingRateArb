@@ -19,9 +19,9 @@ public class ConfigValidator : IConfigValidator
             errors.Add("AlertThreshold must be positive.");
         }
 
-        if (config.CloseThreshold < 0)
+        if (config.CloseThreshold < -0.001m)
         {
-            errors.Add("CloseThreshold must be >= 0 (negative means position bleeds money before closing).");
+            errors.Add("CloseThreshold must be >= -0.001 (small negative allows slight bleed before closing; below -0.001 is excessive).");
         }
 
         if (config.FeeAmortizationHours < 1)

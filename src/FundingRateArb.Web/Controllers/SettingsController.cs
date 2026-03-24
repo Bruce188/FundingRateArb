@@ -397,7 +397,7 @@ public class SettingsController : Controller
         Enum.GetValues<AllocationStrategy>()
             .Select(s => new SelectListItem
             {
-                Value = ((int)s).ToString(),
+                Value = ((int)s).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Text = s.ToString(),
                 Selected = s == selected
             })

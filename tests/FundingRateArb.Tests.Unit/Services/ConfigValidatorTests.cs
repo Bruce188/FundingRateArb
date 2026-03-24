@@ -37,6 +37,21 @@ public class ConfigValidatorTests
     }
 
     [Fact]
+    public void DefaultConfig_IsValid()
+    {
+        // Validates that BotConfiguration's default property values pass all
+        // validation rules. Catches future default regressions (e.g., setting
+        // FeeAmortizationHours = 50 but forgetting to update MaxHoldTimeHours).
+        var defaultConfig = new BotConfiguration();
+
+        var result = _sut.Validate(defaultConfig);
+
+        result.IsValid.Should().BeTrue(
+            "default BotConfiguration should pass validation, but got errors: {0}",
+            string.Join("; ", result.Errors));
+    }
+
+    [Fact]
     public void OpenThreshold_LessOrEqualAlert_Invalid()
     {
         var config = ValidConfig();
@@ -73,10 +88,10 @@ public class ConfigValidatorTests
     }
 
     [Fact]
-    public void CloseThreshold_Negative_Invalid()
+    public void CloseThreshold_BelowFloor_Invalid()
     {
         var config = ValidConfig();
-        config.CloseThreshold = -0.0001m;
+        config.CloseThreshold = -0.002m; // below -0.001 floor
 
         var result = _sut.Validate(config);
 

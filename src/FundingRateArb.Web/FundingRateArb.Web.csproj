@@ -26,6 +26,9 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <UserSecretsId>268cfa61-5da2-41af-86cb-83dd5f0e5af9</UserSecretsId>
+    <!-- CA1305: Serilog sink configuration APIs don't expose IFormatProvider overloads.
+         Scoped here (not global) so Domain/Application retain locale-safety analysis. -->
+    <NoWarn>$(NoWarn);CA1305</NoWarn>
   </PropertyGroup>
 
 </Project>

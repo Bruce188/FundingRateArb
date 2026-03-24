@@ -30,6 +30,7 @@ public class PositionHealthMonitorTests
         AlertThreshold = 0.0001m,
         StopLossPct = 0.15m,
         MaxHoldTimeHours = 72,
+        AdaptiveHoldEnabled = true, // matches BotConfiguration default; explicit for test clarity
     };
 
     public PositionHealthMonitorTests()
@@ -694,6 +695,44 @@ public class PositionHealthMonitorTests
         var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
 
         result.Should().BeNull();
+    }
+
+    // ── B2: AdaptiveHoldEnabled=true default behavior coverage ────────────────
+
+    [Fact]
+    public void DetermineCloseReason_DefaultAdaptiveHoldEnabled_ZeroFunding_ReturnsNull()
+    {
+        // Validates that the new default (AdaptiveHoldEnabled=true) with zero
+        // accumulated funding does not trigger a close — the guard `pos.AccumulatedFunding > 0`
+        // prevents entering the PnL-target branch.
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 0m;
+        pos.SizeUsdc = 100m;
+
+        // Use DefaultConfig which now explicitly sets AdaptiveHoldEnabled = true
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, DefaultConfig, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().BeNull("zero accumulated funding should not trigger PnL-target exit");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DefaultAdaptiveHoldEnabled_FundingExceedsTarget_ReturnsPnlTargetReached()
+    {
+        // Validates that with the default AdaptiveHoldEnabled=true, a position whose
+        // AccumulatedFunding >= TargetPnlMultiplier * entryFee triggers PnlTargetReached.
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045 + 0.0 = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = DefaultConfig.TargetPnlMultiplier(2.0) * 0.45 = 0.90
+        pos.AccumulatedFunding = 0.90m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, DefaultConfig, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
     }
 
     [Fact]

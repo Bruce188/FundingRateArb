@@ -11,9 +11,7 @@
          CA1716: Parameter names conflicting with reserved keywords ('to' in repository interfaces)
          CA1725: Parameter name 'ct' vs 'stoppingToken' in BackgroundService overrides
          CA1861: Constant array arguments in EF-generated migrations
-         CA1305: Locale-sensitive ToString/Parse calls in exchange connectors
-         CA1310: Locale-sensitive string comparisons in exchange connectors
          CA1822: Members that can be static in exchange connector helpers -->
-    <NoWarn>CA1848;CA1711;CA1716;CA1725;CA1861;CA1305;CA1310;CA1822</NoWarn>
+    <NoWarn>CA1848;CA1711;CA1716;CA1725;CA1861;CA1822</NoWarn>
   </PropertyGroup>
 </Project>

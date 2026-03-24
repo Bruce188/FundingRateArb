@@ -63,11 +63,15 @@ jobs:
             exit 1
           fi
           LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' "$REPORT" | head -1)
+          if [ -z "$LINE_RATE" ] || ! echo "$LINE_RATE" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+            echo "::error::Failed to extract line-rate from coverage report"
+            exit 1
+          fi
           PERCENTAGE=$(echo "$LINE_RATE * 100" | bc -l | xargs printf "%.1f")
           echo "Line coverage: ${PERCENTAGE}%"
-          THRESHOLD=15
-          if (( $(echo "$LINE_RATE < 0.${THRESHOLD}" | bc -l) )); then
-            echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD}% threshold"
+          THRESHOLD=0.15
+          if (( $(echo "$LINE_RATE < $THRESHOLD" | bc -l) )); then
+            echo "::error::Code coverage ${PERCENTAGE}% is below the $(echo "$THRESHOLD * 100" | bc -l | xargs printf "%.0f")% threshold"
             exit 1
           fi
 
@@ -96,28 +100,21 @@ jobs:
 
       - name: Scan for secrets in diff
         run: |
-          DIFF=$(git diff HEAD~1...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' 2>/dev/null || true)
-          if [ -z "$DIFF" ]; then
-            echo "No diff to scan"
+          if ! DIFF=$(git diff HEAD~1...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' 2>&1); then
+            echo "::warning::git diff failed — secret scanning skipped. Output: $DIFF"
             exit 0
           fi
-          PATTERNS=(
-            'AKIA[0-9A-Z]{16}'
-            'AIza[0-9A-Za-z\-_]{35}'
-            '-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----'
-            'Password\s*=\s*[^;]{8,}'
-            'api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
-            'secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
-          )
-          FOUND=0
-          for PATTERN in "${PATTERNS[@]}"; do
-            if echo "$DIFF" | grep -PiE "$PATTERN" | grep -v "Test@12345678" | grep -v "example" | grep -v "placeholder"; then
-              echo "::warning::Potential secret pattern detected: $PATTERN"
-              FOUND=1
-            fi
-          done
-          if [ "$FOUND" -eq 1 ]; then
-            echo "::error::Potential secrets detected in diff. Review the warnings above."
+          if [ -z "$DIFF" ]; then
+            echo "::warning::Empty diff — no changes to scan for secrets"
+            exit 0
+          fi
+          COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|Password\s*=\s*[^;]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
+          # Known false positives: exact CI test password, placeholder values
+          ALLOWLIST='Test@12345678!|Password=Unused@12345|example\.com|placeholder'
+          MATCHES=$(printf '%s\n' "$DIFF" | grep -PiE "$COMBINED_PATTERN" | grep -PivE "$ALLOWLIST" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Potential secrets detected in diff:"
+            printf '%s\n' "$MATCHES"
             exit 1
           fi
 

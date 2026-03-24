@@ -195,5 +195,5 @@ public class ExchangeController : Controller
 
     private static IEnumerable<SelectListItem> GetFundingIntervalOptions() =>
         Enum.GetValues<FundingInterval>()
-            .Select(fi => new SelectListItem { Text = fi.ToString(), Value = ((int)fi).ToString() });
+            .Select(fi => new SelectListItem { Text = fi.ToString(), Value = ((int)fi).ToString(System.Globalization.CultureInfo.InvariantCulture) });
 }
