@@ -30,8 +30,8 @@ public sealed class LighterSigner : IDisposable
     private bool _disposed;
 
     // Static flag to ensure DllImportResolver is only set once per process
-    private static bool s_resolverSet;
-    private static readonly object s_resolverLock = new();
+    private static bool _resolverSet;
+    private static readonly object ResolverLock = new();
 
     // ── Native struct matching the Go library's SignedTxResponse ──
 
@@ -95,9 +95,9 @@ public sealed class LighterSigner : IDisposable
 
         // Set the native library search path to include the Python package location.
         // SetDllImportResolver can only be called once per assembly, so guard with a static flag.
-        lock (s_resolverLock)
+        lock (ResolverLock)
         {
-            if (!s_resolverSet)
+            if (!_resolverSet)
             {
                 var signerDir = FindSignerLibraryDirectory();
                 if (signerDir is not null)
@@ -110,12 +110,14 @@ public sealed class LighterSigner : IDisposable
                             {
                                 var fullPath = Path.Combine(signerDir, $"{LibraryName}.so");
                                 if (NativeLibrary.TryLoad(fullPath, out var handle))
+                                {
                                     return handle;
+                                }
                             }
                             return IntPtr.Zero;
                         });
                 }
-                s_resolverSet = true;
+                _resolverSet = true;
             }
         }
     }
@@ -245,13 +247,19 @@ public sealed class LighterSigner : IDisposable
         try
         {
             if (result.Err != IntPtr.Zero)
+            {
                 errMsg = Marshal.PtrToStringAnsi(result.Err) ?? "Unknown signing error";
+            }
 
             if (result.TxInfo != IntPtr.Zero)
+            {
                 txInfo = Marshal.PtrToStringAnsi(result.TxInfo) ?? "";
+            }
 
             if (result.TxHash != IntPtr.Zero)
+            {
                 txHash = Marshal.PtrToStringAnsi(result.TxHash) ?? "";
+            }
 
             if (result.MessageToSign != IntPtr.Zero)
             {
@@ -263,20 +271,35 @@ public sealed class LighterSigner : IDisposable
         {
             // Free native memory allocated by Go's C.CString (malloc) for each non-zero pointer
             if (result.Err != IntPtr.Zero)
+            {
                 Marshal.FreeHGlobal(result.Err);
+            }
+
             if (result.TxInfo != IntPtr.Zero)
+            {
                 Marshal.FreeHGlobal(result.TxInfo);
+            }
+
             if (result.TxHash != IntPtr.Zero)
+            {
                 Marshal.FreeHGlobal(result.TxHash);
+            }
+
             if (result.MessageToSign != IntPtr.Zero)
+            {
                 Marshal.FreeHGlobal(result.MessageToSign);
+            }
         }
 
         if (errMsg is not null)
+        {
             throw new InvalidOperationException($"Lighter signing failed: {errMsg}");
+        }
 
         if (string.IsNullOrEmpty(txInfo))
+        {
             throw new InvalidOperationException("Lighter signing returned empty txInfo");
+        }
 
         return (result.TxType, txInfo, txHash);
     }
@@ -284,7 +307,9 @@ public sealed class LighterSigner : IDisposable
     private void EnsureInitialized()
     {
         if (!_initialized)
+        {
             throw new InvalidOperationException("LighterSigner not initialized. Call Initialize() first.");
+        }
     }
 
     /// <summary>
@@ -296,7 +321,9 @@ public sealed class LighterSigner : IDisposable
         var appDir = AppDomain.CurrentDomain.BaseDirectory;
         var appSoPath = Path.Combine(appDir, $"{LibraryName}.so");
         if (File.Exists(appSoPath))
+        {
             return appDir;
+        }
 
         // In production, only load from the application directory to mitigate supply-chain risk
         var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
@@ -345,7 +372,11 @@ public sealed class LighterSigner : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
         // The native library is a shared singleton managed by the Go runtime;
         // no per-instance cleanup is needed.

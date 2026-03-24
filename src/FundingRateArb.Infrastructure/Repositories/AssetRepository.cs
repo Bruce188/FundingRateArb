@@ -26,7 +26,9 @@ public class AssetRepository : IAssetRepository
     public async Task<List<Asset>> GetActiveAsync()
     {
         if (_cache.TryGetValue(CacheKey, out List<Asset>? cached) && cached is not null)
+        {
             return cached.Select(ShallowCopy).ToList();
+        }
 
         var result = await _context.Assets.AsNoTracking().Where(a => a.IsActive).ToListAsync();
         _cache.Set(CacheKey, result, new MemoryCacheEntryOptions { SlidingExpiration = CacheDuration });

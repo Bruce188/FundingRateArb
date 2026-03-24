@@ -1,10 +1,10 @@
-using Moq;
 using FluentAssertions;
-using FundingRateArb.Application.Services;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
 
@@ -34,21 +34,21 @@ public class PositionSizerTests
         decimal longVolume24h = 100_000_000m,
         decimal shortVolume24h = 100_000_000m,
         decimal? spreadPerHour = null) => new()
-    {
-        AssetId = 1,
-        LongExchangeId = 1,
-        ShortExchangeId = 2,
-        LongRatePerHour = 0.0008m,
-        ShortRatePerHour = 0.0003m,
-        // SpreadPerHour is the gross spread (before fees). Must be >= NetYieldPerHour.
-        // Default: same as netYieldPerHour (zero-fee scenario — fees amortized separately).
-        SpreadPerHour = spreadPerHour ?? netYieldPerHour,
-        NetYieldPerHour = netYieldPerHour,
-        LongVolume24h = longVolume24h,
-        ShortVolume24h = shortVolume24h,
-        LongMarkPrice = 100m,
-        ShortMarkPrice = 100m
-    };
+        {
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongRatePerHour = 0.0008m,
+            ShortRatePerHour = 0.0003m,
+            // SpreadPerHour is the gross spread (before fees). Must be >= NetYieldPerHour.
+            // Default: same as netYieldPerHour (zero-fee scenario — fees amortized separately).
+            SpreadPerHour = spreadPerHour ?? netYieldPerHour,
+            NetYieldPerHour = netYieldPerHour,
+            LongVolume24h = longVolume24h,
+            ShortVolume24h = shortVolume24h,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m
+        };
 
     private static BotConfiguration DefaultConfig(
         decimal totalCapital = 107m,
@@ -56,18 +56,18 @@ public class PositionSizerTests
         int leverage = 5,
         decimal volumeFraction = 0.001m,
         int maxConcurrentPositions = 1) => new()
-    {
-        TotalCapitalUsdc = totalCapital,
-        MaxCapitalPerPosition = maxCapitalPerPos,
-        DefaultLeverage = leverage,
-        VolumeFraction = volumeFraction,
-        MaxConcurrentPositions = maxConcurrentPositions,
-        IsEnabled = true,
-        OpenThreshold = 0.0003m,
-        BreakevenHoursMax = 6,
-        MaxExposurePerAsset = 1.0m,
-        MaxExposurePerExchange = 1.0m,
-    };
+        {
+            TotalCapitalUsdc = totalCapital,
+            MaxCapitalPerPosition = maxCapitalPerPos,
+            DefaultLeverage = leverage,
+            VolumeFraction = volumeFraction,
+            MaxConcurrentPositions = maxConcurrentPositions,
+            IsEnabled = true,
+            OpenThreshold = 0.0003m,
+            BreakevenHoursMax = 6,
+            MaxExposurePerAsset = 1.0m,
+            MaxExposurePerExchange = 1.0m,
+        };
 
     // -----------------------------------------------------------------------
     // CalculateOptimalSizeAsync removed (dead code)
@@ -87,12 +87,12 @@ public class PositionSizerTests
 
     [Theory]
     [InlineData(1.23456, 0.01, 2, 1.23)]
-    [InlineData(1.239,   0.01, 2, 1.23)]
-    [InlineData(100.0,   0.1,  1, 100.0)]
-    [InlineData(0.0056,  0.001, 3, 0.005)]
-    [InlineData(10.0,    0.25, 2, 10.0)]
-    [InlineData(10.1,    0.25, 2, 10.0)]
-    [InlineData(0.0,     0.01, 2, 0.0)]
+    [InlineData(1.239, 0.01, 2, 1.23)]
+    [InlineData(100.0, 0.1, 1, 100.0)]
+    [InlineData(0.0056, 0.001, 3, 0.005)]
+    [InlineData(10.0, 0.25, 2, 10.0)]
+    [InlineData(10.1, 0.25, 2, 10.0)]
+    [InlineData(0.0, 0.01, 2, 0.0)]
     public void RoundToStepSize_ReturnsCorrectValue(
         decimal quantity, decimal stepSize, int decimals, decimal expected)
     {

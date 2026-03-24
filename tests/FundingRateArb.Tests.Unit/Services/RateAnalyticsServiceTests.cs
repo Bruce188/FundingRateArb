@@ -52,11 +52,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = i < 6 ? 0.001m : 0.002m,
-                MinRate = 0.0009m, MaxRate = 0.0021m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.0009m,
+                MaxRate = 0.0021m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -81,11 +84,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = i < 6 ? 0.002m : 0.001m,
-                MinRate = 0.0009m, MaxRate = 0.0021m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.0009m,
+                MaxRate = 0.0021m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -108,11 +114,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.0009m, MaxRate = 0.0011m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.0009m,
+                MaxRate = 0.0011m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -138,19 +147,25 @@ public class RateAnalyticsServiceTests
             var rate = 0.001m + i * 0.0001m;
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-24 + i),
                 AvgRatePerHour = rate,
-                MinRate = rate - 0.0001m, MaxRate = rate + 0.0001m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = rate - 0.0001m,
+                MaxRate = rate + 0.0001m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 2,
+                AssetId = 1,
+                ExchangeId = 2,
                 HourUtc = now.AddHours(-24 + i),
                 AvgRatePerHour = rate * 2, // perfectly correlated (scaled)
-                MinRate = rate * 2 - 0.0001m, MaxRate = rate * 2 + 0.0001m,
-                AvgVolume24hUsd = 500000m, SampleCount = 10,
+                MinRate = rate * 2 - 0.0001m,
+                MaxRate = rate * 2 + 0.0001m,
+                AvgVolume24hUsd = 500000m,
+                SampleCount = 10,
             });
         }
 
@@ -175,19 +190,25 @@ public class RateAnalyticsServiceTests
             var rate = 0.001m + i * 0.0001m;
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-24 + i),
                 AvgRatePerHour = rate,
-                MinRate = rate, MaxRate = rate,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = rate,
+                MaxRate = rate,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 2,
+                AssetId = 1,
+                ExchangeId = 2,
                 HourUtc = now.AddHours(-24 + i),
                 AvgRatePerHour = 0.01m - rate, // anti-correlated
-                MinRate = 0.01m - rate, MaxRate = 0.01m - rate,
-                AvgVolume24hUsd = 500000m, SampleCount = 10,
+                MinRate = 0.01m - rate,
+                MaxRate = 0.01m - rate,
+                AvgVolume24hUsd = 500000m,
+                SampleCount = 10,
             });
         }
 
@@ -214,11 +235,14 @@ public class RateAnalyticsServiceTests
             {
                 aggregates.Add(new FundingRateHourlyAggregate
                 {
-                    AssetId = 1, ExchangeId = 1,
+                    AssetId = 1,
+                    ExchangeId = 1,
                     HourUtc = new DateTime(2026, 3, 19 + day, hour, 0, 0, DateTimeKind.Utc),
                     AvgRatePerHour = 0.001m + hour * 0.0001m,
-                    MinRate = 0.001m, MaxRate = 0.002m,
-                    AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                    MinRate = 0.001m,
+                    MaxRate = 0.002m,
+                    AvgVolume24hUsd = 1000000m,
+                    SampleCount = 10,
                 });
             }
         }
@@ -244,11 +268,14 @@ public class RateAnalyticsServiceTests
         // Latest: spike to 0.01 (outlier)
         var latestAggregate = new FundingRateHourlyAggregate
         {
-            AssetId = 1, ExchangeId = 1,
+            AssetId = 1,
+            ExchangeId = 1,
             HourUtc = now,
             AvgRatePerHour = 0.01m, // 10x normal
-            MinRate = 0.01m, MaxRate = 0.01m,
-            AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            MinRate = 0.01m,
+            MaxRate = 0.01m,
+            AvgVolume24hUsd = 1000000m,
+            SampleCount = 10,
         };
 
         // Stats: zero stddev → skip
@@ -272,11 +299,14 @@ public class RateAnalyticsServiceTests
         // Latest: 0.01 (massive spike, well beyond 2σ of ~0.001 ± 0.00006)
         var latestAggregate = new FundingRateHourlyAggregate
         {
-            AssetId = 1, ExchangeId = 1,
+            AssetId = 1,
+            ExchangeId = 1,
             HourUtc = now,
             AvgRatePerHour = 0.01m,
-            MinRate = 0.01m, MaxRate = 0.01m,
-            AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            MinRate = 0.01m,
+            MaxRate = 0.01m,
+            AvgVolume24hUsd = 1000000m,
+            SampleCount = 10,
         };
 
         // Stats: mean=0.001, stddev=0.00006 → z = (0.01 - 0.001)/0.00006 ≈ 150
@@ -442,11 +472,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-120 + i), // 5 days ago to 3 days ago
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.0009m, MaxRate = 0.0011m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.0009m,
+                MaxRate = 0.0011m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -472,11 +505,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0m,
-                MinRate = 0m, MaxRate = 0m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0m,
+                MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
         // Last 6h: positive rates
@@ -484,11 +520,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0m, MaxRate = 0.002m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0m,
+                MaxRate = 0.002m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -508,11 +547,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0m,
-                MinRate = 0m, MaxRate = 0m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0m,
+                MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
         // Last 6h: negative rates
@@ -520,11 +562,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = -0.001m,
-                MinRate = -0.002m, MaxRate = 0m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = -0.002m,
+                MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -544,11 +589,14 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0m,
-                MinRate = 0m, MaxRate = 0m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0m,
+                MaxRate = 0m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -618,19 +666,25 @@ public class RateAnalyticsServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.0009m, MaxRate = 0.0011m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.0009m,
+                MaxRate = 0.0011m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 2, ExchangeId = 1,
+                AssetId = 2,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-12 + i),
                 AvgRatePerHour = 0.002m,
-                MinRate = 0.0019m, MaxRate = 0.0021m,
-                AvgVolume24hUsd = 500000m, SampleCount = 10,
+                MinRate = 0.0019m,
+                MaxRate = 0.0021m,
+                AvgVolume24hUsd = 500000m,
+                SampleCount = 10,
             });
         }
 

@@ -1,9 +1,9 @@
+using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
-using FluentAssertions;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
@@ -265,9 +265,9 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
-        var expectedSpread    = 0.0009m;
+        var expectedSpread = 0.0009m;
         var expectedFeePerHour = (0.0002m * 2 + 0.0001m * 2) / 24m;
-        var expectedNet       = expectedSpread - expectedFeePerHour;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
@@ -294,9 +294,9 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
-        var expectedSpread    = 0.0009m;
+        var expectedSpread = 0.0009m;
         var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
-        var expectedNet       = expectedSpread - expectedFeePerHour;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
@@ -324,9 +324,9 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
-        var expectedSpread    = 0.0009m;
+        var expectedSpread = 0.0009m;
         var expectedFeePerHour = (0.0003m * 2 + 0.00000m) / 24m;
-        var expectedNet       = expectedSpread - expectedFeePerHour;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
@@ -412,9 +412,9 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
-        var expectedSpread     = 0.0009m;
+        var expectedSpread = 0.0009m;
         var expectedFeePerHour = (0.00090m + 0.00000m) / 48m;
-        var expectedNet        = expectedSpread - expectedFeePerHour;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 
@@ -438,9 +438,9 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
-        var expectedSpread     = 0.0009m;
+        var expectedSpread = 0.0009m;
         var expectedFeePerHour = (0.00090m + 0.00000m) / 24m;
-        var expectedNet        = expectedSpread - expectedFeePerHour;
+        var expectedNet = expectedSpread - expectedFeePerHour;
 
         var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
 

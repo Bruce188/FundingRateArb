@@ -82,7 +82,9 @@ public class ExchangeController : Controller
     {
         var exchange = await _uow.Exchanges.GetByIdAsync(id);
         if (exchange is null)
+        {
             return NotFound();
+        }
 
         var model = new ExchangeEditViewModel
         {
@@ -105,7 +107,9 @@ public class ExchangeController : Controller
     public async Task<IActionResult> Edit(int id, ExchangeEditViewModel model)
     {
         if (id != model.Id)
+        {
             return BadRequest();
+        }
 
         if (!Uri.TryCreate(model.ApiBaseUrl, UriKind.Absolute, out var apiUri)
             || apiUri.Scheme != "https")
@@ -126,7 +130,9 @@ public class ExchangeController : Controller
 
         var exchange = await _uow.Exchanges.GetByIdAsync(id);
         if (exchange is null)
+        {
             return NotFound();
+        }
 
         exchange.Name = model.Name;
         exchange.ApiBaseUrl = model.ApiBaseUrl;
@@ -152,7 +158,9 @@ public class ExchangeController : Controller
     {
         var exchange = await _uow.Exchanges.GetByIdAsync(id);
         if (exchange is null)
+        {
             return NotFound();
+        }
 
         return View(exchange);
     }
@@ -162,7 +170,9 @@ public class ExchangeController : Controller
     {
         var exchange = await _uow.Exchanges.GetByIdAsync(id);
         if (exchange is null)
+        {
             return NotFound();
+        }
 
         try
         {

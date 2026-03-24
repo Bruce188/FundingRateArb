@@ -1,18 +1,17 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace FundingRateArb.Infrastructure.Migrations
+namespace FundingRateArb.Infrastructure.Migrations;
+
+/// <inheritdoc />
+public partial class ApplyLiveTradingConfig : Migration
 {
     /// <inheritdoc />
-    public partial class ApplyLiveTradingConfig : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            // Intentional blanket UPDATE: this is a single-tenant system with one BotConfiguration
-            // row and one UserConfiguration per user. All rows receive the optimized defaults.
-            migrationBuilder.Sql(@"
+        // Only update rows that still have previous defaults, preserving user-customized values.
+        migrationBuilder.Sql(@"
                 UPDATE BotConfigurations SET
                     TotalCapitalUsdc = 39,
                     MinPositionSizeUsdc = 5,
@@ -24,9 +23,11 @@ namespace FundingRateArb.Infrastructure.Migrations
                     DailyDrawdownPausePct = 0.08,
                     MaxHoldTimeHours = 48,
                     FeeAmortizationHours = 12
+                WHERE TotalCapitalUsdc = 107
+                  AND OpenThreshold = 0.0003
             ");
 
-            migrationBuilder.Sql(@"
+        migrationBuilder.Sql(@"
                 UPDATE UserConfigurations SET
                     TotalCapitalUsdc = 39,
                     MaxConcurrentPositions = 1,
@@ -36,19 +37,21 @@ namespace FundingRateArb.Infrastructure.Migrations
                     MaxHoldTimeHours = 48,
                     FeeAmortizationHours = 12,
                     DailyDrawdownPausePct = 0.08
+                WHERE TotalCapitalUsdc = 100
+                  AND OpenThreshold = 0.0001
             ");
 
-            migrationBuilder.Sql(@"
+        migrationBuilder.Sql(@"
                 UPDATE Exchanges SET TakerFeeRate = 0.00045 WHERE Name = 'Hyperliquid';
                 UPDATE Exchanges SET TakerFeeRate = 0 WHERE Name = 'Lighter';
                 UPDATE Exchanges SET TakerFeeRate = 0.0004 WHERE Name = 'Aster';
             ");
-        }
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.Sql(@"
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.Sql(@"
                 UPDATE BotConfigurations SET
                     TotalCapitalUsdc = 107,
                     MinPositionSizeUsdc = 10,
@@ -62,7 +65,7 @@ namespace FundingRateArb.Infrastructure.Migrations
                     FeeAmortizationHours = 24
             ");
 
-            migrationBuilder.Sql(@"
+        migrationBuilder.Sql(@"
                 UPDATE UserConfigurations SET
                     TotalCapitalUsdc = 100,
                     MaxConcurrentPositions = 3,
@@ -74,9 +77,8 @@ namespace FundingRateArb.Infrastructure.Migrations
                     DailyDrawdownPausePct = 0.1
             ");
 
-            migrationBuilder.Sql(@"
+        migrationBuilder.Sql(@"
                 UPDATE Exchanges SET TakerFeeRate = NULL WHERE Name IN ('Hyperliquid', 'Lighter', 'Aster');
             ");
-        }
     }
 }

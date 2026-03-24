@@ -6,7 +6,7 @@ public class UserConfiguration
 {
     public int Id { get; set; }
     public string UserId { get; set; } = null!;
-    public bool IsEnabled { get; set; } = false;
+    public bool IsEnabled { get; set; }
     public decimal OpenThreshold { get; set; } = 0.0002m;
     public decimal CloseThreshold { get; set; } = 0.00005m;
     public decimal AlertThreshold { get; set; } = 0.00015m;
@@ -27,9 +27,9 @@ public class UserConfiguration
     public int FundingWindowMinutes { get; set; } = 10;
     public decimal MaxExposurePerAsset { get; set; } = 0.5m;
     public decimal MaxExposurePerExchange { get; set; } = 0.7m;
-    public bool EmailNotificationsEnabled { get; set; } = false;
-    public bool EmailCriticalAlerts { get; set; } = false;
-    public bool EmailDailySummary { get; set; } = false;
+    public bool EmailNotificationsEnabled { get; set; }
+    public bool EmailCriticalAlerts { get; set; }
+    public bool EmailDailySummary { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastUpdatedAt { get; set; }
 

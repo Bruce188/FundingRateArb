@@ -60,7 +60,9 @@ public class LighterWebSocketClient : IAsyncDisposable
         lock (_subscribedChannels)
         {
             if (!_subscribedChannels.Contains(channel))
+            {
                 _subscribedChannels.Add(channel);
+            }
         }
 
         _logger.LogDebug("Lighter WS subscribed to {Channel}", channel);
@@ -116,14 +118,18 @@ public class LighterWebSocketClient : IAsyncDisposable
             _logger.LogWarning(ex, "Lighter WS receive error");
             OnDisconnected?.Invoke($"WebSocket error: {ex.Message}");
             if (!ct.IsCancellationRequested)
+            {
                 await ReconnectAsync(ct);
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unexpected error in Lighter WS receive loop");
             OnDisconnected?.Invoke($"Unexpected error: {ex.Message}");
             if (!ct.IsCancellationRequested)
+            {
                 await ReconnectAsync(ct);
+            }
         }
     }
 
@@ -232,7 +238,11 @@ public class LighterWebSocketClient : IAsyncDisposable
 
     private async Task SendTextAsync(string message, CancellationToken ct)
     {
-        if (_ws?.State != WebSocketState.Open) return;
+        if (_ws?.State != WebSocketState.Open)
+        {
+            return;
+        }
+
         var bytes = Encoding.UTF8.GetBytes(message);
         await _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
     }
@@ -255,5 +265,7 @@ public class LighterWebSocketClient : IAsyncDisposable
 
         try { _cts?.Dispose(); }
         catch (ObjectDisposedException) { /* Already disposed */ }
+
+        GC.SuppressFinalize(this);
     }
 }

@@ -24,7 +24,9 @@ public class PositionSizer : IPositionSizer
         CancellationToken ct = default)
     {
         if (opportunities.Count == 0)
+        {
             return [];
+        }
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var openPositions = await _uow.Positions.GetOpenAsync();
@@ -46,30 +48,47 @@ public class PositionSizer : IPositionSizer
             case AllocationStrategy.EqualSpread:
                 var equalSlice = totalCapital / opportunities.Count;
                 for (int i = 0; i < sizes.Length; i++)
+                {
                     sizes[i] = equalSlice;
+                }
+
                 break;
 
             case AllocationStrategy.WeightedSpread:
-            {
-                var totalYield = opportunities.Sum(o => o.NetYieldPerHour);
-                if (totalYield <= 0) break;
-                for (int i = 0; i < sizes.Length; i++)
-                    sizes[i] = totalCapital * (opportunities[i].NetYieldPerHour / totalYield);
-                break;
-            }
+                {
+                    var totalYield = opportunities.Sum(o => o.NetYieldPerHour);
+                    if (totalYield <= 0)
+                    {
+                        break;
+                    }
+
+                    for (int i = 0; i < sizes.Length; i++)
+                    {
+                        sizes[i] = totalCapital * (opportunities[i].NetYieldPerHour / totalYield);
+                    }
+
+                    break;
+                }
 
             case AllocationStrategy.RiskAdjusted:
-            {
-                // Weight by yield * sqrt(minVolume) — penalizes low-volume opportunities
-                var scores = opportunities
-                    .Select(o => o.NetYieldPerHour * (decimal)Math.Sqrt((double)Math.Min(o.LongVolume24h, o.ShortVolume24h)))
-                    .ToArray();
-                var totalScore = scores.Sum();
-                if (totalScore <= 0) break;
-                for (int i = 0; i < sizes.Length; i++)
-                    sizes[i] = totalCapital * (scores[i] / totalScore);
-                break;
-            }
+                {
+                    // Weight by yield * sqrt(minVolume) — penalizes low-volume opportunities
+                    var scores = opportunities
+                        .Select(o => o.NetYieldPerHour * (decimal)Math.Sqrt((double)Math.Min(o.LongVolume24h, o.ShortVolume24h)))
+                        .ToArray();
+                    var totalScore = scores.Sum();
+                    if (totalScore <= 0)
+                    {
+                        break;
+                    }
+
+                    for (int i = 0; i < sizes.Length; i++)
+                    {
+                        sizes[i] = totalCapital * (scores[i] / totalScore);
+                    }
+
+                    break;
+                }
         }
 
         // Exposure limit enforcement: cap by per-asset and per-exchange limits
@@ -80,7 +99,11 @@ public class PositionSizer : IPositionSizer
 
         for (int i = 0; i < sizes.Length; i++)
         {
-            if (sizes[i] <= 0) continue;
+            if (sizes[i] <= 0)
+            {
+                continue;
+            }
+
             var opp = opportunities[i];
 
             // Per-asset exposure: sum SizeUsdc of all open positions for this asset + batch allocations
@@ -122,26 +145,36 @@ public class PositionSizer : IPositionSizer
             var liquidityLimit = minVol * config.VolumeFraction;
             var notional = sizes[i] * config.DefaultLeverage;
             if (notional > liquidityLimit)
+            {
                 sizes[i] = liquidityLimit / config.DefaultLeverage;
+            }
         }
 
         // C1: Breakeven gate — reject positions that can't break even in time
         for (int i = 0; i < sizes.Length; i++)
         {
-            if (sizes[i] <= 0) continue;
+            if (sizes[i] <= 0)
+            {
+                continue;
+            }
+
             var opp = opportunities[i];
             var entryFeeRate = opp.SpreadPerHour - opp.NetYieldPerHour;
             if (entryFeeRate < 0) { sizes[i] = 0; continue; }
             var breakEvenHours = _yieldCalculator.BreakEvenHours(entryFeeRate, opp.NetYieldPerHour);
             if (breakEvenHours > config.BreakevenHoursMax)
+            {
                 sizes[i] = 0;
+            }
         }
 
         // H2: Enforce minimum position size (exchange minimums)
         for (int i = 0; i < sizes.Length; i++)
         {
             if (sizes[i] > 0 && sizes[i] < config.MinPositionSizeUsdc)
+            {
                 sizes[i] = 0;
+            }
         }
 
         return sizes;
@@ -149,7 +182,11 @@ public class PositionSizer : IPositionSizer
 
     public static decimal RoundToStepSize(decimal quantity, decimal stepSize, int decimals)
     {
-        if (stepSize <= 0) return Math.Round(quantity, decimals);
+        if (stepSize <= 0)
+        {
+            return Math.Round(quantity, decimals);
+        }
+
         var steps = Math.Floor(quantity / stepSize);
         var rounded = steps * stepSize;
         return Math.Round(rounded, decimals);

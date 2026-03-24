@@ -93,7 +93,7 @@ All parameters are stored in the `BotConfigurations` table and editable via the 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `OpenThreshold` | 0.0003/hr | Minimum spread to open a position |
+| `OpenThreshold` | 0.0002/hr | Minimum spread to open a position |
 | `AlertThreshold` | 0.0001/hr | Spread level that triggers an alert |
 | `CloseThreshold` | -0.00005/hr | Spread level that triggers close |
 
@@ -101,22 +101,22 @@ All parameters are stored in the `BotConfigurations` table and editable via the 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `TotalCapitalUsdc` | 107 | Total trading capital in USDC |
-| `MaxCapitalPerPosition` | 80% | Max fraction per position |
+| `TotalCapitalUsdc` | 39 | Total trading capital in USDC |
+| `MaxCapitalPerPosition` | 90% | Max fraction per position |
 | `DefaultLeverage` | 5x | Default leverage for new positions |
 | `MaxConcurrentPositions` | 1 | Parallel position limit |
-| `MinPositionSizeUsdc` | 10 | Minimum position size |
+| `MinPositionSizeUsdc` | 5 | Minimum position size |
 | `AllocationStrategy` | Concentrated | How capital is split across opportunities |
 
 ### Risk Management
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `StopLossPct` | 15% | Max loss as fraction of margin |
-| `MaxHoldTimeHours` | 72 | Auto-close after this many hours |
-| `BreakevenHoursMax` | 6 | Skip opportunities that take too long to break even on fees |
+| `StopLossPct` | 10% | Max loss as fraction of margin |
+| `MaxHoldTimeHours` | 48 | Auto-close after this many hours |
+| `BreakevenHoursMax` | 8 | Skip opportunities that take too long to break even on fees |
 | `MinVolume24hUsdc` | 50,000 | Minimum 24h volume to consider |
-| `DailyDrawdownPausePct` | 5% | Pause bot after this daily drawdown |
+| `DailyDrawdownPausePct` | 8% | Pause bot after this daily drawdown |
 | `ConsecutiveLossPause` | 3 | Pause after N consecutive losses |
 | `RateStalenessMinutes` | 15 | Ignore rates older than this |
 
@@ -124,7 +124,7 @@ All parameters are stored in the `BotConfigurations` table and editable via the 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `AdaptiveHoldEnabled` | false | Close when P&L target is hit |
+| `AdaptiveHoldEnabled` | true | Close when P&L target is hit |
 | `TargetPnlMultiplier` | 2.0x | P&L target as multiple of fees |
 | `RebalanceEnabled` | false | Auto-rebalance portfolio |
 | `RebalanceMinImprovement` | 0.0002/hr | Min spread improvement to justify rebalance |

@@ -33,7 +33,9 @@ public class DailySummaryService : BackgroundService
             // Next run at 00:05 UTC tomorrow (or today if we haven't passed it yet)
             var nextRun = now.Date.AddMinutes(5);
             if (now >= nextRun)
+            {
                 nextRun = nextRun.AddDays(1);
+            }
 
             var delay = nextRun - now;
             _logger.LogDebug("DailySummaryService next run in {Delay}", delay);
@@ -78,10 +80,15 @@ public class DailySummaryService : BackgroundService
             {
                 var userConfig = await uow.UserConfigurations.GetByUserAsync(userId);
                 if (userConfig is null || !userConfig.EmailNotificationsEnabled || !userConfig.EmailDailySummary)
+                {
                     continue;
+                }
 
                 var user = await userManager.FindByIdAsync(userId);
-                if (user?.Email is null) continue;
+                if (user?.Email is null)
+                {
+                    continue;
+                }
 
                 var openPositions = await uow.Positions.GetOpenByUserAsync(userId);
                 var closedToday = (await uow.Positions.GetClosedSinceAsync(DateTime.UtcNow.Date))

@@ -15,7 +15,11 @@ public class OpportunityListViewModel
     /// <summary>Returns true when the opportunity would be volume-constrained.</summary>
     public bool IsVolumeConstrained(ArbitrageOpportunityDto opp)
     {
-        if (VolumeFraction <= 0) return false;
+        if (VolumeFraction <= 0)
+        {
+            return false;
+        }
+
         var minVol = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
         return minVol * VolumeFraction < NotionalPerLeg;
     }

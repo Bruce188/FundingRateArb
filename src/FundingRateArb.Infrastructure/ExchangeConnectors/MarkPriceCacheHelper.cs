@@ -24,7 +24,9 @@ public sealed class MarkPriceCacheHelper : IDisposable
         // 1. Fast path (no lock)
         var currentCache = _cache;
         if (DateTime.UtcNow < _cacheExpiry && currentCache.TryGetValue(key, out var fastPrice))
+        {
             return fastPrice;
+        }
 
         // 2. Acquire lock to check/start refresh
         Task<Dictionary<string, decimal>> refreshTask;
@@ -33,11 +35,15 @@ public sealed class MarkPriceCacheHelper : IDisposable
         {
             // Re-check cache under lock
             if (DateTime.UtcNow < _cacheExpiry && _cache.TryGetValue(key, out var lockedPrice))
+            {
                 return lockedPrice;
+            }
 
             // Share existing in-flight refresh or start new one
             if (_pendingRefresh is not null)
+            {
                 refreshTask = _pendingRefresh;
+            }
             else
             {
                 _pendingRefresh = fetchFactory(ct);
@@ -63,7 +69,10 @@ public sealed class MarkPriceCacheHelper : IDisposable
         finally { _cacheLock.Release(); }
 
         if (!newCache.TryGetValue(key, out var price))
+        {
             throw new KeyNotFoundException($"Asset '{key}' not found in mark price cache.");
+        }
+
         return price;
     }
 

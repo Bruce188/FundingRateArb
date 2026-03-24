@@ -39,5 +39,9 @@ public class UnitOfWork : IUnitOfWork
     public Task<int> SaveAsync(CancellationToken ct = default) =>
         _context.SaveChangesAsync(ct);
 
-    public void Dispose() => _context.Dispose();
+    public void Dispose()
+    {
+        _context.Dispose();
+        GC.SuppressFinalize(this);
+    }
 }

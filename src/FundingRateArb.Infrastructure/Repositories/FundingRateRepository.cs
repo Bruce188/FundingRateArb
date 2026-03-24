@@ -66,9 +66,14 @@ public class FundingRateRepository : IFundingRateRepository
             .Where(a => a.HourUtc >= from && a.HourUtc <= to);
 
         if (assetId.HasValue)
+        {
             query = query.Where(a => a.AssetId == assetId.Value);
+        }
+
         if (exchangeId.HasValue)
+        {
             query = query.Where(a => a.ExchangeId == exchangeId.Value);
+        }
 
         return await query
             .OrderBy(a => a.HourUtc)

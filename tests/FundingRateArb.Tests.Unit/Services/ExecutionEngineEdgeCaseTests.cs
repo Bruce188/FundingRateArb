@@ -270,7 +270,10 @@ public class ExecutionEngineEdgeCaseTests
             {
                 closeCallCount++;
                 if (closeCallCount <= 2)
+                {
                     return new OrderResultDto { Success = false, Error = "No open position found" };
+                }
+
                 return SuccessOrder("close-1");
             });
 

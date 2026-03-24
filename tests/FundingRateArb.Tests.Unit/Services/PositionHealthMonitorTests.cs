@@ -419,7 +419,10 @@ public class PositionHealthMonitorTests
             {
                 callCount++;
                 if (callCount == 1)
+                {
                     throw new HttpRequestException("Simulated timeout");
+                }
+
                 return 3000m;
             });
         _mockShortConnector
@@ -562,7 +565,9 @@ public class PositionHealthMonitorTests
 
         // Run 5 cycles to accumulate failures
         for (int i = 0; i < 5; i++)
+        {
             await _sut.CheckAndActAsync();
+        }
 
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PriceFeedFailure && al.Severity == AlertSeverity.Critical)),
@@ -856,8 +861,8 @@ public class PositionHealthMonitorTests
         var pos = MakeOpenPosition();
         pos.SizeUsdc = 100m;
         pos.EntryFeesUsdc = 0.5m;
-        pos.LongExchange = null;
-        pos.ShortExchange = null;
+        pos.LongExchange = null!;
+        pos.ShortExchange = null!;
 
         var config = new BotConfiguration
         {

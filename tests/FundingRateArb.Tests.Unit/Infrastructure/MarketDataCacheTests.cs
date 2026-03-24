@@ -10,15 +10,15 @@ public class MarketDataCacheTests
 
     private static FundingRateDto MakeDto(string exchange = "Aster", string symbol = "BTC",
         decimal rate = 0.0005m, decimal markPrice = 50000m, decimal volume = 1_000_000m) => new()
-    {
-        ExchangeName = exchange,
-        Symbol = symbol,
-        RatePerHour = rate,
-        RawRate = rate,
-        MarkPrice = markPrice,
-        IndexPrice = markPrice,
-        Volume24hUsd = volume,
-    };
+        {
+            ExchangeName = exchange,
+            Symbol = symbol,
+            RatePerHour = rate,
+            RawRate = rate,
+            MarkPrice = markPrice,
+            IndexPrice = markPrice,
+            Volume24hUsd = volume,
+        };
 
     [Fact]
     public void Update_StoresRate_RetrievableByExchangeAndSymbol()
@@ -123,9 +123,12 @@ public class MarketDataCacheTests
         _sut.Update(MakeDto("Aster", "BTC", volume: 1_000_000m));
         _sut.Update(new FundingRateDto
         {
-            ExchangeName = "Aster", Symbol = "BTC",
-            RatePerHour = 0.001m, RawRate = 0.001m,
-            MarkPrice = 52000m, IndexPrice = 52000m,
+            ExchangeName = "Aster",
+            Symbol = "BTC",
+            RatePerHour = 0.001m,
+            RawRate = 0.001m,
+            MarkPrice = 52000m,
+            IndexPrice = 52000m,
             Volume24hUsd = 0m,
         });
 
@@ -146,9 +149,12 @@ public class MarketDataCacheTests
     {
         _sut.Update(new FundingRateDto
         {
-            ExchangeName = "Aster", Symbol = "NEW",
-            RatePerHour = 0.001m, RawRate = 0.001m,
-            MarkPrice = 100m, IndexPrice = 100m,
+            ExchangeName = "Aster",
+            Symbol = "NEW",
+            RatePerHour = 0.001m,
+            RawRate = 0.001m,
+            MarkPrice = 100m,
+            IndexPrice = 100m,
             Volume24hUsd = 0m,
         });
 

@@ -41,11 +41,35 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Check formatting
+        run: dotnet format --verify-no-changes --verbosity diagnostic
+
       - name: Build
         run: dotnet build --no-restore -c Release
 
       - name: Unit tests
-        run: dotnet test tests/FundingRateArb.Tests.Unit --no-build -c Release --logger "trx;LogFileName=unit.trx"
+        run: >-
+          dotnet test tests/FundingRateArb.Tests.Unit
+          --no-build -c Release
+          --logger "trx;LogFileName=unit.trx"
+          --collect:"XPlat Code Coverage"
+          -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Check code coverage threshold
+        run: |
+          REPORT=$(find . -name "coverage.cobertura.xml" -path "*/TestResults/*" | head -1)
+          if [ -z "$REPORT" ]; then
+            echo "::error::No coverage report found"
+            exit 1
+          fi
+          LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' "$REPORT" | head -1)
+          PERCENTAGE=$(echo "$LINE_RATE * 100" | bc -l | xargs printf "%.1f")
+          echo "Line coverage: ${PERCENTAGE}%"
+          THRESHOLD=15
+          if (( $(echo "$LINE_RATE < 0.${THRESHOLD}" | bc -l) )); then
+            echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD}% threshold"
+            exit 1
+          fi
 
       - name: Integration tests
         run: dotnet test tests/FundingRateArb.Tests.Integration --no-build -c Release --logger "trx;LogFileName=integration.trx"
@@ -57,7 +81,45 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: "**/TestResults/*.trx"
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/**/coverage.cobertura.xml
+
+      - name: Check for vulnerable packages
+        run: |
+          OUTPUT=$(dotnet list package --vulnerable --include-transitive 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qi "has the following vulnerable packages"; then
+            echo "::error::Vulnerable packages detected"
+            exit 1
+          fi
+
+      - name: Scan for secrets in diff
+        run: |
+          DIFF=$(git diff HEAD~1...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' 2>/dev/null || true)
+          if [ -z "$DIFF" ]; then
+            echo "No diff to scan"
+            exit 0
+          fi
+          PATTERNS=(
+            'AKIA[0-9A-Z]{16}'
+            'AIza[0-9A-Za-z\-_]{35}'
+            '-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----'
+            'Password\s*=\s*[^;]{8,}'
+            'api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
+            'secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
+          )
+          FOUND=0
+          for PATTERN in "${PATTERNS[@]}"; do
+            if echo "$DIFF" | grep -PiE "$PATTERN" | grep -v "Test@12345678" | grep -v "example" | grep -v "placeholder"; then
+              echo "::warning::Potential secret pattern detected: $PATTERN"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" -eq 1 ]; then
+            echo "::error::Potential secrets detected in diff. Review the warnings above."
+            exit 1
+          fi
 
       - name: Publish
         run: dotnet publish src/FundingRateArb.Web/FundingRateArb.Web.csproj -c Release -o ./publish --no-build

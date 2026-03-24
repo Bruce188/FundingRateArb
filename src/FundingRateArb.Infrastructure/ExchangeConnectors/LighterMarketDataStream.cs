@@ -67,7 +67,10 @@ public class LighterMarketDataStream : IMarketDataStream
         var details = await response.Content
             .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct);
 
-        if (details?.OrderBookDetails is null) return;
+        if (details?.OrderBookDetails is null)
+        {
+            return;
+        }
 
         foreach (var market in details.OrderBookDetails)
         {
@@ -78,7 +81,9 @@ public class LighterMarketDataStream : IMarketDataStream
     private void HandleMessage(string channel, JsonElement payload)
     {
         if (!channel.StartsWith("market_stats", StringComparison.OrdinalIgnoreCase))
+        {
             return;
+        }
 
         try
         {
@@ -104,7 +109,9 @@ public class LighterMarketDataStream : IMarketDataStream
         if (el.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in el.EnumerateArray())
+            {
                 TryParseMarketStat(item);
+            }
         }
         else if (el.ValueKind == JsonValueKind.Object)
         {
@@ -116,14 +123,18 @@ public class LighterMarketDataStream : IMarketDataStream
     {
         // Extract market_index to look up symbol
         if (!el.TryGetProperty("market_index", out var marketIndexProp))
+        {
             return;
+        }
 
         var marketIndex = marketIndexProp.ValueKind == JsonValueKind.Number
             ? marketIndexProp.GetInt32()
             : int.TryParse(marketIndexProp.GetString(), out var parsed) ? parsed : -1;
 
         if (marketIndex < 0 || !_marketIndexToSymbol.TryGetValue(marketIndex, out var symbol))
+        {
             return;
+        }
 
         // Extract funding rate (already per-hour, no conversion)
         var fundingRate = GetDecimalProperty(el, "funding_rate_current")
@@ -138,16 +149,18 @@ public class LighterMarketDataStream : IMarketDataStream
                   ?? 0m; // Cache preserves REST-fetched volume when this is 0
 
         if (volume == 0m)
+        {
             _logger.LogDebug("No volume in WS payload for {Symbol} — cache will preserve REST value", symbol);
+        }
 
         var dto = new FundingRateDto
         {
             ExchangeName = ExchangeName,
-            Symbol       = symbol,
-            RawRate      = fundingRate,
-            RatePerHour  = fundingRate,
-            MarkPrice    = markPrice,
-            IndexPrice   = indexPrice,
+            Symbol = symbol,
+            RawRate = fundingRate,
+            RatePerHour = fundingRate,
+            MarkPrice = markPrice,
+            IndexPrice = indexPrice,
             Volume24hUsd = volume,
         };
 
@@ -158,14 +171,20 @@ public class LighterMarketDataStream : IMarketDataStream
     private static decimal? GetDecimalProperty(JsonElement el, string propertyName)
     {
         if (!el.TryGetProperty(propertyName, out var prop))
+        {
             return null;
+        }
 
         if (prop.ValueKind == JsonValueKind.Number)
+        {
             return prop.GetDecimal();
+        }
 
         if (prop.ValueKind == JsonValueKind.String &&
             decimal.TryParse(prop.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var val))
+        {
             return val;
+        }
 
         return null;
     }
@@ -179,5 +198,6 @@ public class LighterMarketDataStream : IMarketDataStream
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        GC.SuppressFinalize(this);
     }
 }

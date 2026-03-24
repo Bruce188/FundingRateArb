@@ -70,7 +70,10 @@ public class KeyVaultConfigurationTests
         {
             var candidate = Path.Combine(dir.FullName, "src", "FundingRateArb.Web");
             if (Directory.Exists(candidate))
+            {
                 return candidate;
+            }
+
             dir = dir.Parent;
         }
         throw new InvalidOperationException("Could not locate the FundingRateArb.Web project root.");

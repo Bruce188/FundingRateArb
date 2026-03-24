@@ -78,107 +78,114 @@ public class SignalEngine : ISignalEngine
 
         foreach (var group in rates.Where(r => r.Asset?.Symbol is not null).GroupBy(r => r.Asset!.Symbol))
         {
-            var symbol    = group.Key;
+            var symbol = group.Key;
             var assetRates = group.ToList();
 
             for (int i = 0; i < assetRates.Count; i++)
-            for (int j = i + 1; j < assetRates.Count; j++)
             {
-                var a = assetRates[i];
-                var b = assetRates[j];
-
-                var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
-
-                diagnostics.TotalPairsEvaluated++;
-
-                var diff = shortR.RatePerHour - longR.RatePerHour;
-
-                // Track best raw spread across ALL pairs, before any filter
-                if (diff > diagnostics.BestRawSpread)
-                    diagnostics.BestRawSpread = diff;
-
-                // M2: Skip opportunities where either leg has insufficient volume
-                if (longR.Volume24hUsd < config.MinVolume24hUsdc || shortR.Volume24hUsd < config.MinVolume24hUsdc)
+                for (int j = i + 1; j < assetRates.Count; j++)
                 {
-                    diagnostics.PairsFilteredByVolume++;
-                    continue;
-                }
+                    var a = assetRates[i];
+                    var b = assetRates[j];
 
-                // Use DB-stored TakerFeeRate when available; fall back to built-in constants.
-                var longFee  = longR.Exchange.TakerFeeRate * 2
-                               ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
-                var shortFee = shortR.Exchange.TakerFeeRate * 2
-                               ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
-                var amortHours = Math.Max(config.FeeAmortizationHours, 1);
-                var feePerHour = (longFee + shortFee) / amortHours;
-                var net = diff - feePerHour;
+                    var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
 
-                // Compute minutes to next settlement from either leg (use minimum)
-                int? minutesToSettlement = null;
-                var now = DateTime.UtcNow;
-                var longNext = _cache.GetNextSettlement(longR.Exchange.Name, symbol);
-                var shortNext = _cache.GetNextSettlement(shortR.Exchange.Name, symbol);
-                if (longNext.HasValue || shortNext.HasValue)
-                {
-                    var longMin = longNext.HasValue ? (int)Math.Max(0, (longNext.Value - now).TotalMinutes) : int.MaxValue;
-                    var shortMin = shortNext.HasValue ? (int)Math.Max(0, (shortNext.Value - now).TotalMinutes) : int.MaxValue;
-                    minutesToSettlement = Math.Min(longMin, shortMin);
-                    if (minutesToSettlement == int.MaxValue) minutesToSettlement = null;
-                }
+                    diagnostics.TotalPairsEvaluated++;
 
-                // Apply funding window boost: 20% yield boost when settlement is imminent
-                var boostedNet = net;
-                if (minutesToSettlement.HasValue && minutesToSettlement.Value <= config.FundingWindowMinutes)
-                {
-                    boostedNet = net * 1.2m;
-                }
+                    var diff = shortR.RatePerHour - longR.RatePerHour;
 
-                // Look up predictions for both legs
-                RatePredictionDto? longPred = null, shortPred = null;
-                predictionLookup?.TryGetValue((longR.AssetId, longR.ExchangeId), out longPred);
-                predictionLookup?.TryGetValue((shortR.AssetId, shortR.ExchangeId), out shortPred);
+                    // Track best raw spread across ALL pairs, before any filter
+                    if (diff > diagnostics.BestRawSpread)
+                    {
+                        diagnostics.BestRawSpread = diff;
+                    }
 
-                var dto = new ArbitrageOpportunityDto
-                {
-                    AssetSymbol = symbol,
-                    AssetId = longR.AssetId,
-                    LongExchangeName = longR.Exchange.Name,
-                    LongExchangeId = longR.ExchangeId,
-                    ShortExchangeName = shortR.Exchange.Name,
-                    ShortExchangeId = shortR.ExchangeId,
-                    LongRatePerHour = longR.RatePerHour,
-                    ShortRatePerHour = shortR.RatePerHour,
-                    SpreadPerHour = diff,
-                    NetYieldPerHour = boostedNet,
-                    AnnualizedYield = net * 24m * 365m,
-                    LongVolume24h = longR.Volume24hUsd,
-                    ShortVolume24h = shortR.Volume24hUsd,
-                    LongMarkPrice = longR.MarkPrice,
-                    ShortMarkPrice = shortR.MarkPrice,
-                    MinutesToNextSettlement = minutesToSettlement,
-                    PredictedLongRate = longPred?.PredictedRatePerHour,
-                    PredictedShortRate = shortPred?.PredictedRatePerHour,
-                    PredictedSpread = longPred is not null && shortPred is not null
-                        ? shortPred.PredictedRatePerHour - longPred.PredictedRatePerHour
-                        : null,
-                    PredictionConfidence = longPred is not null && shortPred is not null
-                        ? Math.Min(longPred.Confidence, shortPred.Confidence)
-                        : null,
-                    PredictedTrend = shortPred?.TrendDirection,
-                };
+                    // M2: Skip opportunities where either leg has insufficient volume
+                    if (longR.Volume24hUsd < config.MinVolume24hUsdc || shortR.Volume24hUsd < config.MinVolume24hUsdc)
+                    {
+                        diagnostics.PairsFilteredByVolume++;
+                        continue;
+                    }
 
-                if (net >= config.OpenThreshold)
-                {
-                    opportunities.Add(dto);
-                }
-                else if (net > 0)
-                {
-                    netPositiveList.Add(dto);
-                    diagnostics.NetPositiveBelowThreshold++;
-                }
-                else
-                {
-                    diagnostics.PairsFilteredByThreshold++;
+                    // Use DB-stored TakerFeeRate when available; fall back to built-in constants.
+                    var longFee = longR.Exchange.TakerFeeRate * 2
+                                   ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
+                    var shortFee = shortR.Exchange.TakerFeeRate * 2
+                                   ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
+                    var amortHours = Math.Max(config.FeeAmortizationHours, 1);
+                    var feePerHour = (longFee + shortFee) / amortHours;
+                    var net = diff - feePerHour;
+
+                    // Compute minutes to next settlement from either leg (use minimum)
+                    int? minutesToSettlement = null;
+                    var now = DateTime.UtcNow;
+                    var longNext = _cache.GetNextSettlement(longR.Exchange.Name, symbol);
+                    var shortNext = _cache.GetNextSettlement(shortR.Exchange.Name, symbol);
+                    if (longNext.HasValue || shortNext.HasValue)
+                    {
+                        var longMin = longNext.HasValue ? (int)Math.Max(0, (longNext.Value - now).TotalMinutes) : int.MaxValue;
+                        var shortMin = shortNext.HasValue ? (int)Math.Max(0, (shortNext.Value - now).TotalMinutes) : int.MaxValue;
+                        minutesToSettlement = Math.Min(longMin, shortMin);
+                        if (minutesToSettlement == int.MaxValue)
+                        {
+                            minutesToSettlement = null;
+                        }
+                    }
+
+                    // Apply funding window boost: 20% yield boost when settlement is imminent
+                    var boostedNet = net;
+                    if (minutesToSettlement.HasValue && minutesToSettlement.Value <= config.FundingWindowMinutes)
+                    {
+                        boostedNet = net * 1.2m;
+                    }
+
+                    // Look up predictions for both legs
+                    RatePredictionDto? longPred = null, shortPred = null;
+                    predictionLookup?.TryGetValue((longR.AssetId, longR.ExchangeId), out longPred);
+                    predictionLookup?.TryGetValue((shortR.AssetId, shortR.ExchangeId), out shortPred);
+
+                    var dto = new ArbitrageOpportunityDto
+                    {
+                        AssetSymbol = symbol,
+                        AssetId = longR.AssetId,
+                        LongExchangeName = longR.Exchange.Name,
+                        LongExchangeId = longR.ExchangeId,
+                        ShortExchangeName = shortR.Exchange.Name,
+                        ShortExchangeId = shortR.ExchangeId,
+                        LongRatePerHour = longR.RatePerHour,
+                        ShortRatePerHour = shortR.RatePerHour,
+                        SpreadPerHour = diff,
+                        NetYieldPerHour = boostedNet,
+                        AnnualizedYield = net * 24m * 365m,
+                        LongVolume24h = longR.Volume24hUsd,
+                        ShortVolume24h = shortR.Volume24hUsd,
+                        LongMarkPrice = longR.MarkPrice,
+                        ShortMarkPrice = shortR.MarkPrice,
+                        MinutesToNextSettlement = minutesToSettlement,
+                        PredictedLongRate = longPred?.PredictedRatePerHour,
+                        PredictedShortRate = shortPred?.PredictedRatePerHour,
+                        PredictedSpread = longPred is not null && shortPred is not null
+                            ? shortPred.PredictedRatePerHour - longPred.PredictedRatePerHour
+                            : null,
+                        PredictionConfidence = longPred is not null && shortPred is not null
+                            ? Math.Min(longPred.Confidence, shortPred.Confidence)
+                            : null,
+                        PredictedTrend = shortPred?.TrendDirection,
+                    };
+
+                    if (net >= config.OpenThreshold)
+                    {
+                        opportunities.Add(dto);
+                    }
+                    else if (net > 0)
+                    {
+                        netPositiveList.Add(dto);
+                        diagnostics.NetPositiveBelowThreshold++;
+                    }
+                    else
+                    {
+                        diagnostics.PairsFilteredByThreshold++;
+                    }
                 }
             }
         }

@@ -65,7 +65,9 @@ public class HyperliquidMarketDataStream : IMarketDataStream
         }
 
         if (_subscriptions.Count == 0)
+        {
             _logger.LogWarning("No HyperLiquid WebSocket subscriptions were established");
+        }
     }
 
     private void HandleSymbolUpdate(string symbol, DataEvent<HyperLiquidFuturesTicker> update)
@@ -74,11 +76,11 @@ public class HyperliquidMarketDataStream : IMarketDataStream
         var dto = new FundingRateDto
         {
             ExchangeName = ExchangeName,
-            Symbol       = symbol,
-            RawRate      = ticker.FundingRate ?? 0m,
-            RatePerHour  = ticker.FundingRate ?? 0m, // Already per-hour
-            MarkPrice    = ticker.MarkPrice,
-            IndexPrice   = ticker.OraclePrice ?? 0m,
+            Symbol = symbol,
+            RawRate = ticker.FundingRate ?? 0m,
+            RatePerHour = ticker.FundingRate ?? 0m, // Already per-hour
+            MarkPrice = ticker.MarkPrice,
+            IndexPrice = ticker.OraclePrice ?? 0m,
             Volume24hUsd = ticker.NotionalVolume,
         };
 
@@ -89,12 +91,16 @@ public class HyperliquidMarketDataStream : IMarketDataStream
     public async Task StopAsync()
     {
         foreach (var sub in _subscriptions)
+        {
             await sub.CloseAsync();
+        }
+
         _subscriptions.Clear();
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        GC.SuppressFinalize(this);
     }
 }

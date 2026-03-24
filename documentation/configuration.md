@@ -40,7 +40,9 @@ dotnet user-secrets set "SendGrid:ApiKey" "<key>"
 
 ### Production Setup
 
-In production, configure via environment variables or Azure Key Vault:
+In production, use Azure Key Vault or App Service configuration slots as the primary method for storing secrets. Avoid setting secrets via shell `export` commands or `.bashrc` -- values set this way are visible in `/proc/*/environ`.
+
+If environment variables must be used directly:
 
 ```bash
 # Required
@@ -79,11 +81,11 @@ DataProtection__BlobStorageConnection="DefaultEndpointsProtocol=https;..."
     "Lighter": { "ApiKeyIndex": 2, "InfraKeys": [] }
   },
   "Authentication": {
-    "Google": { "ClientId": "", "ClientSecret": "" },
-    "GitHub": { "ClientId": "", "ClientSecret": "" }
+    "Google": { "ClientId": "REPLACE_VIA_USER_SECRETS", "ClientSecret": "REPLACE_VIA_USER_SECRETS" },
+    "GitHub": { "ClientId": "REPLACE_VIA_USER_SECRETS", "ClientSecret": "REPLACE_VIA_USER_SECRETS" }
   },
   "SendGrid": {
-    "ApiKey": "",
+    "ApiKey": "REPLACE_VIA_USER_SECRETS",
     "FromEmail": "noreply@fundingarb.com",
     "FromName": "FundingRateArb"
   },

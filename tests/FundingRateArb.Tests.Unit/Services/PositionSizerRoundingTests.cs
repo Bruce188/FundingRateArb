@@ -1,5 +1,5 @@
-using FundingRateArb.Application.Services;
 using FluentAssertions;
+using FundingRateArb.Application.Services;
 
 namespace FundingRateArb.Tests.Unit.Services;
 
@@ -7,11 +7,11 @@ public class PositionSizerRoundingTests
 {
     [Theory]
     [InlineData(0.1234567, 0.00001, 5, 0.12345)]  // BTC on Hyperliquid
-    [InlineData(1.5678,    0.0001,  4, 1.5678)]    // ETH on Hyperliquid (exact fit)
-    [InlineData(1.56789,   0.0001,  4, 1.5678)]    // ETH on Hyperliquid (truncate)
-    [InlineData(99.999,    0.01,    2, 99.99)]      // SOL on Hyperliquid
-    [InlineData(0.004,     0.01,    2, 0.00)]       // Below minimum step
-    [InlineData(50.0,      1.0,     0, 50.0)]       // Whole units only
+    [InlineData(1.5678, 0.0001, 4, 1.5678)]    // ETH on Hyperliquid (exact fit)
+    [InlineData(1.56789, 0.0001, 4, 1.5678)]    // ETH on Hyperliquid (truncate)
+    [InlineData(99.999, 0.01, 2, 99.99)]      // SOL on Hyperliquid
+    [InlineData(0.004, 0.01, 2, 0.00)]       // Below minimum step
+    [InlineData(50.0, 1.0, 0, 50.0)]       // Whole units only
     public void RoundToStepSize_AlwaysRoundsDown(
         decimal quantity, decimal stepSize, int decimals, decimal expected)
     {

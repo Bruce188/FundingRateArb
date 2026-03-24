@@ -32,7 +32,9 @@ public static class DbSeeder
         foreach (var role in new[] { "Admin", "Trader" })
         {
             if (!await roleMgr.RoleExistsAsync(role))
+            {
                 await roleMgr.CreateAsync(new IdentityRole(role));
+            }
         }
     }
 
@@ -55,19 +57,24 @@ public static class DbSeeder
 
         var admin = new ApplicationUser
         {
-            UserName       = AdminEmail,
-            Email          = AdminEmail,
-            DisplayName    = "Admin",
+            UserName = AdminEmail,
+            Email = AdminEmail,
+            DisplayName = "Admin",
             EmailConfirmed = true,
         };
         var result = await userMgr.CreateAsync(admin, adminPassword);
         if (result.Succeeded)
+        {
             await userMgr.AddToRoleAsync(admin, "Admin");
+        }
     }
 
     private static async Task SeedExchangesAsync(AppDbContext context)
     {
-        if (await context.Exchanges.AnyAsync()) return;
+        if (await context.Exchanges.AnyAsync())
+        {
+            return;
+        }
 
         context.Exchanges.AddRange(
             new Exchange
@@ -110,7 +117,10 @@ public static class DbSeeder
 
     private static async Task SeedAssetsAsync(AppDbContext context)
     {
-        if (await context.Assets.AnyAsync()) return;
+        if (await context.Assets.AnyAsync())
+        {
+            return;
+        }
 
         // All 86 assets commonly listed on Hyperliquid, Lighter and Aster DEX
         var assets = new (string Symbol, string Name)[]
@@ -211,7 +221,10 @@ public static class DbSeeder
     private static async Task SeedBotConfigAsync(AppDbContext context, UserManager<ApplicationUser> userMgr)
     {
         var admin = await userMgr.FindByEmailAsync(AdminEmail);
-        if (admin is null) return;
+        if (admin is null)
+        {
+            return;
+        }
 
         var existing = await context.BotConfigurations.FirstOrDefaultAsync();
         if (existing is not null)
@@ -219,11 +232,11 @@ public static class DbSeeder
             // Backfill new fields if they have zero defaults from old migration
             if (existing.FeeAmortizationHours == 0)
             {
-                existing.FeeAmortizationHours = 24;
-                existing.MinPositionSizeUsdc = 10m;
+                existing.FeeAmortizationHours = 12;
+                existing.MinPositionSizeUsdc = 5m;
                 existing.MinVolume24hUsdc = 50_000m;
                 existing.RateStalenessMinutes = 15;
-                existing.DailyDrawdownPausePct = 0.05m;
+                existing.DailyDrawdownPausePct = 0.08m;
                 existing.ConsecutiveLossPause = 3;
                 await context.SaveChangesAsync();
             }
@@ -261,7 +274,10 @@ public static class DbSeeder
         AppDbContext context, UserManager<ApplicationUser> userMgr)
     {
         var admin = await userMgr.FindByEmailAsync(AdminEmail);
-        if (admin is null) return;
+        if (admin is null)
+        {
+            return;
+        }
 
         // Create default UserConfiguration for admin if none exists
         var hasConfig = await context.UserConfigurations

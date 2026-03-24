@@ -123,7 +123,9 @@ public class CountingSlowHttpMessageHandler : HttpMessageHandler
     {
         var count = Interlocked.Increment(ref _callCount);
         if (count == 1)
+        {
             _onFirstCall?.TrySetResult(true);
+        }
 
         // Small yield to allow concurrent callers to reach the cache check
         await Task.Yield();

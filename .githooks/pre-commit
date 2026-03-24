@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Only check staged .cs files
+STAGED_CS=$(git diff --cached --name-only --diff-filter=ACM -- '*.cs' || true)
+
+if [ -n "$STAGED_CS" ]; then
+  echo "Running format check on staged C# files..."
+  if ! dotnet format --verify-no-changes --include $STAGED_CS 2>/dev/null; then
+    echo "ERROR: Code formatting violations detected. Run 'dotnet format' to fix."
+    exit 1
+  fi
+fi
+
+# Secret scanning on all staged files
+STAGED_ALL=$(git diff --cached --name-only --diff-filter=ACM || true)
+if [ -n "$STAGED_ALL" ]; then
+  DIFF=$(git diff --cached -- $STAGED_ALL)
+  PATTERNS=(
+    'AKIA[0-9A-Z]{16}'
+    '-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----'
+    'Password\s*=\s*[^;]{8,}'
+  )
+  for PATTERN in "${PATTERNS[@]}"; do
+    if echo "$DIFF" | grep -PiE "$PATTERN" | grep -v "Test@12345678" | grep -v "example" > /dev/null 2>&1; then
+      echo "ERROR: Potential secret detected matching pattern: $PATTERN"
+      exit 1
+    fi
+  done
+fi
+
+echo "Pre-commit checks passed."

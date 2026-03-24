@@ -28,7 +28,10 @@ public class PositionsController : Controller
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var positions = User.IsInRole("Admin")
             ? await _uow.Positions.GetAllAsync()
@@ -59,14 +62,22 @@ public class PositionsController : Controller
     public async Task<IActionResult> Details(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
         var position = await _uow.Positions.GetByIdAsync(id);
 
         if (position is null)
+        {
             return NotFound();
+        }
 
         if (!User.IsInRole("Admin") && position.UserId != userId)
+        {
             return Forbid();
+        }
 
         var positionDto = new PositionDetailsDto
         {
@@ -107,17 +118,27 @@ public class PositionsController : Controller
     public async Task<IActionResult> Close(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
         var position = await _uow.Positions.GetByIdAsync(id);
 
         if (position is null)
+        {
             return NotFound();
+        }
 
         if (!User.IsInRole("Admin") && position.UserId != userId)
+        {
             return Forbid();
+        }
 
         if (position.Status != PositionStatus.Open)
+        {
             return BadRequest("Position is already closed.");
+        }
 
         _logger.LogInformation("User {UserId} manually closing position {PositionId}", userId, id);
         await _executionEngine.ClosePositionAsync(position, CloseReason.Manual, ct);
