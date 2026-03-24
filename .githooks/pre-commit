@@ -22,7 +22,7 @@ if [ -n "$STAGED_ALL" ]; then
     'Password\s*=\s*[^;]{8,}'
   )
   for PATTERN in "${PATTERNS[@]}"; do
-    if echo "$DIFF" | grep -Pi "$PATTERN" | grep -v "Test@12345678" | grep -v "example" > /dev/null 2>&1; then
+    if echo "$DIFF" | grep -Pi -e "$PATTERN" | grep -v "Test@12345678" | grep -v "example" > /dev/null 2>&1; then
       echo "ERROR: Potential secret detected matching pattern: $PATTERN"
       exit 1
     fi
