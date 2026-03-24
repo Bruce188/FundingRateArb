@@ -123,22 +123,33 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserA, new UserConfiguration
         {
-            UserId = UserA, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
         SetupUser(UserB, new UserConfiguration
         {
-            UserId = UserB, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserB,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "ExA",
-            ShortExchangeId = 2, ShortExchangeName = "ExB",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 2,
+            ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -169,9 +180,13 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserA, new UserConfiguration
         {
-            UserId = UserA, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         // User A has no valid credentials
@@ -179,7 +194,10 @@ public class BotOrchestratorMultiUserTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -243,22 +261,33 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserA, new UserConfiguration
         {
-            UserId = UserA, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
         SetupUser(UserB, new UserConfiguration
         {
-            UserId = UserB, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserB,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "ExA",
-            ShortExchangeId = 2, ShortExchangeName = "ExB",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 2,
+            ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -325,16 +354,23 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserB, new UserConfiguration
         {
-            UserId = UserB, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserB,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "ExA",
-            ShortExchangeId = 2, ShortExchangeName = "ExB",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 2,
+            ShortExchangeName = "ExB",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -363,9 +399,13 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserA, new UserConfiguration
         {
-            UserId = UserA, IsEnabled = true, MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         // User A only has exchanges 1 and 2 enabled (not 3)
@@ -375,9 +415,12 @@ public class BotOrchestratorMultiUserTests
         // Opportunity uses exchanges 1 and 3 — user doesn't have exchange 3 enabled
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "ExA",
-            ShortExchangeId = 3, ShortExchangeName = "ExC", // not in user's enabled list
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 3,
+            ShortExchangeName = "ExC", // not in user's enabled list
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -400,9 +443,13 @@ public class BotOrchestratorMultiUserTests
 
         SetupUser(UserA, new UserConfiguration
         {
-            UserId = UserA, IsEnabled = true, MaxConcurrentPositions = 0, // max reached immediately
-            OpenThreshold = 0.0001m, DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3, AllocationStrategy = AllocationStrategy.Concentrated,
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 0, // max reached immediately
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
         });
 
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());

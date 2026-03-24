@@ -1,7 +1,7 @@
 using System.Diagnostics;
+using FundingRateArb.Web.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using FundingRateArb.Web.Models;
 
 namespace FundingRateArb.Web.Controllers;
 

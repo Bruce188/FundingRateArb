@@ -144,11 +144,11 @@ public class LighterConnector : IExchangeConnector, IDisposable
             .Select(r => new FundingRateDto
             {
                 ExchangeName = ExchangeName,
-                Symbol       = r.Symbol,
-                RawRate      = r.Rate,
-                RatePerHour  = r.Rate,
+                Symbol = r.Symbol,
+                RawRate = r.Rate,
+                RatePerHour = r.Rate,
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
-                MarkPrice    = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
+                MarkPrice = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
             }).ToList();
     }
 
@@ -227,7 +227,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             var markPrice = market.LastTradePrice;
             if (markPrice <= 0)
+            {
                 throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
+            }
 
             // 2. Validate leverage against market's IMF limits
             if (market.MinInitialMarginFraction > 0)
@@ -276,7 +278,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
             }
 
             if (baseAmount > 1_000_000_000_000L)
+            {
                 throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
+            }
 
             // 5. Calculate price in Lighter integer format with slippage
             var priceMultiplier = (long)Math.Pow(10, market.PriceDecimals);
@@ -295,7 +299,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             // Bounds check: native signer's SignCreateOrder takes int price
             if (priceInt <= 0 || priceInt > int.MaxValue)
+            {
                 throw new InvalidOperationException($"Price {priceInt} exceeds int range for Lighter API");
+            }
 
             // 6. Get nonce and sign order
             var nonce = await GetNextNonceAsync(ct);
@@ -358,7 +364,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             var markPrice = market.LastTradePrice;
             if (markPrice <= 0)
+            {
                 throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
+            }
 
             // 2. Get current position size from account (single HTTP fetch via helper)
             var accountIndex = GetAccountIndex();
@@ -366,7 +374,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             var account = accountResponse?.Accounts?.FirstOrDefault();
             if (account is null)
+            {
                 throw new InvalidOperationException("Account not found on Lighter DEX");
+            }
 
             // Find the position and parse its size in one pass (avoids double TryParse)
             decimal positionSize = 0m;
@@ -374,13 +384,22 @@ public class LighterConnector : IExchangeConnector, IDisposable
             foreach (var p in account.Positions ?? [])
             {
                 if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                {
                     continue;
+                }
+
                 if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
                         System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                {
                     continue;
+                }
+
                 var absSize = Math.Abs(parsed);
                 if (absSize <= 0)
+                {
                     continue;
+                }
+
                 positionSize = absSize;
                 matchedPosition = p;
                 break;
@@ -407,7 +426,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
             }
 
             if (baseAmount > 1_000_000_000_000L)
+            {
                 throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
+            }
 
             // 3. To close: reverse the side (Long->Sell, Short->Buy)
             bool isAsk = side == Side.Long;
@@ -426,7 +447,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             // Bounds check: native signer's SignCreateOrder takes int price
             if (priceInt <= 0 || priceInt > int.MaxValue)
+            {
                 throw new InvalidOperationException($"Price {priceInt} exceeds int range for Lighter API");
+            }
 
             // 5. Sign and submit
             var nonce = await GetNextNonceAsync(ct);
@@ -476,10 +499,17 @@ public class LighterConnector : IExchangeConnector, IDisposable
     /// </summary>
     private void EnsureSignerReady()
     {
-        if (_signerInitialized) return;
+        if (_signerInitialized)
+        {
+            return;
+        }
+
         lock (_signerLock)
         {
-            if (_signerInitialized) return;
+            if (_signerInitialized)
+            {
+                return;
+            }
 
             var privateKey = _configuration["Exchanges:Lighter:SignerPrivateKey"]
                 ?? throw new InvalidOperationException(
@@ -488,11 +518,15 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
             var apiKeyStr = _configuration["Exchanges:Lighter:ApiKey"] ?? "2";
             if (!int.TryParse(apiKeyStr, out var apiKeyIndex))
+            {
                 throw new InvalidOperationException($"Invalid Lighter ApiKey value: {apiKeyStr}");
+            }
 
             var indexStr = _configuration["Exchanges:Lighter:AccountIndex"] ?? "281474976624240";
             if (!long.TryParse(indexStr, out var accountIndex))
+            {
                 throw new InvalidOperationException($"Invalid Lighter AccountIndex: {indexStr}");
+            }
 
             // Cache for use in GetNextNonceAsync and GetAccountAsync (avoids re-reading IConfiguration)
             _accountIndex = accountIndex;
@@ -501,7 +535,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
             // Base URL without /api/v1/ suffix (the signer needs the root URL)
             var baseUrl = _httpClient.BaseAddress?.ToString().TrimEnd('/') ?? "";
             if (baseUrl.EndsWith("/api/v1"))
+            {
                 baseUrl = baseUrl[..^"/api/v1".Length];
+            }
 
             _signer.Initialize(baseUrl, privateKey, apiKeyIndex, accountIndex);
             _signerInitialized = true;
@@ -515,11 +551,17 @@ public class LighterConnector : IExchangeConnector, IDisposable
     private long GetAccountIndex()
     {
         // If already cached by EnsureSignerReady, return cached value immediately
-        if (_signerInitialized) return _accountIndex;
+        if (_signerInitialized)
+        {
+            return _accountIndex;
+        }
 
         var indexStr = _configuration["Exchanges:Lighter:AccountIndex"] ?? "281474976624240";
         if (!long.TryParse(indexStr, out var accountIndex))
+        {
             throw new InvalidOperationException($"Invalid Lighter AccountIndex: {indexStr}");
+        }
+
         return accountIndex;
     }
 
@@ -578,7 +620,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
 
         var result = JsonSerializer.Deserialize<LighterSendTxResponse>(responseBody, JsonOptions);
         if (result is null)
+        {
             throw new InvalidOperationException("Failed to deserialize Lighter sendTx response");
+        }
 
         if (result.Code != 200)
         {
@@ -625,7 +669,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
         // 1. Fast path: cache is warm — no locking needed
         var currentCache = _marketCache;
         if (currentCache is not null && DateTime.UtcNow < _marketCacheExpiry)
+        {
             return currentCache.GetValueOrDefault(asset);
+        }
 
         // 2. Cache miss — acquire lock to inspect/create a shared in-flight refresh task
         Task<Dictionary<string, LighterOrderBookDetail>> refreshTask;
@@ -712,7 +758,9 @@ public class LighterConnector : IExchangeConnector, IDisposable
         {
             var market = await GetMarketDetailAsync(asset, ct);
             if (market is null || market.MinInitialMarginFraction <= 0)
+            {
                 return null;
+            }
 
             // maxLeverage = 1 / (MinInitialMarginFraction / 10000)
             // The MinInitialMarginFraction is stored as basis points (e.g., 1000 = 10%)
@@ -728,5 +776,6 @@ public class LighterConnector : IExchangeConnector, IDisposable
     public void Dispose()
     {
         _cacheLock.Dispose();
+        GC.SuppressFinalize(this);
     }
 }

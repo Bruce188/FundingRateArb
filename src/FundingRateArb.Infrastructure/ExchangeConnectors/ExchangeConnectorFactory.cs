@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
+using Aster.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using HyperLiquid.Net.Clients;
-using Aster.Net.Clients;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -30,7 +30,11 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     /// </summary>
     public void RegisterInfraConnectors(string exchangeName, IReadOnlyList<IExchangeConnector> connectors)
     {
-        if (connectors.Count == 0) return;
+        if (connectors.Count == 0)
+        {
+            return;
+        }
+
         _keyPools[exchangeName] = new KeyPool(connectors);
     }
 
@@ -40,12 +44,17 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         if (_keyPools.TryGetValue(exchangeName, out var pool))
         {
             var connector = pool.GetNext();
-            if (connector is not null) return connector;
+            if (connector is not null)
+            {
+                return connector;
+            }
             // All keys in cooldown — fall through to DI singleton
         }
 
         if (!ConnectorTypes.TryGetValue(exchangeName, out var type))
+        {
             throw new ArgumentException($"Unknown exchange: '{exchangeName}'. Valid values: {string.Join(", ", ConnectorTypes.Keys)}", nameof(exchangeName));
+        }
 
         return (IExchangeConnector)_serviceProvider.GetRequiredService(type);
     }
@@ -73,7 +82,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     public void MarkRateLimited(string exchangeName, IExchangeConnector connector, TimeSpan? cooldown = null)
     {
         if (_keyPools.TryGetValue(exchangeName, out var pool))
+        {
             pool.MarkCooldown(connector, cooldown ?? TimeSpan.FromSeconds(60));
+        }
     }
 
     /// <summary>Exposes key pool internals for testing.</summary>
@@ -90,9 +101,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         IExchangeConnector? connector = exchangeName.ToLowerInvariant() switch
         {
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey),
-            "aster"       => CreateAsterConnector(apiKey, apiSecret),
-            "lighter"     => CreateLighterConnector(walletAddress, privateKey, apiKey),
-            _             => null
+            "aster" => CreateAsterConnector(apiKey, apiSecret),
+            "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKey),
+            _ => null
         };
 
         return Task.FromResult(connector);
@@ -115,7 +126,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private HyperliquidConnector? CreateHyperliquidConnector(string? walletAddress, string? privateKey)
     {
         if (string.IsNullOrEmpty(walletAddress) || string.IsNullOrEmpty(privateKey))
+        {
             return null;
+        }
 
         var restClient = new HyperLiquidRestClient(options =>
         {
@@ -129,7 +142,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
     {
         if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        {
             return null;
+        }
 
         var restClient = new AsterRestClient(options =>
         {
@@ -145,16 +160,26 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         string? walletAddress, string? privateKey, string? apiKeyIndex)
     {
         if (string.IsNullOrEmpty(privateKey))
+        {
             return null;
+        }
 
         // Build an in-memory configuration with user-specific Lighter credentials
         var configData = new Dictionary<string, string?>();
         if (!string.IsNullOrEmpty(privateKey))
+        {
             configData["Exchanges:Lighter:SignerPrivateKey"] = privateKey;
+        }
+
         if (!string.IsNullOrEmpty(apiKeyIndex))
+        {
             configData["Exchanges:Lighter:ApiKey"] = apiKeyIndex;
+        }
+
         if (!string.IsNullOrEmpty(walletAddress))
+        {
             configData["Exchanges:Lighter:AccountIndex"] = walletAddress;
+        }
 
         var userConfig = new ConfigurationBuilder()
             .AddInMemoryCollection(configData)
@@ -192,7 +217,10 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         /// </summary>
         public IExchangeConnector? GetNext()
         {
-            if (_connectors.Count == 0) return null;
+            if (_connectors.Count == 0)
+            {
+                return null;
+            }
 
             var now = DateTime.UtcNow;
 

@@ -223,9 +223,12 @@ public class UserSettingsServiceTests
 
         // Assert
         result.UserId.Should().Be(UserId);
-        result.TotalCapitalUsdc.Should().Be(100m); // default
+        result.TotalCapitalUsdc.Should().Be(39m); // default
         result.DefaultLeverage.Should().Be(5); // default
-        result.MaxConcurrentPositions.Should().Be(3); // default
+        result.MaxConcurrentPositions.Should().Be(1); // default
+        result.MaxCapitalPerPosition.Should().Be(0.90m); // default
+        result.StopLossPct.Should().Be(0.10m); // default
+        result.MaxHoldTimeHours.Should().Be(48); // default
         _mockConfigurations.Verify(r => r.Add(It.Is<UserConfiguration>(c =>
             c.UserId == UserId)), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(default), Times.Once);

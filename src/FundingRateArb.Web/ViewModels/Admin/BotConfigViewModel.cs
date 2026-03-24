@@ -51,10 +51,10 @@ public class BotConfigViewModel
     public int? AllocationTopN { get; set; }
 
     [Required, Range(1, 168), Display(Name = "Fee Amortization (hours)")]
-    public int? FeeAmortizationHours { get; set; } = 24;
+    public int? FeeAmortizationHours { get; set; } = 12;
 
     [Required, Range(1, 1000000), Display(Name = "Min Position Size (USDC)")]
-    public decimal? MinPositionSizeUsdc { get; set; } = 10m;
+    public decimal? MinPositionSizeUsdc { get; set; } = 5m;
 
     [Required, Range(0, 10000000), Display(Name = "Min Volume 24h (USDC)")]
     public decimal? MinVolume24hUsdc { get; set; } = 50_000m;
@@ -63,7 +63,7 @@ public class BotConfigViewModel
     public int? RateStalenessMinutes { get; set; } = 15;
 
     [Required, Range(0.01, 1.0), Display(Name = "Daily Drawdown Pause (%)")]
-    public decimal? DailyDrawdownPausePct { get; set; } = 0.05m;
+    public decimal? DailyDrawdownPausePct { get; set; } = 0.08m;
 
     [Required, Range(1, 20), Display(Name = "Consecutive Loss Pause")]
     public int? ConsecutiveLossPause { get; set; } = 3;

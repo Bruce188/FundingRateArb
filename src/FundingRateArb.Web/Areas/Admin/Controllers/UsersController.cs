@@ -51,7 +51,9 @@ public class UsersController : Controller
     {
         var user = await _userManager.FindByIdAsync(userId);
         if (user is null)
+        {
             return NotFound();
+        }
 
         var currentRoles = await _userManager.GetRolesAsync(user);
         var availableRoles = new[] { "Admin", "Trader" }
@@ -74,7 +76,9 @@ public class UsersController : Controller
     {
         var user = await _userManager.FindByIdAsync(model.UserId);
         if (user is null)
+        {
             return NotFound();
+        }
 
         // Prevent admin from removing their own Admin role
         var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -94,7 +98,9 @@ public class UsersController : Controller
         await _userManager.RemoveFromRolesAsync(user, currentRoles);
 
         if (filteredRoles.Count > 0)
+        {
             await _userManager.AddToRolesAsync(user, filteredRoles);
+        }
 
         _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser} — roles changed from [{OldRoles}] to [{NewRoles}]",
             "RoleChanged", "User", model.UserId, User.Identity?.Name ?? "unknown",

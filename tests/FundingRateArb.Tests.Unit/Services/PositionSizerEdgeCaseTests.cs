@@ -34,17 +34,17 @@ public class PositionSizerEdgeCaseTests
         decimal maxCapitalPerPos = 0.80m,
         int leverage = 5,
         decimal volumeFraction = 0.001m) => new()
-    {
-        TotalCapitalUsdc = totalCapital,
-        MaxCapitalPerPosition = maxCapitalPerPos,
-        DefaultLeverage = leverage,
-        VolumeFraction = volumeFraction,
-        MaxConcurrentPositions = 1,
-        IsEnabled = true,
-        OpenThreshold = 0.0003m,
-        BreakevenHoursMax = breakevenHoursMax,
-        UpdatedByUserId = "admin-user-id",
-    };
+        {
+            TotalCapitalUsdc = totalCapital,
+            MaxCapitalPerPosition = maxCapitalPerPos,
+            DefaultLeverage = leverage,
+            VolumeFraction = volumeFraction,
+            MaxConcurrentPositions = 1,
+            IsEnabled = true,
+            OpenThreshold = 0.0003m,
+            BreakevenHoursMax = breakevenHoursMax,
+            UpdatedByUserId = "admin-user-id",
+        };
 
     // ── Test 5: Break-even exceeds max → size zeroed in batch path ──────────
 

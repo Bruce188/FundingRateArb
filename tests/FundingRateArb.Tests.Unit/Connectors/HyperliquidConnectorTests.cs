@@ -1,15 +1,15 @@
 using CryptoExchange.Net.Objects;
 using CryptoExchange.Net.Objects.Errors;
 using FluentAssertions;
+using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.ExchangeConnectors;
+using HyperLiquid.Net.Enums;
 using HyperLiquid.Net.Interfaces.Clients;
 using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
 using HyperLiquid.Net.Objects.Models;
 using Moq;
 using Polly;
 using Polly.Registry;
-using FundingRateArb.Domain.Enums;
-using FundingRateArb.Infrastructure.ExchangeConnectors;
-using HyperLiquid.Net.Enums;
 
 namespace FundingRateArb.Tests.Unit.Connectors;
 
@@ -685,7 +685,9 @@ public class HyperliquidConnectorTests
                 })
             .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
             {
-                OrderId = 1L, FilledQuantity = 0.1m, AveragePrice = 3000m,
+                OrderId = 1L,
+                FilledQuantity = 0.1m,
+                AveragePrice = 3000m,
             }));
 
         await _sut.ClosePositionAsync("ETH", Side.Long);

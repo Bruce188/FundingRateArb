@@ -36,7 +36,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
-        if (openPositions.Count == 0) return Array.Empty<(ArbitragePosition, CloseReason)>();
+        if (openPositions.Count == 0)
+        {
+            return Array.Empty<(ArbitragePosition, CloseReason)>();
+        }
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
@@ -91,7 +94,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var estimatedQty = avgEntryPrice > 0
                     ? pos.SizeUsdc * pos.Leverage / avgEntryPrice
                     : 0m;
-                var longPnl  = (currentLongMark - pos.LongEntryPrice) * estimatedQty;
+                var longPnl = (currentLongMark - pos.LongEntryPrice) * estimatedQty;
                 var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
                 var unrealizedPnl = longPnl + shortPnl;
 
@@ -123,11 +126,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     {
                         _uow.Alerts.Add(new Alert
                         {
-                            UserId              = pos.UserId,
+                            UserId = pos.UserId,
                             ArbitragePositionId = pos.Id,
-                            Type                = AlertType.SpreadWarning,
-                            Severity            = AlertSeverity.Warning,
-                            Message             = $"Spread warning: {assetSymbol} " +
+                            Type = AlertType.SpreadWarning,
+                            Severity = AlertSeverity.Warning,
+                            Message = $"Spread warning: {assetSymbol} " +
                                                   $"{longExchangeName}/{shortExchangeName} " +
                                                   $"spread={spread:F6}/hour (threshold={config.AlertThreshold:F6})",
                         });
@@ -177,7 +180,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 ? pos.ClosingStartedAt ?? pos.OpenedAt
                 : pos.OpenedAt;
 
-            if (referenceTime >= cutoff) continue;
+            if (referenceTime >= cutoff)
+            {
+                continue;
+            }
 
             _logger.LogCritical(
                 "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
@@ -187,18 +193,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             _uow.Positions.Update(pos);
             _uow.Alerts.Add(new Alert
             {
-                UserId   = pos.UserId,
+                UserId = pos.UserId,
                 ArbitragePositionId = pos.Id,
-                Type     = AlertType.LegFailed,
+                Type = AlertType.LegFailed,
                 Severity = AlertSeverity.Critical,
-                Message  = $"Position #{pos.Id} stuck in {status} for >{maxAge.TotalMinutes:F0} minutes. " +
+                Message = $"Position #{pos.Id} stuck in {status} for >{maxAge.TotalMinutes:F0} minutes. " +
                            $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
             });
             reaped = true;
         }
 
         if (reaped)
+        {
             await _uow.SaveAsync(ct);
+        }
     }
 
     public static CloseReason? DetermineCloseReason(
@@ -207,7 +215,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         // Priority: StopLoss > PnlTargetReached > MaxHoldTime > SpreadCollapsed
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
+        {
             return CloseReason.StopLoss;
+        }
 
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
         {
@@ -219,14 +229,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                         pos.LongExchange.TakerFeeRate, pos.ShortExchange.TakerFeeRate)
                     : 0m;
             if (entryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * entryFee)
+            {
                 return CloseReason.PnlTargetReached;
+            }
         }
 
         if (hoursOpen >= config.MaxHoldTimeHours)
+        {
             return CloseReason.MaxHoldTimeReached;
+        }
 
         if (spread < config.CloseThreshold)
+        {
             return CloseReason.SpreadCollapsed;
+        }
 
         return null;
     }
@@ -251,7 +267,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         // Prefer DB-stored fee rate when available
         if (dbFeeRate.HasValue)
+        {
             return dbFeeRate.Value;
+        }
 
         // Hardcoded fallback for when DB rate is not loaded
         return exchangeName switch

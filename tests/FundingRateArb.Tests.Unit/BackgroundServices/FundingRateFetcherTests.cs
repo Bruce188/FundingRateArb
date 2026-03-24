@@ -4,6 +4,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using FundingRateArb.Infrastructure.Hubs;
@@ -11,7 +12,6 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Tests.Unit.BackgroundServices;
 
@@ -496,18 +496,24 @@ public class FundingRateFetcherTests
         // Step 1: REST fetch populates cache with real volume
         realCache.Update(new FundingRateDto
         {
-            ExchangeName = "Aster", Symbol = "ETH",
-            RatePerHour = 0.0005m, RawRate = 0.002m,
-            MarkPrice = 3000m, IndexPrice = 3000m,
+            ExchangeName = "Aster",
+            Symbol = "ETH",
+            RatePerHour = 0.0005m,
+            RawRate = 0.002m,
+            MarkPrice = 3000m,
+            IndexPrice = 3000m,
             Volume24hUsd = 100_000m,
         });
 
         // Step 2: WebSocket update overwrites rate/price but has 0 volume
         realCache.Update(new FundingRateDto
         {
-            ExchangeName = "Aster", Symbol = "ETH",
-            RatePerHour = 0.0006m, RawRate = 0.0024m,
-            MarkPrice = 3050m, IndexPrice = 3050m,
+            ExchangeName = "Aster",
+            Symbol = "ETH",
+            RatePerHour = 0.0006m,
+            RawRate = 0.0024m,
+            MarkPrice = 3050m,
+            IndexPrice = 3050m,
             Volume24hUsd = 0m,
         });
 
@@ -560,9 +566,12 @@ public class FundingRateFetcherTests
         // Simulate WebSocket update with 0 volume
         realCache.Update(new FundingRateDto
         {
-            ExchangeName = "Aster", Symbol = "ETH",
-            RatePerHour = 0.0006m, RawRate = 0.0024m,
-            MarkPrice = 3050m, IndexPrice = 3050m,
+            ExchangeName = "Aster",
+            Symbol = "ETH",
+            RatePerHour = 0.0006m,
+            RawRate = 0.0024m,
+            MarkPrice = 3050m,
+            IndexPrice = 3050m,
             Volume24hUsd = 0m,
         });
 
@@ -633,7 +642,8 @@ public class FundingRateFetcherTests
         {
             [1] = new Exchange
             {
-                Id = 1, Name = "Hyperliquid",
+                Id = 1,
+                Name = "Hyperliquid",
                 FundingSettlementType = FundingSettlementType.Continuous,
                 FundingIntervalHours = 1,
             }
@@ -658,7 +668,8 @@ public class FundingRateFetcherTests
         {
             [3] = new Exchange
             {
-                Id = 3, Name = "Aster",
+                Id = 3,
+                Name = "Aster",
                 FundingSettlementType = FundingSettlementType.Periodic,
                 FundingIntervalHours = 8,
             }
@@ -682,7 +693,8 @@ public class FundingRateFetcherTests
         {
             [3] = new Exchange
             {
-                Id = 3, Name = "Aster",
+                Id = 3,
+                Name = "Aster",
                 FundingSettlementType = FundingSettlementType.Periodic,
                 FundingIntervalHours = 8,
             }
@@ -711,7 +723,8 @@ public class FundingRateFetcherTests
         {
             [3] = new Exchange
             {
-                Id = 3, Name = "Aster",
+                Id = 3,
+                Name = "Aster",
                 FundingSettlementType = FundingSettlementType.Periodic,
                 FundingIntervalHours = 8,
             }
@@ -751,10 +764,12 @@ public class FundingRateFetcherTests
 
         var pos = new ArbitragePosition
         {
-            Id = 1, AssetId = 1,
+            Id = 1,
+            AssetId = 1,
             LongExchangeId = 1,   // Hyperliquid (Continuous)
             ShortExchangeId = 3,  // Aster (Periodic)
-            SizeUsdc = 100m, Leverage = 5,
+            SizeUsdc = 100m,
+            Leverage = 5,
             AccumulatedFunding = 0m,
             Status = PositionStatus.Open,
         };

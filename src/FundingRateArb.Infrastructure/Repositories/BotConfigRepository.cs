@@ -23,12 +23,16 @@ public class BotConfigRepository : IBotConfigRepository
     public async Task<BotConfiguration> GetActiveAsync()
     {
         if (_cache.TryGetValue(CacheKey, out BotConfiguration? cached) && cached is not null)
+        {
             return ShallowCopy(cached);
+        }
 
         var config = await _context.BotConfigurations.AsNoTracking().FirstOrDefaultAsync();
         if (config is null)
+        {
             throw new InvalidOperationException(
                 "No BotConfiguration found. Run the seeder or create one via Admin UI.");
+        }
 
         _cache.Set(CacheKey, config, new MemoryCacheEntryOptions
         {
@@ -42,8 +46,11 @@ public class BotConfigRepository : IBotConfigRepository
     {
         var config = await _context.BotConfigurations.FirstOrDefaultAsync();
         if (config is null)
+        {
             throw new InvalidOperationException(
                 "No BotConfiguration found. Run the seeder or create one via Admin UI.");
+        }
+
         return config;
     }
 

@@ -85,7 +85,10 @@ public class UserSettingsService : IUserSettingsService
     public async Task<UserConfiguration> GetOrCreateConfigAsync(string userId)
     {
         var config = await _uow.UserConfigurations.GetByUserAsync(userId);
-        if (config is not null) return config;
+        if (config is not null)
+        {
+            return config;
+        }
 
         config = new UserConfiguration
         {
@@ -138,10 +141,14 @@ public class UserSettingsService : IUserSettingsService
         Dictionary<int, bool> assetPreferences)
     {
         foreach (var (exchangeId, isEnabled) in exchangePreferences)
+        {
             await _uow.UserPreferences.SetExchangePreferenceAsync(userId, exchangeId, isEnabled);
+        }
 
         foreach (var (assetId, isEnabled) in assetPreferences)
+        {
             await _uow.UserPreferences.SetAssetPreferenceAsync(userId, assetId, isEnabled);
+        }
 
         await _uow.SaveAsync();
     }

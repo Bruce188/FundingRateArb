@@ -26,7 +26,9 @@ public class ExchangeRepository : IExchangeRepository
     public async Task<List<Exchange>> GetActiveAsync()
     {
         if (_cache.TryGetValue(CacheKey, out List<Exchange>? cached) && cached is not null)
+        {
             return cached.Select(ShallowCopy).ToList();
+        }
 
         var result = await _context.Exchanges.AsNoTracking().Where(e => e.IsActive).ToListAsync();
         _cache.Set(CacheKey, result, new MemoryCacheEntryOptions { SlidingExpiration = CacheDuration });

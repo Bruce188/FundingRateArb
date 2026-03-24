@@ -16,7 +16,9 @@ public class MarketDataCache : IMarketDataCache
 
         // Preserve existing volume when the incoming update has 0 (e.g. WS stream without volume data)
         if (rate.Volume24hUsd == 0m && _rates.TryGetValue(key, out var existing) && existing.Rate.Volume24hUsd > 0m)
+        {
             rate.Volume24hUsd = existing.Rate.Volume24hUsd; // N.B. mutates caller's dto
+        }
 
         _rates[key] = (rate, DateTime.UtcNow);
     }
@@ -56,7 +58,11 @@ public class MarketDataCache : IMarketDataCache
     public bool IsStale(string exchangeName, string symbol, TimeSpan maxAge)
     {
         var key = Key(exchangeName, symbol);
-        if (!_rates.TryGetValue(key, out var entry)) return true;
+        if (!_rates.TryGetValue(key, out var entry))
+        {
+            return true;
+        }
+
         return DateTime.UtcNow - entry.Timestamp > maxAge;
     }
 
@@ -67,7 +73,10 @@ public class MarketDataCache : IMarketDataCache
             .Where(kv => kv.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        if (exchangeEntries.Count == 0) return true;
+        if (exchangeEntries.Count == 0)
+        {
+            return true;
+        }
 
         var now = DateTime.UtcNow;
         return exchangeEntries.Any(kv => now - kv.Value.Timestamp > maxAge);

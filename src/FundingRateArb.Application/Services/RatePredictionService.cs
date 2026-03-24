@@ -26,7 +26,9 @@ public class RatePredictionService : IRatePredictionService
     {
         // F4: Cache predictions with 5-min TTL — hourly aggregates change at most once per hour
         if (_cache.TryGetValue(CacheKey, out List<RatePredictionDto>? cached) && cached is not null)
+        {
             return cached;
+        }
 
         var from = DateTime.UtcNow.AddHours(-FetchHours);
         var to = DateTime.UtcNow;
@@ -36,7 +38,9 @@ public class RatePredictionService : IRatePredictionService
         // If pair count grows unbounded, consider server-side aggregation or batch by asset.
         var aggregates = await _uow.FundingRates.GetHourlyAggregatesAsync(null, null, from, to, ct);
         if (aggregates.Count == 0)
+        {
             return [];
+        }
 
         // F17: Use GetActiveAsync instead of GetAllAsync to skip inactive/soft-deleted records
         var assets = await _uow.Assets.GetActiveAsync();
@@ -58,7 +62,9 @@ public class RatePredictionService : IRatePredictionService
                 group.Key.AssetId, group.Key.ExchangeId,
                 assetLookup, exchangeLookup);
             if (prediction is not null)
+            {
                 results.Add(prediction);
+            }
         }
 
         _cache.Set(CacheKey, results, CacheDuration);
@@ -78,14 +84,23 @@ public class RatePredictionService : IRatePredictionService
 
         var aggregates = await _uow.FundingRates.GetHourlyAggregatesAsync(assetId, exchangeId, from, to, ct);
         if (aggregates.Count < MinHoursRequired)
+        {
             return null;
+        }
 
         var asset = await _uow.Assets.GetByIdAsync(assetId);
         var exchange = await _uow.Exchanges.GetByIdAsync(exchangeId);
         var assetLookup = new Dictionary<int, string>();
         var exchangeLookup = new Dictionary<int, string>();
-        if (asset is not null) assetLookup[assetId] = asset.Symbol;
-        if (exchange is not null) exchangeLookup[exchangeId] = exchange.Name;
+        if (asset is not null)
+        {
+            assetLookup[assetId] = asset.Symbol;
+        }
+
+        if (exchange is not null)
+        {
+            exchangeLookup[exchangeId] = exchange.Name;
+        }
 
         return ComputePrediction(aggregates, assetId, exchangeId, assetLookup, exchangeLookup);
     }
@@ -100,10 +115,14 @@ public class RatePredictionService : IRatePredictionService
         // Fall back to sorting only if needed (single-pair queries from GetPredictionAsync).
         var ordered = aggregates;
         if (aggregates.Count > 1 && aggregates[0].HourUtc > aggregates[^1].HourUtc)
+        {
             ordered = aggregates.OrderBy(a => a.HourUtc).ToList();
+        }
 
         if (ordered.Count < MinHoursRequired)
+        {
             return null;
+        }
 
         // Compute EWMA and one-step-ahead forecast
         var rates = ordered.Select(a => a.AvgRatePerHour).ToList();
@@ -129,7 +148,9 @@ public class RatePredictionService : IRatePredictionService
     public static List<decimal> ComputeEwma(List<decimal> rates)
     {
         if (rates.Count == 0)
+        {
             return [];
+        }
 
         var ewma = new List<decimal>(rates.Count) { rates[0] };
         for (int i = 1; i < rates.Count; i++)
@@ -142,7 +163,9 @@ public class RatePredictionService : IRatePredictionService
     public static decimal ComputeConfidence(List<decimal> rates)
     {
         if (rates.Count == 0)
+        {
             return 0m;
+        }
 
         var sampleCount = rates.Count;
         var avgRate = rates.Average();
@@ -165,7 +188,9 @@ public class RatePredictionService : IRatePredictionService
     public static string ComputeTrend(List<decimal> ewmaValues)
     {
         if (ewmaValues.Count < 2)
+        {
             return "stable";
+        }
 
         var currentEwma = ewmaValues[^1];
 
@@ -174,7 +199,9 @@ public class RatePredictionService : IRatePredictionService
         var previousEwma = ewmaValues[compareIndex];
 
         if (previousEwma == 0)
+        {
             return currentEwma > 0 ? "rising" : currentEwma < 0 ? "falling" : "stable";
+        }
 
         var change = (currentEwma - previousEwma) / Math.Abs(previousEwma);
 

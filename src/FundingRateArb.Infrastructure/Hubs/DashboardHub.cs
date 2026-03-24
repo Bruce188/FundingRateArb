@@ -27,11 +27,15 @@ public class DashboardHub : Hub<IDashboardClient>
         await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.MarketData);
 
         if (Context.User?.IsInRole("Admin") == true)
+        {
             await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.Admins);
+        }
 
         var userId = Context.UserIdentifier;
         if (userId != null)
+        {
             await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
+        }
 
         await base.OnConnectedAsync();
     }

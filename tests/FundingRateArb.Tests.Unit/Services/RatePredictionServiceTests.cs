@@ -76,11 +76,14 @@ public class RatePredictionServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-48 + i),
                 AvgRatePerHour = 0.001m + i * 0.00001m,
-                MinRate = 0.001m, MaxRate = 0.002m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.001m,
+                MaxRate = 0.002m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -102,7 +105,9 @@ public class RatePredictionServiceTests
         // EWMA values that increase by >15% over 12 points
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(1m + i * 0.05m); // 1.0 to 2.15 — large increase
+        }
 
         var trend = RatePredictionService.ComputeTrend(ewma);
 
@@ -114,7 +119,9 @@ public class RatePredictionServiceTests
     {
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(2m - i * 0.05m); // 2.0 to 0.85 — large decrease
+        }
 
         var trend = RatePredictionService.ComputeTrend(ewma);
 
@@ -126,7 +133,9 @@ public class RatePredictionServiceTests
     {
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(1.0m); // constant
+        }
 
         var trend = RatePredictionService.ComputeTrend(ewma);
 
@@ -186,11 +195,14 @@ public class RatePredictionServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-10 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.001m, MaxRate = 0.001m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.001m,
+                MaxRate = 0.001m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -221,11 +233,14 @@ public class RatePredictionServiceTests
         var now = DateTime.UtcNow;
         var aggregates = Enumerable.Range(0, 24).Select(i => new FundingRateHourlyAggregate
         {
-            AssetId = 1, ExchangeId = 1,
+            AssetId = 1,
+            ExchangeId = 1,
             HourUtc = now.AddHours(-24 + i),
             AvgRatePerHour = 0.001m,
-            MinRate = 0.001m, MaxRate = 0.001m,
-            AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            MinRate = 0.001m,
+            MaxRate = 0.001m,
+            AvgVolume24hUsd = 1000000m,
+            SampleCount = 10,
         }).ToList();
 
         var assetLookup = new Dictionary<int, string> { { 1, "ETH" } };
@@ -242,11 +257,14 @@ public class RatePredictionServiceTests
         var now = DateTime.UtcNow;
         var aggregates = Enumerable.Range(0, 23).Select(i => new FundingRateHourlyAggregate
         {
-            AssetId = 1, ExchangeId = 1,
+            AssetId = 1,
+            ExchangeId = 1,
             HourUtc = now.AddHours(-23 + i),
             AvgRatePerHour = 0.001m,
-            MinRate = 0.001m, MaxRate = 0.001m,
-            AvgVolume24hUsd = 1000000m, SampleCount = 10,
+            MinRate = 0.001m,
+            MaxRate = 0.001m,
+            AvgVolume24hUsd = 1000000m,
+            SampleCount = 10,
         }).ToList();
 
         var assetLookup = new Dictionary<int, string> { { 1, "ETH" } };
@@ -283,11 +301,14 @@ public class RatePredictionServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-48 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.001m, MaxRate = 0.001m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.001m,
+                MaxRate = 0.001m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 
@@ -311,7 +332,10 @@ public class RatePredictionServiceTests
         // Build EWMA values where the compare point (-12h) is 0 and current is positive
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(0m); // fill with zeros
+        }
+
         ewma[^1] = 0.001m; // current is positive
 
         var trend = RatePredictionService.ComputeTrend(ewma);
@@ -324,7 +348,10 @@ public class RatePredictionServiceTests
     {
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(0m);
+        }
+
         ewma[^1] = -0.001m; // current is negative
 
         var trend = RatePredictionService.ComputeTrend(ewma);
@@ -337,7 +364,9 @@ public class RatePredictionServiceTests
     {
         var ewma = new List<decimal>();
         for (int i = 0; i < 24; i++)
+        {
             ewma.Add(0m);
+        }
 
         var trend = RatePredictionService.ComputeTrend(ewma);
 
@@ -355,11 +384,14 @@ public class RatePredictionServiceTests
         {
             aggregates.Add(new FundingRateHourlyAggregate
             {
-                AssetId = 1, ExchangeId = 1,
+                AssetId = 1,
+                ExchangeId = 1,
                 HourUtc = now.AddHours(-48 + i),
                 AvgRatePerHour = 0.001m,
-                MinRate = 0.001m, MaxRate = 0.001m,
-                AvgVolume24hUsd = 1000000m, SampleCount = 10,
+                MinRate = 0.001m,
+                MaxRate = 0.001m,
+                AvgVolume24hUsd = 1000000m,
+                SampleCount = 10,
             });
         }
 

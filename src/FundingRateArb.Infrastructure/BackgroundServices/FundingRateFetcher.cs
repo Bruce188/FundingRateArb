@@ -44,11 +44,11 @@ public class FundingRateFetcher : BackgroundService
         IHubContext<DashboardHub, IDashboardClient> hubContext,
         ILogger<FundingRateFetcher> logger)
     {
-        _scopeFactory    = scopeFactory;
-        _cache           = cache;
+        _scopeFactory = scopeFactory;
+        _cache = cache;
         _readinessSignal = readinessSignal;
-        _hubContext      = hubContext;
-        _logger          = logger;
+        _hubContext = hubContext;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -86,9 +86,9 @@ public class FundingRateFetcher : BackgroundService
     /// </summary>
     internal async Task FetchAllAsync(CancellationToken ct)
     {
-        using var scope  = _scopeFactory.CreateScope();
-        var uow          = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        var factory      = scope.ServiceProvider.GetRequiredService<IExchangeConnectorFactory>();
+        using var scope = _scopeFactory.CreateScope();
+        var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var factory = scope.ServiceProvider.GetRequiredService<IExchangeConnectorFactory>();
 
         var connectors = factory.GetAllConnectors().ToList();
 
@@ -113,7 +113,9 @@ public class FundingRateFetcher : BackgroundService
 
                     // Seed cache with REST data so volume survives subsequent WS updates
                     foreach (var rate in rates)
+                    {
                         _cache.Update(rate);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -124,11 +126,11 @@ public class FundingRateFetcher : BackgroundService
 
         // Resolve exchange and asset lookup tables once
         var exchanges = await uow.Exchanges.GetActiveAsync();
-        var assets    = await uow.Assets.GetActiveAsync();
+        var assets = await uow.Assets.GetActiveAsync();
 
         // H-FR2: Build lookup dictionaries before the loop — O(N+M) instead of O(N*M)
         var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
-        var assetMap    = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
+        var assetMap = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
 
         // M9: Build snapshot list first, then AddRange once (instead of individual Add calls)
         var now = DateTime.UtcNow;
@@ -136,19 +138,26 @@ public class FundingRateFetcher : BackgroundService
 
         foreach (var rate in allRates)
         {
-            if (!exchangeMap.TryGetValue(rate.ExchangeName, out var exchange)) continue;
-            if (!assetMap.TryGetValue(rate.Symbol, out var asset)) continue;
+            if (!exchangeMap.TryGetValue(rate.ExchangeName, out var exchange))
+            {
+                continue;
+            }
+
+            if (!assetMap.TryGetValue(rate.Symbol, out var asset))
+            {
+                continue;
+            }
 
             snapshots.Add(new FundingRateSnapshot
             {
-                ExchangeId   = exchange.Id,
-                AssetId      = asset.Id,
-                RatePerHour  = rate.RatePerHour,
-                RawRate      = rate.RawRate,
-                MarkPrice    = rate.MarkPrice,
-                IndexPrice   = rate.IndexPrice,
+                ExchangeId = exchange.Id,
+                AssetId = asset.Id,
+                RatePerHour = rate.RatePerHour,
+                RawRate = rate.RawRate,
+                MarkPrice = rate.MarkPrice,
+                IndexPrice = rate.IndexPrice,
                 Volume24hUsd = rate.Volume24hUsd,
-                RecordedAt   = now,
+                RecordedAt = now,
             });
         }
 
@@ -185,13 +194,19 @@ public class FundingRateFetcher : BackgroundService
     internal async Task TryAggregateHourlyAsync(IUnitOfWork uow, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
-        if (now.Minute < 5) return; // Wait until minute 5 to ensure all :00 snapshots are persisted
+        if (now.Minute < 5)
+        {
+            return; // Wait until minute 5 to ensure all :00 snapshots are persisted
+        }
 
         // Determine the hour we should aggregate (the previous completed hour)
         var previousHourStart = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(-1);
 
         // Skip if we already aggregated this hour
-        if (previousHourStart <= _lastAggregatedHourUtc) return;
+        if (previousHourStart <= _lastAggregatedHourUtc)
+        {
+            return;
+        }
 
         var currentHourStart = previousHourStart.AddHours(1);
         var snapshots = await uow.FundingRates.GetSnapshotsInRangeAsync(previousHourStart, currentHourStart, ct);
@@ -206,16 +221,16 @@ public class FundingRateFetcher : BackgroundService
             .GroupBy(s => new { s.ExchangeId, s.AssetId })
             .Select(g => new Domain.Entities.FundingRateHourlyAggregate
             {
-                ExchangeId      = g.Key.ExchangeId,
-                AssetId         = g.Key.AssetId,
-                HourUtc         = previousHourStart,
-                AvgRatePerHour  = g.Average(s => s.RatePerHour),
-                MinRate         = g.Min(s => s.RatePerHour),
-                MaxRate         = g.Max(s => s.RatePerHour),
-                LastRate        = g.OrderByDescending(s => s.RecordedAt).First().RatePerHour,
+                ExchangeId = g.Key.ExchangeId,
+                AssetId = g.Key.AssetId,
+                HourUtc = previousHourStart,
+                AvgRatePerHour = g.Average(s => s.RatePerHour),
+                MinRate = g.Min(s => s.RatePerHour),
+                MaxRate = g.Max(s => s.RatePerHour),
+                LastRate = g.OrderByDescending(s => s.RecordedAt).First().RatePerHour,
                 AvgVolume24hUsd = g.Average(s => s.Volume24hUsd),
-                AvgMarkPrice    = g.Average(s => s.MarkPrice),
-                SampleCount     = g.Count(),
+                AvgMarkPrice = g.Average(s => s.MarkPrice),
+                SampleCount = g.Count(),
             })
             .ToList();
 
@@ -244,7 +259,10 @@ public class FundingRateFetcher : BackgroundService
     private async Task UpdateAccumulatedFundingAsync(IUnitOfWork uow, CancellationToken ct)
     {
         var openPositions = await uow.Positions.GetOpenTrackedAsync();
-        if (openPositions.Count == 0) return;
+        if (openPositions.Count == 0)
+        {
+            return;
+        }
 
         var latestRates = await uow.FundingRates.GetLatestPerExchangePerAssetAsync();
         var exchanges = await uow.Exchanges.GetActiveAsync();
@@ -259,7 +277,10 @@ public class FundingRateFetcher : BackgroundService
             var shortRate = latestRates
                 .FirstOrDefault(r => r.ExchangeId == pos.ShortExchangeId && r.AssetId == pos.AssetId);
 
-            if (longRate is null || shortRate is null) continue;
+            if (longRate is null || shortRate is null)
+            {
+                continue;
+            }
 
             var notional = pos.SizeUsdc * pos.Leverage;
 
@@ -276,7 +297,9 @@ public class FundingRateFetcher : BackgroundService
 
         // Update last cycle time for all exchanges involved
         foreach (var exchange in exchanges)
+        {
             _lastCycleTimePerExchange[exchange.Id] = now;
+        }
 
         await uow.SaveAsync(ct);
     }
@@ -295,14 +318,19 @@ public class FundingRateFetcher : BackgroundService
         DateTime now)
     {
         if (!exchangeById.TryGetValue(exchangeId, out var exchange))
+        {
             return 0m;
+        }
 
         if (exchange.FundingSettlementType == FundingSettlementType.Periodic)
         {
             // For periodic exchanges, funding is settled at interval boundaries.
             // Detect if a settlement boundary has been crossed since the last cycle.
             var intervalHours = exchange.FundingIntervalHours;
-            if (intervalHours <= 0) intervalHours = 8; // safety fallback
+            if (intervalHours <= 0)
+            {
+                intervalHours = 8; // safety fallback
+            }
 
             var lastCycle = _lastCycleTimePerExchange.GetValueOrDefault(exchangeId, DateTime.MinValue);
 
@@ -340,7 +368,11 @@ public class FundingRateFetcher : BackgroundService
 
     private void SignalReadyOnce()
     {
-        if (_hasSignaled) return;
+        if (_hasSignaled)
+        {
+            return;
+        }
+
         _hasSignaled = true;
         _readinessSignal.SignalReady();
         _logger.LogInformation("Funding rate readiness signal fired — BotOrchestrator may proceed");

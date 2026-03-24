@@ -275,8 +275,10 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,  // same pair
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,  // same pair
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -392,9 +394,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -476,7 +481,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // GetOpenAsync must be called AFTER the health monitor
-        var healthIndex  = callOrder.IndexOf("health");
+        var healthIndex = callOrder.IndexOf("health");
         var getOpenIndex = callOrder.IndexOf("GetOpen");
 
         healthIndex.Should().BeGreaterThanOrEqualTo(0, "health monitor must run");
@@ -532,9 +537,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -562,9 +570,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -598,9 +609,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -635,9 +649,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -776,9 +793,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -844,9 +864,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -922,9 +945,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -965,7 +991,9 @@ public class BotOrchestratorTests
         var openingPos = new ArbitragePosition
         {
             UserId = TestUserId,
-            AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
             Status = PositionStatus.Opening,
         };
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
@@ -973,9 +1001,12 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "Hyperliquid",
-            ShortExchangeId = 2, ShortExchangeName = "Lighter",
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
             NetYieldPerHour = 0.001m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });

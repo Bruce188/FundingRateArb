@@ -20,7 +20,9 @@ public class PortfolioRebalancer : IPortfolioRebalancer
         var recommendations = new List<RebalanceRecommendationDto>();
 
         if (!config.RebalanceEnabled || openPositions.Count == 0 || opportunities.Count == 0)
+        {
             return Task.FromResult(recommendations);
+        }
 
         // Build a set of currently held asset/exchange combos to skip
         var heldKeys = openPositions
@@ -34,7 +36,9 @@ public class PortfolioRebalancer : IPortfolioRebalancer
         {
             var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
             if (hoursOpen < MinHoursBeforeRebalance)
+            {
                 continue;
+            }
 
             // Guard: skip positions with unloaded navigation properties — fee calc needs exchange names
             if (pos.LongExchange is null || pos.ShortExchange is null)
@@ -47,7 +51,9 @@ public class PortfolioRebalancer : IPortfolioRebalancer
 
             var remainingHours = Math.Max(0, config.MaxHoldTimeHours - hoursOpen);
             if (remainingHours <= 0)
+            {
                 continue; // will be closed by MaxHoldTime soon anyway
+            }
 
             // CurrentSpreadPerHour is net at this lifecycle stage: entry fees were already paid,
             // so remaining funding income is fee-free. This makes it comparable to NetYieldPerHour
@@ -59,7 +65,9 @@ public class PortfolioRebalancer : IPortfolioRebalancer
             {
                 var oppKey = $"{opp.AssetId}-{opp.LongExchangeId}-{opp.ShortExchangeId}";
                 if (heldKeys.Contains(oppKey))
+                {
                     continue;
+                }
 
                 // Switching cost: close current position only (2 trades = open + close legs)
                 // opp.NetYieldPerHour already accounts for the new position's round-trip fees,
@@ -99,7 +107,9 @@ public class PortfolioRebalancer : IPortfolioRebalancer
         foreach (var (rec, oppKey, _) in candidates)
         {
             if (usedOpps.Contains(oppKey) || usedPositions.Contains(rec.PositionId))
+            {
                 continue;
+            }
 
             usedOpps.Add(oppKey);
             usedPositions.Add(rec.PositionId);

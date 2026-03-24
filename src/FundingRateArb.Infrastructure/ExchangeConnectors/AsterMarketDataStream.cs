@@ -38,7 +38,9 @@ public class AsterMarketDataStream : IMarketDataStream
             ct: ct);
 
         if (!result.Success)
+        {
             throw new InvalidOperationException($"Aster WS subscription failed: {result.Error}");
+        }
 
         _subscription = result.Data;
         _subscription.ConnectionLost += () =>
@@ -57,13 +59,13 @@ public class AsterMarketDataStream : IMarketDataStream
             var symbol = NormalizeSymbol(item.Symbol);
             var dto = new FundingRateDto
             {
-                ExchangeName      = ExchangeName,
-                Symbol            = symbol,
-                RawRate           = item.FundingRate ?? 0m,
-                RatePerHour       = (item.FundingRate ?? 0m) / 8m, // 8h → per-hour
-                MarkPrice         = item.MarkPrice,
-                IndexPrice        = item.IndexPrice,
-                Volume24hUsd      = 0m, // Mark price stream excludes volume — cache preserves REST-fetched value
+                ExchangeName = ExchangeName,
+                Symbol = symbol,
+                RawRate = item.FundingRate ?? 0m,
+                RatePerHour = (item.FundingRate ?? 0m) / 8m, // 8h → per-hour
+                MarkPrice = item.MarkPrice,
+                IndexPrice = item.IndexPrice,
+                Volume24hUsd = 0m, // Mark price stream excludes volume — cache preserves REST-fetched value
                 NextSettlementUtc = item.NextFundingTime,
             };
 
@@ -80,12 +82,16 @@ public class AsterMarketDataStream : IMarketDataStream
     public async Task StopAsync()
     {
         if (_subscription is not null)
+        {
             await _subscription.CloseAsync();
+        }
+
         _subscription = null;
     }
 
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        GC.SuppressFinalize(this);
     }
 }

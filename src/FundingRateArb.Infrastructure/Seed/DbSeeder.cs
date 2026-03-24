@@ -32,7 +32,9 @@ public static class DbSeeder
         foreach (var role in new[] { "Admin", "Trader" })
         {
             if (!await roleMgr.RoleExistsAsync(role))
+            {
                 await roleMgr.CreateAsync(new IdentityRole(role));
+            }
         }
     }
 
@@ -55,19 +57,24 @@ public static class DbSeeder
 
         var admin = new ApplicationUser
         {
-            UserName       = AdminEmail,
-            Email          = AdminEmail,
-            DisplayName    = "Admin",
+            UserName = AdminEmail,
+            Email = AdminEmail,
+            DisplayName = "Admin",
             EmailConfirmed = true,
         };
         var result = await userMgr.CreateAsync(admin, adminPassword);
         if (result.Succeeded)
+        {
             await userMgr.AddToRoleAsync(admin, "Admin");
+        }
     }
 
     private static async Task SeedExchangesAsync(AppDbContext context)
     {
-        if (await context.Exchanges.AnyAsync()) return;
+        if (await context.Exchanges.AnyAsync())
+        {
+            return;
+        }
 
         context.Exchanges.AddRange(
             new Exchange
@@ -110,7 +117,10 @@ public static class DbSeeder
 
     private static async Task SeedAssetsAsync(AppDbContext context)
     {
-        if (await context.Assets.AnyAsync()) return;
+        if (await context.Assets.AnyAsync())
+        {
+            return;
+        }
 
         // All 86 assets commonly listed on Hyperliquid, Lighter and Aster DEX
         var assets = new (string Symbol, string Name)[]
@@ -211,7 +221,10 @@ public static class DbSeeder
     private static async Task SeedBotConfigAsync(AppDbContext context, UserManager<ApplicationUser> userMgr)
     {
         var admin = await userMgr.FindByEmailAsync(AdminEmail);
-        if (admin is null) return;
+        if (admin is null)
+        {
+            return;
+        }
 
         var existing = await context.BotConfigurations.FirstOrDefaultAsync();
         if (existing is not null)
@@ -219,11 +232,11 @@ public static class DbSeeder
             // Backfill new fields if they have zero defaults from old migration
             if (existing.FeeAmortizationHours == 0)
             {
-                existing.FeeAmortizationHours = 24;
-                existing.MinPositionSizeUsdc = 10m;
+                existing.FeeAmortizationHours = 12;
+                existing.MinPositionSizeUsdc = 5m;
                 existing.MinVolume24hUsdc = 50_000m;
                 existing.RateStalenessMinutes = 15;
-                existing.DailyDrawdownPausePct = 0.05m;
+                existing.DailyDrawdownPausePct = 0.08m;
                 existing.ConsecutiveLossPause = 3;
                 await context.SaveChangesAsync();
             }
@@ -233,22 +246,23 @@ public static class DbSeeder
         context.BotConfigurations.Add(new BotConfiguration
         {
             IsEnabled = false,
-            TotalCapitalUsdc = 107m,
+            TotalCapitalUsdc = 39m,
             DefaultLeverage = 5,
             MaxConcurrentPositions = 1,
-            OpenThreshold = 0.0003m,
+            OpenThreshold = 0.0002m,
             AlertThreshold = 0.0001m,
             CloseThreshold = -0.00005m,
-            StopLossPct = 0.15m,
-            MaxHoldTimeHours = 72,
+            StopLossPct = 0.10m,
+            MaxHoldTimeHours = 48,
             VolumeFraction = 0.001m,
-            MaxCapitalPerPosition = 0.80m,
-            BreakevenHoursMax = 6,
-            FeeAmortizationHours = 24,
-            MinPositionSizeUsdc = 10m,
+            MaxCapitalPerPosition = 0.90m,
+            BreakevenHoursMax = 8,
+            AdaptiveHoldEnabled = true,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 5m,
             MinVolume24hUsdc = 50_000m,
             RateStalenessMinutes = 15,
-            DailyDrawdownPausePct = 0.05m,
+            DailyDrawdownPausePct = 0.08m,
             ConsecutiveLossPause = 3,
             LastUpdatedAt = DateTime.UtcNow,
             UpdatedByUserId = admin.Id
@@ -260,7 +274,10 @@ public static class DbSeeder
         AppDbContext context, UserManager<ApplicationUser> userMgr)
     {
         var admin = await userMgr.FindByEmailAsync(AdminEmail);
-        if (admin is null) return;
+        if (admin is null)
+        {
+            return;
+        }
 
         // Create default UserConfiguration for admin if none exists
         var hasConfig = await context.UserConfigurations
@@ -271,22 +288,22 @@ public static class DbSeeder
             {
                 UserId = admin.Id,
                 IsEnabled = false,
-                OpenThreshold = 0.0003m,
+                OpenThreshold = 0.0002m,
                 CloseThreshold = -0.00005m,
                 AlertThreshold = 0.0001m,
                 DefaultLeverage = 5,
-                TotalCapitalUsdc = 107m,
-                MaxCapitalPerPosition = 0.80m,
+                TotalCapitalUsdc = 39m,
+                MaxCapitalPerPosition = 0.90m,
                 MaxConcurrentPositions = 1,
-                StopLossPct = 0.15m,
-                MaxHoldTimeHours = 72,
+                StopLossPct = 0.10m,
+                MaxHoldTimeHours = 48,
                 AllocationStrategy = AllocationStrategy.Concentrated,
                 AllocationTopN = 3,
-                FeeAmortizationHours = 24m,
-                MinPositionSizeUsdc = 10m,
+                FeeAmortizationHours = 12m,
+                MinPositionSizeUsdc = 5m,
                 MinVolume24hUsdc = 50_000m,
                 RateStalenessMinutes = 15,
-                DailyDrawdownPausePct = 0.05m,
+                DailyDrawdownPausePct = 0.08m,
                 ConsecutiveLossPause = 3,
                 CreatedAt = DateTime.UtcNow
             });

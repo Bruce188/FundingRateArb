@@ -13,10 +13,15 @@ public class TradeAnalyticsService : ITradeAnalyticsService
     public async Task<PositionAnalyticsDto?> GetPositionAnalyticsAsync(int positionId, string? userId = null, CancellationToken ct = default)
     {
         var position = await _uow.Positions.GetByIdAsync(positionId);
-        if (position is null) return null;
+        if (position is null)
+        {
+            return null;
+        }
 
         if (userId is not null && position.UserId != userId)
+        {
             return null;
+        }
 
         var hoursHeld = ComputeHoursHeld(position);
         var actualPnl = ComputeActualPnl(position);

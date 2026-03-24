@@ -36,7 +36,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             ct);
 
         if (!result.Success)
+        {
             throw new InvalidOperationException(result.Error!.ToString());
+        }
 
         return result.Data.Tickers.Select(t => new FundingRateDto
         {
@@ -65,7 +67,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
             // B1: Guard mark price = 0
             if (markPrice <= 0)
+            {
                 return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+            }
 
             // Set leverage before placing the order
             var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
@@ -80,7 +84,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
             // B3: Zero-quantity guard
             if (quantity <= 0)
+            {
                 return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
+            }
 
             // B5: Slippage protection
             var limitPrice = side == Side.Long
@@ -201,17 +207,24 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 async t => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(t),
                 token);
             if (!result.Success)
+            {
                 throw new InvalidOperationException(result.Error!.ToString());
+            }
 
             if (result.Data.ExchangeInfo?.Symbols != null)
             {
                 foreach (var s in result.Data.ExchangeInfo.Symbols)
+                {
                     _szDecimalsCache[s.Name] = s.QuantityDecimals;
+                }
             }
 
             var cache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             foreach (var t in result.Data.Tickers)
+            {
                 cache[t.Symbol] = t.MarkPrice;
+            }
+
             return cache;
         }, ct);
     }
@@ -226,7 +239,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 ct);
 
             if (!result.Success || result.Data.ExchangeInfo?.Symbols is null)
+            {
                 return null;
+            }
 
             var symbol = result.Data.ExchangeInfo.Symbols
                 .FirstOrDefault(s => s.Name.Equals(asset, StringComparison.OrdinalIgnoreCase));
@@ -251,6 +266,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     public void Dispose()
     {
         _markPriceCache.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     public async Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default)
@@ -262,7 +278,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             ct);
 
         if (!result.Success)
+        {
             throw new InvalidOperationException(result.Error!.ToString());
+        }
 
         return result.Data.Withdrawable;
     }
@@ -281,7 +299,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 ct);
 
             if (!result.Success || result.Data.Positions is null)
+            {
                 return 0m;
+            }
 
             var position = result.Data.Positions
                 .FirstOrDefault(p => p.Position?.Symbol == asset);

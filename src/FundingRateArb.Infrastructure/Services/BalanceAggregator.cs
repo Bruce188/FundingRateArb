@@ -32,7 +32,9 @@ public class BalanceAggregator : IBalanceAggregator
         var cacheKey = $"balance:{userId}";
 
         if (_cache.TryGetValue<BalanceSnapshotDto>(cacheKey, out var cached) && cached is not null)
+        {
             return cached;
+        }
 
         var credentials = await _userSettings.GetActiveCredentialsAsync(userId);
 

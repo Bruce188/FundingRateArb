@@ -1,11 +1,11 @@
 using System.Security.Claims;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace FundingRateArb.Web.Controllers;
 
@@ -35,7 +35,10 @@ public class DashboardController : Controller
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         // Lazy initialization: ensure user has default settings on first visit
         var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
@@ -111,7 +114,9 @@ public class DashboardController : Controller
                             pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
                     var target = botConfig.TargetPnlMultiplier * fee;
                     if (target > 0)
+                    {
                         pnlProgress[pos.Id] = Math.Min(pos.AccumulatedFunding / target, 2.0m);
+                    }
                 }
             }
         }

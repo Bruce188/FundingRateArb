@@ -59,7 +59,9 @@ public class BotConfigController : Controller
     public async Task<IActionResult> Index(BotConfigViewModel model)
     {
         if (!ModelState.IsValid)
+        {
             return View(model);
+        }
 
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
@@ -91,7 +93,10 @@ public class BotConfigController : Controller
         if (!validation.IsValid)
         {
             foreach (var error in validation.Errors)
+            {
                 ModelState.AddModelError(string.Empty, error);
+            }
+
             return View(model);
         }
 

@@ -141,19 +141,28 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true,
-                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 2,
             });
 
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread,
+            AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
@@ -185,19 +194,28 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true,
-                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 2,
             });
 
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread,
+            AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
@@ -238,19 +256,28 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true,
-                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 2,
             });
 
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 2,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.EqualSpread,
+            AllocationTopN = 2,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
@@ -299,8 +326,13 @@ public class BotOrchestratorTests
     {
         return new ArbitragePosition
         {
-            Id = 1, AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
-            SizeUsdc = 100m, Leverage = 5, MarginUsdc = marginUsdc,
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            MarginUsdc = marginUsdc,
             CurrentSpreadPerHour = currentSpread,
             OpenedAt = openedAt ?? DateTime.UtcNow.AddHours(-1),
             AccumulatedFunding = accumulatedFunding,
@@ -430,10 +462,14 @@ public class BotOrchestratorTests
     {
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 1,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 1,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
@@ -480,20 +516,32 @@ public class BotOrchestratorTests
     {
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 1,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 1,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
         // ETH has an active position
         var existingPosition = new ArbitragePosition
         {
-            Id = 1, AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
-            UserId = TestUserId, SizeUsdc = 100m, Leverage = 5, MarginUsdc = 20m,
-            CurrentSpreadPerHour = 0.001m, EntrySpreadPerHour = 0.001m,
-            OpenedAt = DateTime.UtcNow.AddHours(-1), Status = PositionStatus.Open,
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            UserId = TestUserId,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            MarginUsdc = 20m,
+            CurrentSpreadPerHour = 0.001m,
+            EntrySpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            Status = PositionStatus.Open,
             Asset = new Asset { Symbol = "ETH" },
             LongExchange = new Exchange { Name = "ExA" },
             ShortExchange = new Exchange { Name = "ExB" },
@@ -528,18 +576,26 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true,
-                MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 3,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
             });
 
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
@@ -592,18 +648,26 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true,
-                MaxConcurrentPositions = 1, TotalCapitalUsdc = 1000m,
-                MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.EqualSpread, AllocationTopN = 3,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 1,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
             });
 
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
@@ -611,10 +675,18 @@ public class BotOrchestratorTests
         // But with a different asset so the candidates aren't filtered by active key
         var existingPosition = new ArbitragePosition
         {
-            Id = 99, AssetId = 5, LongExchangeId = 1, ShortExchangeId = 2,
-            UserId = TestUserId, SizeUsdc = 100m, Leverage = 5, MarginUsdc = 20m,
-            CurrentSpreadPerHour = 0.001m, EntrySpreadPerHour = 0.001m,
-            OpenedAt = DateTime.UtcNow.AddHours(-1), Status = PositionStatus.Open,
+            Id = 99,
+            AssetId = 5,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            UserId = TestUserId,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            MarginUsdc = 20m,
+            CurrentSpreadPerHour = 0.001m,
+            EntrySpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            Status = PositionStatus.Open,
             Asset = new Asset { Symbol = "SOL" },
             LongExchange = new Exchange { Name = "ExA" },
             ShortExchange = new Exchange { Name = "ExB" },
@@ -650,9 +722,12 @@ public class BotOrchestratorTests
     {
         var config = new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5,
-            TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m,
-            VolumeFraction = 0.001m, UpdatedByUserId = TestUserId,
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);

@@ -14,7 +14,7 @@ public class Alert
     [Required, MaxLength(1000)]
     public string Message { get; set; } = null!;
 
-    public bool IsRead { get; set; } = false;
+    public bool IsRead { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
     public ApplicationUser User { get; set; } = null!;

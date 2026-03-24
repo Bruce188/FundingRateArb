@@ -52,10 +52,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         IHubContext<DashboardHub, IDashboardClient> hubContext,
         ILogger<BotOrchestrator> logger)
     {
-        _scopeFactory    = scopeFactory;
+        _scopeFactory = scopeFactory;
         _readinessSignal = readinessSignal;
-        _hubContext      = hubContext;
-        _logger          = logger;
+        _hubContext = hubContext;
+        _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -71,7 +71,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
             try
             {
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, _immediateCts.Token);
-                if (!await timer.WaitForNextTickAsync(linkedCts.Token)) break;
+                if (!await timer.WaitForNextTickAsync(linkedCts.Token))
+                {
+                    break;
+                }
             }
             catch (OperationCanceledException) when (_immediateCts.IsCancellationRequested)
             {
@@ -109,12 +112,19 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     public void RecordCloseResult(decimal realizedPnl, string? userId = null)
     {
-        if (string.IsNullOrEmpty(userId)) return;
+        if (string.IsNullOrEmpty(userId))
+        {
+            return;
+        }
 
         if (realizedPnl < 0)
+        {
             _userConsecutiveLosses.AddOrUpdate(userId, 1, (_, count) => count + 1);
+        }
         else
+        {
             _userConsecutiveLosses[userId] = 0;
+        }
     }
 
     /// <summary>Exposes cooldown state for unit testing.</summary>
@@ -133,12 +143,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
     internal async Task RunCycleAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
-        var uow            = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        var globalConfig   = await uow.BotConfig.GetActiveAsync();
-        var healthMonitor  = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
-        var signalEngine   = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
+        var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var globalConfig = await uow.BotConfig.GetActiveAsync();
+        var healthMonitor = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
+        var signalEngine = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
-        var userSettings   = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
+        var userSettings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
 
         // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
         var positionsToClose = await healthMonitor.CheckAndActAsync(ct);
@@ -146,7 +156,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         {
             await executionEngine.ClosePositionAsync(pos, reason, ct);
             if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
+            {
                 RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
+            }
         }
 
         // Fetch ALL open positions after health monitor so closed positions are excluded
@@ -202,7 +214,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
                 // Filter only actually closed positions so unclosed ones still get health monitoring
                 if (closedIds.Count > 0)
+                {
                     allOpenPositions = allOpenPositions.Where(p => !closedIds.Contains(p.Id)).ToList();
+                }
             }
             catch (Exception ex)
             {
@@ -270,7 +284,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
     {
         var allOpportunities = opportunityResult.Opportunities;
         var userConfig = await userSettings.GetOrCreateConfigAsync(userId);
-        if (!userConfig.IsEnabled) return;
+        if (!userConfig.IsEnabled)
+        {
+            return;
+        }
 
         // Check user has valid credentials (at least 2 exchanges)
         if (!await userSettings.HasValidCredentialsAsync(userId))
@@ -348,7 +365,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Where(opp =>
             {
                 var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
-                if (allActiveKeys.Contains(key)) return false;
+                if (allActiveKeys.Contains(key))
+                {
+                    return false;
+                }
                 // Per-user cooldown key
                 var cooldownKey = $"{userId}:{key}";
                 if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
@@ -375,10 +395,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     .Where(opp =>
                     {
                         var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
-                        if (allActiveKeys.Contains(key)) return false;
+                        if (allActiveKeys.Contains(key))
+                        {
+                            return false;
+                        }
+
                         var cooldownKey = $"{userId}:{key}";
                         if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+                        {
                             return false;
+                        }
+
                         return true;
                     })
                     .Take(1)
@@ -447,7 +474,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
         {
             var opp = candidates[idx];
             var size = sizes[idx];
-            if (size <= 0) continue;
+            if (size <= 0)
+            {
+                continue;
+            }
+
             if (slotsAvailable <= 0)
             {
                 // Track remaining candidates as skipped due to max positions
@@ -527,7 +558,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
     {
         try
         {
-            if (opportunities.Count == 0) return;
+            if (opportunities.Count == 0)
+            {
+                return;
+            }
 
             var activeKeys = allOpenPositions
                 .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
@@ -542,15 +576,25 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 if (!wasOpened)
                 {
                     if (activeKeys.Contains(key))
+                    {
                         skipReason = "active_position";
+                    }
                     else if (_failedOpCooldowns.Any(cd => cd.Key.EndsWith($":{key}") && DateTime.UtcNow < cd.Value.CooldownUntil))
+                    {
                         skipReason = "cooldown";
+                    }
                     else if (capitalExhaustedKeys.Contains(key))
+                    {
                         skipReason = "capital_exhausted";
+                    }
                     else if (maxPositionsKeys.Contains(key))
+                    {
                         skipReason = "max_positions";
+                    }
                     else
+                    {
                         skipReason = "below_threshold";
+                    }
                 }
 
                 return new OpportunitySnapshot
@@ -599,10 +643,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
             var dto = new DashboardDto
             {
-                BotEnabled        = botEnabled,
+                BotEnabled = botEnabled,
                 OpenPositionCount = openPositions.Count,
-                TotalPnl          = totalPnl,
-                BestSpread        = bestSpread,
+                TotalPnl = totalPnl,
+                BestSpread = bestSpread,
             };
 
             await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveDashboardUpdate(dto);
@@ -649,23 +693,28 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
             // H6: Prune old IDs periodically to prevent unbounded growth
             if (_pushedAlertIds.Count > 1000)
+            {
                 _pushedAlertIds.Clear();
+            }
 
             foreach (var alert in recentAlerts)
             {
                 // H6: Skip already-pushed alerts to prevent duplicate pushes
-                if (!_pushedAlertIds.TryAdd(alert.Id, 0)) continue;
+                if (!_pushedAlertIds.TryAdd(alert.Id, 0))
+                {
+                    continue;
+                }
 
                 var dto = new AlertDto
                 {
-                    Id                  = alert.Id,
-                    UserId              = alert.UserId,
+                    Id = alert.Id,
+                    UserId = alert.UserId,
                     ArbitragePositionId = alert.ArbitragePositionId,
-                    Type                = alert.Type,
-                    Severity            = alert.Severity,
-                    Message             = alert.Message,
-                    IsRead              = alert.IsRead,
-                    CreatedAt           = alert.CreatedAt,
+                    Type = alert.Type,
+                    Severity = alert.Severity,
+                    Message = alert.Message,
+                    IsRead = alert.IsRead,
+                    CreatedAt = alert.CreatedAt,
                 };
 
                 await _hubContext.Clients.Group($"user-{alert.UserId}").ReceiveAlert(dto);
@@ -687,6 +736,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _disposed = true;
         }
         base.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <summary>
@@ -698,9 +748,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
         try
         {
             if (userId is not null)
+            {
                 await _hubContext.Clients.Group($"user-{userId}").ReceiveStatusExplanation(message, severity);
+            }
             else
+            {
                 await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveStatusExplanation(message, severity);
+            }
         }
         catch (Exception ex)
         {
@@ -712,20 +766,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
     {
         var dto = new PositionSummaryDto
         {
-            Id                  = pos.Id,
-            AssetSymbol         = pos.Asset?.Symbol ?? "?",
-            LongExchangeName    = pos.LongExchange?.Name ?? "?",
-            ShortExchangeName   = pos.ShortExchange?.Name ?? "?",
-            SizeUsdc            = pos.SizeUsdc,
-            MarginUsdc          = pos.MarginUsdc,
-            EntrySpreadPerHour  = pos.EntrySpreadPerHour,
+            Id = pos.Id,
+            AssetSymbol = pos.Asset?.Symbol ?? "?",
+            LongExchangeName = pos.LongExchange?.Name ?? "?",
+            ShortExchangeName = pos.ShortExchange?.Name ?? "?",
+            SizeUsdc = pos.SizeUsdc,
+            MarginUsdc = pos.MarginUsdc,
+            EntrySpreadPerHour = pos.EntrySpreadPerHour,
             CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
-            AccumulatedFunding  = pos.AccumulatedFunding,
-            UnrealizedPnl       = pos.AccumulatedFunding, // best estimate until live mark-to-market
-            RealizedPnl         = pos.RealizedPnl,
-            Status              = pos.Status,
-            OpenedAt            = pos.OpenedAt,
-            ClosedAt            = pos.ClosedAt,
+            AccumulatedFunding = pos.AccumulatedFunding,
+            UnrealizedPnl = pos.AccumulatedFunding, // best estimate until live mark-to-market
+            RealizedPnl = pos.RealizedPnl,
+            Status = pos.Status,
+            OpenedAt = pos.OpenedAt,
+            ClosedAt = pos.ClosedAt,
         };
 
         ComputeWarnings(dto, pos, config);
