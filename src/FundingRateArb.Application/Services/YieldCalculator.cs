@@ -28,7 +28,9 @@ public class YieldCalculator : IYieldCalculator
     public decimal UnrealizedPnl(ArbitragePosition pos)
     {
         if (pos.AccumulatedFunding != 0m)
+        {
             return pos.AccumulatedFunding;
+        }
 
         var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
         var notional = pos.SizeUsdc * pos.Leverage;
@@ -45,7 +47,9 @@ public class YieldCalculator : IYieldCalculator
     public decimal BreakEvenHours(decimal feeRateTotal, decimal netRatePerHour)
     {
         if (netRatePerHour <= 0m)
+        {
             return decimal.MaxValue;
+        }
 
         return feeRateTotal / netRatePerHour;
     }

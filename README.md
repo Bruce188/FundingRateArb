@@ -20,6 +20,19 @@
 
 Automated funding rate arbitrage bot for perpetual futures. Monitors funding rate differentials across DEXs (Lighter, Aster) and CEXs (HyperLiquid), opens hedged long/short positions when spreads exceed a configurable threshold, and collects the funding rate differential as yield.
 
+## How It Works
+
+Perpetual futures exchanges charge or pay **funding rates** to keep contract prices aligned with spot. When Exchange A pays longs and Exchange B pays shorts at different rates, a **spread** exists. The bot goes long on one and short on the other, capturing the differential as market-neutral yield.
+
+```
+Exchange A:  funding rate  +0.01%/hr  (longs pay shorts)
+Exchange B:  funding rate  -0.03%/hr  (shorts pay longs)
+                                       ─────────────────
+Spread:      0.04%/hr  →  bot opens long A + short B  →  collects 0.04%/hr
+```
+
+Every 60 seconds the bot scores all exchange pairs, sizes positions based on available capital, executes dual-leg trades with pre-flight margin checks, and monitors open positions for health degradation.
+
 ## Architecture
 
 The project follows **Clean Architecture** with four layers:
@@ -46,23 +59,27 @@ FundingRateArb.sln
 
 ## Key Components
 
-- **SignalEngine** — scores funding rate spreads across exchange pairs, adaptive threshold fallback
-- **PositionSizer** — calculates position size from capital, leverage, and liquidity limits
-- **ExecutionEngine** — concurrent dual-leg order placement with pre-flight margin checks and emergency close
-- **BotOrchestrator** — background service running 60-second cycles (fetch rates, monitor positions, open/close trades)
-- **PositionHealthMonitor** — monitors open positions for health degradation and triggers alerts
-- **YieldCalculator** — computes realized and projected yield from funding rate differentials
-- **BalanceAggregator** — aggregates balances across all connected exchange accounts
-- **Dashboard** — real-time MVC + SignalR UI showing rates, opportunities, positions, alerts, and KPIs
-- **ApiKeyVault** — encrypted exchange credential storage using ASP.NET Core Data Protection API
+| Component | Purpose |
+|-----------|---------|
+| **SignalEngine** | Scores funding rate spreads across all exchange pairs with adaptive threshold fallback and optional ML-based rate prediction |
+| **PositionSizer** | Allocates capital using configurable strategies (Concentrated, WeightedSpread, EqualSpread, RiskAdjusted) with per-asset/exchange exposure limits |
+| **ExecutionEngine** | Concurrent dual-leg order placement with pre-flight margin checks and atomic rollback on partial fills |
+| **BotOrchestrator** | Background service running 60-second trading cycles with circuit breaker, consecutive loss tracking, and alert deduplication |
+| **PositionHealthMonitor** | Monitors open positions for spread collapse, max hold time, stop loss, P&L targets, and stale price feeds |
+| **YieldCalculator** | Computes annualized yield, projected/unrealized P&L, and break-even hours |
+| **MarketDataCache** | In-memory cache of latest rates from both REST polling and WebSocket streams |
+| **DashboardHub** | SignalR hub pushing real-time rate updates, opportunities, position changes, and alerts to connected clients |
+| **ApiKeyVault** | Encrypted exchange credential storage using ASP.NET Core Data Protection API |
 
 ## Exchange Integrations
 
-| Exchange | Type | Connection | Features |
-|----------|------|------------|----------|
-| **Lighter** | DEX | REST API + WebSocket | Custom signer, market data streaming, order placement |
-| **Aster** | DEX | SDK (Aster.Net) + WebSocket | Funding rates, order execution, market data |
-| **HyperLiquid** | CEX | SDK (HyperLiquid.Net) + WebSocket | Wallet-based auth, funding rates, positions |
+| Exchange | Type | Settlement | Connection | Auth |
+|----------|------|-----------|------------|------|
+| **HyperLiquid** | CEX | Continuous | SDK (HyperLiquid.Net) + WebSocket | Wallet-based |
+| **Lighter** | DEX | Continuous | Custom REST + WebSocket | Custom signer (zkLighter) |
+| **Aster** | DEX | Periodic (8h) | SDK (Aster.Net) + WebSocket | API key |
+
+Each exchange implements `IExchangeConnector` (REST) and `IMarketDataStream` (WebSocket). The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and rate-limit cooldown.
 
 ## Prerequisites
 
@@ -83,7 +100,7 @@ dotnet restore
 ### 2. Start SQL Server (Docker)
 
 ```bash
-docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=YourPassword123!" \
+docker run -e "ACCEPT_EULA=Y" -e "MSSQL_SA_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>" \
   -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest
 ```
 
@@ -94,10 +111,10 @@ cd src/FundingRateArb.Web
 
 # Database connection
 dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
-  "Server=localhost,1433;Database=FundingRateArbDb;User Id=SA;Password=YourPassword123!;TrustServerCertificate=True"
+  "Server=localhost,1433;Database=FundingRateArbDb;User Id=SA;Password=<YOUR_SA_PASSWORD>;TrustServerCertificate=True"
 
 # Admin seed password
-dotnet user-secrets set "Seed:AdminPassword" "YourAdminPassword!"
+dotnet user-secrets set "Seed:AdminPassword" "<YOUR_ADMIN_PASSWORD>"
 
 # Exchange credentials
 dotnet user-secrets set "Exchanges:Lighter:SignerPrivateKey" "<your-key>"
@@ -123,8 +140,8 @@ The app starts at `http://localhost:5273`. EF Core auto-migrates and seeds an ad
 ```bash
 # Create .env file
 cat > .env <<EOF
-SA_PASSWORD=YourStrongPassword123!
-ADMIN_PASSWORD=YourAdminPassword!
+SA_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
+ADMIN_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
 LIGHTER_SIGNER_KEY=<your-key>
 LIGHTER_API_KEY=2
 ASTER_API_KEY=<your-key>
@@ -134,6 +151,8 @@ EOF
 # Build and run
 docker compose up -d
 ```
+
+**Important:** Replace all placeholder values with strong, unique passwords. Never commit `.env` to version control.
 
 The multi-stage Dockerfile builds with the .NET SDK and runs on the lightweight ASP.NET runtime image as a non-root user. Docker Compose orchestrates the app alongside SQL Server 2022 with health checks and volume persistence.
 
@@ -165,7 +184,7 @@ Requires the app running at `http://localhost:5273` with a seeded database.
 
 | Suite | Framework | Scope |
 |-------|-----------|-------|
-| Unit | xUnit, Moq, FluentAssertions | SignalEngine, PositionSizer, ExecutionEngine, YieldCalculator, ConfigValidator, ApiKeyVault |
+| Unit | xUnit, Moq, FluentAssertions | SignalEngine, PositionSizer, ExecutionEngine, YieldCalculator, ConfigValidator, ApiKeyVault, Connectors |
 | Integration | xUnit, EF Core InMemory | Repositories, UnitOfWork, database persistence |
 | E2E | Playwright (Python), pytest | Authentication, dashboard, admin panel, settings, mobile responsiveness |
 
@@ -183,7 +202,7 @@ The application uses Polly resilience pipelines to handle exchange API failures 
 
 | Pipeline | Strategy | Use Case |
 |----------|----------|----------|
-| `ExchangeSdk` | Retry + circuit breaker + 15s timeout | General exchange API calls |
+| `ExchangeSdk` | Retry (3x exponential) + circuit breaker + 15s timeout | General exchange API calls |
 | `OrderExecution` | Circuit breaker + 30s timeout (no retry) | Order placement — prevents double fills |
 | `OrderClose` | 30s timeout only | Position close — critical path |
 
@@ -199,23 +218,40 @@ Bot behavior is configured via the database (`BotConfigurations` table), editabl
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `IsEnabled` | Kill switch for automated trading | `false` |
-| `TotalCapitalUsdc` | Total capital budget in USDC | — |
+| `TotalCapitalUsdc` | Total capital budget in USDC | `39` |
 | `MaxCapitalPerPosition` | Max fraction per position (0-1) | `0.90` |
-| `DefaultLeverage` | Leverage for new positions | `20` |
-| `OpenThreshold` | Min spread/hr to open a position | `0.00003` |
-| `BreakevenHoursMax` | Max hours to break even on fees | `6` |
+| `DefaultLeverage` | Leverage for new positions | `5` |
+| `OpenThreshold` | Min spread/hr to open a position | `0.0002` |
+| `CloseThreshold` | Spread/hr that triggers close | `-0.00005` |
+| `StopLossPct` | Max loss as fraction of margin | `0.10` |
+| `MaxHoldTimeHours` | Auto-close after this many hours | `48` |
+| `BreakevenHoursMax` | Max hours to break even on fees | `8` |
 | `MaxConcurrentPositions` | Parallel position limit | `1` |
+| `AllocationStrategy` | Capital split strategy | `Concentrated` |
 
 Exchange credentials are managed via .NET User Secrets (development) or environment variables (production). Never commit credentials to the repository.
 
 ## Security
 
-- ASP.NET Core Identity with strict password policies and role-based access control
+- ASP.NET Core Identity with strict password policies (12+ chars) and role-based access control
 - Exchange API keys encrypted at rest via Data Protection API
-- Content Security Policy, X-Frame-Options, and strict cookie settings
+- Content Security Policy with pinned CDN URLs and SRI hashes
+- X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy headers
+- HttpOnly, SameSite=Strict cookies with 8-hour sliding expiration
 - Non-root Docker container user
 - GitHub Actions OIDC federation for passwordless Azure deployments
 - Rate limiting on all endpoints
+- Serilog with sensitive data masking enricher
+
+## Documentation
+
+Detailed documentation is available in [`documentation/`](documentation/):
+
+- [Architecture Overview](documentation/architecture.md) — layer diagram, runtime architecture, data flow, background services
+- [Trading Engine](documentation/trading-engine.md) — signal engine, position sizer, execution engine, health monitor, full configuration reference
+- [API Reference](documentation/api-reference.md) — all routes, SignalR hub, core interfaces, DTOs
+- [Configuration Guide](documentation/configuration.md) — secrets management, identity, logging, rate limiting
+- [Deployment Guide](documentation/deployment.md) — local dev, Docker, Azure, CI/CD, migrations
 
 ## License
 

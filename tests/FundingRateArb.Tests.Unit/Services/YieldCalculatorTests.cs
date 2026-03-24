@@ -12,8 +12,8 @@ public class YieldCalculatorTests
 
     [Theory]
     [InlineData(0.0004, 3.504)]   // 0.04%/hour * 24 * 365
-    [InlineData(0.001,  8.76)]
-    [InlineData(0,      0)]
+    [InlineData(0.001, 8.76)]
+    [InlineData(0, 0)]
     public void AnnualizedYield_CalculatesCorrectly(decimal ratePerHour, decimal expected)
     {
         var result = _sut.AnnualizedYield(ratePerHour);
@@ -31,9 +31,9 @@ public class YieldCalculatorTests
     // ── ProjectedPnl ─────────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData(1000, 0.0004, 24,  9.6)]   // $1000 * 0.04%/hr * 24h
-    [InlineData(500,  0.001,   8,  4.0)]
-    [InlineData(1000, 0,      24,  0)]
+    [InlineData(1000, 0.0004, 24, 9.6)]   // $1000 * 0.04%/hr * 24h
+    [InlineData(500, 0.001, 8, 4.0)]
+    [InlineData(1000, 0, 24, 0)]
     public void ProjectedPnl_CalculatesCorrectly(
         decimal sizeUsdc, decimal netRatePerHour, decimal hours, decimal expected)
     {
@@ -59,7 +59,7 @@ public class YieldCalculatorTests
 
     [Theory]
     [InlineData(0.0009, 0.0004, 2.25)]   // 0.09% fees / 0.04%/hr = 2.25 h
-    [InlineData(0.001,  0.0005, 2.0)]
+    [InlineData(0.001, 0.0005, 2.0)]
     public void BreakEvenHours_CalculatesCorrectly(
         decimal feeRateTotal, decimal netRatePerHour, decimal expected)
     {
@@ -88,10 +88,10 @@ public class YieldCalculatorTests
     {
         var pos = new ArbitragePosition
         {
-            SizeUsdc            = 1000m,
-            EntrySpreadPerHour  = 0.0004m,
-            AccumulatedFunding  = 7.50m,
-            OpenedAt            = DateTime.UtcNow.AddHours(-10)
+            SizeUsdc = 1000m,
+            EntrySpreadPerHour = 0.0004m,
+            AccumulatedFunding = 7.50m,
+            OpenedAt = DateTime.UtcNow.AddHours(-10)
         };
 
         var result = _sut.UnrealizedPnl(pos);
@@ -108,11 +108,11 @@ public class YieldCalculatorTests
         var openedAt = DateTime.UtcNow.AddHours(-6);
         var pos = new ArbitragePosition
         {
-            SizeUsdc            = 1000m,
-            Leverage            = 5,
-            EntrySpreadPerHour  = 0.0004m,
-            AccumulatedFunding  = 0m,
-            OpenedAt            = openedAt
+            SizeUsdc = 1000m,
+            Leverage = 5,
+            EntrySpreadPerHour = 0.0004m,
+            AccumulatedFunding = 0m,
+            OpenedAt = openedAt
         };
 
         var result = _sut.UnrealizedPnl(pos);
@@ -126,10 +126,10 @@ public class YieldCalculatorTests
     {
         var pos = new ArbitragePosition
         {
-            SizeUsdc            = 1000m,
-            EntrySpreadPerHour  = 0m,
-            AccumulatedFunding  = 0m,
-            OpenedAt            = DateTime.UtcNow.AddHours(-5)
+            SizeUsdc = 1000m,
+            EntrySpreadPerHour = 0m,
+            AccumulatedFunding = 0m,
+            OpenedAt = DateTime.UtcNow.AddHours(-5)
         };
 
         var result = _sut.UnrealizedPnl(pos);

@@ -23,7 +23,9 @@ public class FundingRateReadinessSignal : IFundingRateReadinessSignal
         // If the TCS completed, we're ready. If the delay completed first (timeout), proceed anyway.
         // If cancellation was requested, the Task.Delay throws and propagates.
         if (completedTask != _tcs.Task && ct.IsCancellationRequested)
+        {
             ct.ThrowIfCancellationRequested();
+        }
     }
 
     public void SignalReady() => _tcs.TrySetResult(true);

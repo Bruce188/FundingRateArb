@@ -41,11 +41,41 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Check formatting
+        run: dotnet format --verify-no-changes --verbosity diagnostic
+
       - name: Build
         run: dotnet build --no-restore -c Release
 
       - name: Unit tests
-        run: dotnet test tests/FundingRateArb.Tests.Unit --no-build -c Release --logger "trx;LogFileName=unit.trx"
+        run: >-
+          dotnet test tests/FundingRateArb.Tests.Unit
+          --no-build -c Release
+          --logger "trx;LogFileName=unit.trx"
+          --collect:"XPlat Code Coverage"
+          -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Check code coverage threshold
+        run: |
+          REPORT=$(find . -name "coverage.cobertura.xml" -path "*/TestResults/*" | head -1)
+          if [ -z "$REPORT" ]; then
+            echo "::error::No coverage report found"
+            exit 1
+          fi
+          LINE_RATE=$(grep -oP 'line-rate="\K[^"]+' "$REPORT" | head -1)
+          if [ -z "$LINE_RATE" ] || ! echo "$LINE_RATE" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+            echo "::error::Failed to extract line-rate from coverage report"
+            exit 1
+          fi
+          PERCENTAGE=$(awk "BEGIN {printf \"%.1f\", $LINE_RATE * 100}")
+          echo "Line coverage: ${PERCENTAGE}%"
+          # THRESHOLD is a ratio (0.15 = 15%)
+          THRESHOLD=0.15
+          if awk "BEGIN {exit !($LINE_RATE < $THRESHOLD)}"; then
+            THRESHOLD_PCT=$(awk "BEGIN {printf \"%.0f\", $THRESHOLD * 100}")
+            echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD_PCT}% threshold"
+            exit 1
+          fi
 
       - name: Integration tests
         run: dotnet test tests/FundingRateArb.Tests.Integration --no-build -c Release --logger "trx;LogFileName=integration.trx"
@@ -57,7 +87,38 @@ jobs:
         if: always()
         with:
           name: test-results
-          path: "**/TestResults/*.trx"
+          path: |
+            **/TestResults/*.trx
+            **/TestResults/**/coverage.cobertura.xml
+
+      - name: Check for vulnerable packages
+        run: |
+          OUTPUT=$(dotnet list package --vulnerable --include-transitive 2>&1)
+          echo "$OUTPUT"
+          if echo "$OUTPUT" | grep -qi "has the following vulnerable packages"; then
+            echo "::error::Vulnerable packages detected"
+            exit 1
+          fi
+
+      - name: Scan for secrets in diff
+        run: |
+          if ! DIFF=$(git diff origin/main...HEAD -- '*.cs' '*.json' '*.yml' '*.yaml' '*.config' '*.xml' '*.md' '*.sh' '*.txt' '*.env*' 'Dockerfile*' 2>&1); then
+            echo "::warning::git diff failed — secret scanning skipped. Output: $DIFF"
+            exit 0
+          fi
+          if [ -z "$DIFF" ]; then
+            echo "::warning::Empty diff — no changes to scan for secrets"
+            exit 0
+          fi
+          COMBINED_PATTERN='AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z\-_]{35}|-----BEGIN (RSA |EC |DSA )?PRIVATE KEY-----|(?<!//\s)(?<!#\s)Password\s*=\s*[^;"\x27]{8,}|api[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}|secret[_-]?key\s*[:=]\s*["\x27][A-Za-z0-9\-_]{20,}'
+          # Known false positives: CI/test passwords, placeholder values
+          ALLOWLIST='Password\s*=\s*"?[A-Za-z]+@[0-9]+!?"?|Password=Unused@[0-9]+|example\.com|placeholder'
+          MATCHES=$(printf '%s\n' "$DIFF" | grep -Pi "$COMBINED_PATTERN" | grep -Piv "$ALLOWLIST" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::Potential secrets detected in diff:"
+            printf '%s\n' "$MATCHES"
+            exit 1
+          fi
 
       - name: Publish
         run: dotnet publish src/FundingRateArb.Web/FundingRateArb.Web.csproj -c Release -o ./publish --no-build

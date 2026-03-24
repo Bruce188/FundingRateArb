@@ -34,7 +34,9 @@ public class AssetController : Controller
     public async Task<IActionResult> Create(AssetCreateViewModel model)
     {
         if (!ModelState.IsValid)
+        {
             return View(model);
+        }
 
         var asset = new Asset
         {
@@ -58,7 +60,9 @@ public class AssetController : Controller
     {
         var asset = await _uow.Assets.GetByIdAsync(id);
         if (asset is null)
+        {
             return NotFound();
+        }
 
         var model = new AssetEditViewModel
         {
@@ -75,14 +79,20 @@ public class AssetController : Controller
     public async Task<IActionResult> Edit(int id, AssetEditViewModel model)
     {
         if (id != model.Id)
+        {
             return BadRequest();
+        }
 
         if (!ModelState.IsValid)
+        {
             return View(model);
+        }
 
         var asset = await _uow.Assets.GetByIdAsync(id);
         if (asset is null)
+        {
             return NotFound();
+        }
 
         asset.Symbol = model.Symbol.ToUpperInvariant();
         asset.Name = model.Name;
@@ -103,7 +113,9 @@ public class AssetController : Controller
     {
         var asset = await _uow.Assets.GetByIdAsync(id);
         if (asset is null)
+        {
             return NotFound();
+        }
 
         return View(asset);
     }
@@ -113,7 +125,9 @@ public class AssetController : Controller
     {
         var asset = await _uow.Assets.GetByIdAsync(id);
         if (asset is null)
+        {
             return NotFound();
+        }
 
         try
         {

@@ -1,28 +1,28 @@
+using System.Threading.RateLimiting;
+using AspNet.Security.OAuth.GitHub;
+using Azure.Identity;
+using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
-using FundingRateArb.Infrastructure.Services;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
 using FundingRateArb.Infrastructure.Seed;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
-using System.Threading.RateLimiting;
-using Microsoft.AspNetCore.RateLimiting;
-using CryptoExchange.Net.Authentication;
-using AspNet.Security.OAuth.GitHub;
-using Azure.Identity;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.MSSqlServer;
@@ -55,7 +55,7 @@ try
     var isDevelopment = builder.Environment.IsDevelopment();
     builder.Services.AddSerilog((_, lc) =>
     {
-        lc  .ReadFrom.Configuration(builder.Configuration)
+        lc.ReadFrom.Configuration(builder.Configuration)
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
@@ -90,10 +90,10 @@ try
                 connectionString: builder.Configuration.GetConnectionString("DefaultConnection"),
                 sinkOptions: new MSSqlServerSinkOptions
                 {
-                    TableName          = "AuditLogs",
+                    TableName = "AuditLogs",
                     AutoCreateSqlTable = true,
-                    BatchPostingLimit  = 50,
-                    BatchPeriod        = TimeSpan.FromSeconds(5),
+                    BatchPostingLimit = 50,
+                    BatchPeriod = TimeSpan.FromSeconds(5),
                 },
                 restrictedToMinimumLevel: LogEventLevel.Warning);
         }
@@ -114,15 +114,15 @@ try
     // --- Identity ---
     builder.Services.AddDefaultIdentity<ApplicationUser>(options =>
     {
-        options.Password.RequireDigit           = true;
-        options.Password.RequiredLength         = 12;
-        options.Password.RequireLowercase       = true;
-        options.Password.RequireUppercase       = true;
+        options.Password.RequireDigit = true;
+        options.Password.RequiredLength = 12;
+        options.Password.RequireLowercase = true;
+        options.Password.RequireUppercase = true;
         options.Password.RequireNonAlphanumeric = true;
-        options.SignIn.RequireConfirmedAccount  = false;
-        options.Lockout.DefaultLockoutTimeSpan  = TimeSpan.FromMinutes(15);
+        options.SignIn.RequireConfirmedAccount = false;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
         options.Lockout.MaxFailedAccessAttempts = 5;
-        options.Lockout.AllowedForNewUsers      = true;
+        options.Lockout.AllowedForNewUsers = true;
     })
     .AddRoles<IdentityRole>()
     .AddEntityFrameworkStores<AppDbContext>();
@@ -157,10 +157,10 @@ try
         options.Cookie.SecurePolicy = isDevelopment
             ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
             : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always;
-        options.Cookie.SameSite     = Microsoft.AspNetCore.Http.SameSiteMode.Strict;
-        options.Cookie.HttpOnly     = true;
-        options.ExpireTimeSpan      = TimeSpan.FromHours(8);
-        options.SlidingExpiration   = true;
+        options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict;
+        options.Cookie.HttpOnly = true;
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = true;
     });
 
     // --- Data Protection (for IApiKeyVault) ---
@@ -170,16 +170,25 @@ try
     if (isDevelopment)
     {
         var dpKeysDir = new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "dp-keys"));
-        if (!dpKeysDir.Exists) dpKeysDir.Create();
+        if (!dpKeysDir.Exists)
+        {
+            dpKeysDir.Create();
+        }
+
         if (!OperatingSystem.IsWindows())
+        {
             dpKeysDir.UnixFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        }
+
         dataProtection.PersistKeysToFileSystem(dpKeysDir);
     }
     else
     {
         var dpBlobConn = builder.Configuration["DataProtection:BlobStorageConnection"];
         if (!string.IsNullOrEmpty(dpBlobConn))
+        {
             dataProtection.PersistKeysToAzureBlobStorage(dpBlobConn, "dataprotection", "keys.xml");
+        }
     }
     builder.Services.AddScoped<IApiKeyVault, ApiKeyVault>();
 
@@ -215,17 +224,17 @@ try
                 .Handle<TimeoutRejectedException>()
                 .Handle<TaskCanceledException>(),
             MaxRetryAttempts = 3,
-            Delay            = TimeSpan.FromSeconds(2),
-            BackoffType      = DelayBackoffType.Exponential,
-            UseJitter        = true,
+            Delay = TimeSpan.FromSeconds(2),
+            BackoffType = DelayBackoffType.Exponential,
+            UseJitter = true,
         });
 
         pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
         {
-            FailureRatio      = 0.5,
-            SamplingDuration  = TimeSpan.FromSeconds(30),
+            FailureRatio = 0.5,
+            SamplingDuration = TimeSpan.FromSeconds(30),
             MinimumThroughput = 5,
-            BreakDuration     = TimeSpan.FromSeconds(30),
+            BreakDuration = TimeSpan.FromSeconds(30),
             ShouldHandle = new PredicateBuilder()
                 .Handle<HttpRequestException>()
                 .Handle<TimeoutRejectedException>(),
@@ -239,10 +248,10 @@ try
     {
         pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
         {
-            FailureRatio      = 0.5,
-            SamplingDuration  = TimeSpan.FromSeconds(30),
+            FailureRatio = 0.5,
+            SamplingDuration = TimeSpan.FromSeconds(30),
             MinimumThroughput = 3,
-            BreakDuration     = TimeSpan.FromSeconds(60),
+            BreakDuration = TimeSpan.FromSeconds(60),
             ShouldHandle = new PredicateBuilder()
                 .Handle<HttpRequestException>()
                 .Handle<TimeoutRejectedException>(),
@@ -263,7 +272,7 @@ try
     builder.Services.AddHyperLiquid(options =>
     {
         var addr = builder.Configuration["Exchanges:Hyperliquid:WalletAddress"];
-        var key  = builder.Configuration["Exchanges:Hyperliquid:PrivateKey"];
+        var key = builder.Configuration["Exchanges:Hyperliquid:PrivateKey"];
         if (!string.IsNullOrEmpty(addr) && addr != "PLACEHOLDER"
             && !string.IsNullOrEmpty(key) && key != "PLACEHOLDER")
         {
@@ -272,7 +281,7 @@ try
     });
     builder.Services.AddAster(options =>
     {
-        var apiKey    = builder.Configuration["Exchanges:Aster:ApiKey"];
+        var apiKey = builder.Configuration["Exchanges:Aster:ApiKey"];
         var apiSecret = builder.Configuration["Exchanges:Aster:ApiSecret"];
         if (!string.IsNullOrEmpty(apiKey) && !string.IsNullOrEmpty(apiSecret))
         {
@@ -287,31 +296,36 @@ try
     builder.Services.AddHttpClient<LighterConnector>(client =>
     {
         client.BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/");
-        client.Timeout     = TimeSpan.FromSeconds(30);
+        client.Timeout = TimeSpan.FromSeconds(30);
     })
     .AddStandardResilienceHandler(options =>
     {
-        options.Retry.MaxRetryAttempts               = 3;
-        options.Retry.Delay                          = TimeSpan.FromSeconds(1);
-        options.Retry.BackoffType                    = DelayBackoffType.Exponential;
-        options.Retry.UseJitter                      = true;
+        options.Retry.MaxRetryAttempts = 3;
+        options.Retry.Delay = TimeSpan.FromSeconds(1);
+        options.Retry.BackoffType = DelayBackoffType.Exponential;
+        options.Retry.UseJitter = true;
         // C4: Never retry POST requests — sendTx is a non-idempotent on-chain transaction
         options.Retry.ShouldHandle = args =>
         {
             if (args.Outcome.Result is HttpResponseMessage resp
                 && resp.RequestMessage?.Method == HttpMethod.Post)
+            {
                 return ValueTask.FromResult(false);
+            }
 
             if (args.Outcome.Exception is not null)
+            {
                 return ValueTask.FromResult(true);
+            }
+
             return ValueTask.FromResult(args.Outcome.Result?.IsSuccessStatusCode == false);
         };
-        options.CircuitBreaker.FailureRatio          = 0.5;
-        options.CircuitBreaker.SamplingDuration      = TimeSpan.FromSeconds(30);
-        options.CircuitBreaker.MinimumThroughput     = 5;
-        options.CircuitBreaker.BreakDuration         = TimeSpan.FromSeconds(30);
-        options.AttemptTimeout.Timeout               = TimeSpan.FromSeconds(10);
-        options.TotalRequestTimeout.Timeout          = TimeSpan.FromSeconds(30);
+        options.CircuitBreaker.FailureRatio = 0.5;
+        options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+        options.CircuitBreaker.MinimumThroughput = 5;
+        options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+        options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(10);
+        options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
     });
     builder.Services.AddScoped<AsterConnector>();
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
@@ -404,10 +418,10 @@ try
     // --- Security response headers ---
     app.Use(async (ctx, next) =>
     {
-        ctx.Response.Headers["X-Frame-Options"]         = "DENY";
-        ctx.Response.Headers["X-Content-Type-Options"]  = "nosniff";
-        ctx.Response.Headers["Referrer-Policy"]         = "strict-origin-when-cross-origin";
-        ctx.Response.Headers["Permissions-Policy"]      = "geolocation=(), microphone=(), camera=()";
+        ctx.Response.Headers["X-Frame-Options"] = "DENY";
+        ctx.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        ctx.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+        ctx.Response.Headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()";
         // F5: CSP URLs are pinned to CDN script versions in Views/Analytics/RateAnalytics.cshtml.
         // When bumping chart.js or adapter versions, update BOTH the CSP URLs here AND the script tags in the view.
         // SRI integrity hashes in the HTML provide an additional verification layer.

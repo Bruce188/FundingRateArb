@@ -521,13 +521,19 @@ public class ExecutionEngineTests
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cl", FilledPrice = 3010m, FilledQuantity = 0.165m
+                Success = true,
+                OrderId = "cl",
+                FilledPrice = 3010m,
+                FilledQuantity = 0.165m
             });
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cs", FilledPrice = 2990m, FilledQuantity = 0.168m
+                Success = true,
+                OrderId = "cs",
+                FilledPrice = 2990m,
+                FilledQuantity = 0.168m
             });
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
@@ -554,18 +560,24 @@ public class ExecutionEngineTests
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cl", FilledPrice = 3010m, FilledQuantity = qty
+                Success = true,
+                OrderId = "cl",
+                FilledPrice = 3010m,
+                FilledQuantity = qty
             });
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
-                Success = true, OrderId = "cs", FilledPrice = 2990m, FilledQuantity = qty
+                Success = true,
+                OrderId = "cs",
+                FilledPrice = 2990m,
+                FilledQuantity = qty
             });
 
         await _sut.ClosePositionAsync(position, CloseReason.Manual, CancellationToken.None);
 
-        var longPnl  = (3010m - 3000m) * qty;
+        var longPnl = (3010m - 3000m) * qty;
         var shortPnl = (3001m - 2990m) * qty;
         var pricePnl = longPnl + shortPnl;
         // exitFees: Hyperliquid long=3010*0.167*0.00045, Lighter short=2990*0.167*0

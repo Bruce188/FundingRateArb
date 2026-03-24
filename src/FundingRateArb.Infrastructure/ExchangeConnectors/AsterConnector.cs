@@ -49,17 +49,19 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
         var markPricesTask = pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token), ct);
+            async token => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token), ct).AsTask();
         var tickersTask = pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetTickersAsync(token), ct);
+            async token => await _restClient.FuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
 
-        await Task.WhenAll(markPricesTask.AsTask(), tickersTask.AsTask());
+        await Task.WhenAll(markPricesTask, tickersTask);
 
         var markPrices = await markPricesTask;
-        var tickers    = await tickersTask;
+        var tickers = await tickersTask;
 
         if (!markPrices.Success)
+        {
             throw new InvalidOperationException(markPrices.Error?.Message ?? "Unknown error");
+        }
 
         var volumeBySymbol = tickers.Success && tickers.Data is not null
             ? tickers.Data.ToDictionary(t => t.Symbol, t => t.QuoteVolume)
@@ -68,13 +70,13 @@ public class AsterConnector : IExchangeConnector, IDisposable
         return markPrices.Data!
             .Select(mp => new FundingRateDto
             {
-                ExchangeName     = ExchangeName,
-                Symbol           = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
-                RawRate          = mp.FundingRate ?? 0m,
-                RatePerHour      = (mp.FundingRate ?? 0m) / 8m, // 8-hour rate normalised to per-hour
-                MarkPrice        = mp.MarkPrice,
-                IndexPrice       = mp.IndexPrice,
-                Volume24hUsd     = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                ExchangeName = ExchangeName,
+                Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
+                RawRate = mp.FundingRate ?? 0m,
+                RatePerHour = (mp.FundingRate ?? 0m) / 8m, // 8-hour rate normalised to per-hour
+                MarkPrice = mp.MarkPrice,
+                IndexPrice = mp.IndexPrice,
+                Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
                 NextSettlementUtc = mp.NextFundingTime,
             })
             .ToList();
@@ -96,14 +98,18 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
         // B1: Guard mark price = 0
         if (markPrice <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+        }
 
         var qtyPrecision = await GetQuantityPrecisionAsync(symbol, ct);
         var quantity = Math.Round(sizeUsdc * leverage / markPrice, qtyPrecision, MidpointRounding.ToZero);
 
         // B3: Zero-quantity guard
         if (quantity <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
+        }
 
         // B2: Abort order if SetLeverageAsync fails
         var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
@@ -144,17 +150,17 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto
             {
                 Success = false,
-                Error   = result.Error?.Message ?? "Unknown error",
+                Error = result.Error?.Message ?? "Unknown error",
             };
         }
 
         var order = result.Data!;
         return new OrderResultDto
         {
-            Success         = true,
-            OrderId         = order.Id.ToString(),
-            FilledPrice     = order.AveragePrice,
-            FilledQuantity  = order.QuantityFilled,
+            Success = true,
+            OrderId = order.Id.ToString(),
+            FilledPrice = order.AveragePrice,
+            FilledQuantity = order.QuantityFilled,
         };
     }
 
@@ -176,10 +182,16 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var posResult = await pipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
         if (!posResult.Success)
+        {
             return new OrderResultDto { Success = false, Error = $"Failed to fetch position: {posResult.Error?.Message ?? "Unknown error"}" };
+        }
+
         var pos = posResult.Data?.FirstOrDefault(p => p.Symbol == symbol && p.PositionAmount != 0);
         if (pos == null)
+        {
             return new OrderResultDto { Success = false, Error = $"No open position for {symbol}" };
+        }
+
         var quantity = Math.Abs(pos.PositionAmount);
 
         // B8: Use separate OrderClose pipeline (no circuit breaker)
@@ -211,16 +223,16 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto
             {
                 Success = false,
-                Error   = result.Error?.Message ?? "Unknown error",
+                Error = result.Error?.Message ?? "Unknown error",
             };
         }
 
         var order = result.Data!;
         return new OrderResultDto
         {
-            Success        = true,
-            OrderId        = order.Id.ToString(),
-            FilledPrice    = order.AveragePrice,
+            Success = true,
+            OrderId = order.Id.ToString(),
+            FilledPrice = order.AveragePrice,
             FilledQuantity = order.QuantityFilled,
         };
     }
@@ -236,11 +248,16 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t),
                 token);
             if (!result.Success)
+            {
                 throw new InvalidOperationException(result.Error?.Message ?? "Unknown error");
+            }
 
             var cache = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
             foreach (var mp in result.Data!)
+            {
                 cache[mp.Symbol] = mp.MarkPrice;
+            }
+
             return cache;
         }, ct);
     }
@@ -261,11 +278,15 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t), ct);
 
             if (!result.Success || result.Data is null)
+            {
                 return ComputeNextSettlement8h();
+            }
 
             var mp = result.Data.FirstOrDefault(m => m.Symbol == symbol);
             if (mp is null)
+            {
                 return ComputeNextSettlement8h();
+            }
 
             return mp.NextFundingTime;
         }
@@ -286,6 +307,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     public void Dispose()
     {
         _markPriceCache.Dispose();
+        GC.SuppressFinalize(this);
     }
 
     /// <inheritdoc />
@@ -298,7 +320,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             ct);
 
         if (!result.Success)
+        {
             throw new InvalidOperationException(result.Error?.Message ?? "Unknown error");
+        }
 
         return result.Data!
             .Where(b => b.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase))
@@ -315,11 +339,15 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 async token => await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token), ct);
 
             if (!result.Success || result.Data is null)
+            {
                 return null;
+            }
 
             var symbolBracket = result.Data.FirstOrDefault();
             if (symbolBracket?.Brackets is null || symbolBracket.Brackets.Length == 0)
+            {
                 return null;
+            }
 
             // The first bracket (lowest notional) has the highest allowed leverage
             return symbolBracket.Brackets.Max(b => b.InitialLeverage);
@@ -333,7 +361,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private async Task<int> GetQuantityPrecisionAsync(string symbol, CancellationToken ct)
     {
         if (_quantityPrecisionCache.TryGetValue(symbol, out var cached))
+        {
             return cached;
+        }
 
         try
         {
@@ -344,7 +374,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             if (result.Success && result.Data?.Symbols != null)
             {
                 foreach (var s in result.Data.Symbols)
+                {
                     _quantityPrecisionCache[s.Name] = s.QuantityPrecision;
+                }
             }
         }
         catch (Exception ex)

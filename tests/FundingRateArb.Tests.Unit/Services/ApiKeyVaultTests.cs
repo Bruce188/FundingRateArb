@@ -21,7 +21,7 @@ public class ApiKeyVaultTests
         const string plaintext = "super-secret-api-key-12345";
 
         var ciphertext = _sut.Encrypt(plaintext);
-        var result     = _sut.Decrypt(ciphertext);
+        var result = _sut.Decrypt(ciphertext);
 
         result.Should().Be(plaintext);
     }
@@ -43,7 +43,7 @@ public class ApiKeyVaultTests
     public void RoundTrip_WorksForVariousInputs(string plaintext)
     {
         var ciphertext = _sut.Encrypt(plaintext);
-        var result     = _sut.Decrypt(ciphertext);
+        var result = _sut.Decrypt(ciphertext);
 
         result.Should().Be(plaintext);
     }

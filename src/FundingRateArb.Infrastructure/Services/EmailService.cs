@@ -110,10 +110,14 @@ public class EmailService : IEmailService
             var response = await client.SendEmailAsync(msg, ct);
 
             if (response.IsSuccessStatusCode)
+            {
                 _logger.LogInformation("Daily summary email sent to {Email}", recipientEmail);
+            }
             else
+            {
                 _logger.LogWarning("SendGrid returned {StatusCode} for daily summary to {Email}",
                     response.StatusCode, recipientEmail);
+            }
         }
         catch (Exception ex)
         {

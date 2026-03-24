@@ -73,7 +73,9 @@ public class MarketDataStreamManager : BackgroundService
                     foreach (var stream in _streams)
                     {
                         if (!stream.IsConnected)
+                        {
                             _logger.LogWarning("WebSocket stream disconnected: {Exchange}", stream.ExchangeName);
+                        }
                     }
                 }
                 catch (Exception ex)

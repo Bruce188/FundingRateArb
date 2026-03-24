@@ -21,7 +21,10 @@ public class AlertsController : Controller
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var alerts = User.IsInRole("Admin")
             ? await _uow.Alerts.GetAllAsync()
@@ -62,13 +65,22 @@ public class AlertsController : Controller
     public async Task<IActionResult> MarkAsRead(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
         var alert = await _uow.Alerts.GetByIdAsync(id);
 
-        if (alert is null) return NotFound();
+        if (alert is null)
+        {
+            return NotFound();
+        }
 
         if (!User.IsInRole("Admin") && alert.UserId != userId)
+        {
             return Forbid();
+        }
 
         alert.IsRead = true;
         _uow.Alerts.Update(alert);

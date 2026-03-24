@@ -12,7 +12,7 @@ public class RateAnalyticsService : IRateAnalyticsService
     private static List<ZScoreAlertDto>? _zScoreCache;
     private static decimal _zScoreCacheThreshold;
     private static DateTime _zScoreCacheExpiry = DateTime.MinValue;
-    private static readonly object _zScoreCacheLock = new();
+    private static readonly object ZScoreCacheLock = new();
 
     public RateAnalyticsService(IUnitOfWork uow) => _uow = uow;
 
@@ -30,7 +30,9 @@ public class RateAnalyticsService : IRateAnalyticsService
 
         var aggregates = aggregatesTask.Result;
         if (aggregates.Count == 0)
+        {
             return [];
+        }
 
         var assets = assetsTask.Result;
         var exchanges = exchangesTask.Result;
@@ -47,7 +49,9 @@ public class RateAnalyticsService : IRateAnalyticsService
         {
             var orderedRates = group.OrderBy(a => a.HourUtc).ToList();
             if (orderedRates.Count == 0)
+            {
                 continue;
+            }
 
             var hourlyPoints = orderedRates.Select(a => new HourlyRatePoint(
                 a.HourUtc, a.AvgRatePerHour, a.MinRate, a.MaxRate, a.AvgVolume24hUsd)).ToList();
@@ -89,7 +93,9 @@ public class RateAnalyticsService : IRateAnalyticsService
 
         var aggregates = aggregatesTask.Result;
         if (aggregates.Count == 0)
+        {
             return [];
+        }
 
         var exchanges = exchangesTask.Result;
         var exchangeLookup = exchanges.ToDictionary(e => e.Id, e => e.Name);
@@ -112,14 +118,19 @@ public class RateAnalyticsService : IRateAnalyticsService
         // Build a matrix: exchangeId → sparse array indexed by allHours position
         var hourIndex = new Dictionary<DateTime, int>(allHours.Count);
         for (int h = 0; h < allHours.Count; h++)
+        {
             hourIndex[allHours[h]] = h;
+        }
 
         var rateMatrix = new Dictionary<int, decimal?[]>(exchangeIds.Count);
         foreach (var exId in exchangeIds)
         {
             var arr = new decimal?[allHours.Count];
             foreach (var (hour, rate) in byExchange[exId])
+            {
                 arr[hourIndex[hour]] = rate;
+            }
+
             rateMatrix[exId] = arr;
         }
 
@@ -147,7 +158,9 @@ public class RateAnalyticsService : IRateAnalyticsService
                 }
 
                 if (series1.Count < 2)
+                {
                     continue;
+                }
 
                 var pearsonR = ComputePearsonCorrelation(series1, series2);
 
@@ -169,7 +182,9 @@ public class RateAnalyticsService : IRateAnalyticsService
 
         var aggregates = await _uow.FundingRates.GetHourlyAggregatesAsync(assetId, exchangeId, from, to, ct);
         if (aggregates.Count == 0)
+        {
             return [];
+        }
 
         // Group by hour-of-day (0-23)
         var byHour = aggregates
@@ -190,7 +205,7 @@ public class RateAnalyticsService : IRateAnalyticsService
     public async Task<List<ZScoreAlertDto>> GetZScoreAlertsAsync(decimal threshold = 2.0m, CancellationToken ct = default)
     {
         // Return cached results if within 5-minute TTL and same threshold
-        lock (_zScoreCacheLock)
+        lock (ZScoreCacheLock)
         {
             if (_zScoreCache is not null
                 && _zScoreCacheThreshold == threshold
@@ -213,7 +228,9 @@ public class RateAnalyticsService : IRateAnalyticsService
 
         var latestRates = await latestRatesTask;
         if (latestRates.Count == 0)
+        {
             return [];
+        }
 
         var stats = await statsTask;
         var statsByPair = stats.ToDictionary(s => (s.AssetId, s.ExchangeId));
@@ -229,10 +246,14 @@ public class RateAnalyticsService : IRateAnalyticsService
         {
             var key = (latest.AssetId, latest.ExchangeId);
             if (!statsByPair.TryGetValue(key, out var pairStats))
+            {
                 continue;
+            }
 
             if (pairStats.StdDev == 0)
+            {
                 continue;
+            }
 
             var zScore = (latest.AvgRatePerHour - pairStats.Mean) / pairStats.StdDev;
 
@@ -253,7 +274,7 @@ public class RateAnalyticsService : IRateAnalyticsService
             .ToList();
 
         // Cache for 5 minutes — Z-scores from hourly data change at most hourly
-        lock (_zScoreCacheLock)
+        lock (ZScoreCacheLock)
         {
             _zScoreCache = capped;
             _zScoreCacheThreshold = threshold;
@@ -266,14 +287,18 @@ public class RateAnalyticsService : IRateAnalyticsService
     public static string ComputeTrendDirection(List<FundingRateHourlyAggregate> orderedRates)
     {
         if (orderedRates.Count < 2)
+        {
             return "stable";
+        }
 
         // Compare last 6h avg vs previous 6h avg
         var totalCount = orderedRates.Count;
         var halfSize = Math.Min(6, totalCount / 2);
 
         if (halfSize == 0)
+        {
             return "stable";
+        }
 
         var recentAvg = orderedRates
             .Skip(totalCount - halfSize)
@@ -284,7 +309,9 @@ public class RateAnalyticsService : IRateAnalyticsService
             .Average(a => a.AvgRatePerHour);
 
         if (previousAvg == 0)
+        {
             return recentAvg > 0 ? "rising" : recentAvg < 0 ? "falling" : "stable";
+        }
 
         var change = (recentAvg - previousAvg) / Math.Abs(previousAvg);
 
@@ -296,7 +323,9 @@ public class RateAnalyticsService : IRateAnalyticsService
     public static decimal ComputePearsonCorrelation(List<decimal> x, List<decimal> y)
     {
         if (x.Count != y.Count || x.Count < 2)
+        {
             return 0m;
+        }
 
         var n = x.Count;
         var avgX = x.Average();
@@ -313,7 +342,9 @@ public class RateAnalyticsService : IRateAnalyticsService
         }
 
         if (sumX2 == 0 || sumY2 == 0)
+        {
             return 0m;
+        }
 
         // Cast to double before multiplying to avoid decimal overflow on large series
         var denominator = (double)sumX2 * (double)sumY2;
@@ -323,7 +354,9 @@ public class RateAnalyticsService : IRateAnalyticsService
     public static decimal ComputeStdDev(List<decimal> values, decimal mean)
     {
         if (values.Count < 2)
+        {
             return 0m;
+        }
 
         var sumSquaredDiffs = values.Sum(v => (v - mean) * (v - mean));
         return (decimal)Math.Sqrt((double)(sumSquaredDiffs / (values.Count - 1)));
@@ -334,7 +367,7 @@ public class RateAnalyticsService : IRateAnalyticsService
     /// </summary>
     public static void ResetZScoreCache()
     {
-        lock (_zScoreCacheLock)
+        lock (ZScoreCacheLock)
         {
             _zScoreCache = null;
             _zScoreCacheExpiry = DateTime.MinValue;

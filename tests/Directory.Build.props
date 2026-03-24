@@ -1,0 +1,14 @@
+<Project>
+  <!-- Import root Directory.Build.props -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)..'))" />
+
+  <PropertyGroup>
+    <!-- Suppress test-specific analyzer rules:
+         CA1707: Underscores in test method names (standard xUnit naming convention)
+         CA1001: Test classes with disposable fields (xUnit handles lifecycle)
+         CA2201: Exception type too general (acceptable in test assertions)
+         CA1859: Concrete type recommendations (test mocking patterns)
+         CA1816: GC.SuppressFinalize in test helpers -->
+    <NoWarn>$(NoWarn);CA1707;CA1001;CA2201;CA1859;CA1816</NoWarn>
+  </PropertyGroup>
+</Project>

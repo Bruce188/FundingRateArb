@@ -27,7 +27,10 @@ public class AnalyticsController : Controller
     public async Task<IActionResult> Index(int skip = 0, int take = 50, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
@@ -47,11 +50,17 @@ public class AnalyticsController : Controller
     public async Task<IActionResult> PositionAnalysis(int id, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var analytics = await _tradeAnalytics.GetPositionAnalyticsAsync(id, effectiveUserId, ct);
-        if (analytics is null) return NotFound();
+        if (analytics is null)
+        {
+            return NotFound();
+        }
 
         return View(analytics);
     }
@@ -84,11 +93,15 @@ public class AnalyticsController : Controller
     private async Task<(HashSet<int>? AssetIds, HashSet<int>? ExchangeIds)> GetUserScopeAsync()
     {
         if (User.IsInRole("Admin"))
+        {
             return (null, null);
+        }
 
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null)
+        {
             return (new HashSet<int>(), new HashSet<int>());
+        }
 
         var assetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId)).ToHashSet();
         var exchangeIds = (await _userSettings.GetUserEnabledExchangeIdsAsync(userId)).ToHashSet();
@@ -103,7 +116,9 @@ public class AnalyticsController : Controller
     {
         var (assetIds, exchangeIds) = await GetUserScopeAsync();
         if (assetIds is null && exchangeIds is null)
+        {
             return (null, null, null, null);
+        }
 
         var assets = await _uow.Assets.GetActiveAsync();
         var exchanges = await _uow.Exchanges.GetActiveAsync();
@@ -142,7 +157,9 @@ public class AnalyticsController : Controller
         var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
 
         if (assetId.HasValue && !IsAssetInScope(assetId.Value, scopeAssetIds))
+        {
             return Forbid();
+        }
 
         // F4: Fetch assets and exchanges once, reuse for dropdown + scope filtering
         var assets = await _uow.Assets.GetActiveAsync();
@@ -163,7 +180,10 @@ public class AnalyticsController : Controller
         {
             var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, ct: ct);
             if (scopeExchangeIds is not null)
+            {
                 trends = trends.Where(t => scopeExchangeIds.Contains(t.ExchangeId)).ToList();
+            }
+
             vm.Trends = trends;
         }
 
@@ -179,16 +199,22 @@ public class AnalyticsController : Controller
         var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
 
         if (!IsAssetInScope(assetId, scopeAssetIds))
+        {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
+        }
 
         // F17: Validate exchangeId against scope before calling service
         if (exchangeId.HasValue && !IsExchangeInScope(exchangeId.Value, scopeExchangeIds))
+        {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
+        }
 
         // Pass exchangeId to service for server-side filtering (avoids fetching all exchanges)
         var trends = await _rateAnalytics.GetRateTrendsAsync(assetId, days, exchangeId, ct);
         if (scopeExchangeIds is not null)
+        {
             trends = trends.Where(t => scopeExchangeIds.Contains(t.ExchangeId)).ToList();
+        }
 
         return Json(trends);
     }
@@ -201,7 +227,9 @@ public class AnalyticsController : Controller
 
         // F6: Validate asset scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
+        {
             return Forbid();
+        }
 
         var correlations = await _rateAnalytics.GetCrossExchangeCorrelationAsync(assetId, days, ct);
         var asset = await _uow.Assets.GetByIdAsync(assetId);
@@ -234,9 +262,14 @@ public class AnalyticsController : Controller
 
         // F6: Validate both asset and exchange scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
+        {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
+        }
+
         if (!IsExchangeInScope(exchangeId, scopeExchangeIds))
+        {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
+        }
 
         var patterns = await _rateAnalytics.GetTimeOfDayPatternsAsync(assetId, exchangeId, days, ct);
         return Json(patterns);

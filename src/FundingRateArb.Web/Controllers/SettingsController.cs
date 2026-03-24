@@ -28,7 +28,10 @@ public class SettingsController : Controller
     public async Task<IActionResult> ApiKeys()
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var exchanges = await _settings.GetAvailableExchangesAsync();
         // Fetch all credentials in a single query to avoid N+1
@@ -60,12 +63,15 @@ public class SettingsController : Controller
         string? privateKey)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         // Input validation: reject suspiciously long or whitespace-only values
-        const int MaxCredentialLength = 500;
-        if (apiKey?.Length > MaxCredentialLength || apiSecret?.Length > MaxCredentialLength
-            || walletAddress?.Length > MaxCredentialLength || privateKey?.Length > MaxCredentialLength)
+        const int maxCredentialLength = 500;
+        if (apiKey?.Length > maxCredentialLength || apiSecret?.Length > maxCredentialLength
+            || walletAddress?.Length > maxCredentialLength || privateKey?.Length > maxCredentialLength)
         {
             TempData["Error"] = "Credential value exceeds maximum allowed length.";
             return RedirectToAction(nameof(ApiKeys));
@@ -88,7 +94,10 @@ public class SettingsController : Controller
     public async Task<IActionResult> DeleteApiKey(int exchangeId)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         await _settings.DeleteCredentialAsync(userId, exchangeId);
         TempData["Success"] = "API key deleted successfully.";
@@ -139,8 +148,16 @@ public class SettingsController : Controller
 
     private static string? MaskSecret(string? value)
     {
-        if (value is null) return null;
-        if (value.Length < 10) return "****";
+        if (value is null)
+        {
+            return null;
+        }
+
+        if (value.Length < 10)
+        {
+            return "****";
+        }
+
         return value[..4] + "..." + value[^4..];
     }
 
@@ -152,7 +169,10 @@ public class SettingsController : Controller
     public async Task<IActionResult> Preferences()
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var exchanges = await _settings.GetAvailableExchangesAsync();
         var enabledExchangeIds = await _settings.GetUserEnabledExchangeIdsAsync(userId);
@@ -196,7 +216,10 @@ public class SettingsController : Controller
         List<int> enabledAssetIds)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         enabledExchangeIds ??= [];
         enabledAssetIds ??= [];
@@ -237,7 +260,10 @@ public class SettingsController : Controller
     public async Task<IActionResult> Configuration()
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
@@ -285,7 +311,10 @@ public class SettingsController : Controller
         }
 
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
@@ -327,7 +356,10 @@ public class SettingsController : Controller
     public async Task<IActionResult> ResetConfiguration()
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var globalConfig = await _uow.BotConfig.GetActiveAsync();
         var userConfig = await _settings.GetOrCreateConfigAsync(userId);
@@ -365,7 +397,7 @@ public class SettingsController : Controller
         Enum.GetValues<AllocationStrategy>()
             .Select(s => new SelectListItem
             {
-                Value = ((int)s).ToString(),
+                Value = ((int)s).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Text = s.ToString(),
                 Selected = s == selected
             })

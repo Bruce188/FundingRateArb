@@ -18,7 +18,9 @@ public class KeyPoolTests
 
         var results = new List<IExchangeConnector>();
         for (int i = 0; i < 6; i++)
+        {
             results.Add(pool.GetNext()!);
+        }
 
         // All three connectors should appear in the first 3 calls
         results.Take(3).Should().Contain(c1);
@@ -41,7 +43,9 @@ public class KeyPoolTests
         {
             var connector = pool.GetNext()!;
             if (!pool.IsInCooldown(connector))
+            {
                 results.Add(connector);
+            }
         }
 
         results.Should().Contain(c2);

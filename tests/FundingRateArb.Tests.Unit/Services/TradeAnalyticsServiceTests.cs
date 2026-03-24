@@ -154,9 +154,16 @@ public class TradeAnalyticsServiceTests
     {
         var pos = new ArbitragePosition
         {
-            Id = 10, UserId = "owner-123", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
-            SizeUsdc = 500m, EntrySpreadPerHour = 0.001m, AccumulatedFunding = 5m,
-            OpenedAt = DateTime.UtcNow.AddHours(-5), Status = PositionStatus.Open,
+            Id = 10,
+            UserId = "owner-123",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 500m,
+            EntrySpreadPerHour = 0.001m,
+            AccumulatedFunding = 5m,
+            OpenedAt = DateTime.UtcNow.AddHours(-5),
+            Status = PositionStatus.Open,
             Asset = new Asset { Symbol = "ETH" },
             LongExchange = new Exchange { Name = "Hyperliquid" },
             ShortExchange = new Exchange { Name = "Aster" },
@@ -175,9 +182,16 @@ public class TradeAnalyticsServiceTests
     {
         var pos = new ArbitragePosition
         {
-            Id = 11, UserId = "owner-123", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
-            SizeUsdc = 500m, EntrySpreadPerHour = 0.001m, AccumulatedFunding = 5m,
-            OpenedAt = DateTime.UtcNow.AddHours(-5), Status = PositionStatus.Open,
+            Id = 11,
+            UserId = "owner-123",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 500m,
+            EntrySpreadPerHour = 0.001m,
+            AccumulatedFunding = 5m,
+            OpenedAt = DateTime.UtcNow.AddHours(-5),
+            Status = PositionStatus.Open,
             Asset = new Asset { Symbol = "ETH" },
             LongExchange = new Exchange { Name = "Hyperliquid" },
             ShortExchange = new Exchange { Name = "Aster" },
@@ -195,9 +209,16 @@ public class TradeAnalyticsServiceTests
     {
         var pos = new ArbitragePosition
         {
-            Id = 12, UserId = "owner-123", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
-            SizeUsdc = 500m, EntrySpreadPerHour = 0.001m, AccumulatedFunding = 5m,
-            OpenedAt = DateTime.UtcNow.AddHours(-5), Status = PositionStatus.Open,
+            Id = 12,
+            UserId = "owner-123",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 500m,
+            EntrySpreadPerHour = 0.001m,
+            AccumulatedFunding = 5m,
+            OpenedAt = DateTime.UtcNow.AddHours(-5),
+            Status = PositionStatus.Open,
             Asset = new Asset { Symbol = "ETH" },
             LongExchange = new Exchange { Name = "Hyperliquid" },
             ShortExchange = new Exchange { Name = "Aster" },

@@ -30,6 +30,7 @@ public class PositionHealthMonitorTests
         AlertThreshold = 0.0001m,
         StopLossPct = 0.15m,
         MaxHoldTimeHours = 72,
+        AdaptiveHoldEnabled = true, // matches BotConfiguration default; explicit for test clarity
     };
 
     public PositionHealthMonitorTests()
@@ -419,7 +420,10 @@ public class PositionHealthMonitorTests
             {
                 callCount++;
                 if (callCount == 1)
+                {
                     throw new HttpRequestException("Simulated timeout");
+                }
+
                 return 3000m;
             });
         _mockShortConnector
@@ -562,7 +566,9 @@ public class PositionHealthMonitorTests
 
         // Run 5 cycles to accumulate failures
         for (int i = 0; i < 5; i++)
+        {
             await _sut.CheckAndActAsync();
+        }
 
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PriceFeedFailure && al.Severity == AlertSeverity.Critical)),
@@ -689,6 +695,44 @@ public class PositionHealthMonitorTests
         var result = PositionHealthMonitor.DetermineCloseReason(pos, config, 0m, 2m, 0.001m);
 
         result.Should().BeNull();
+    }
+
+    // ── B2: AdaptiveHoldEnabled=true default behavior coverage ────────────────
+
+    [Fact]
+    public void DetermineCloseReason_DefaultAdaptiveHoldEnabled_ZeroFunding_ReturnsNull()
+    {
+        // Validates that the new default (AdaptiveHoldEnabled=true) with zero
+        // accumulated funding does not trigger a close — the guard `pos.AccumulatedFunding > 0`
+        // prevents entering the PnL-target branch.
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 0m;
+        pos.SizeUsdc = 100m;
+
+        // Use DefaultConfig which now explicitly sets AdaptiveHoldEnabled = true
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, DefaultConfig, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().BeNull("zero accumulated funding should not trigger PnL-target exit");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DefaultAdaptiveHoldEnabled_FundingExceedsTarget_ReturnsPnlTargetReached()
+    {
+        // Validates that with the default AdaptiveHoldEnabled=true, a position whose
+        // AccumulatedFunding >= TargetPnlMultiplier * entryFee triggers PnlTargetReached.
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045 + 0.0 = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = DefaultConfig.TargetPnlMultiplier(2.0) * 0.45 = 0.90
+        pos.AccumulatedFunding = 0.90m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, DefaultConfig, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
     }
 
     [Fact]
@@ -856,8 +900,8 @@ public class PositionHealthMonitorTests
         var pos = MakeOpenPosition();
         pos.SizeUsdc = 100m;
         pos.EntryFeesUsdc = 0.5m;
-        pos.LongExchange = null;
-        pos.ShortExchange = null;
+        pos.LongExchange = null!;
+        pos.ShortExchange = null!;
 
         var config = new BotConfiguration
         {
@@ -953,6 +997,40 @@ public class PositionHealthMonitorTests
         BotOrchestrator.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
+    }
+
+    // ── NB6: AdaptiveHoldEnabled=true tested through CheckAndActAsync ──────────
+
+    [Fact]
+    public async Task CheckAndActAsync_DefaultAdaptiveHold_ClosesWhenFundingExceedsTarget()
+    {
+        // Use default BotConfiguration (AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0)
+        var defaultConfig = new BotConfiguration
+        {
+            IsEnabled = true,
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.10m,
+            MaxHoldTimeHours = 48,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(defaultConfig);
+
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        // GetTakerFeeRate("Hyperliquid", "Lighter") = 0.00045
+        // estimatedEntryFee = 100 * 5 * 2 * 0.00045 = 0.45
+        // target = 2.0 * 0.45 = 0.90
+        pos.AccumulatedFunding = 1.0m; // exceeds target of 0.90
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices();
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.PnlTargetReached);
     }
 
     [Fact]
