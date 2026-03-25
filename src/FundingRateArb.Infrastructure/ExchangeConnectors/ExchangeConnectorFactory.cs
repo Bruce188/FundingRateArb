@@ -104,6 +104,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey),
             "aster" => CreateAsterConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKey),
+            "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
         };
 

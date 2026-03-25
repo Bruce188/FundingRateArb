@@ -3,7 +3,7 @@
 
 @{
     ViewData["Title"] = "Bot Configuration";
-    var d = Model.AdminDefaults;
+    var d = Model.AdminDefaults!;
 }
 
 <h2 class="mb-3">Settings</h2>
@@ -41,21 +41,21 @@
                     <label asp-for="TotalCapitalUsdc" class="form-label"></label>
                     <input asp-for="TotalCapitalUsdc" class="form-control" type="number" step="any" min="1" />
                     <div class="form-text">How much capital the bot can use for trading</div>
-                    @if (d != null) { <small class="text-muted">(Default: @d.TotalCapitalUsdc USDC)</small> }
+                    <small class="text-muted">(Default: @d.TotalCapitalUsdc USDC)</small>
                     <span asp-validation-for="TotalCapitalUsdc" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
                     <label asp-for="DefaultLeverage" class="form-label"></label>
                     <input asp-for="DefaultLeverage" class="form-control" type="number" min="1" max="50" />
                     <div class="form-text">Leverage multiplier applied to positions</div>
-                    @if (d != null) { <small class="text-muted">(Default: @(d.DefaultLeverage)x)</small> }
+                    <small class="text-muted">(Default: @(d.DefaultLeverage)x)</small>
                     <span asp-validation-for="DefaultLeverage" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
                     <label asp-for="MaxConcurrentPositions" class="form-label"></label>
                     <input asp-for="MaxConcurrentPositions" class="form-control" type="number" min="1" max="20" />
                     <div class="form-text">Maximum simultaneous open positions</div>
-                    @if (d != null) { <small class="text-muted">(Default: @d.MaxConcurrentPositions)</small> }
+                    <small class="text-muted">(Default: @d.MaxConcurrentPositions)</small>
                     <span asp-validation-for="MaxConcurrentPositions" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
@@ -63,14 +63,14 @@
                     <input asp-for="OpenThreshold" class="form-control" type="number" step="any" />
                     <div class="form-text">Minimum spread to open a position</div>
                     <small id="open-threshold-pct" class="text-info"></small>
-                    @if (d != null) { <small class="text-muted">(Default: @d.OpenThreshold)</small> }
+                    <small class="text-muted">(Default: @d.OpenThreshold)</small>
                     <span asp-validation-for="OpenThreshold" class="text-danger"></span>
                 </div>
                 <div class="col-md-4">
                     <label asp-for="StopLossPct" class="form-label"></label>
                     <input asp-for="StopLossPct" class="form-control" type="number" step="any" min="0.001" max="1" />
                     <div class="form-text">Stop loss as fraction of capital (e.g. 0.10 = 10%)</div>
-                    @if (d != null) { <small class="text-muted">(Default: @d.StopLossPct)</small> }
+                    <small class="text-muted">(Default: @d.StopLossPct)</small>
                     <span asp-validation-for="StopLossPct" class="text-danger"></span>
                 </div>
             </div>
@@ -97,7 +97,7 @@
                         <input asp-for="CloseThreshold" class="form-control" type="number" step="any" />
                         <div class="form-text">Rate at which to close a position</div>
                         <small id="close-threshold-pct" class="text-info"></small>
-                        @if (d != null) { <small class="text-muted">(Default: @d.CloseThreshold)</small> }
+                        <small class="text-muted">(Default: @d.CloseThreshold)</small>
                         <span asp-validation-for="CloseThreshold" class="text-danger"></span>
                     </div>
                     <div class="col-md-6">
@@ -105,7 +105,7 @@
                         <input asp-for="AlertThreshold" class="form-control" type="number" step="any" />
                         <div class="form-text">Rate at which to trigger alerts</div>
                         <small id="alert-threshold-pct" class="text-info"></small>
-                        @if (d != null) { <small class="text-muted">(Default: @d.AlertThreshold)</small> }
+                        <small class="text-muted">(Default: @d.AlertThreshold)</small>
                         <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                     </div>
                 </div>
@@ -120,43 +120,43 @@
                     <div class="col-md-4">
                         <label asp-for="DailyDrawdownPausePct" class="form-label"></label>
                         <input asp-for="DailyDrawdownPausePct" class="form-control" type="number" step="any" min="0.01" max="1" />
-                        <div class="form-text">Fraction of capital -- pauses new opens when hit</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.DailyDrawdownPausePct)</small> }
+                        <div class="form-text">Fraction of capital &mdash; pauses new opens when hit</div>
+                        <small class="text-muted">(Default: @d.DailyDrawdownPausePct)</small>
                         <span asp-validation-for="DailyDrawdownPausePct" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="ConsecutiveLossPause" class="form-label"></label>
                         <input asp-for="ConsecutiveLossPause" class="form-control" type="number" min="1" max="20" />
                         <div class="form-text">Pause after N consecutive losing positions</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.ConsecutiveLossPause)</small> }
+                        <small class="text-muted">(Default: @d.ConsecutiveLossPause)</small>
                         <span asp-validation-for="ConsecutiveLossPause" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MaxHoldTimeHours" class="form-label"></label>
                         <input asp-for="MaxHoldTimeHours" class="form-control" type="number" min="1" max="720" />
                         <div class="form-text">Maximum time to hold a position open</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MaxHoldTimeHours h)</small> }
+                        <small class="text-muted">(Default: @d.MaxHoldTimeHours h)</small>
                         <span asp-validation-for="MaxHoldTimeHours" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MaxCapitalPerPosition" class="form-label"></label>
                         <input asp-for="MaxCapitalPerPosition" class="form-control" type="number" step="any" min="0.01" max="1" />
                         <div class="form-text">Fraction of total capital per position</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MaxCapitalPerPosition)</small> }
+                        <small class="text-muted">(Default: @d.MaxCapitalPerPosition)</small>
                         <span asp-validation-for="MaxCapitalPerPosition" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MaxExposurePerAsset" class="form-label"></label>
                         <input asp-for="MaxExposurePerAsset" class="form-control" type="number" step="any" min="0.01" max="1" />
                         <div class="form-text">Max fraction of capital in any single asset</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MaxExposurePerAsset)</small> }
+                        <small class="text-muted">(Default: @d.MaxExposurePerAsset)</small>
                         <span asp-validation-for="MaxExposurePerAsset" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MaxExposurePerExchange" class="form-label"></label>
                         <input asp-for="MaxExposurePerExchange" class="form-control" type="number" step="any" min="0.01" max="1" />
                         <div class="form-text">Max fraction of capital on any single exchange</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MaxExposurePerExchange)</small> }
+                        <small class="text-muted">(Default: @d.MaxExposurePerExchange)</small>
                         <span asp-validation-for="MaxExposurePerExchange" class="text-danger"></span>
                     </div>
                 </div>
@@ -172,14 +172,14 @@
                         <label asp-for="AllocationStrategy" class="form-label"></label>
                         <select asp-for="AllocationStrategy" class="form-select" asp-items="Model.AllocationStrategyOptions"></select>
                         <div class="form-text">Concentrated = all capital on best APR. Spread modes distribute across top N.</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.AllocationStrategy)</small> }
+                        <small class="text-muted">(Default: @d.AllocationStrategy)</small>
                         <span asp-validation-for="AllocationStrategy" class="text-danger"></span>
                     </div>
                     <div class="col-md-6">
                         <label asp-for="AllocationTopN" class="form-label"></label>
                         <input asp-for="AllocationTopN" class="form-control" type="number" min="1" max="20" />
                         <div class="form-text">Number of opportunities to spread capital across</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.AllocationTopN)</small> }
+                        <small class="text-muted">(Default: @d.AllocationTopN)</small>
                         <span asp-validation-for="AllocationTopN" class="text-danger"></span>
                     </div>
                 </div>
@@ -195,35 +195,35 @@
                         <label asp-for="FeeAmortizationHours" class="form-label"></label>
                         <input asp-for="FeeAmortizationHours" class="form-control" type="number" step="any" min="1" max="168" />
                         <div class="form-text">Hours over which to amortize entry/exit fees</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.FeeAmortizationHours h)</small> }
+                        <small class="text-muted">(Default: @d.FeeAmortizationHours h)</small>
                         <span asp-validation-for="FeeAmortizationHours" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MinPositionSizeUsdc" class="form-label"></label>
                         <input asp-for="MinPositionSizeUsdc" class="form-control" type="number" step="any" min="1" />
                         <div class="form-text">Minimum margin per position (exchange minimums)</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MinPositionSizeUsdc USDC)</small> }
+                        <small class="text-muted">(Default: @d.MinPositionSizeUsdc USDC)</small>
                         <span asp-validation-for="MinPositionSizeUsdc" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="MinVolume24hUsdc" class="form-label"></label>
                         <input asp-for="MinVolume24hUsdc" class="form-control" type="number" step="any" min="0" />
                         <div class="form-text">Minimum 24h volume to consider an asset</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.MinVolume24hUsdc USDC)</small> }
+                        <small class="text-muted">(Default: @d.MinVolume24hUsdc USDC)</small>
                         <span asp-validation-for="MinVolume24hUsdc" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="RateStalenessMinutes" class="form-label"></label>
                         <input asp-for="RateStalenessMinutes" class="form-control" type="number" min="1" max="60" />
                         <div class="form-text">Max age for funding rates before considered stale</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.RateStalenessMinutes min)</small> }
+                        <small class="text-muted">(Default: @d.RateStalenessMinutes min)</small>
                         <span asp-validation-for="RateStalenessMinutes" class="text-danger"></span>
                     </div>
                     <div class="col-md-4">
                         <label asp-for="FundingWindowMinutes" class="form-label"></label>
                         <input asp-for="FundingWindowMinutes" class="form-control" type="number" min="1" max="60" />
                         <div class="form-text">Minutes before settlement to boost opportunity scoring</div>
-                        @if (d != null) { <small class="text-muted">(Default: @d.FundingWindowMinutes min)</small> }
+                        <small class="text-muted">(Default: @d.FundingWindowMinutes min)</small>
                         <span asp-validation-for="FundingWindowMinutes" class="text-danger"></span>
                     </div>
                 </div>

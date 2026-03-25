@@ -181,7 +181,30 @@ public class PositionsControllerTests
         _mockExecution.Verify(e => e.ClosePositionAsync(null!, position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // Test 6: Trader's Index only returns positions owned by that trader
+    // Test 6: Non-admin closing position with null UserId returns Forbid
+    [Fact]
+    public async Task Close_WhenNonAdminAndPositionHasNullUserId_ReturnsForbid()
+    {
+        // Position from legacy data where UserId is null — ownership check fails for non-admin
+        var position = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = null!,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        var result = await controller.Close(position.Id);
+
+        result.Should().BeOfType<ForbidResult>();
+        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Test 7: Trader's Index only returns positions owned by that trader
     [Fact]
     public async Task Index_TraderSeesOnlyOwnPositions()
     {

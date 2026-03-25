@@ -641,6 +641,8 @@ public class ExecutionEngine : IExecutionEngine
     /// <summary>
     /// Decrypts credential and returns the raw values needed for connector creation.
     /// Isolates decryption in its own scope to minimize plaintext credential lifetime.
+    /// Note: .NET strings are immutable — decrypted credentials persist in memory until GC.
+    /// This is an inherent platform limitation; SecureString is deprecated and not supported by exchange SDKs.
     /// </summary>
     private (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? Error) DecryptAndCreateConnectorArgs(
         UserExchangeCredential cred, string exchangeName, string userId)

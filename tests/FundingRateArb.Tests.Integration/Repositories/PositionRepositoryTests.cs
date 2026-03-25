@@ -140,5 +140,33 @@ public class PositionRepositoryTests : IDisposable
         results[0].ShortExchange.Should().NotBeNull();
     }
 
+    // ── NB6: GetClosedKpiProjectionSinceAsync integration test ──
+
+    [Fact]
+    public async Task GetClosedKpiProjectionSinceAsync_ReturnsLightweightProjection()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+        pos.RealizedPnl = 12.5m;
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetClosedKpiProjectionSinceAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — projection fields should be populated correctly
+        results.Should().HaveCount(1);
+        var dto = results[0];
+        dto.RealizedPnl.Should().Be(12.5m);
+        dto.AssetSymbol.Should().Be("BTC");
+        dto.LongExchangeName.Should().NotBeNullOrEmpty();
+        dto.ShortExchangeName.Should().NotBeNullOrEmpty();
+        dto.ClosedAt.Should().NotBeNull();
+        dto.OpenedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
     public void Dispose() => _fixture.Dispose();
 }

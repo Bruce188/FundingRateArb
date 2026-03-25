@@ -1512,4 +1512,158 @@ public class ExecutionEngineTests
         _mockFactory.Verify(f => f.CreateForUserAsync("Lighter",
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
+
+    // ── B2: CoinGlass guard in CreateForUserAsync ─────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_CoinGlassExchange_ReturnsError()
+    {
+        // CoinGlass is a read-only data source; CreateForUserAsync should throw NotSupportedException
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetSymbol = "ETH",
+            AssetId = 1,
+            LongExchangeName = "CoinGlass",
+            LongExchangeId = 4,
+            ShortExchangeName = "Lighter",
+            ShortExchangeId = 2,
+            SpreadPerHour = 0.0005m,
+            NetYieldPerHour = 0.0004m,
+            LongMarkPrice = 3000m,
+            ShortMarkPrice = 3001m,
+        };
+
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 4, Exchange = new Exchange { Name = "CoinGlass" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("CoinGlass", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, opp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("Exchange connection failed");
+    }
+
+    // ── NB5: Null Exchange navigation property on credential ─────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_CredentialWithNullExchangeNavProperty_ReturnsError()
+    {
+        // Credential exists but Exchange navigation property is null (not loaded via Include)
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = null! };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Hyperliquid");
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── N7: ClosePositionAsync disposal tests ────────────────────────────────
+
+    [Fact]
+    public async Task ClosePositionAsync_Success_DisposesConnectorsAfterCompletion()
+    {
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var mockDisposableShort = new Mock<IExchangeConnector>();
+        mockDisposableShort.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableShort.Object);
+
+        mockDisposableLong
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long-1", 3000m));
+        mockDisposableShort
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-short-1", 3001m));
+
+        var position = new ArbitragePosition
+        {
+            Id = 50,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+        mockDisposableShort.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_Failure_DisposesConnectorsAfterCompletion()
+    {
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var mockDisposableShort = new Mock<IExchangeConnector>();
+        mockDisposableShort.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableShort.Object);
+
+        mockDisposableLong
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Close failed on long"));
+        mockDisposableShort
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Close failed on short"));
+
+        var position = new ArbitragePosition
+        {
+            Id = 51,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+        mockDisposableShort.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+    }
 }

@@ -158,4 +158,17 @@ public class SettingsControllerTests
         model.AdminDefaults!.TotalCapitalUsdc.Should().Be(0m);
         model.AdminDefaults.DefaultLeverage.Should().Be(0);
     }
+
+    [Fact]
+    public async Task ResetConfiguration_NullGlobalConfig_RedirectsWithErrorMessage()
+    {
+        SetupAuthenticatedUser();
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).Returns(Task.FromResult<BotConfiguration>(null!));
+
+        var result = await _controller.ResetConfiguration();
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("Configuration");
+        _controller.TempData["Error"].Should().Be("No global configuration found. Cannot reset to defaults.");
+    }
 }

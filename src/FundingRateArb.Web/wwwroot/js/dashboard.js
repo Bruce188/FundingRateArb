@@ -332,6 +332,12 @@
             retryBtn.textContent = "Triggering...";
             try {
                 var token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+                if (!token) {
+                    console.warn("CSRF token not found — retry request skipped");
+                    retryBtn.textContent = "Retry Now";
+                    retryBtn.disabled = false;
+                    return;
+                }
                 var resp = await fetch("/Dashboard/RetryNow", {
                     method: "POST",
                     headers: {

@@ -37,12 +37,17 @@ public class AnalyticsController : Controller
         take = Math.Clamp(take, 1, 200);
         days = Math.Clamp(days, 1, 365);
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
-        var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
+        var since = DateTime.UtcNow.AddDays(-days);
 
+        // NB8: Run independent queries concurrently
+        var summariesTask = _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
+        var projectionsTask = _uow.Positions.GetClosedKpiProjectionSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
+        await Task.WhenAll(summariesTask, projectionsTask);
+
+        var summaries = summariesTask.Result;
         // B1: Use lightweight projection to avoid loading full entity graphs with 3 Include joins.
         // Only scalar fields needed for KPI computation are fetched from the database.
-        var since = DateTime.UtcNow.AddDays(-days);
-        var closedProjections = await _uow.Positions.GetClosedKpiProjectionSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
+        var closedProjections = projectionsTask.Result;
 
         // N1: Single-pass accumulator for all scalar KPIs — avoids ~9 separate list traversals
         var now = DateTime.UtcNow;
@@ -192,10 +197,14 @@ public class AnalyticsController : Controller
         var from = DateTime.UtcNow.AddDays(-days);
         var to = DateTime.UtcNow;
 
-        var snapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
+        // N8: Run independent queries concurrently
+        var snapshotsTask = _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
+        var statsTask = _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
+        await Task.WhenAll(snapshotsTask, statsTask);
 
+        var snapshots = snapshotsTask.Result;
         // Compute skip reason distribution via SQL aggregate (single query, no double-fetch)
-        var (totalSeen, opened, skipReasonDict) = await _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
+        var (totalSeen, opened, skipReasonDict) = statsTask.Result;
         var skipReasons = skipReasonDict
             .Select(kvp => new SkipReasonStat { Reason = kvp.Key, Count = kvp.Value })
             .OrderByDescending(s => s.Count)

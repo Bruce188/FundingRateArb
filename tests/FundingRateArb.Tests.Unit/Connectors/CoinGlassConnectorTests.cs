@@ -532,4 +532,54 @@ public class CoinGlassConnectorTests
         rates.Should().HaveCount(1);
         rates[0].RatePerHour.Should().Be(0.0008m / 8); // negative defaults to 8
     }
+
+    // N6: API key header absence test
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WithoutApiKey_DoesNotSendHeader()
+    {
+        var json = """
+        {
+            "code": "0",
+            "data": [
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRateByExchange": {
+                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                    }
+                }
+            ]
+        }
+        """;
+
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Callback<HttpRequestMessage, CancellationToken>((req, _) => capturedRequest = req)
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
+            })
+            .Build();
+
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        await sut.GetFundingRatesAsync();
+
+        capturedRequest.Should().NotBeNull();
+        capturedRequest!.Headers.Contains("CG-API-KEY").Should().BeFalse();
+    }
 }

@@ -140,6 +140,8 @@ public class PositionsController : Controller
             return BadRequest("Position is already closed.");
         }
 
+        // Admin close intentionally uses the position owner's credentials (admin acts on behalf of user).
+        // The audit log records both the acting admin and the position owner for accountability.
         _logger.LogInformation("User {ActingUserId} closing position {PositionId} owned by {OwnerUserId}", userId, id, position.UserId);
         await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";

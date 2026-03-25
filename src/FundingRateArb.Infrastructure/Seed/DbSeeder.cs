@@ -115,11 +115,13 @@ public static class DbSeeder
             {
                 Name = "CoinGlass",
                 ApiBaseUrl = "https://open-api-v3.coinglass.com",
+                WsBaseUrl = "",
                 FundingInterval = FundingInterval.EightHourly,
                 FundingIntervalHours = 8,
                 SupportsSubAccounts = false,
                 IsActive = true,
-                Description = "CoinGlass aggregator — read-only funding rate data from Binance, Bybit, OKX, dYdX, etc."
+                // Data-only source: cannot be used for trading. CreateForUserAsync throws NotSupportedException.
+                Description = "CoinGlass aggregator — read-only funding rate data source. Not a trading venue."
             }
         );
         await context.SaveChangesAsync();

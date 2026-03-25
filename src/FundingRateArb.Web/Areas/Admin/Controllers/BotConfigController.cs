@@ -49,7 +49,12 @@ public class BotConfigController : Controller
             ConsecutiveLossPause = config.ConsecutiveLossPause,
             FundingWindowMinutes = config.FundingWindowMinutes,
             MaxExposurePerAsset = config.MaxExposurePerAsset,
-            MaxExposurePerExchange = config.MaxExposurePerExchange
+            MaxExposurePerExchange = config.MaxExposurePerExchange,
+            TargetPnlMultiplier = config.TargetPnlMultiplier,
+            AdaptiveHoldEnabled = config.AdaptiveHoldEnabled,
+            RebalanceEnabled = config.RebalanceEnabled,
+            RebalanceMinImprovement = config.RebalanceMinImprovement,
+            MaxRebalancesPerCycle = config.MaxRebalancesPerCycle
         };
 
         return View(model);
@@ -88,6 +93,11 @@ public class BotConfigController : Controller
         config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
         config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
         config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
+        config.TargetPnlMultiplier = model.TargetPnlMultiplier!.Value;
+        config.AdaptiveHoldEnabled = model.AdaptiveHoldEnabled;
+        config.RebalanceEnabled = model.RebalanceEnabled;
+        config.RebalanceMinImprovement = model.RebalanceMinImprovement!.Value;
+        config.MaxRebalancesPerCycle = model.MaxRebalancesPerCycle!.Value;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)

@@ -95,6 +95,9 @@
 
         if (!alert.message) return;
 
+        // Skip toast when the alerts table is visible (alerts.js handles display on that page)
+        if (document.getElementById("alerts-table-body")) return;
+
         var severityClass = alert.severity === 1 ? "text-bg-danger"
             : alert.severity === 2 ? "text-bg-warning"
             : "text-bg-info";
@@ -128,11 +131,12 @@
     });
 
     // Web Lock to prevent browser tab sleeping
+    var lockResolver = null;
     if (navigator && navigator.locks && navigator.locks.request) {
-        var promise = new Promise(function (res) { window._lockResolver = res; });
+        var promise = new Promise(function (res) { lockResolver = res; });
         navigator.locks.request("signalr_lock", { mode: "shared" }, function () { return promise; });
         window.addEventListener("beforeunload", function () {
-            if (window._lockResolver) window._lockResolver();
+            if (lockResolver) lockResolver();
         });
     }
 
