@@ -19,6 +19,8 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// </summary>
 public class CoinGlassConnector : IExchangeConnector
 {
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
     private readonly string? _apiKey;
@@ -43,7 +45,7 @@ public class CoinGlassConnector : IExchangeConnector
 
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, "api/futures/funding-rates-all");
+        using var request = new HttpRequestMessage(HttpMethod.Get, "api/futures/funding-rates-all");
         if (!string.IsNullOrEmpty(_apiKey))
         {
             request.Headers.Add("CG-API-KEY", _apiKey);
@@ -60,83 +62,88 @@ public class CoinGlassConnector : IExchangeConnector
             return [];
         }
 
-        if (!response.IsSuccessStatusCode)
+        using (response)
         {
-            _logger.LogWarning("CoinGlass API returned {StatusCode}", response.StatusCode);
-            return [];
-        }
-
-        CoinGlassResponse? data;
-        try
-        {
-            data = await response.Content.ReadFromJsonAsync<CoinGlassResponse>(
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true }, ct);
-        }
-        catch (JsonException ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse CoinGlass response");
-            return [];
-        }
-
-        if (data?.Data is null || data.Code != "0")
-        {
-            _logger.LogDebug("CoinGlass returned no data or error code {Code}", data?.Code);
-            return [];
-        }
-
-        var rates = new List<FundingRateDto>();
-
-        foreach (var item in data.Data)
-        {
-            if (string.IsNullOrEmpty(item.Symbol))
+            if (!response.IsSuccessStatusCode)
             {
-                continue;
+                _logger.LogWarning("CoinGlass API returned {StatusCode}", response.StatusCode);
+                return [];
             }
 
-            // Normalize symbol: remove trailing "USDT", "USD", "PERP" suffixes
-            var symbol = NormalizeSymbol(item.Symbol);
-
-            if (item.FundingRateByExchange is null)
+            CoinGlassResponse? data;
+            try
             {
-                continue;
+                data = await response.Content.ReadFromJsonAsync<CoinGlassResponse>(JsonOptions, ct);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse CoinGlass response");
+                return [];
             }
 
-            foreach (var (exchangeName, exchangeRate) in item.FundingRateByExchange)
+            if (data?.Data is null || data.Code != "0")
             {
-                // Skip exchanges with dedicated connectors
-                if (DirectConnectorExchanges.Contains(exchangeName))
+                _logger.LogDebug("CoinGlass returned no data or error code {Code}", data?.Code);
+                return [];
+            }
+
+            var rates = new List<FundingRateDto>();
+
+            foreach (var item in data.Data)
+            {
+                if (string.IsNullOrEmpty(item.Symbol))
                 {
                     continue;
                 }
 
-                if (exchangeRate?.Rate is null)
+                // Normalize symbol: remove trailing "USDT", "USD", "PERP" suffixes
+                var symbol = NormalizeSymbol(item.Symbol);
+
+                if (item.FundingRateByExchange is null)
                 {
                     continue;
                 }
 
-                var rawRate = exchangeRate.Rate.Value;
-
-                // CoinGlass rates are per-interval (typically 8h). Convert to per-hour.
-                var intervalHours = exchangeRate.IntervalHours > 0 ? exchangeRate.IntervalHours : 8;
-                var ratePerHour = rawRate / intervalHours;
-
-                rates.Add(new FundingRateDto
+                foreach (var (exchangeName, exchangeRate) in item.FundingRateByExchange)
                 {
-                    ExchangeName = exchangeName,
-                    Symbol = symbol,
-                    RawRate = rawRate,
-                    RatePerHour = ratePerHour,
-                    MarkPrice = exchangeRate.MarkPrice ?? 0,
-                    IndexPrice = exchangeRate.IndexPrice ?? 0,
-                    Volume24hUsd = item.Volume24hUsd ?? 0,
-                });
+                    // Skip exchanges with dedicated connectors
+                    if (DirectConnectorExchanges.Contains(exchangeName))
+                    {
+                        continue;
+                    }
+
+                    if (exchangeRate?.Rate is null)
+                    {
+                        continue;
+                    }
+
+                    var rawRate = exchangeRate.Rate.Value;
+
+                    // CoinGlass rates are per-interval (typically 8h). Convert to per-hour.
+                    var intervalHours = exchangeRate.IntervalHours > 0 ? exchangeRate.IntervalHours : 8;
+                    var ratePerHour = rawRate / intervalHours;
+
+                    rates.Add(new FundingRateDto
+                    {
+                        // Map to "CoinGlass" exchange entity so FundingRateFetcher can resolve
+                        // the ExchangeId. The original source exchange is logged for diagnostics.
+                        ExchangeName = "CoinGlass",
+                        Symbol = symbol,
+                        RawRate = rawRate,
+                        RatePerHour = ratePerHour,
+                        MarkPrice = exchangeRate.MarkPrice ?? 0,
+                        IndexPrice = exchangeRate.IndexPrice ?? 0,
+                        Volume24hUsd = item.Volume24hUsd ?? 0,
+                    });
+                }
             }
-        }
 
-        _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates from {Exchanges} exchanges",
-            rates.Count, rates.Select(r => r.ExchangeName).Distinct().Count());
+            _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates from {Exchanges} source exchanges",
+                rates.Count, rates.Select(r => r.Symbol).Distinct().Count());
 
-        return rates;
+            return rates;
+
+        } // end using response
     }
 
     public Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)

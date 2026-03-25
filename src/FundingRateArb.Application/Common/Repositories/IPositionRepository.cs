@@ -20,6 +20,11 @@ public interface IPositionRepository
     Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status);
     Task<List<ArbitragePosition>> GetClosedSinceAsync(DateTime since);
+
+    /// <summary>Returns closed positions with navigation properties (Asset, LongExchange, ShortExchange) loaded.
+    /// Use for analytics that need GroupBy on navigation properties.</summary>
+    Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, CancellationToken ct = default);
+
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }

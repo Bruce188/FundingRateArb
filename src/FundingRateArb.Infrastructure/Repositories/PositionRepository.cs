@@ -74,6 +74,23 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since)
             .ToListAsync();
 
+    public Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        return query.ToListAsync(ct);
+    }
+
     public Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)

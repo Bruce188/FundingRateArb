@@ -36,14 +36,10 @@ public class AnalyticsController : Controller
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
 
-        // Compute summary KPIs from closed positions
-        var closedPositions = await _uow.Positions.GetClosedSinceAsync(DateTime.MinValue);
-        if (effectiveUserId is not null)
-        {
-            closedPositions = closedPositions.Where(p => p.UserId == effectiveUserId).ToList();
-        }
+        // Compute summary KPIs from closed positions — filter by userId in SQL, include navigation properties
+        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(DateTime.MinValue, effectiveUserId, ct);
 
-        var closedWithPnl = closedPositions.Where(p => p.Status == PositionStatus.Closed && p.RealizedPnl.HasValue).ToList();
+        var closedWithPnl = closedPositions.Where(p => p.RealizedPnl.HasValue).ToList();
         var now = DateTime.UtcNow;
 
         var vm = new PositionAnalyticsIndexViewModel
@@ -124,14 +120,10 @@ public class AnalyticsController : Controller
 
         var snapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
 
-        // Compute skip reason distribution from all snapshots in the period
-        var allSnapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, 0, 10000, ct);
-        var totalSeen = allSnapshots.Count;
-        var opened = allSnapshots.Count(s => s.WasOpened);
-        var skipReasons = allSnapshots
-            .Where(s => !s.WasOpened && !string.IsNullOrEmpty(s.SkipReason))
-            .GroupBy(s => s.SkipReason!)
-            .Select(g => new SkipReasonStat { Reason = g.Key, Count = g.Count() })
+        // Compute skip reason distribution via SQL aggregate (single query, no double-fetch)
+        var (totalSeen, opened, skipReasonDict) = await _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
+        var skipReasons = skipReasonDict
+            .Select(kvp => new SkipReasonStat { Reason = kvp.Key, Count = kvp.Value })
             .OrderByDescending(s => s.Count)
             .ToList();
 

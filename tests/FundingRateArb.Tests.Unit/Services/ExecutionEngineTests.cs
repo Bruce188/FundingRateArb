@@ -1195,4 +1195,89 @@ public class ExecutionEngineTests
 
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
     }
+
+    // ── B2/B3: Credential failure path tests ─────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_MissingLongCredentials_ReturnsError()
+    {
+        // Only short credential exists — long exchange has no credentials
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential> { shortCred });
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Hyperliquid");
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPositionAsync_FactoryReturnsNullConnector_ReturnsError()
+    {
+        // Credentials exist but factory returns null for long exchange
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Hyperliquid");
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_MissingCredentials_CreatesCriticalAlertAndPreservesStatus()
+    {
+        var position = MakeOpenPosition();
+        // Return empty credential list — no credentials for any exchange
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential>());
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        // Position status must NOT change — remains Open for manual intervention
+        position.Status.Should().Be(PositionStatus.Open);
+
+        // A critical alert must be created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("Manual intervention required"))),
+            Times.Once);
+
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_FactoryReturnsNullConnector_CreatesCriticalAlertAndPreservesStatus()
+    {
+        var position = MakeOpenPosition();
+        // Credentials exist but factory returns null for long exchange
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        // Position status must NOT change — remains Open for manual intervention
+        position.Status.Should().Be(PositionStatus.Open);
+
+        // A critical alert must be created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("Manual intervention required"))),
+            Times.Once);
+
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

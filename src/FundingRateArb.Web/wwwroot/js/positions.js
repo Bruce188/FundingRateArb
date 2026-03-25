@@ -8,7 +8,9 @@
     var connection = window.appSignalR.connection;
 
     connection.on("ReceivePositionUpdate", function (position) {
-        var row = document.querySelector('tr[data-position-id="' + position.id + '"]');
+        var positionId = parseInt(position.id, 10);
+        if (isNaN(positionId)) return;
+        var row = document.querySelector('tr[data-position-id="' + positionId + '"]');
         if (!row) return;
 
         // Update current spread

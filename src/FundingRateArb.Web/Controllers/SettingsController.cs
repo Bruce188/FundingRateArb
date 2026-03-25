@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
@@ -267,7 +268,31 @@ public class SettingsController : Controller
 
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
-        var adminDefaults = await _uow.BotConfig.GetActiveAsync();
+        var globalConfig = await _uow.BotConfig.GetActiveAsync();
+
+        var adminDefaults = new DefaultConfigSummaryDto
+        {
+            TotalCapitalUsdc = globalConfig.TotalCapitalUsdc,
+            DefaultLeverage = globalConfig.DefaultLeverage,
+            MaxConcurrentPositions = globalConfig.MaxConcurrentPositions,
+            MaxCapitalPerPosition = globalConfig.MaxCapitalPerPosition,
+            OpenThreshold = globalConfig.OpenThreshold,
+            CloseThreshold = globalConfig.CloseThreshold,
+            AlertThreshold = globalConfig.AlertThreshold,
+            StopLossPct = globalConfig.StopLossPct,
+            MaxHoldTimeHours = globalConfig.MaxHoldTimeHours,
+            DailyDrawdownPausePct = globalConfig.DailyDrawdownPausePct,
+            ConsecutiveLossPause = globalConfig.ConsecutiveLossPause,
+            MaxExposurePerAsset = globalConfig.MaxExposurePerAsset,
+            MaxExposurePerExchange = globalConfig.MaxExposurePerExchange,
+            AllocationStrategy = globalConfig.AllocationStrategy,
+            AllocationTopN = globalConfig.AllocationTopN,
+            FeeAmortizationHours = globalConfig.FeeAmortizationHours,
+            MinPositionSizeUsdc = globalConfig.MinPositionSizeUsdc,
+            MinVolume24hUsdc = globalConfig.MinVolume24hUsdc,
+            RateStalenessMinutes = globalConfig.RateStalenessMinutes,
+            FundingWindowMinutes = globalConfig.FundingWindowMinutes,
+        };
 
         var model = new UserConfigViewModel
         {
