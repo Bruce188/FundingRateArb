@@ -302,30 +302,27 @@ public class AnalyticsControllerTests
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
 
-        var closedPositions = new List<ArbitragePosition>
+        var closedProjections = new List<ClosedPositionKpiDto>
         {
             new()
             {
                 RealizedPnl = 10m, ClosedAt = DateTime.UtcNow.AddDays(-1), OpenedAt = DateTime.UtcNow.AddDays(-1).AddHours(-2),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
             },
             new()
             {
                 RealizedPnl = -5m, ClosedAt = DateTime.UtcNow.AddDays(-2), OpenedAt = DateTime.UtcNow.AddDays(-2).AddHours(-4),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
             },
             new()
             {
                 RealizedPnl = 20m, ClosedAt = DateTime.UtcNow.AddDays(-3), OpenedAt = DateTime.UtcNow.AddDays(-3).AddHours(-1),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "BTC" }, LongExchange = new Exchange { Name = "Lighter" }, ShortExchange = new Exchange { Name = "Hyperliquid" },
+                AssetSymbol = "BTC", LongExchangeName = "Lighter", ShortExchangeName = "Hyperliquid",
             },
         };
 
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(closedPositions);
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedProjections);
 
         var result = await _controller.Index();
 
@@ -347,8 +344,8 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         var result = await _controller.Index();
 
@@ -372,13 +369,13 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         await _controller.Index();
 
         // effectiveUserId should be null for admin
-        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockPositionRepo.Verify(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -387,13 +384,13 @@ public class AnalyticsControllerTests
         SetupNormalUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync("test-user-id", 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         await _controller.Index();
 
         // effectiveUserId should be the user's ID for non-admin
-        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockPositionRepo.Verify(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── PassedOpportunities tests (NB4) ─────────────────────────
@@ -408,33 +405,30 @@ public class AnalyticsControllerTests
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
 
         var now = DateTime.UtcNow;
-        var closedPositions = new List<ArbitragePosition>
+        var closedProjections = new List<ClosedPositionKpiDto>
         {
             // Position closed 2 days ago — within 7d and 30d windows
             new()
             {
                 RealizedPnl = 10m, ClosedAt = now.AddDays(-2), OpenedAt = now.AddDays(-2).AddHours(-1),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
             },
             // Position closed 15 days ago — outside 7d, within 30d
             new()
             {
                 RealizedPnl = 20m, ClosedAt = now.AddDays(-15), OpenedAt = now.AddDays(-15).AddHours(-2),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "BTC" }, LongExchange = new Exchange { Name = "Lighter" }, ShortExchange = new Exchange { Name = "Hyperliquid" },
+                AssetSymbol = "BTC", LongExchangeName = "Lighter", ShortExchangeName = "Hyperliquid",
             },
             // Position closed 60 days ago — outside both 7d and 30d windows
             new()
             {
                 RealizedPnl = 50m, ClosedAt = now.AddDays(-60), OpenedAt = now.AddDays(-60).AddHours(-3),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
             },
         };
 
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(closedPositions);
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedProjections);
 
         var result = await _controller.Index();
 
@@ -535,13 +529,13 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         await _controller.Index(days: inputDays);
 
         // Verify the since date passed to the repository corresponds to the clamped days value
-        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(
+        _mockPositionRepo.Verify(r => r.GetClosedKpiProjectionSinceAsync(
             It.Is<DateTime>(d => d >= DateTime.UtcNow.AddDays(-expectedDays - 1) && d <= DateTime.UtcNow.AddDays(-expectedDays + 1)),
             null, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -555,8 +549,8 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, expectedSkip, It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         await _controller.Index(skip: inputSkip);
 
@@ -573,8 +567,8 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, expectedTake, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ClosedPositionKpiDto>());
 
         await _controller.Index(take: inputTake);
 
@@ -628,26 +622,24 @@ public class AnalyticsControllerTests
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
 
-        var closedPositions = new List<ArbitragePosition>
+        var closedProjections = new List<ClosedPositionKpiDto>
         {
             // Position with PnL — should be included
             new()
             {
                 RealizedPnl = 10m, ClosedAt = DateTime.UtcNow.AddDays(-1), OpenedAt = DateTime.UtcNow.AddDays(-1).AddHours(-2),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
             },
             // Position with null PnL — should be excluded from KPIs
             new()
             {
                 RealizedPnl = null, ClosedAt = DateTime.UtcNow.AddDays(-2), OpenedAt = DateTime.UtcNow.AddDays(-2).AddHours(-3),
-                Status = PositionStatus.Closed,
-                Asset = new Asset { Symbol = "BTC" }, LongExchange = new Exchange { Name = "Lighter" }, ShortExchange = new Exchange { Name = "Hyperliquid" },
+                AssetSymbol = "BTC", LongExchangeName = "Lighter", ShortExchangeName = "Hyperliquid",
             },
         };
 
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(closedPositions);
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedProjections);
 
         var result = await _controller.Index();
 
@@ -661,5 +653,45 @@ public class AnalyticsControllerTests
         // Per-asset should only include ETH (the one with PnL)
         vm.PerAsset.Should().HaveCount(1);
         vm.PerAsset[0].AssetSymbol.Should().Be("ETH");
+    }
+
+    // ── NB7: ClosedAt=null edge case ─────────────────────────────
+
+    [Fact]
+    public async Task Index_ClosedAtNull_UsesZeroFallbackForHoldTime()
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+
+        var closedProjections = new List<ClosedPositionKpiDto>
+        {
+            // Position with PnL but null ClosedAt — should contribute 0 hours to avg hold time
+            new()
+            {
+                RealizedPnl = 10m, ClosedAt = null, OpenedAt = DateTime.UtcNow.AddDays(-1),
+                AssetSymbol = "ETH", LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            },
+            // Normal position with ClosedAt set
+            new()
+            {
+                RealizedPnl = 20m, ClosedAt = DateTime.UtcNow.AddHours(-2), OpenedAt = DateTime.UtcNow.AddHours(-6),
+                AssetSymbol = "BTC", LongExchangeName = "Lighter", ShortExchangeName = "Hyperliquid",
+            },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetClosedKpiProjectionSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedProjections);
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionAnalyticsIndexViewModel>().Subject;
+
+        vm.TotalTrades.Should().Be(2);
+        // AvgHoldTimeHours: position 1 has 0 hours (null ClosedAt), position 2 has ~4 hours
+        // Average should be ~2 hours (0 + ~4) / 2
+        vm.AvgHoldTimeHours.Should().BeGreaterThan(0);
+        vm.AvgHoldTimeHours.Should().BeLessThan(4m);
     }
 }

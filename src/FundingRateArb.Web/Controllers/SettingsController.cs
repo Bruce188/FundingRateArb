@@ -270,29 +270,32 @@ public class SettingsController : Controller
 
         var globalConfig = await _uow.BotConfig.GetActiveAsync();
 
-        var adminDefaults = new DefaultConfigSummaryDto
-        {
-            TotalCapitalUsdc = globalConfig.TotalCapitalUsdc,
-            DefaultLeverage = globalConfig.DefaultLeverage,
-            MaxConcurrentPositions = globalConfig.MaxConcurrentPositions,
-            MaxCapitalPerPosition = globalConfig.MaxCapitalPerPosition,
-            OpenThreshold = globalConfig.OpenThreshold,
-            CloseThreshold = globalConfig.CloseThreshold,
-            AlertThreshold = globalConfig.AlertThreshold,
-            StopLossPct = globalConfig.StopLossPct,
-            MaxHoldTimeHours = globalConfig.MaxHoldTimeHours,
-            DailyDrawdownPausePct = globalConfig.DailyDrawdownPausePct,
-            ConsecutiveLossPause = globalConfig.ConsecutiveLossPause,
-            MaxExposurePerAsset = globalConfig.MaxExposurePerAsset,
-            MaxExposurePerExchange = globalConfig.MaxExposurePerExchange,
-            AllocationStrategy = globalConfig.AllocationStrategy,
-            AllocationTopN = globalConfig.AllocationTopN,
-            FeeAmortizationHours = globalConfig.FeeAmortizationHours,
-            MinPositionSizeUsdc = globalConfig.MinPositionSizeUsdc,
-            MinVolume24hUsdc = globalConfig.MinVolume24hUsdc,
-            RateStalenessMinutes = globalConfig.RateStalenessMinutes,
-            FundingWindowMinutes = globalConfig.FundingWindowMinutes,
-        };
+        // NB8: Guard against null — if no BotConfiguration exists, use an empty DTO with default values
+        var adminDefaults = globalConfig is not null
+            ? new DefaultConfigSummaryDto
+            {
+                TotalCapitalUsdc = globalConfig.TotalCapitalUsdc,
+                DefaultLeverage = globalConfig.DefaultLeverage,
+                MaxConcurrentPositions = globalConfig.MaxConcurrentPositions,
+                MaxCapitalPerPosition = globalConfig.MaxCapitalPerPosition,
+                OpenThreshold = globalConfig.OpenThreshold,
+                CloseThreshold = globalConfig.CloseThreshold,
+                AlertThreshold = globalConfig.AlertThreshold,
+                StopLossPct = globalConfig.StopLossPct,
+                MaxHoldTimeHours = globalConfig.MaxHoldTimeHours,
+                DailyDrawdownPausePct = globalConfig.DailyDrawdownPausePct,
+                ConsecutiveLossPause = globalConfig.ConsecutiveLossPause,
+                MaxExposurePerAsset = globalConfig.MaxExposurePerAsset,
+                MaxExposurePerExchange = globalConfig.MaxExposurePerExchange,
+                AllocationStrategy = globalConfig.AllocationStrategy,
+                AllocationTopN = globalConfig.AllocationTopN,
+                FeeAmortizationHours = globalConfig.FeeAmortizationHours,
+                MinPositionSizeUsdc = globalConfig.MinPositionSizeUsdc,
+                MinVolume24hUsdc = globalConfig.MinVolume24hUsdc,
+                RateStalenessMinutes = globalConfig.RateStalenessMinutes,
+                FundingWindowMinutes = globalConfig.FundingWindowMinutes,
+            }
+            : new DefaultConfigSummaryDto();
 
         var model = new UserConfigViewModel
         {
@@ -390,6 +393,12 @@ public class SettingsController : Controller
         }
 
         var globalConfig = await _uow.BotConfig.GetActiveAsync();
+        if (globalConfig is null)
+        {
+            TempData["Error"] = "No global configuration found. Cannot reset to defaults.";
+            return RedirectToAction(nameof(Configuration));
+        }
+
         var userConfig = await _settings.GetOrCreateConfigAsync(userId);
 
         userConfig.OpenThreshold = globalConfig.OpenThreshold;

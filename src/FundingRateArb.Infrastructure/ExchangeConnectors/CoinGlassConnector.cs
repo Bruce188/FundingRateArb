@@ -34,8 +34,9 @@ public class CoinGlassConnector : IExchangeConnector
         "Hyperliquid", "Lighter", "Aster"
     };
 
-    /// <summary>Common symbol suffixes to strip during normalization.</summary>
-    private static readonly string[] SymbolSuffixes = ["USDT", "USD", "-PERP", "_PERP", "/USD", "/USDT"];
+    /// <summary>Common symbol suffixes to strip during normalization.
+    /// Ordered longest-first so compound suffixes (e.g., "USD_PERP") are matched before simple ones.</summary>
+    private static readonly string[] SymbolSuffixes = ["/USDT", "/USD", "USDT_PERP", "USD_PERP", "USDT-PERP", "USD-PERP", "-PERP", "_PERP", "USDT", "USD"];
 
     public CoinGlassConnector(HttpClient httpClient, IConfiguration configuration, ILogger<CoinGlassConnector> logger)
     {

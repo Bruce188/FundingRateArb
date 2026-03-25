@@ -1,3 +1,4 @@
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 
@@ -25,6 +26,10 @@ public interface IPositionRepository
     /// Use for analytics that need GroupBy on navigation properties.
     /// The maxRows parameter limits the SQL query result set size to prevent unbounded memory usage.</summary>
     Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default);
+
+    /// <summary>Returns a lightweight projection of closed positions for KPI computation.
+    /// Projects only scalar fields needed for aggregation, avoiding full entity graph materialization.</summary>
+    Task<List<ClosedPositionKpiDto>> GetClosedKpiProjectionSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default);
 
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);

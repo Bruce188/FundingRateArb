@@ -131,4 +131,31 @@ public class SettingsControllerTests
 
         result.Should().BeOfType<UnauthorizedResult>();
     }
+
+    [Fact]
+    public async Task Configuration_Get_NullGlobalConfig_ReturnsViewWithEmptyDefaults()
+    {
+        SetupAuthenticatedUser();
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).Returns(Task.FromResult<BotConfiguration>(null!));
+        _mockSettings
+            .Setup(s => s.GetOrCreateConfigAsync("test-user-id"))
+            .ReturnsAsync(new UserConfiguration
+            {
+                IsEnabled = true,
+                TotalCapitalUsdc = 1000m,
+                DefaultLeverage = 3,
+                MaxConcurrentPositions = 2,
+            });
+
+        // Should not throw NullReferenceException
+        var result = await _controller.Configuration();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<UserConfigViewModel>().Subject;
+
+        // AdminDefaults should be an empty DTO with default values, not null
+        model.AdminDefaults.Should().NotBeNull();
+        model.AdminDefaults!.TotalCapitalUsdc.Should().Be(0m);
+        model.AdminDefaults.DefaultLeverage.Should().Be(0);
+    }
 }

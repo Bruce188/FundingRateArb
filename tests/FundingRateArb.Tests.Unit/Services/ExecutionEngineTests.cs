@@ -1214,6 +1214,8 @@ public class ExecutionEngineTests
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        // N6: SaveAsync must NOT be called on credential failure
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1232,6 +1234,8 @@ public class ExecutionEngineTests
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        // N6: SaveAsync must NOT be called on credential failure
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1340,6 +1344,124 @@ public class ExecutionEngineTests
             Times.Once);
 
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── B2: Null/empty userId tests ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task OpenPositionAsync_NullOrEmptyUserId_ReturnsError(string? userId)
+    {
+        var result = await _sut.OpenPositionAsync(userId!, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("User ID is required");
+        // No exchange calls should have been made
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockFactory.Verify(f => f.CreateForUserAsync(
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task ClosePositionAsync_NullOrEmptyUserId_CreatesAlertAndReturns(string? userId)
+    {
+        var position = MakeOpenPosition();
+
+        await _sut.ClosePositionAsync(userId!, position, CloseReason.Manual, CancellationToken.None);
+
+        // Position status must NOT change — remains Open for manual intervention
+        position.Status.Should().Be(PositionStatus.Open);
+
+        // A critical alert must be created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("Manual intervention required"))),
+            Times.Once);
+
+        // No exchange calls should have been made
+        _mockLongConnector.Verify(c => c.ClosePositionAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── NB5: Connector disposal tests ──────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_Success_DisposesConnectorsAfterCompletion()
+    {
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var mockDisposableShort = new Mock<IExchangeConnector>();
+        mockDisposableShort.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableShort.Object);
+
+        mockDisposableLong
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        mockDisposableShort
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        mockDisposableLong
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        mockDisposableShort
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+        mockDisposableShort.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPositionAsync_Failure_DisposesConnectorsAfterCompletion()
+    {
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+        var mockDisposableShort = new Mock<IExchangeConnector>();
+        mockDisposableShort.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableShort.Object);
+
+        mockDisposableLong
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        mockDisposableShort
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        mockDisposableLong
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long failed"));
+        mockDisposableShort
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short failed"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+        mockDisposableShort.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
     }
 
     // ── NB6: CreateForUserAsync exception path ──────────────────────────────────

@@ -300,6 +300,7 @@ public class CoinGlassConnectorTests
     [InlineData("BTC", "BTC")]       // NB5: no suffix to strip
     [InlineData("LINK-", "LINK")]     // NB5: trailing separator
     [InlineData("LINKUSD", "LINK")]   // NB5: matches "USD" specifically
+    [InlineData("SOLUSD_PERP", "SOL")]  // NB1: compound suffix (USD + _PERP) must strip fully
     public async Task GetFundingRatesAsync_NormalizeSymbol_AllPatterns(string inputSymbol, string expectedSymbol)
     {
         var json = $$"""
@@ -466,6 +467,39 @@ public class CoinGlassConnectorTests
         var rates = await sut.GetFundingRatesAsync();
 
         rates.Should().BeEmpty();
+    }
+
+    // NB6: Null exchange value in FundingRateByExchange dictionary
+
+    [Fact]
+    public async Task GetFundingRatesAsync_NullExchangeValue_SkipsNullEntry()
+    {
+        var json = """
+        {
+            "code": "0",
+            "data": [
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRateByExchange": {
+                        "OKX": null,
+                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                    }
+                }
+            ]
+        }
+        """;
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+
+        var sut = CreateConnector(response);
+        var rates = await sut.GetFundingRatesAsync();
+
+        // Only Binance should produce a rate; OKX with null value is silently skipped
+        rates.Should().HaveCount(1);
+        rates[0].RawRate.Should().Be(0.0001m);
     }
 
     // N9: Negative intervalHours defaults to 8

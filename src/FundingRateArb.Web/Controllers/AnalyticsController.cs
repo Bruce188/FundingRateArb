@@ -39,14 +39,88 @@ public class AnalyticsController : Controller
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
 
-        // Compute summary KPIs from closed positions — bounded by days parameter and SQL row limit
+        // B1: Use lightweight projection to avoid loading full entity graphs with 3 Include joins.
+        // Only scalar fields needed for KPI computation are fetched from the database.
         var since = DateTime.UtcNow.AddDays(-days);
-        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
+        var closedProjections = await _uow.Positions.GetClosedKpiProjectionSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
 
-        var closedWithPnl = closedPositions
-            .Where(p => p.RealizedPnl.HasValue)
-            .ToList();
+        // N1: Single-pass accumulator for all scalar KPIs — avoids ~9 separate list traversals
         var now = DateTime.UtcNow;
+        var cutoff7d = now.AddDays(-7);
+        var cutoff30d = now.AddDays(-30);
+
+        var totalPnl = 0m;
+        var pnl7d = 0m;
+        var pnl30d = 0m;
+        var winCount = 0;
+        var totalHoldHours = 0.0;
+        var bestPnl = decimal.MinValue;
+        var worstPnl = decimal.MaxValue;
+        var kpiCount = 0;
+
+        // Per-asset and per-exchange accumulators
+        var assetAccum = new Dictionary<string, (decimal pnl, int trades, int wins)>();
+        var exchangeAccum = new Dictionary<string, (decimal pnl, int trades, int wins)>();
+
+        foreach (var p in closedProjections)
+        {
+            if (!p.RealizedPnl.HasValue)
+            {
+                continue;
+            }
+
+            var pnl = p.RealizedPnl.Value;
+            kpiCount++;
+            totalPnl += pnl;
+            if (pnl > 0)
+            {
+                winCount++;
+            }
+
+            if (pnl > bestPnl)
+            {
+                bestPnl = pnl;
+            }
+
+            if (pnl < worstPnl)
+            {
+                worstPnl = pnl;
+            }
+
+            totalHoldHours += (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0;
+
+            if (p.ClosedAt >= cutoff7d)
+            {
+                pnl7d += pnl;
+            }
+
+            if (p.ClosedAt >= cutoff30d)
+            {
+                pnl30d += pnl;
+            }
+
+            // Per-asset accumulation
+            var assetKey = p.AssetSymbol;
+            if (assetAccum.TryGetValue(assetKey, out var assetData))
+            {
+                assetAccum[assetKey] = (assetData.pnl + pnl, assetData.trades + 1, assetData.wins + (pnl > 0 ? 1 : 0));
+            }
+            else
+            {
+                assetAccum[assetKey] = (pnl, 1, pnl > 0 ? 1 : 0);
+            }
+
+            // Per-exchange pair accumulation
+            var exchangeKey = $"{p.LongExchangeName}/{p.ShortExchangeName}";
+            if (exchangeAccum.TryGetValue(exchangeKey, out var exchData))
+            {
+                exchangeAccum[exchangeKey] = (exchData.pnl + pnl, exchData.trades + 1, exchData.wins + (pnl > 0 ? 1 : 0));
+            }
+            else
+            {
+                exchangeAccum[exchangeKey] = (pnl, 1, pnl > 0 ? 1 : 0);
+            }
+        }
 
         var vm = new PositionAnalyticsIndexViewModel
         {
@@ -54,43 +128,33 @@ public class AnalyticsController : Controller
             Skip = skip,
             Take = take,
             HasMore = summaries.Count == take,
-            TotalTrades = closedWithPnl.Count,
-            TotalRealizedPnl = closedWithPnl.Sum(p => p.RealizedPnl ?? 0),
-            TotalRealizedPnl7d = closedWithPnl.Where(p => p.ClosedAt >= now.AddDays(-7)).Sum(p => p.RealizedPnl ?? 0),
-            TotalRealizedPnl30d = closedWithPnl.Where(p => p.ClosedAt >= now.AddDays(-30)).Sum(p => p.RealizedPnl ?? 0),
-            WinRate = closedWithPnl.Count > 0 ? (decimal)closedWithPnl.Count(p => p.RealizedPnl > 0) / closedWithPnl.Count : 0,
-            AvgHoldTimeHours = closedWithPnl.Count > 0 ? (decimal)closedWithPnl.Average(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0) : 0,
-            AvgPnlPerTrade = closedWithPnl.Count > 0 ? closedWithPnl.Average(p => p.RealizedPnl ?? 0) : 0,
-            BestTradePnl = closedWithPnl.Count > 0 ? closedWithPnl.Max(p => p.RealizedPnl ?? 0) : 0,
-            WorstTradePnl = closedWithPnl.Count > 0 ? closedWithPnl.Min(p => p.RealizedPnl ?? 0) : 0,
-            PerAsset = closedWithPnl
-                .GroupBy(p => p.Asset?.Symbol ?? "Unknown")
-                .Select(g =>
+            TotalTrades = kpiCount,
+            TotalRealizedPnl = totalPnl,
+            TotalRealizedPnl7d = pnl7d,
+            TotalRealizedPnl30d = pnl30d,
+            WinRate = kpiCount > 0 ? (decimal)winCount / kpiCount : 0,
+            AvgHoldTimeHours = kpiCount > 0 ? (decimal)totalHoldHours / kpiCount : 0,
+            AvgPnlPerTrade = kpiCount > 0 ? totalPnl / kpiCount : 0,
+            BestTradePnl = kpiCount > 0 ? bestPnl : 0,
+            WorstTradePnl = kpiCount > 0 ? worstPnl : 0,
+            PerAsset = assetAccum
+                .Select(kvp => new AssetPerformance
                 {
-                    var count = g.Count();
-                    return new AssetPerformance
-                    {
-                        AssetSymbol = g.Key,
-                        Trades = count,
-                        TotalPnl = g.Sum(p => p.RealizedPnl ?? 0),
-                        WinRate = (decimal)g.Count(p => p.RealizedPnl > 0) / count,
-                        AvgPnl = g.Average(p => p.RealizedPnl ?? 0),
-                    };
+                    AssetSymbol = kvp.Key,
+                    Trades = kvp.Value.trades,
+                    TotalPnl = kvp.Value.pnl,
+                    WinRate = (decimal)kvp.Value.wins / kvp.Value.trades,
+                    AvgPnl = kvp.Value.pnl / kvp.Value.trades,
                 })
                 .OrderByDescending(a => a.TotalPnl)
                 .ToList(),
-            PerExchangePair = closedWithPnl
-                .GroupBy(p => $"{p.LongExchange?.Name ?? "?"}/{p.ShortExchange?.Name ?? "?"}")
-                .Select(g =>
+            PerExchangePair = exchangeAccum
+                .Select(kvp => new ExchangePairPerformance
                 {
-                    var count = g.Count();
-                    return new ExchangePairPerformance
-                    {
-                        Pair = g.Key,
-                        Trades = count,
-                        TotalPnl = g.Sum(p => p.RealizedPnl ?? 0),
-                        WinRate = (decimal)g.Count(p => p.RealizedPnl > 0) / count,
-                    };
+                    Pair = kvp.Key,
+                    Trades = kvp.Value.trades,
+                    TotalPnl = kvp.Value.pnl,
+                    WinRate = (decimal)kvp.Value.wins / kvp.Value.trades,
                 })
                 .OrderByDescending(e => e.TotalPnl)
                 .ToList(),

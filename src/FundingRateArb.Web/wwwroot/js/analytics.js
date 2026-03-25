@@ -8,29 +8,32 @@
     var connection = window.appSignalR.connection;
 
     // Rate Analytics: live chart data point on ReceiveFundingRateUpdate
-    // Only binds if a Chart.js instance exists on the page
+    // Only binds if the rate chart canvas exists on the current page.
+    // NB2: Robust guard — verify Chart.js is loaded, canvas exists, chart is initialized,
+    // and datasets are present before attempting to update.
     connection.on("ReceiveFundingRateUpdate", function (rateData) {
+        if (typeof Chart === "undefined") return;
+
         var chartCanvas = document.getElementById("rateChart");
         if (!chartCanvas) return;
 
-        // Chart.js stores instance on canvas via Chart.getChart()
-        var chart = typeof Chart !== "undefined" ? Chart.getChart(chartCanvas) : null;
-        if (!chart) return;
+        var chart = Chart.getChart(chartCanvas);
+        if (!chart || !chart.data || !chart.data.datasets || chart.data.datasets.length === 0) return;
 
-        // Append new data point if the chart has datasets
-        if (chart.data.datasets.length > 0 && rateData.timestamp && rateData.rate !== undefined) {
-            var label = new Date(rateData.timestamp).toLocaleTimeString();
-            chart.data.labels.push(label);
-            chart.data.datasets[0].data.push(rateData.rate);
+        // Validate incoming data before appending
+        if (!rateData || !rateData.timestamp || rateData.rate === undefined || rateData.rate === null) return;
 
-            // Keep a rolling window of 100 data points
-            if (chart.data.labels.length > 100) {
-                chart.data.labels.shift();
-                chart.data.datasets[0].data.shift();
-            }
+        var label = new Date(rateData.timestamp).toLocaleTimeString();
+        chart.data.labels.push(label);
+        chart.data.datasets[0].data.push(rateData.rate);
 
-            chart.update("none");
+        // Keep a rolling window of 100 data points
+        if (chart.data.labels.length > 100) {
+            chart.data.labels.shift();
+            chart.data.datasets[0].data.shift();
         }
+
+        chart.update("none");
     });
 
     // Passed Opportunities: live opportunity count update

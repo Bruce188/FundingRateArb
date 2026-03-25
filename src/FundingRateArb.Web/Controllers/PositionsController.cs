@@ -140,7 +140,7 @@ public class PositionsController : Controller
             return BadRequest("Position is already closed.");
         }
 
-        _logger.LogInformation("User {UserId} manually closing position {PositionId}", userId, id);
+        _logger.LogInformation("User {ActingUserId} closing position {PositionId} owned by {OwnerUserId}", userId, id, position.UserId);
         await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
