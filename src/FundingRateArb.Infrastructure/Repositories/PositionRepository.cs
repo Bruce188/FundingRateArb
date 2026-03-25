@@ -74,7 +74,7 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since)
             .ToListAsync();
 
-    public Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, CancellationToken ct = default)
+    public Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default)
     {
         var query = _context.ArbitragePositions
             .Include(p => p.Asset)
@@ -88,7 +88,11 @@ public class PositionRepository : IPositionRepository
             query = query.Where(p => p.UserId == userId);
         }
 
-        return query.ToListAsync(ct);
+        // B1: Apply row limit in SQL (TOP/LIMIT) to prevent unbounded memory usage
+        return query
+            .OrderByDescending(p => p.ClosedAt)
+            .Take(maxRows)
+            .ToListAsync(ct);
     }
 
     public Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status) =>

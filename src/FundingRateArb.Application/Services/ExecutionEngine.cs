@@ -79,8 +79,9 @@ public class ExecutionEngine : IExecutionEngine
             }
             catch (Exception ex)
             {
+                // NB3: Log full exception internally but return generic message to user
                 _logger.LogWarning(ex, "Pre-flight balance check failed for {Asset}, skipping trade", opp.AssetSymbol);
-                return (false, $"Pre-flight balance check failed: {ex.Message}");
+                return (false, "Pre-flight balance check failed — exchange connection error");
             }
 
             _logger.LogInformation(
@@ -293,8 +294,8 @@ public class ExecutionEngine : IExecutionEngine
         } // end try
         finally
         {
-            (longConnector as IDisposable)?.Dispose();
-            (shortConnector as IDisposable)?.Dispose();
+            await DisposeConnectorAsync(longConnector);
+            await DisposeConnectorAsync(shortConnector);
         }
     }
 
@@ -532,8 +533,8 @@ public class ExecutionEngine : IExecutionEngine
         } // end try
         finally
         {
-            (longConnector as IDisposable)?.Dispose();
-            (shortConnector as IDisposable)?.Dispose();
+            await DisposeConnectorAsync(longConnector);
+            await DisposeConnectorAsync(shortConnector);
         }
     }
 
@@ -541,9 +542,23 @@ public class ExecutionEngine : IExecutionEngine
     /// Creates user-specific exchange connectors for the long and short exchanges
     /// using the user's stored API credentials.
     /// </summary>
+    /// <remarks>
+    /// Optimization opportunity: when the orchestrator processes N positions for the same user
+    /// in one cycle, this method is called N times with redundant credential lookups and connector
+    /// initializations. A per-cycle cache keyed by (userId, exchangeName) would avoid repeated work.
+    /// </remarks>
     private async Task<(IExchangeConnector Long, IExchangeConnector Short, string? Error)> CreateUserConnectorsAsync(
         string userId, string longExchangeName, string shortExchangeName)
     {
+        // N1: Guard against null/empty userId — legacy records or admin-initiated operations
+        // could pass null, leading to silent failures in credential lookup
+        if (string.IsNullOrEmpty(userId))
+        {
+            _logger.LogError("CreateUserConnectorsAsync called with null/empty userId for {LongExchange}/{ShortExchange}",
+                longExchangeName, shortExchangeName);
+            return (null!, null!, "User ID is required for credential-based connector creation");
+        }
+
         var credentials = await _userSettings.GetActiveCredentialsAsync(userId);
 
         var longCred = credentials.FirstOrDefault(c =>
@@ -563,57 +578,100 @@ public class ExecutionEngine : IExecutionEngine
             return (null!, null!, $"No credentials found for {shortExchangeName}");
         }
 
-        // Decrypt credentials — if decryption throws (e.g. CryptographicException),
-        // return a structured error instead of letting the exception propagate unhandled.
-        (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey) longDecrypted, shortDecrypted;
-        try
-        {
-            longDecrypted = _userSettings.DecryptCredential(longCred);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to decrypt credentials for {Exchange} (user {UserId})", longExchangeName, userId);
-            return (null!, null!, $"Failed to decrypt credentials for {longExchangeName}");
-        }
+        // NB4: Decrypt credentials in tightly scoped blocks to minimize plaintext lifetime in memory.
+        // Create connectors immediately after decryption so credentials don't linger.
+        IExchangeConnector? longConnector = null;
+        IExchangeConnector? shortConnector = null;
 
         try
         {
-            shortDecrypted = _userSettings.DecryptCredential(shortCred);
+            // Decrypt + create long connector in tight scope
+            {
+                var longDecrypted = DecryptAndCreateConnectorArgs(longCred, longExchangeName, userId);
+                if (longDecrypted.Error is not null)
+                {
+                    return (null!, null!, longDecrypted.Error);
+                }
+
+                longConnector = await _connectorFactory.CreateForUserAsync(
+                    longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
+                    longDecrypted.WalletAddress, longDecrypted.PrivateKey);
+            }
+
+            // Decrypt + create short connector in tight scope
+            {
+                var shortDecrypted = DecryptAndCreateConnectorArgs(shortCred, shortExchangeName, userId);
+                if (shortDecrypted.Error is not null)
+                {
+                    await DisposeConnectorAsync(longConnector);
+                    return (null!, null!, shortDecrypted.Error);
+                }
+
+                shortConnector = await _connectorFactory.CreateForUserAsync(
+                    shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
+                    shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to decrypt credentials for {Exchange} (user {UserId})", shortExchangeName, userId);
-            return (null!, null!, $"Failed to decrypt credentials for {shortExchangeName}");
+            // NB6: If CreateForUserAsync throws (not returns null), ensure cleanup
+            _logger.LogError(ex, "Failed to create connector for user {UserId}", userId);
+            await DisposeConnectorAsync(longConnector);
+            await DisposeConnectorAsync(shortConnector);
+            return (null!, null!, "Exchange connection failed");
         }
-
-        // Create both connectors concurrently — these are independent network calls
-        var longTask = _connectorFactory.CreateForUserAsync(
-            longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
-            longDecrypted.WalletAddress, longDecrypted.PrivateKey);
-        var shortTask = _connectorFactory.CreateForUserAsync(
-            shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
-            shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
-
-        await Task.WhenAll(longTask, shortTask);
-
-        var longConnector = longTask.Result;
-        var shortConnector = shortTask.Result;
 
         if (longConnector is null)
         {
-            (shortConnector as IDisposable)?.Dispose();
+            await DisposeConnectorAsync(shortConnector);
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", longExchangeName, userId);
             return (null!, null!, $"Could not create connector for {longExchangeName} — invalid credentials");
         }
 
         if (shortConnector is null)
         {
-            (longConnector as IDisposable)?.Dispose();
+            await DisposeConnectorAsync(longConnector);
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", shortExchangeName, userId);
             return (null!, null!, $"Could not create connector for {shortExchangeName} — invalid credentials");
         }
 
         return (longConnector, shortConnector, null);
+    }
+
+    /// <summary>
+    /// Decrypts credential and returns the raw values needed for connector creation.
+    /// Isolates decryption in its own scope to minimize plaintext credential lifetime.
+    /// </summary>
+    private (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? Error) DecryptAndCreateConnectorArgs(
+        UserExchangeCredential cred, string exchangeName, string userId)
+    {
+        try
+        {
+            var decrypted = _userSettings.DecryptCredential(cred);
+            return (decrypted.ApiKey, decrypted.ApiSecret, decrypted.WalletAddress, decrypted.PrivateKey, null);
+        }
+        catch (Exception ex)
+        {
+            // N2: Log only the exception type name, not the full exception which may contain cryptographic metadata
+            _logger.LogError("Failed to decrypt credentials for {Exchange} (user {UserId}): {ExceptionType}",
+                exchangeName, userId, ex.GetType().Name);
+            return (null, null, null, null, "Credential validation failed");
+        }
+    }
+
+    /// <summary>
+    /// Disposes a connector, checking for IAsyncDisposable first, then IDisposable.
+    /// </summary>
+    private static async Task DisposeConnectorAsync(IExchangeConnector? connector)
+    {
+        if (connector is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+        }
+        else
+        {
+            (connector as IDisposable)?.Dispose();
+        }
     }
 
     private static decimal GetTakerFeeRate(string exchangeName) => exchangeName switch

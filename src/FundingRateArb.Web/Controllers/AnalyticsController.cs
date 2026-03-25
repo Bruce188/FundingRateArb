@@ -39,14 +39,12 @@ public class AnalyticsController : Controller
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
 
-        // Compute summary KPIs from closed positions — bounded to avoid loading full history
+        // Compute summary KPIs from closed positions — bounded by days parameter and SQL row limit
         var since = DateTime.UtcNow.AddDays(-days);
-        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(since, effectiveUserId, ct);
+        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
 
-        // Hard cap to prevent excessive memory usage for admin users with large datasets
         var closedWithPnl = closedPositions
             .Where(p => p.RealizedPnl.HasValue)
-            .Take(10_000)
             .ToList();
         var now = DateTime.UtcNow;
 

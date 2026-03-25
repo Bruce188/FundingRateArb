@@ -324,7 +324,7 @@ public class AnalyticsControllerTests
             },
         };
 
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(closedPositions);
 
         var result = await _controller.Index();
@@ -347,7 +347,7 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<ArbitragePosition>());
 
         var result = await _controller.Index();
@@ -372,13 +372,13 @@ public class AnalyticsControllerTests
         SetupAdminUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<ArbitragePosition>());
 
         await _controller.Index();
 
         // effectiveUserId should be null for admin
-        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()), Times.Once);
+        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -387,13 +387,13 @@ public class AnalyticsControllerTests
         SetupNormalUser();
         _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync("test-user-id", 0, 50, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()))
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<ArbitragePosition>());
 
         await _controller.Index();
 
         // effectiveUserId should be the user's ID for non-admin
-        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()), Times.Once);
+        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── PassedOpportunities tests (NB4) ─────────────────────────
@@ -433,7 +433,7 @@ public class AnalyticsControllerTests
             },
         };
 
-        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(closedPositions);
 
         var result = await _controller.Index();
@@ -521,5 +521,145 @@ public class AnalyticsControllerTests
         // Should be ordered by count descending, so cooldown is the top
         vm.TopSkipReason.Should().Be("cooldown");
         vm.SkipReasons[0].Reason.Should().Be("cooldown");
+    }
+
+    // ── NB5: Parameter clamping tests ───────────────────────────
+
+    [Theory]
+    [InlineData(0, 1)]      // days=0 → clamps to 1
+    [InlineData(-5, 1)]     // negative → clamps to 1
+    [InlineData(500, 365)]  // over max → clamps to 365
+    [InlineData(90, 90)]    // within range → unchanged
+    public async Task Index_DaysParameterClamped(int inputDays, int expectedDays)
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        await _controller.Index(days: inputDays);
+
+        // Verify the since date passed to the repository corresponds to the clamped days value
+        _mockPositionRepo.Verify(r => r.GetClosedWithNavigationSinceAsync(
+            It.Is<DateTime>(d => d >= DateTime.UtcNow.AddDays(-expectedDays - 1) && d <= DateTime.UtcNow.AddDays(-expectedDays + 1)),
+            null, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(-5, 0)]     // negative skip → clamps to 0
+    [InlineData(0, 0)]      // zero skip → unchanged
+    [InlineData(10, 10)]    // positive → unchanged
+    public async Task Index_SkipParameterClamped(int inputSkip, int expectedSkip)
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, expectedSkip, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        await _controller.Index(skip: inputSkip);
+
+        _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync(null, expectedSkip, It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]      // take=0 → clamps to 1
+    [InlineData(-1, 1)]     // negative → clamps to 1
+    [InlineData(999, 200)]  // over max → clamps to 200
+    [InlineData(50, 50)]    // within range → unchanged
+    public async Task Index_TakeParameterClamped(int inputTake, int expectedTake)
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, expectedTake, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        await _controller.Index(take: inputTake);
+
+        _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync(null, 0, expectedTake, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]      // days=0 → clamps to 1
+    [InlineData(-1, 1)]     // negative → clamps to 1
+    [InlineData(50, 30)]    // over max → clamps to 30
+    [InlineData(15, 15)]    // within range → unchanged
+    public async Task PassedOpportunities_DaysParameterClamped(int inputDays, int expectedDays)
+    {
+        SetupAdminUser();
+        _mockSnapshotRepo.Setup(r => r.GetRecentAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, 100, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<OpportunitySnapshot>());
+        _mockSnapshotRepo.Setup(r => r.GetSkipReasonStatsAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((0, 0, new Dictionary<string, int>()));
+
+        await _controller.PassedOpportunities(days: inputDays);
+
+        // Verify the from date passed to the repository corresponds to the clamped days value
+        _mockSnapshotRepo.Verify(r => r.GetRecentAsync(
+            It.Is<DateTime>(d => d >= DateTime.UtcNow.AddDays(-expectedDays - 1) && d <= DateTime.UtcNow.AddDays(-expectedDays + 1)),
+            It.IsAny<DateTime>(), 0, 100, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(0, 1)]      // take=0 → clamps to 1
+    [InlineData(999, 200)]  // over max → clamps to 200
+    public async Task PassedOpportunities_TakeParameterClamped(int inputTake, int expectedTake)
+    {
+        SetupAdminUser();
+        _mockSnapshotRepo.Setup(r => r.GetRecentAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, expectedTake, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<OpportunitySnapshot>());
+        _mockSnapshotRepo.Setup(r => r.GetSkipReasonStatsAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((0, 0, new Dictionary<string, int>()));
+
+        await _controller.PassedOpportunities(take: inputTake);
+
+        _mockSnapshotRepo.Verify(r => r.GetRecentAsync(
+            It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, expectedTake, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── N4: Null RealizedPnl exclusion ──────────────────────────
+
+    [Fact]
+    public async Task Index_NullRealizedPnl_ExcludedFromKPIs()
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+
+        var closedPositions = new List<ArbitragePosition>
+        {
+            // Position with PnL — should be included
+            new()
+            {
+                RealizedPnl = 10m, ClosedAt = DateTime.UtcNow.AddDays(-1), OpenedAt = DateTime.UtcNow.AddDays(-1).AddHours(-2),
+                Status = PositionStatus.Closed,
+                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+            },
+            // Position with null PnL — should be excluded from KPIs
+            new()
+            {
+                RealizedPnl = null, ClosedAt = DateTime.UtcNow.AddDays(-2), OpenedAt = DateTime.UtcNow.AddDays(-2).AddHours(-3),
+                Status = PositionStatus.Closed,
+                Asset = new Asset { Symbol = "BTC" }, LongExchange = new Exchange { Name = "Lighter" }, ShortExchange = new Exchange { Name = "Hyperliquid" },
+            },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedPositions);
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionAnalyticsIndexViewModel>().Subject;
+
+        // Only 1 position has PnL — the null one should be excluded
+        vm.TotalTrades.Should().Be(1);
+        vm.TotalRealizedPnl.Should().Be(10m);
+        vm.WinRate.Should().Be(1.0m);
+        // Per-asset should only include ETH (the one with PnL)
+        vm.PerAsset.Should().HaveCount(1);
+        vm.PerAsset[0].AssetSymbol.Should().Be("ETH");
     }
 }

@@ -1312,7 +1312,7 @@ public class ExecutionEngineTests
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
         result.Success.Should().BeFalse();
-        result.Error.Should().Contain("decrypt").And.Contain("Hyperliquid");
+        result.Error.Should().Contain("Credential validation failed");
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1340,5 +1340,54 @@ public class ExecutionEngineTests
             Times.Once);
 
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── NB6: CreateForUserAsync exception path ──────────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_CreateForUserAsyncThrows_ReturnsError()
+    {
+        // CreateForUserAsync throws (not returns null) for long exchange
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ThrowsAsync(new HttpRequestException("Exchange SDK initialization failed"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("Exchange connection failed");
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── NB7: Case-insensitive credential matching ───────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_DifferentCaseExchangeNames_MatchesCredentials()
+    {
+        // Credentials stored with different casing than opportunity exchange names
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "hyperliquid" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "LIGHTER" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+
+        // Factory should still be called with the opportunity's casing
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // Verify connectors were created (credentials matched despite different casing)
+        _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+        _mockFactory.Verify(f => f.CreateForUserAsync("Lighter",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 }

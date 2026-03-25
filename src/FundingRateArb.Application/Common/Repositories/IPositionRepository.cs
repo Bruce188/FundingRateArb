@@ -22,8 +22,9 @@ public interface IPositionRepository
     Task<List<ArbitragePosition>> GetClosedSinceAsync(DateTime since);
 
     /// <summary>Returns closed positions with navigation properties (Asset, LongExchange, ShortExchange) loaded.
-    /// Use for analytics that need GroupBy on navigation properties.</summary>
-    Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, CancellationToken ct = default);
+    /// Use for analytics that need GroupBy on navigation properties.
+    /// The maxRows parameter limits the SQL query result set size to prevent unbounded memory usage.</summary>
+    Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default);
 
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
