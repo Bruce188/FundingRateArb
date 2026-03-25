@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -35,12 +36,62 @@ public class AnalyticsController : Controller
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
 
+        // Compute summary KPIs from closed positions
+        var closedPositions = await _uow.Positions.GetClosedSinceAsync(DateTime.MinValue);
+        if (effectiveUserId is not null)
+        {
+            closedPositions = closedPositions.Where(p => p.UserId == effectiveUserId).ToList();
+        }
+
+        var closedWithPnl = closedPositions.Where(p => p.Status == PositionStatus.Closed && p.RealizedPnl.HasValue).ToList();
+        var now = DateTime.UtcNow;
+
         var vm = new PositionAnalyticsIndexViewModel
         {
             Summaries = summaries,
             Skip = skip,
             Take = take,
             HasMore = summaries.Count == take,
+            TotalTrades = closedWithPnl.Count,
+            TotalRealizedPnl = closedWithPnl.Sum(p => p.RealizedPnl ?? 0),
+            TotalRealizedPnl7d = closedWithPnl.Where(p => p.ClosedAt >= now.AddDays(-7)).Sum(p => p.RealizedPnl ?? 0),
+            TotalRealizedPnl30d = closedWithPnl.Where(p => p.ClosedAt >= now.AddDays(-30)).Sum(p => p.RealizedPnl ?? 0),
+            WinRate = closedWithPnl.Count > 0 ? (decimal)closedWithPnl.Count(p => p.RealizedPnl > 0) / closedWithPnl.Count : 0,
+            AvgHoldTimeHours = closedWithPnl.Count > 0 ? (decimal)closedWithPnl.Average(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0) : 0,
+            AvgPnlPerTrade = closedWithPnl.Count > 0 ? closedWithPnl.Average(p => p.RealizedPnl ?? 0) : 0,
+            BestTradePnl = closedWithPnl.Count > 0 ? closedWithPnl.Max(p => p.RealizedPnl ?? 0) : 0,
+            WorstTradePnl = closedWithPnl.Count > 0 ? closedWithPnl.Min(p => p.RealizedPnl ?? 0) : 0,
+            PerAsset = closedWithPnl
+                .GroupBy(p => p.Asset?.Symbol ?? "Unknown")
+                .Select(g =>
+                {
+                    var count = g.Count();
+                    return new AssetPerformance
+                    {
+                        AssetSymbol = g.Key,
+                        Trades = count,
+                        TotalPnl = g.Sum(p => p.RealizedPnl ?? 0),
+                        WinRate = (decimal)g.Count(p => p.RealizedPnl > 0) / count,
+                        AvgPnl = g.Average(p => p.RealizedPnl ?? 0),
+                    };
+                })
+                .OrderByDescending(a => a.TotalPnl)
+                .ToList(),
+            PerExchangePair = closedWithPnl
+                .GroupBy(p => $"{p.LongExchange?.Name ?? "?"}/{p.ShortExchange?.Name ?? "?"}")
+                .Select(g =>
+                {
+                    var count = g.Count();
+                    return new ExchangePairPerformance
+                    {
+                        Pair = g.Key,
+                        Trades = count,
+                        TotalPnl = g.Sum(p => p.RealizedPnl ?? 0),
+                        WinRate = (decimal)g.Count(p => p.RealizedPnl > 0) / count,
+                    };
+                })
+                .OrderByDescending(e => e.TotalPnl)
+                .ToList(),
         };
 
         return View(vm);
@@ -73,6 +124,17 @@ public class AnalyticsController : Controller
 
         var snapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
 
+        // Compute skip reason distribution from all snapshots in the period
+        var allSnapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, 0, 10000, ct);
+        var totalSeen = allSnapshots.Count;
+        var opened = allSnapshots.Count(s => s.WasOpened);
+        var skipReasons = allSnapshots
+            .Where(s => !s.WasOpened && !string.IsNullOrEmpty(s.SkipReason))
+            .GroupBy(s => s.SkipReason!)
+            .Select(g => new SkipReasonStat { Reason = g.Key, Count = g.Count() })
+            .OrderByDescending(s => s.Count)
+            .ToList();
+
         var vm = new PassedOpportunitiesViewModel
         {
             Snapshots = snapshots,
@@ -80,6 +142,11 @@ public class AnalyticsController : Controller
             Skip = skip,
             Take = take,
             HasMore = snapshots.Count == take,
+            TotalOpportunitiesSeen = totalSeen,
+            TotalOpened = opened,
+            OpenedPct = totalSeen > 0 ? (decimal)opened / totalSeen * 100 : 0,
+            TopSkipReason = skipReasons.FirstOrDefault()?.Reason ?? "N/A",
+            SkipReasons = skipReasons,
         };
 
         return View(vm);

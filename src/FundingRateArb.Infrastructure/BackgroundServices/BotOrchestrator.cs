@@ -154,7 +154,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var positionsToClose = await healthMonitor.CheckAndActAsync(ct);
         foreach (var (pos, reason) in positionsToClose)
         {
-            await executionEngine.ClosePositionAsync(pos, reason, ct);
+            await executionEngine.ClosePositionAsync(pos.UserId, pos, reason, ct);
             if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
             {
                 RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
@@ -207,7 +207,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                             "Rebalancing: closing position #{PositionId} ({Asset}) for better opportunity {NewAsset} on {NewLong}/{NewShort}",
                             rec.PositionId, rec.PositionAsset, rec.ReplacementAsset,
                             rec.ReplacementLongExchange, rec.ReplacementShortExchange);
-                        await executionEngine.ClosePositionAsync(posToClose, CloseReason.Rebalanced, ct);
+                        await executionEngine.ClosePositionAsync(posToClose.UserId, posToClose, CloseReason.Rebalanced, ct);
                         closedIds.Add(rec.PositionId);
                     }
                 }
@@ -497,7 +497,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 "Opening position for user {UserId}: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
                 userId, opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
 
-            var (success, error) = await executionEngine.OpenPositionAsync(opp, size, ct);
+            var (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, ct);
 
             if (success)
             {

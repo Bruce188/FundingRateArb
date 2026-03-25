@@ -141,7 +141,7 @@ public class PositionsController : Controller
         }
 
         _logger.LogInformation("User {UserId} manually closing position {PositionId}", userId, id);
-        await _executionEngine.ClosePositionAsync(position, CloseReason.Manual, ct);
+        await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
     }

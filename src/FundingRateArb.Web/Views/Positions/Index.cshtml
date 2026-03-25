@@ -39,7 +39,7 @@ else
             <tbody>
                 @foreach (var pos in Model.Positions)
                 {
-                    <tr>
+                    <tr data-position-id="@pos.Id">
                         <td>@pos.AssetSymbol</td>
                         <td>@pos.LongExchangeName</td>
                         <td>@pos.ShortExchangeName</td>
@@ -53,11 +53,11 @@ else
                                     _                      => "bg-secondary",
                                 };
                             }
-                            <span class="badge @badgeClass">@pos.Status</span>
+                            <span class="badge pos-status @badgeClass">@pos.Status</span>
                         </td>
                         <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
-                        <td class="text-end">@pos.CurrentSpreadPerHour.ToString("P4")</td>
-                        <td class="text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
+                        <td class="text-end pos-spread">@pos.CurrentSpreadPerHour.ToString("P4")</td>
+                        <td class="pos-funding text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
                             @pos.AccumulatedFunding.ToString("F4")
                         </td>
                         <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
@@ -77,4 +77,8 @@ else
             </tbody>
         </table>
     </div>
+}
+
+@section Scripts {
+    <script src="~/js/positions.js" asp-append-version="true"></script>
 }

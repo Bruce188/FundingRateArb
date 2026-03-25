@@ -1,489 +1,353 @@
 "use strict";
 
+// Dashboard-specific SignalR event handlers.
+// Depends on signalr-connection.js which provides window.appSignalR.
 
-// B1: Dynamic decimal formatting for small prices
-function formatPrice(price) {
-    if (price === 0) return "$0.00";
-    if (price >= 1) return "$" + price.toFixed(2);
-    if (price >= 0.01) return "$" + price.toFixed(4);
-    return "$" + parseFloat(price.toFixed(8)).toPrecision(4);
-}
+(function () {
+    if (!window.appSignalR) return;
+    var connection = window.appSignalR.connection;
+    var showToast = window.appSignalR.showToast;
 
-// B5: Centralized toast creation using Bootstrap 5 Toast API
-function showToast(message, cssClass, delay) {
-    cssClass = cssClass || "text-bg-primary";
-    delay = delay || 4000;
-
-    var container = document.getElementById("notification-toast-container");
-    if (!container) return;
-
-    var toastEl = document.createElement("div");
-    toastEl.className = "toast align-items-center " + cssClass + " border-0";
-    toastEl.setAttribute("role", "alert");
-
-    var dFlex = document.createElement("div");
-    dFlex.className = "d-flex";
-
-    var toastBody = document.createElement("div");
-    toastBody.className = "toast-body";
-    toastBody.textContent = message;
-    dFlex.appendChild(toastBody);
-
-    toastEl.appendChild(dFlex);
-    container.appendChild(toastEl);
-
-    var toast = new bootstrap.Toast(toastEl, {
-        animation: true,
-        autohide: true,
-        delay: delay
-    });
-    toast.show();
-
-    toastEl.addEventListener("hidden.bs.toast", function () { toastEl.remove(); });
-}
-
-// B5: Alert toasts keep close button and have longer delay
-function showAlertToast(message, severityClass) {
-    var container = document.getElementById("notification-toast-container");
-    if (!container) return;
-
-    var toastEl = document.createElement("div");
-    toastEl.className = "toast align-items-center " + severityClass + " border-0";
-    toastEl.setAttribute("role", "alert");
-
-    var dFlex = document.createElement("div");
-    dFlex.className = "d-flex";
-
-    var toastBody = document.createElement("div");
-    toastBody.className = "toast-body";
-    toastBody.textContent = message;
-    dFlex.appendChild(toastBody);
-
-    var closeBtn = document.createElement("button");
-    closeBtn.type = "button";
-    closeBtn.className = "btn-close btn-close-white me-2 m-auto";
-    closeBtn.setAttribute("data-bs-dismiss", "toast");
-    dFlex.appendChild(closeBtn);
-
-    toastEl.appendChild(dFlex);
-    container.appendChild(toastEl);
-
-    var toast = new bootstrap.Toast(toastEl, {
-        animation: true,
-        autohide: true,
-        delay: 5000
-    });
-    toast.show();
-
-    toastEl.addEventListener("hidden.bs.toast", function () { toastEl.remove(); });
-}
-
-const connection = new signalR.HubConnectionBuilder()
-    .withUrl("/hubs/dashboard")
-    .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
-    .build();
-
-connection.on("ReceiveDashboardUpdate", (data) => {
-    const botStatus = document.getElementById("bot-status");
-    if (botStatus) {
-        botStatus.textContent = data.botEnabled ? "RUNNING" : "STOPPED";
-        botStatus.className = "badge " + (data.botEnabled ? "bg-success" : "bg-danger");
+    // B1: Dynamic decimal formatting for small prices
+    function formatPrice(price) {
+        if (price === 0) return "$0.00";
+        if (price >= 1) return "$" + price.toFixed(2);
+        if (price >= 0.01) return "$" + price.toFixed(4);
+        return "$" + parseFloat(price.toFixed(8)).toPrecision(4);
     }
 
-    const openPositions = document.getElementById("open-positions");
-    if (openPositions) openPositions.textContent = data.openPositionCount;
-
-    const totalPnl = document.getElementById("total-pnl");
-    if (totalPnl) totalPnl.textContent = (data.totalPnl ?? 0).toFixed(4);
-
-    const bestSpread = document.getElementById("best-spread");
-    if (bestSpread) {
-        const spread = data.bestSpread ?? 0;
-        bestSpread.textContent = spread > 0
-            ? (spread * 100).toFixed(4) + "%"
-            : "N/A";
-    }
-});
-
-connection.on("ReceivePositionUpdate", (position) => {
-    const positionRow = document.getElementById("position-" + position.id);
-    if (positionRow) {
-        const pnlEl = positionRow.querySelector(".position-pnl");
-        if (pnlEl) {
-            const pnl = position.unrealizedPnl ?? 0;
-            pnlEl.textContent = "$" + pnl.toFixed(2);
-            pnlEl.className = "position-pnl " + (pnl >= 0 ? "text-success" : "text-danger");
-        }
-        const spreadEl = positionRow.querySelector(".position-spread");
-        if (spreadEl) {
-            spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(6) + "%";
+    connection.on("ReceiveDashboardUpdate", function (data) {
+        var botStatus = document.getElementById("bot-status");
+        if (botStatus) {
+            botStatus.textContent = data.botEnabled ? "RUNNING" : "STOPPED";
+            botStatus.className = "badge " + (data.botEnabled ? "bg-success" : "bg-danger");
         }
 
-        // Apply warning level row class
-        positionRow.classList.remove("table-danger", "table-warning", "table-info");
-        var warnLevel = position.warningLevel ?? 0;
-        if (warnLevel === 3) positionRow.classList.add("table-danger");
-        else if (warnLevel === 2) positionRow.classList.add("table-warning");
-        else if (warnLevel === 1) positionRow.classList.add("table-info");
+        var openPositions = document.getElementById("open-positions");
+        if (openPositions) openPositions.textContent = data.openPositionCount;
 
-        // Update warning type icons in the first cell
-        var firstTd = positionRow.querySelector("td:first-child");
-        if (firstTd) {
-            var existing = firstTd.querySelectorAll(".warning-icon");
-            existing.forEach(function(el) { el.remove(); });
+        var totalPnl = document.getElementById("total-pnl");
+        if (totalPnl) totalPnl.textContent = (data.totalPnl ?? 0).toFixed(4);
 
-            var warnTypes = position.warningTypes || [];
-            var iconMap = { 0: "\u25B2", 1: "\u2248", 2: "\u23F0", 3: "\u26BF", 4: "\u2193" };
-            var nameMap = { 0: "SpreadRisk", 1: "Liquidity", 2: "TimeBased", 3: "Leverage", 4: "Loss" };
-            warnTypes.forEach(function(wt) {
-                var span = document.createElement("span");
-                span.className = "warning-icon warning-" + (nameMap[wt] || "").toLowerCase();
-                span.title = nameMap[wt] || "";
-                span.textContent = iconMap[wt] || "";
-                firstTd.appendChild(span);
-            });
-        }
-    }
-});
-
-// B5: Use centralized showToast for notification toasts (no close button, 4s delay)
-connection.on("ReceiveNotification", (message) => {
-    showToast(message, "text-bg-primary", 4000);
-});
-
-var isMobile = window.matchMedia('(max-width: 575.98px)');
-
-// C1 fix: replaced innerHTML with createElement + textContent for opportunity data
-connection.on("ReceiveOpportunityUpdate", (data) => {
-    var tbody = document.getElementById("opportunities-table-body");
-    var cardsContainer = document.getElementById("opportunities-cards");
-
-    // Rebuild mobile cards
-    if (cardsContainer && isMobile.matches) {
-        var opportunities = data.opportunities || [];
-        cardsContainer.innerHTML = "";
-        if (opportunities.length === 0) {
-            var p = document.createElement("p");
-            p.className = "text-muted text-center py-3 mb-0";
-            p.textContent = "No opportunities detected.";
-            cardsContainer.appendChild(p);
-        } else {
-            opportunities.forEach(function(opp) {
-                var card = document.createElement("div");
-                card.className = "card mb-2 mobile-card";
-                var body = document.createElement("div");
-                body.className = "card-body p-2";
-
-                var header = document.createElement("div");
-                header.className = "d-flex justify-content-between";
-                var strong = document.createElement("strong");
-                strong.textContent = opp.assetSymbol;
-                header.appendChild(strong);
-                var badge = document.createElement("span");
-                var apyVal = (opp.annualizedYield * 100).toFixed(0);
-                badge.className = "badge " + (opp.annualizedYield > 0.50 ? "bg-success" : opp.annualizedYield >= 0.20 ? "bg-warning text-dark" : "bg-secondary");
-                badge.textContent = apyVal + "% APY";
-                header.appendChild(badge);
-                body.appendChild(header);
-
-                var exchanges = document.createElement("small");
-                exchanges.className = "text-muted";
-                exchanges.textContent = "Long: " + opp.longExchangeName + " | Short: " + opp.shortExchangeName;
-                body.appendChild(exchanges);
-
-                var spread = document.createElement("div");
-                spread.className = "small";
-                spread.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + (opp.netYieldPerHour * 100).toFixed(4) + "%/hr";
-                body.appendChild(spread);
-
-                card.appendChild(body);
-                cardsContainer.appendChild(card);
-            });
-        }
-    }
-
-    if (!tbody) return;
-
-    const opportunities = data.opportunities || [];
-    const diagnostics = data.diagnostics;
-
-    // Update count badge
-    const countBadge = document.querySelector(".badge.bg-primary");
-    if (countBadge) countBadge.textContent = opportunities.length + " found";
-
-    // Update Best Spread KPI from diagnostics (raw spread includes all opportunities, not just above-threshold)
-    if (diagnostics && diagnostics.bestRawSpread > 0) {
-        const bestSpread = document.getElementById("best-spread");
+        var bestSpread = document.getElementById("best-spread");
         if (bestSpread) {
-            bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
+            var spread = data.bestSpread ?? 0;
+            bestSpread.textContent = spread > 0
+                ? (spread * 100).toFixed(4) + "%"
+                : "N/A";
         }
-    }
+    });
 
-    tbody.innerHTML = "";
-    if (opportunities.length === 0) {
-        const emptyRow = document.createElement("tr");
-        const emptyCell = document.createElement("td");
-        emptyCell.colSpan = 8;
-        emptyCell.className = "text-center py-4";
+    connection.on("ReceivePositionUpdate", function (position) {
+        var positionRow = document.getElementById("position-" + position.id);
+        if (positionRow) {
+            var pnlEl = positionRow.querySelector(".position-pnl");
+            if (pnlEl) {
+                var pnl = position.unrealizedPnl ?? 0;
+                pnlEl.textContent = "$" + pnl.toFixed(2);
+                pnlEl.className = "position-pnl " + (pnl >= 0 ? "text-success" : "text-danger");
+            }
+            var spreadEl = positionRow.querySelector(".position-spread");
+            if (spreadEl) {
+                spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(6) + "%";
+            }
 
-        if (diagnostics) {
-            const alertDiv = document.createElement("div");
-            alertDiv.className = "mb-0 d-inline-block";
+            // Apply warning level row class
+            positionRow.classList.remove("table-danger", "table-warning", "table-info");
+            var warnLevel = position.warningLevel ?? 0;
+            if (warnLevel === 3) positionRow.classList.add("table-danger");
+            else if (warnLevel === 2) positionRow.classList.add("table-warning");
+            else if (warnLevel === 1) positionRow.classList.add("table-info");
 
-            if (diagnostics.totalRatesLoaded === 0) {
-                alertDiv.className += " alert alert-warning";
-                alertDiv.textContent = "No funding rate data available. Background services may not be running.";
-            } else if (diagnostics.ratesAfterStalenessFilter === 0) {
-                alertDiv.className += " alert alert-warning";
-                alertDiv.textContent = "All " + diagnostics.totalRatesLoaded + " rates are older than " + diagnostics.stalenessMinutes + " minutes. Exchange connections may be down.";
-            } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByVolume > 0 && diagnostics.pairsFilteredByThreshold === 0) {
-                alertDiv.className += " alert alert-info";
-                alertDiv.textContent = diagnostics.pairsFilteredByVolume + " pairs filtered \u2014 volume below $" + diagnostics.minVolumeThreshold.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " on one or both legs.";
-            } else if (diagnostics.pairsPassing === 0 && (diagnostics.pairsFilteredByThreshold > 0 || diagnostics.netPositiveBelowThreshold > 0)) {
-                alertDiv.className += " alert alert-info";
-                const totalBelowThreshold = diagnostics.pairsFilteredByThreshold + (diagnostics.netPositiveBelowThreshold || 0);
-                let thresholdText = totalBelowThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. ";
-                if (diagnostics.netPositiveBelowThreshold > 0) {
-                    const bold = document.createElement("strong");
-                    bold.textContent = diagnostics.netPositiveBelowThreshold + " profitable (adaptive eligible).";
-                    alertDiv.textContent = thresholdText;
-                    alertDiv.appendChild(bold);
-                    const trailing = document.createTextNode(" Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.");
-                    alertDiv.appendChild(trailing);
-                } else {
-                    alertDiv.textContent = thresholdText + "Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
-                }
+            // Update warning type icons in the first cell
+            var firstTd = positionRow.querySelector("td:first-child");
+            if (firstTd) {
+                var existing = firstTd.querySelectorAll(".warning-icon");
+                existing.forEach(function (el) { el.remove(); });
+
+                var warnTypes = position.warningTypes || [];
+                var iconMap = { 0: "\u25B2", 1: "\u2248", 2: "\u23F0", 3: "\u26BF", 4: "\u2193" };
+                var nameMap = { 0: "SpreadRisk", 1: "Liquidity", 2: "TimeBased", 3: "Leverage", 4: "Loss" };
+                warnTypes.forEach(function (wt) {
+                    var span = document.createElement("span");
+                    span.className = "warning-icon warning-" + (nameMap[wt] || "").toLowerCase();
+                    span.title = nameMap[wt] || "";
+                    span.textContent = iconMap[wt] || "";
+                    firstTd.appendChild(span);
+                });
+            }
+        }
+    });
+
+    var isMobile = window.matchMedia('(max-width: 575.98px)');
+
+    // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
+    connection.on("ReceiveOpportunityUpdate", function (data) {
+        var tbody = document.getElementById("opportunities-table-body");
+        var cardsContainer = document.getElementById("opportunities-cards");
+
+        // Rebuild mobile cards
+        if (cardsContainer && isMobile.matches) {
+            var opportunities = data.opportunities || [];
+            cardsContainer.innerHTML = "";
+            if (opportunities.length === 0) {
+                var p = document.createElement("p");
+                p.className = "text-muted text-center py-3 mb-0";
+                p.textContent = "No opportunities detected.";
+                cardsContainer.appendChild(p);
             } else {
-                const span = document.createElement("span");
-                span.className = "text-muted";
-                span.textContent = "No arbitrage opportunities detected at this time.";
-                const br = document.createElement("br");
-                const small = document.createElement("small");
-                small.textContent = "Rates are fetched every minute. Check back shortly.";
-                span.appendChild(br);
-                span.appendChild(small);
-                emptyCell.appendChild(span);
-                emptyRow.appendChild(emptyCell);
-                tbody.appendChild(emptyRow);
-                return;
+                opportunities.forEach(function (opp) {
+                    var card = document.createElement("div");
+                    card.className = "card mb-2 mobile-card";
+                    var body = document.createElement("div");
+                    body.className = "card-body p-2";
+
+                    var header = document.createElement("div");
+                    header.className = "d-flex justify-content-between";
+                    var strong = document.createElement("strong");
+                    strong.textContent = opp.assetSymbol;
+                    header.appendChild(strong);
+                    var badge = document.createElement("span");
+                    var apyVal = (opp.annualizedYield * 100).toFixed(0);
+                    badge.className = "badge " + (opp.annualizedYield > 0.50 ? "bg-success" : opp.annualizedYield >= 0.20 ? "bg-warning text-dark" : "bg-secondary");
+                    badge.textContent = apyVal + "% APY";
+                    header.appendChild(badge);
+                    body.appendChild(header);
+
+                    var exchanges = document.createElement("small");
+                    exchanges.className = "text-muted";
+                    exchanges.textContent = "Long: " + opp.longExchangeName + " | Short: " + opp.shortExchangeName;
+                    body.appendChild(exchanges);
+
+                    var spreadDiv = document.createElement("div");
+                    spreadDiv.className = "small";
+                    spreadDiv.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + (opp.netYieldPerHour * 100).toFixed(4) + "%/hr";
+                    body.appendChild(spreadDiv);
+
+                    card.appendChild(body);
+                    cardsContainer.appendChild(card);
+                });
             }
-
-            emptyCell.appendChild(alertDiv);
-        } else {
-            emptyCell.className += " text-muted py-5";
-            emptyCell.textContent = "No arbitrage opportunities detected at this time. Rates are fetched every minute. Check back shortly.";
         }
 
-        emptyRow.appendChild(emptyCell);
-        tbody.appendChild(emptyRow);
-        return;
-    }
+        if (!tbody) return;
 
-    const notionalPerLeg = parseFloat(tbody.dataset.notionalPerLeg) || 0;
-    const volumeFraction = parseFloat(tbody.dataset.volumeFraction) || 0;
+        var opportunitiesArr = data.opportunities || [];
+        var diagnostics = data.diagnostics;
 
-    opportunities.forEach(opp => {
-        const aprClass = opp.annualizedYield > 0.50
-            ? "text-success fw-bold"
-            : opp.annualizedYield >= 0.20
-                ? "text-warning fw-bold"
-                : "";
+        // Update count badge
+        var countBadge = document.querySelector(".badge.bg-primary");
+        if (countBadge) countBadge.textContent = opportunitiesArr.length + " found";
 
-        const constrained = volumeFraction > 0
-            && Math.min(opp.longVolume24h, opp.shortVolume24h) * volumeFraction < notionalPerLeg;
-
-        const row = document.createElement("tr");
-        if (constrained) row.className = "table-warning";
-
-        const tdAsset = document.createElement("td");
-        const strong = document.createElement("strong");
-        strong.textContent = opp.assetSymbol;
-        tdAsset.appendChild(strong);
-        row.appendChild(tdAsset);
-
-        // B1: Use formatPrice for mark prices
-        const tdPrice = document.createElement("td");
-        const lp = opp.longMarkPrice || 0;
-        const sp = opp.shortMarkPrice || 0;
-        const avgPrice = (lp > 0 && sp > 0) ? (lp + sp) / 2 : Math.max(lp, sp);
-        tdPrice.textContent = formatPrice(avgPrice);
-        row.appendChild(tdPrice);
-
-        const tdLong = document.createElement("td");
-        tdLong.textContent = opp.longExchangeName;
-        row.appendChild(tdLong);
-
-        const tdShort = document.createElement("td");
-        tdShort.textContent = opp.shortExchangeName;
-        row.appendChild(tdShort);
-
-        const tdSpread = document.createElement("td");
-        tdSpread.className = "text-info";
-        tdSpread.textContent = (opp.spreadPerHour * 100).toFixed(4) + "%";
-        row.appendChild(tdSpread);
-
-        const tdYield = document.createElement("td");
-        tdYield.textContent = (opp.netYieldPerHour * 100).toFixed(4) + "%";
-        row.appendChild(tdYield);
-
-        const tdApr = document.createElement("td");
-        tdApr.className = aprClass;
-        const aprText = (opp.annualizedYield * 100).toFixed(1) + "%";
-        if (constrained) {
-            tdApr.textContent = aprText + " ";
-            const warn = document.createElement("span");
-            warn.className = "ms-1";
-            warn.title = "Position size limited by liquidity";
-            warn.textContent = "\u26A0";
-            tdApr.appendChild(warn);
-        } else {
-            tdApr.textContent = aprText;
+        // Update Best Spread KPI from diagnostics (raw spread includes all opportunities, not just above-threshold)
+        if (diagnostics && diagnostics.bestRawSpread > 0) {
+            var bestSpread = document.getElementById("best-spread");
+            if (bestSpread) {
+                bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
+            }
         }
-        row.appendChild(tdApr);
 
-        var tdNext = document.createElement("td");
-        tdNext.className = "text-muted small";
-        if (opp.minutesToNextSettlement != null) {
-            tdNext.textContent = opp.minutesToNextSettlement + "m";
-        }
-        row.appendChild(tdNext);
+        tbody.innerHTML = "";
+        if (opportunitiesArr.length === 0) {
+            var emptyRow = document.createElement("tr");
+            var emptyCell = document.createElement("td");
+            emptyCell.colSpan = 8;
+            emptyCell.className = "text-center py-4";
 
-        tbody.appendChild(row);
-    });
-});
+            if (diagnostics) {
+                var alertDiv = document.createElement("div");
+                alertDiv.className = "mb-0 d-inline-block";
 
-// B5: Alert toasts use showAlertToast (with close button, 5s delay)
-connection.on("ReceiveAlert", (alert) => {
-    const badge = document.getElementById("alert-badge");
-    if (badge) {
-        const current = parseInt(badge.textContent) || 0;
-        badge.textContent = current + 1;
-        badge.classList.remove("d-none");
-    }
-
-    if (!alert.message) return;
-
-    const severityClass = alert.severity === 1 ? "text-bg-danger"
-        : alert.severity === 2 ? "text-bg-warning"
-        : "text-bg-info";
-
-    showAlertToast(alert.message, severityClass);
-});
-
-// Balance update from BalanceAggregator
-connection.on("ReceiveBalanceUpdate", (snapshot) => {
-    const row = document.getElementById("exchange-balances-row");
-    const container = document.getElementById("exchange-balances");
-    const totalEl = document.getElementById("balance-total");
-    if (!row || !container) return;
-
-    container.innerHTML = "";
-    const balances = snapshot.balances || [];
-
-    balances.forEach(b => {
-        const span = document.createElement("span");
-        span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
-        span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
-        container.appendChild(span);
-    });
-
-    if (totalEl) {
-        totalEl.textContent = "Total: $" + (snapshot.totalAvailableUsdc || 0).toFixed(2);
-    }
-
-    row.style.display = balances.length > 0 ? "block" : "none";
-});
-
-// B4: Handle status explanations — show toast AND update persistent status area
-connection.on("ReceiveStatusExplanation", (message, severity) => {
-    const cssClass = severity === "danger" ? "text-bg-danger"
-        : severity === "warning" ? "text-bg-warning"
-        : "text-bg-info";
-
-    showToast(message, cssClass, 4000);
-
-    // Update persistent status area
-    const statusArea = document.getElementById("status-explanation");
-    if (statusArea) {
-        const alertClass = severity === "danger" ? "alert-danger"
-            : severity === "warning" ? "alert-warning"
-            : "alert-info";
-        statusArea.className = "alert " + alertClass + " mb-0 py-2 px-3 small";
-        statusArea.textContent = message;
-        statusArea.style.display = "block";
-    }
-});
-
-connection.onreconnecting(() => {
-    const status = document.getElementById("connection-status");
-    if (status) {
-        status.className = "badge bg-warning";
-        status.textContent = "Reconnecting...";
-    }
-});
-
-connection.onreconnected(() => {
-    const status = document.getElementById("connection-status");
-    if (status) {
-        status.className = "badge bg-success";
-        status.textContent = "Live";
-    }
-});
-
-connection.onclose(() => {
-    const status = document.getElementById("connection-status");
-    if (status) {
-        status.className = "badge bg-danger";
-        status.textContent = "Disconnected";
-    }
-});
-
-const retryBtn = document.getElementById("retry-now-btn");
-if (retryBtn) {
-    retryBtn.addEventListener("click", async () => {
-        retryBtn.disabled = true;
-        retryBtn.textContent = "Triggering...";
-        try {
-            const token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
-            const resp = await fetch("/Dashboard/RetryNow", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "RequestVerificationToken": token
+                if (diagnostics.totalRatesLoaded === 0) {
+                    alertDiv.className += " alert alert-warning";
+                    alertDiv.textContent = "No funding rate data available. Background services may not be running.";
+                } else if (diagnostics.ratesAfterStalenessFilter === 0) {
+                    alertDiv.className += " alert alert-warning";
+                    alertDiv.textContent = "All " + diagnostics.totalRatesLoaded + " rates are older than " + diagnostics.stalenessMinutes + " minutes. Exchange connections may be down.";
+                } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByVolume > 0 && diagnostics.pairsFilteredByThreshold === 0) {
+                    alertDiv.className += " alert alert-info";
+                    alertDiv.textContent = diagnostics.pairsFilteredByVolume + " pairs filtered \u2014 volume below $" + diagnostics.minVolumeThreshold.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " on one or both legs.";
+                } else if (diagnostics.pairsPassing === 0 && (diagnostics.pairsFilteredByThreshold > 0 || diagnostics.netPositiveBelowThreshold > 0)) {
+                    alertDiv.className += " alert alert-info";
+                    var totalBelowThreshold = diagnostics.pairsFilteredByThreshold + (diagnostics.netPositiveBelowThreshold || 0);
+                    var thresholdText = totalBelowThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. ";
+                    if (diagnostics.netPositiveBelowThreshold > 0) {
+                        var bold = document.createElement("strong");
+                        bold.textContent = diagnostics.netPositiveBelowThreshold + " profitable (adaptive eligible).";
+                        alertDiv.textContent = thresholdText;
+                        alertDiv.appendChild(bold);
+                        var trailing = document.createTextNode(" Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.");
+                        alertDiv.appendChild(trailing);
+                    } else {
+                        alertDiv.textContent = thresholdText + "Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
+                    }
+                } else {
+                    var span = document.createElement("span");
+                    span.className = "text-muted";
+                    span.textContent = "No arbitrage opportunities detected at this time.";
+                    var br = document.createElement("br");
+                    var small = document.createElement("small");
+                    small.textContent = "Rates are fetched every minute. Check back shortly.";
+                    span.appendChild(br);
+                    span.appendChild(small);
+                    emptyCell.appendChild(span);
+                    emptyRow.appendChild(emptyCell);
+                    tbody.appendChild(emptyRow);
+                    return;
                 }
-            });
-            const data = await resp.json();
-            if (data.success) {
-                retryBtn.textContent = "Triggered!";
-                setTimeout(() => { retryBtn.textContent = "Retry Now"; retryBtn.disabled = false; }, 3000);
+
+                emptyCell.appendChild(alertDiv);
+            } else {
+                emptyCell.className += " text-muted py-5";
+                emptyCell.textContent = "No arbitrage opportunities detected at this time. Rates are fetched every minute. Check back shortly.";
             }
-        } catch (e) {
-            retryBtn.textContent = "Retry Now";
-            retryBtn.disabled = false;
+
+            emptyRow.appendChild(emptyCell);
+            tbody.appendChild(emptyRow);
+            return;
+        }
+
+        var notionalPerLeg = parseFloat(tbody.dataset.notionalPerLeg) || 0;
+        var volumeFraction = parseFloat(tbody.dataset.volumeFraction) || 0;
+
+        opportunitiesArr.forEach(function (opp) {
+            var aprClass = opp.annualizedYield > 0.50
+                ? "text-success fw-bold"
+                : opp.annualizedYield >= 0.20
+                    ? "text-warning fw-bold"
+                    : "";
+
+            var constrained = volumeFraction > 0
+                && Math.min(opp.longVolume24h, opp.shortVolume24h) * volumeFraction < notionalPerLeg;
+
+            var row = document.createElement("tr");
+            if (constrained) row.className = "table-warning";
+
+            var tdAsset = document.createElement("td");
+            var strongEl = document.createElement("strong");
+            strongEl.textContent = opp.assetSymbol;
+            tdAsset.appendChild(strongEl);
+            row.appendChild(tdAsset);
+
+            // B1: Use formatPrice for mark prices
+            var tdPrice = document.createElement("td");
+            var lp = opp.longMarkPrice || 0;
+            var sp = opp.shortMarkPrice || 0;
+            var avgPrice = (lp > 0 && sp > 0) ? (lp + sp) / 2 : Math.max(lp, sp);
+            tdPrice.textContent = formatPrice(avgPrice);
+            row.appendChild(tdPrice);
+
+            var tdLong = document.createElement("td");
+            tdLong.textContent = opp.longExchangeName;
+            row.appendChild(tdLong);
+
+            var tdShort = document.createElement("td");
+            tdShort.textContent = opp.shortExchangeName;
+            row.appendChild(tdShort);
+
+            var tdSpread = document.createElement("td");
+            tdSpread.className = "text-info";
+            tdSpread.textContent = (opp.spreadPerHour * 100).toFixed(4) + "%";
+            row.appendChild(tdSpread);
+
+            var tdYield = document.createElement("td");
+            tdYield.textContent = (opp.netYieldPerHour * 100).toFixed(4) + "%";
+            row.appendChild(tdYield);
+
+            var tdApr = document.createElement("td");
+            tdApr.className = aprClass;
+            var aprText = (opp.annualizedYield * 100).toFixed(1) + "%";
+            if (constrained) {
+                tdApr.textContent = aprText + " ";
+                var warn = document.createElement("span");
+                warn.className = "ms-1";
+                warn.title = "Position size limited by liquidity";
+                warn.textContent = "\u26A0";
+                tdApr.appendChild(warn);
+            } else {
+                tdApr.textContent = aprText;
+            }
+            row.appendChild(tdApr);
+
+            var tdNext = document.createElement("td");
+            tdNext.className = "text-muted small";
+            if (opp.minutesToNextSettlement != null) {
+                tdNext.textContent = opp.minutesToNextSettlement + "m";
+            }
+            row.appendChild(tdNext);
+
+            tbody.appendChild(row);
+        });
+    });
+
+    // Balance update from BalanceAggregator
+    connection.on("ReceiveBalanceUpdate", function (snapshot) {
+        var row = document.getElementById("exchange-balances-row");
+        var container = document.getElementById("exchange-balances");
+        var totalEl = document.getElementById("balance-total");
+        if (!row || !container) return;
+
+        container.innerHTML = "";
+        var balances = snapshot.balances || [];
+
+        balances.forEach(function (b) {
+            var span = document.createElement("span");
+            span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
+            span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
+            container.appendChild(span);
+        });
+
+        if (totalEl) {
+            totalEl.textContent = "Total: $" + (snapshot.totalAvailableUsdc || 0).toFixed(2);
+        }
+
+        row.style.display = balances.length > 0 ? "block" : "none";
+    });
+
+    // B4: Handle status explanations
+    connection.on("ReceiveStatusExplanation", function (message, severity) {
+        var cssClass = severity === "danger" ? "text-bg-danger"
+            : severity === "warning" ? "text-bg-warning"
+            : "text-bg-info";
+
+        showToast(message, cssClass, 4000);
+
+        // Update persistent status area
+        var statusArea = document.getElementById("status-explanation");
+        if (statusArea) {
+            var alertClass = severity === "danger" ? "alert-danger"
+                : severity === "warning" ? "alert-warning"
+                : "alert-info";
+            statusArea.className = "alert " + alertClass + " mb-0 py-2 px-3 small";
+            statusArea.textContent = message;
+            statusArea.style.display = "block";
         }
     });
-}
 
-// L1 fix: exponential backoff on initial connection failure
-async function start() {
-    let retryDelay = 1000; // start at 1s
-    const maxDelay = 30000; // cap at 30s
-
-    while (true) {
-        try {
-            await connection.start();
-            const status = document.getElementById("connection-status");
-            if (status) {
-                status.className = "badge bg-success";
-                status.textContent = "Live";
+    // Retry Now button
+    var retryBtn = document.getElementById("retry-now-btn");
+    if (retryBtn) {
+        retryBtn.addEventListener("click", async function () {
+            retryBtn.disabled = true;
+            retryBtn.textContent = "Triggering...";
+            try {
+                var token = document.querySelector('input[name="__RequestVerificationToken"]')?.value;
+                var resp = await fetch("/Dashboard/RetryNow", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "RequestVerificationToken": token
+                    }
+                });
+                var respData = await resp.json();
+                if (respData.success) {
+                    retryBtn.textContent = "Triggered!";
+                    setTimeout(function () { retryBtn.textContent = "Retry Now"; retryBtn.disabled = false; }, 3000);
+                }
+            } catch (e) {
+                retryBtn.textContent = "Retry Now";
+                retryBtn.disabled = false;
             }
-            return; // connected successfully
-        } catch (err) {
-            console.error("SignalR connection failed, retrying in " + retryDelay + "ms:", err);
-            await new Promise(resolve => setTimeout(resolve, retryDelay));
-            retryDelay = Math.min(retryDelay * 2, maxDelay);
-        }
+        });
     }
-}
-
-start();
+})();

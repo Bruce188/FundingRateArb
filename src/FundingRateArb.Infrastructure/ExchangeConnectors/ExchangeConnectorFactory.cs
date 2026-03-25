@@ -19,7 +19,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     {
         { "Hyperliquid", typeof(HyperliquidConnector) },
         { "Lighter",     typeof(LighterConnector) },
-        { "Aster",       typeof(AsterConnector) }
+        { "Aster",       typeof(AsterConnector) },
+        { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
     public ExchangeConnectorFactory(IServiceProvider serviceProvider)

@@ -13,20 +13,23 @@ public class ExecutionEngine : IExecutionEngine
 
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
+    private readonly IUserSettingsService _userSettings;
     private readonly ILogger<ExecutionEngine> _logger;
 
     public ExecutionEngine(
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
+        IUserSettingsService userSettings,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
+        _userSettings = userSettings;
         _logger = logger;
     }
 
     public async Task<(bool Success, string? Error)> OpenPositionAsync(
-        ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
+        string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
 
@@ -38,8 +41,13 @@ public class ExecutionEngine : IExecutionEngine
             return (false, $"Order size {sizeUsdc:F2} exceeds safety cap of {MaxSingleOrderUsdc} USDC");
         }
 
-        var longConnector = _connectorFactory.GetConnector(opp.LongExchangeName);
-        var shortConnector = _connectorFactory.GetConnector(opp.ShortExchangeName);
+        // Create user-specific connectors using the user's exchange credentials
+        var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
+            userId, opp.LongExchangeName, opp.ShortExchangeName);
+        if (credError is not null)
+        {
+            return (false, credError);
+        }
 
         // Pre-flight margin check: verify both exchanges have sufficient balance
         // before opening any legs. Prevents the costly open→fail→emergency-close cycle
@@ -96,7 +104,7 @@ public class ExecutionEngine : IExecutionEngine
                     originalLeverage, longMax.Value, opp.AssetSymbol, opp.LongExchangeName);
                 _uow.Alerts.Add(new Alert
                 {
-                    UserId = config.UpdatedByUserId,
+                    UserId = userId,
                     Type = AlertType.LeverageReduced,
                     Severity = AlertSeverity.Warning,
                     Message = $"Leverage reduced from {originalLeverage}x to {longMax.Value}x for {opp.AssetSymbol} on {opp.LongExchangeName} (exchange maximum)",
@@ -111,7 +119,7 @@ public class ExecutionEngine : IExecutionEngine
                     originalLeverage, shortMax.Value, opp.AssetSymbol, opp.ShortExchangeName);
                 _uow.Alerts.Add(new Alert
                 {
-                    UserId = config.UpdatedByUserId,
+                    UserId = userId,
                     Type = AlertType.LeverageReduced,
                     Severity = AlertSeverity.Warning,
                     Message = $"Leverage reduced from {originalLeverage}x to {shortMax.Value}x for {opp.AssetSymbol} on {opp.ShortExchangeName} (exchange maximum)",
@@ -128,7 +136,7 @@ public class ExecutionEngine : IExecutionEngine
         // succeeds leaves a recoverable audit trail.
         var position = new ArbitragePosition
         {
-            UserId = config.UpdatedByUserId,
+            UserId = userId,
             AssetId = opp.AssetId,
             LongExchangeId = opp.LongExchangeId,
             ShortExchangeId = opp.ShortExchangeId,
@@ -224,7 +232,7 @@ public class ExecutionEngine : IExecutionEngine
             _uow.Positions.Update(position);
             _uow.Alerts.Add(new Alert
             {
-                UserId = config.UpdatedByUserId,
+                UserId = userId,
                 Type = AlertType.PositionOpened,
                 Severity = AlertSeverity.Info,
                 Message = $"Position opened: {opp.AssetSymbol} " +
@@ -254,17 +262,17 @@ public class ExecutionEngine : IExecutionEngine
         // Emergency close any leg that succeeded — run sequentially to avoid concurrent exchange state issues
         if (longSuccess)
         {
-            await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, config.UpdatedByUserId, ct);
+            await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
         }
 
         if (shortSuccess)
         {
-            await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, config.UpdatedByUserId, ct);
+            await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
         }
 
         _uow.Alerts.Add(new Alert
         {
-            UserId = config.UpdatedByUserId,
+            UserId = userId,
             Type = AlertType.LegFailed,
             Severity = AlertSeverity.Critical,
             Message = $"Emergency close: {opp.AssetSymbol} " +
@@ -281,7 +289,7 @@ public class ExecutionEngine : IExecutionEngine
         return (false, error);
     }
 
-    public async Task ClosePositionAsync(ArbitragePosition position, CloseReason reason, CancellationToken ct = default)
+    public async Task ClosePositionAsync(string userId, ArbitragePosition position, CloseReason reason, CancellationToken ct = default)
     {
         // Resolve exchange names (use nav property if loaded, else query DB)
         var longExchangeName = position.LongExchange?.Name
@@ -291,8 +299,23 @@ public class ExecutionEngine : IExecutionEngine
         var assetSymbol = position.Asset?.Symbol
             ?? (await _uow.Assets.GetByIdAsync(position.AssetId))!.Symbol;
 
-        var longConnector = _connectorFactory.GetConnector(longExchangeName);
-        var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+        // Create user-specific connectors using the user's exchange credentials
+        var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
+            userId, longExchangeName, shortExchangeName);
+        if (credError is not null)
+        {
+            _logger.LogError("Cannot close position #{PositionId}: {Error}", position.Id, credError);
+            _uow.Alerts.Add(new Alert
+            {
+                UserId = userId,
+                ArbitragePositionId = position.Id,
+                Type = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message = $"Cannot close position for {assetSymbol}: {credError}. Manual intervention required.",
+            });
+            await _uow.SaveAsync(ct);
+            return;
+        }
 
         _logger.LogInformation(
             "Closing position #{PositionId}: {Asset} reason={Reason}",
@@ -493,6 +516,53 @@ public class ExecutionEngine : IExecutionEngine
         });
 
         await _uow.SaveAsync(ct);
+    }
+
+    /// <summary>
+    /// Creates user-specific exchange connectors for the long and short exchanges
+    /// using the user's stored API credentials.
+    /// </summary>
+    private async Task<(IExchangeConnector Long, IExchangeConnector Short, string? Error)> CreateUserConnectorsAsync(
+        string userId, string longExchangeName, string shortExchangeName)
+    {
+        var credentials = await _userSettings.GetActiveCredentialsAsync(userId);
+
+        var longCred = credentials.FirstOrDefault(c =>
+            string.Equals(c.Exchange?.Name, longExchangeName, StringComparison.OrdinalIgnoreCase));
+        var shortCred = credentials.FirstOrDefault(c =>
+            string.Equals(c.Exchange?.Name, shortExchangeName, StringComparison.OrdinalIgnoreCase));
+
+        if (longCred is null)
+        {
+            return (null!, null!, $"No credentials found for {longExchangeName} (user {userId})");
+        }
+
+        if (shortCred is null)
+        {
+            return (null!, null!, $"No credentials found for {shortExchangeName} (user {userId})");
+        }
+
+        var longDecrypted = _userSettings.DecryptCredential(longCred);
+        var longConnector = await _connectorFactory.CreateForUserAsync(
+            longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
+            longDecrypted.WalletAddress, longDecrypted.PrivateKey);
+
+        if (longConnector is null)
+        {
+            return (null!, null!, $"Could not create connector for {longExchangeName} (user {userId}) — invalid credentials");
+        }
+
+        var shortDecrypted = _userSettings.DecryptCredential(shortCred);
+        var shortConnector = await _connectorFactory.CreateForUserAsync(
+            shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
+            shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
+
+        if (shortConnector is null)
+        {
+            return (null!, null!, $"Could not create connector for {shortExchangeName} (user {userId}) — invalid credentials");
+        }
+
+        return (longConnector, shortConnector, null);
     }
 
     private static decimal GetTakerFeeRate(string exchangeName) => exchangeName switch

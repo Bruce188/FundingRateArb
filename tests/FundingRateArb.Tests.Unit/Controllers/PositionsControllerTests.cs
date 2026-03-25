@@ -78,7 +78,7 @@ public class PositionsControllerTests
 
         // Assert
         result.Should().BeOfType<ForbidResult>();
-        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // Test 2: Admin can close any position regardless of ownership
@@ -89,7 +89,7 @@ public class PositionsControllerTests
         var position = OpenPositionOwnedBy("some-other-user-id");
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
-        _mockExecution.Setup(e => e.ClosePositionAsync(position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+        _mockExecution.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(AdminUser("admin-id"));
@@ -100,7 +100,7 @@ public class PositionsControllerTests
         // Assert
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
-        _mockExecution.Verify(e => e.ClosePositionAsync(position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // Test 3: Closing an already-closed position returns BadRequest
@@ -125,7 +125,7 @@ public class PositionsControllerTests
 
         // Assert
         result.Should().BeOfType<BadRequestObjectResult>();
-        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // Test 4: Happy path - owner closes own open position, gets redirect
@@ -136,7 +136,7 @@ public class PositionsControllerTests
         var position = OpenPositionOwnedBy("trader-id");
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
-        _mockExecution.Setup(e => e.ClosePositionAsync(position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+        _mockExecution.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(TraderUser("trader-id"));
@@ -148,7 +148,7 @@ public class PositionsControllerTests
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
         controller.TempData["Success"].Should().Be("Position closed successfully.");
-        _mockExecution.Verify(e => e.ClosePositionAsync(position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // Test 5: Trader's Index only returns positions owned by that trader

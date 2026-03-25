@@ -267,6 +267,8 @@ public class SettingsController : Controller
 
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
+        var adminDefaults = await _uow.BotConfig.GetActiveAsync();
+
         var model = new UserConfigViewModel
         {
             IsEnabled = config.IsEnabled,
@@ -294,7 +296,8 @@ public class SettingsController : Controller
             EmailCriticalAlerts = config.EmailCriticalAlerts,
             EmailDailySummary = config.EmailDailySummary,
             AllocationStrategyOptions = BuildAllocationStrategyOptions(config.AllocationStrategy),
-            StatusMessage = TempData["Success"] as string
+            StatusMessage = TempData["Success"] as string,
+            AdminDefaults = adminDefaults,
         };
 
         return View(model);
