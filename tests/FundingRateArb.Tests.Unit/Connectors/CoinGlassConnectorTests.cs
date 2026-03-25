@@ -286,6 +286,9 @@ public class CoinGlassConnectorTests
     [InlineData("BTC/USD", "BTC")]
     [InlineData("BTCUSD", "BTC")]
     [InlineData("DOGE/USDT", "DOGE")]
+    [InlineData("BTC", "BTC")]       // NB5: no suffix to strip
+    [InlineData("LINK-", "LINK")]     // NB5: trailing separator
+    [InlineData("LINKUSD", "LINK")]   // NB5: matches "USD" specifically
     public async Task GetFundingRatesAsync_NormalizeSymbol_AllPatterns(string inputSymbol, string expectedSymbol)
     {
         var json = $$"""
@@ -421,5 +424,67 @@ public class CoinGlassConnectorTests
 
         // Should return empty despite data being present because code != "0"
         rates.Should().BeEmpty();
+    }
+
+    // NB6: Timeout/TaskCanceledException test
+
+    [Fact]
+    public async Task GetFundingRatesAsync_Timeout_ReturnsEmptyList()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"));
+
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
+            })
+            .Build();
+
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().BeEmpty();
+    }
+
+    // N9: Negative intervalHours defaults to 8
+
+    [Fact]
+    public async Task GetFundingRatesAsync_NegativeIntervalHours_DefaultsToEight()
+    {
+        var json = """
+        {
+            "code": "0",
+            "data": [
+                {
+                    "symbol": "BTCUSDT",
+                    "fundingRateByExchange": {
+                        "Binance": { "rate": 0.0008, "markPrice": 65000, "intervalHours": -1 }
+                    }
+                }
+            ]
+        }
+        """;
+
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        };
+
+        var sut = CreateConnector(response);
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(1);
+        rates[0].RatePerHour.Should().Be(0.0008m / 8); // negative defaults to 8
     }
 }

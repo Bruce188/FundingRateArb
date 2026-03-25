@@ -581,6 +581,7 @@ public class ExecutionEngine : IExecutionEngine
 
         if (shortConnector is null)
         {
+            (longConnector as IDisposable)?.Dispose();
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", shortExchangeName, userId);
             return (null!, null!, $"Could not create connector for {shortExchangeName} — invalid credentials");
         }

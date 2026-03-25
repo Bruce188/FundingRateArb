@@ -44,8 +44,14 @@ public class OpportunitySnapshotRepository : IOpportunitySnapshotRepository
         var baseQuery = _context.OpportunitySnapshots
             .Where(s => s.RecordedAt >= from && s.RecordedAt <= to);
 
-        var totalCount = await baseQuery.CountAsync(ct);
-        var openedCount = await baseQuery.CountAsync(s => s.WasOpened, ct);
+        // Combine total and opened counts into a single SQL query (2 round-trips instead of 3)
+        var summary = await baseQuery
+            .GroupBy(_ => 1)
+            .Select(g => new { Total = g.Count(), Opened = g.Count(s => s.WasOpened) })
+            .FirstOrDefaultAsync(ct);
+
+        var totalCount = summary?.Total ?? 0;
+        var openedCount = summary?.Opened ?? 0;
 
         var skipReasons = await baseQuery
             .Where(s => !s.WasOpened && s.SkipReason != null && s.SkipReason != "")

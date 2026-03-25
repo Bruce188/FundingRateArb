@@ -1217,6 +1217,24 @@ public class ExecutionEngineTests
     }
 
     [Fact]
+    public async Task OpenPositionAsync_MissingShortCredentials_ReturnsError()
+    {
+        // Only long credential exists — short exchange has no credentials
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(TestUserId))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred });
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Lighter");
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task OpenPositionAsync_FactoryReturnsNullConnector_ReturnsError()
     {
         // Credentials exist but factory returns null for long exchange

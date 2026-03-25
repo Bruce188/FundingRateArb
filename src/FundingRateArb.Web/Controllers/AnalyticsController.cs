@@ -25,7 +25,7 @@ public class AnalyticsController : Controller
     }
 
     [HttpGet]
-    public async Task<IActionResult> Index(int skip = 0, int take = 50, CancellationToken ct = default)
+    public async Task<IActionResult> Index(int skip = 0, int take = 50, int days = 90, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null)
@@ -33,11 +33,13 @@ public class AnalyticsController : Controller
             return Unauthorized();
         }
 
+        days = Math.Clamp(days, 1, 365);
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
 
-        // Compute summary KPIs from closed positions — filter by userId in SQL, include navigation properties
-        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(DateTime.MinValue, effectiveUserId, ct);
+        // Compute summary KPIs from closed positions — bounded to avoid loading full history
+        var since = DateTime.UtcNow.AddDays(-days);
+        var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(since, effectiveUserId, ct);
 
         var closedWithPnl = closedPositions.Where(p => p.RealizedPnl.HasValue).ToList();
         var now = DateTime.UtcNow;

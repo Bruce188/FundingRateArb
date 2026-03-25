@@ -137,7 +137,7 @@ public class PositionsControllerTests
         var position = OpenPositionOwnedBy("trader-id");
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
-        _mockExecution.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+        _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(TraderUser("trader-id"));
@@ -149,7 +149,7 @@ public class PositionsControllerTests
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
         controller.TempData["Success"].Should().Be("Position closed successfully.");
-        _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecution.Verify(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // Test 5: Trader's Index only returns positions owned by that trader

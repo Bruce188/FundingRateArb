@@ -34,6 +34,9 @@ public class CoinGlassConnector : IExchangeConnector
         "Hyperliquid", "Lighter", "Aster"
     };
 
+    /// <summary>Common symbol suffixes to strip during normalization.</summary>
+    private static readonly string[] SymbolSuffixes = ["USDT", "USD", "-PERP", "_PERP", "/USD", "/USDT"];
+
     public CoinGlassConnector(HttpClient httpClient, IConfiguration configuration, ILogger<CoinGlassConnector> logger)
     {
         _httpClient = httpClient;
@@ -125,8 +128,13 @@ public class CoinGlassConnector : IExchangeConnector
 
                     rates.Add(new FundingRateDto
                     {
-                        // Map to "CoinGlass" exchange entity so FundingRateFetcher can resolve
-                        // the ExchangeId. The original source exchange is logged for diagnostics.
+                        // Design decision: all rates map to the "CoinGlass" exchange entity.
+                        // This means cross-source arbitrage (e.g., Binance vs. OKX) within CoinGlass
+                        // data will not be detected — only spreads between CoinGlass and directly
+                        // connected exchanges (Hyperliquid, Lighter, Aster) are surfaced.
+                        // To enable cross-source arbitrage, each source exchange would need its own
+                        // ExchangeId, which requires additional Exchange entity seeding and
+                        // deduplication logic in FundingRateFetcher.
                         ExchangeName = "CoinGlass",
                         Symbol = symbol,
                         RawRate = rawRate,
@@ -138,7 +146,7 @@ public class CoinGlassConnector : IExchangeConnector
                 }
             }
 
-            _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates from {Exchanges} source exchanges",
+            _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates across {Symbols} distinct symbols",
                 rates.Count, rates.Select(r => r.Symbol).Distinct().Count());
 
             return rates;
@@ -184,7 +192,7 @@ public class CoinGlassConnector : IExchangeConnector
     {
         var s = symbol.ToUpperInvariant();
         // Strip common suffixes
-        foreach (var suffix in new[] { "USDT", "USD", "-PERP", "_PERP", "/USD", "/USDT" })
+        foreach (var suffix in SymbolSuffixes)
         {
             if (s.EndsWith(suffix, StringComparison.Ordinal))
             {
@@ -192,7 +200,7 @@ public class CoinGlassConnector : IExchangeConnector
                 break;
             }
         }
-        // Strip leading separator if present
+        // Strip trailing separator if present
         return s.TrimEnd('-', '_', '/');
     }
 
