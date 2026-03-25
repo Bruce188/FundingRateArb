@@ -1298,4 +1298,47 @@ public class ExecutionEngineTests
 
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ── NB4: DecryptCredential exception path ──────────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_DecryptCredentialThrows_ReturnsError()
+    {
+        // DecryptCredential throws CryptographicException for the long exchange
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
+            .Throws(new System.Security.Cryptography.CryptographicException("Corrupt key data"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("decrypt").And.Contain("Hyperliquid");
+        // No orders should have been placed
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_DecryptCredentialThrows_CreatesCriticalAlertAndPreservesStatus()
+    {
+        var position = MakeOpenPosition();
+        // DecryptCredential throws for the long exchange
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
+            .Throws(new System.Security.Cryptography.CryptographicException("Corrupt key data"));
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        // Position status must NOT change — remains Open for manual intervention
+        position.Status.Should().Be(PositionStatus.Open);
+
+        // A critical alert must be created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("Manual intervention required"))),
+            Times.Once);
+
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

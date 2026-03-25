@@ -131,7 +131,18 @@
     if (navigator && navigator.locks && navigator.locks.request) {
         var promise = new Promise(function (res) { window._lockResolver = res; });
         navigator.locks.request("signalr_lock", { mode: "shared" }, function () { return promise; });
+        window.addEventListener("beforeunload", function () {
+            if (window._lockResolver) window._lockResolver();
+        });
     }
+
+    // Export for page-specific scripts BEFORE start() to avoid race condition
+    // where page scripts check window.appSignalR before it's assigned.
+    window.appSignalR = Object.freeze({
+        connection: connection,
+        showToast: showToast,
+        showAlertToast: showAlertToast
+    });
 
     // Exponential backoff on initial connection failure
     async function start() {
@@ -155,12 +166,7 @@
         }
     }
 
-    start();
-
-    // Export for page-specific scripts
-    window.appSignalR = {
-        connection: connection,
-        showToast: showToast,
-        showAlertToast: showAlertToast
-    };
+    start().catch(function (err) {
+        console.error("SignalR start failed:", err);
+    });
 })();

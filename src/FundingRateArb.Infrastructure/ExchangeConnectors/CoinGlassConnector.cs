@@ -146,8 +146,7 @@ public class CoinGlassConnector : IExchangeConnector
                 }
             }
 
-            _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates across {Symbols} distinct symbols",
-                rates.Count, rates.Select(r => r.Symbol).Distinct().Count());
+            _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates", rates.Count);
 
             return rates;
 

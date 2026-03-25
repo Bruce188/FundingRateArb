@@ -563,21 +563,48 @@ public class ExecutionEngine : IExecutionEngine
             return (null!, null!, $"No credentials found for {shortExchangeName}");
         }
 
-        var longDecrypted = _userSettings.DecryptCredential(longCred);
-        var longConnector = await _connectorFactory.CreateForUserAsync(
+        // Decrypt credentials — if decryption throws (e.g. CryptographicException),
+        // return a structured error instead of letting the exception propagate unhandled.
+        (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey) longDecrypted, shortDecrypted;
+        try
+        {
+            longDecrypted = _userSettings.DecryptCredential(longCred);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to decrypt credentials for {Exchange} (user {UserId})", longExchangeName, userId);
+            return (null!, null!, $"Failed to decrypt credentials for {longExchangeName}");
+        }
+
+        try
+        {
+            shortDecrypted = _userSettings.DecryptCredential(shortCred);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to decrypt credentials for {Exchange} (user {UserId})", shortExchangeName, userId);
+            return (null!, null!, $"Failed to decrypt credentials for {shortExchangeName}");
+        }
+
+        // Create both connectors concurrently — these are independent network calls
+        var longTask = _connectorFactory.CreateForUserAsync(
             longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
             longDecrypted.WalletAddress, longDecrypted.PrivateKey);
+        var shortTask = _connectorFactory.CreateForUserAsync(
+            shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
+            shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
+
+        await Task.WhenAll(longTask, shortTask);
+
+        var longConnector = longTask.Result;
+        var shortConnector = shortTask.Result;
 
         if (longConnector is null)
         {
+            (shortConnector as IDisposable)?.Dispose();
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", longExchangeName, userId);
             return (null!, null!, $"Could not create connector for {longExchangeName} — invalid credentials");
         }
-
-        var shortDecrypted = _userSettings.DecryptCredential(shortCred);
-        var shortConnector = await _connectorFactory.CreateForUserAsync(
-            shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
-            shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
 
         if (shortConnector is null)
         {

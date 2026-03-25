@@ -33,6 +33,8 @@ public class AnalyticsController : Controller
             return Unauthorized();
         }
 
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 200);
         days = Math.Clamp(days, 1, 365);
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
@@ -41,7 +43,11 @@ public class AnalyticsController : Controller
         var since = DateTime.UtcNow.AddDays(-days);
         var closedPositions = await _uow.Positions.GetClosedWithNavigationSinceAsync(since, effectiveUserId, ct);
 
-        var closedWithPnl = closedPositions.Where(p => p.RealizedPnl.HasValue).ToList();
+        // Hard cap to prevent excessive memory usage for admin users with large datasets
+        var closedWithPnl = closedPositions
+            .Where(p => p.RealizedPnl.HasValue)
+            .Take(10_000)
+            .ToList();
         var now = DateTime.UtcNow;
 
         var vm = new PositionAnalyticsIndexViewModel
@@ -117,6 +123,10 @@ public class AnalyticsController : Controller
     [HttpGet]
     public async Task<IActionResult> PassedOpportunities(int days = 1, int skip = 0, int take = 100, CancellationToken ct = default)
     {
+        days = Math.Clamp(days, 1, 30);
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 200);
+
         var from = DateTime.UtcNow.AddDays(-days);
         var to = DateTime.UtcNow;
 

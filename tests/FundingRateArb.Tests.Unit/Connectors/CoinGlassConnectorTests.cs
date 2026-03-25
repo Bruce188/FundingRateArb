@@ -217,6 +217,17 @@ public class CoinGlassConnectorTests
         sut.ExchangeName.Should().Be("CoinGlass");
     }
 
+    [Fact]
+    public async Task GetMarkPriceAsync_ThrowsNotSupported()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK);
+        var sut = CreateConnector(response);
+
+        Func<Task> act = async () => await sut.GetMarkPriceAsync("BTC");
+
+        await act.Should().ThrowAsync<NotSupportedException>();
+    }
+
     // NB11: intervalHours edge cases
 
     [Fact]

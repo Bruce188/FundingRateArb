@@ -89,7 +89,7 @@
         // Rebuild mobile cards
         if (cardsContainer && isMobile.matches) {
             var opportunities = data.opportunities || [];
-            cardsContainer.innerHTML = "";
+            cardsContainer.replaceChildren();
             if (opportunities.length === 0) {
                 var p = document.createElement("p");
                 p.className = "text-muted text-center py-3 mb-0";
@@ -147,7 +147,7 @@
             }
         }
 
-        tbody.innerHTML = "";
+        tbody.replaceChildren();
         if (opportunitiesArr.length === 0) {
             var emptyRow = document.createElement("tr");
             var emptyCell = document.createElement("td");
@@ -287,7 +287,7 @@
         var totalEl = document.getElementById("balance-total");
         if (!row || !container) return;
 
-        container.innerHTML = "";
+        container.replaceChildren();
         var balances = snapshot.balances || [];
 
         balances.forEach(function (b) {

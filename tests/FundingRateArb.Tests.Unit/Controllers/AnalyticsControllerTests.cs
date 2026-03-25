@@ -398,6 +398,59 @@ public class AnalyticsControllerTests
 
     // ── PassedOpportunities tests (NB4) ─────────────────────────
 
+    // ── NB6: 7d/30d PnL window filtering ───────────────────────
+
+    [Fact]
+    public async Task Index_PnlWindowFiltering_ExcludesPositionsOutsideWindow()
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+
+        var now = DateTime.UtcNow;
+        var closedPositions = new List<ArbitragePosition>
+        {
+            // Position closed 2 days ago — within 7d and 30d windows
+            new()
+            {
+                RealizedPnl = 10m, ClosedAt = now.AddDays(-2), OpenedAt = now.AddDays(-2).AddHours(-1),
+                Status = PositionStatus.Closed,
+                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+            },
+            // Position closed 15 days ago — outside 7d, within 30d
+            new()
+            {
+                RealizedPnl = 20m, ClosedAt = now.AddDays(-15), OpenedAt = now.AddDays(-15).AddHours(-2),
+                Status = PositionStatus.Closed,
+                Asset = new Asset { Symbol = "BTC" }, LongExchange = new Exchange { Name = "Lighter" }, ShortExchange = new Exchange { Name = "Hyperliquid" },
+            },
+            // Position closed 60 days ago — outside both 7d and 30d windows
+            new()
+            {
+                RealizedPnl = 50m, ClosedAt = now.AddDays(-60), OpenedAt = now.AddDays(-60).AddHours(-3),
+                Status = PositionStatus.Closed,
+                Asset = new Asset { Symbol = "ETH" }, LongExchange = new Exchange { Name = "Hyperliquid" }, ShortExchange = new Exchange { Name = "Lighter" },
+            },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetClosedWithNavigationSinceAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closedPositions);
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionAnalyticsIndexViewModel>().Subject;
+
+        // 7d PnL should only include position closed 2 days ago
+        vm.TotalRealizedPnl7d.Should().Be(10m);
+        // 30d PnL should include positions closed 2 and 15 days ago
+        vm.TotalRealizedPnl30d.Should().Be(30m);
+        // All-time PnL should include all three
+        vm.TotalRealizedPnl.Should().Be(80m);
+    }
+
+    // ── PassedOpportunities tests (NB4) ─────────────────────────
+
     [Fact]
     public async Task PassedOpportunities_PopulatesSkipReasonStats()
     {
