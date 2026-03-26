@@ -9,6 +9,7 @@ using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -269,7 +270,69 @@ public class PositionsControllerTests
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // Test 9: Trader's Index only returns positions owned by that trader
+    // Test 9: When engine throws, position status remains Open
+    [Fact]
+    public async Task Close_WhenEngineThrows_PositionStatusRemainsOpen()
+    {
+        // Arrange
+        var position = OpenPositionOwnedBy("trader-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange timeout"));
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        // Act
+        await controller.Close(position.Id);
+
+        // Assert — position status must remain Open after failed close
+        position.Status.Should().Be(PositionStatus.Open);
+    }
+
+    // Test 10: OperationCanceledException propagates instead of being swallowed
+    [Fact]
+    public async Task Close_WhenCancelled_PropagatesCancellation()
+    {
+        // Arrange
+        var position = OpenPositionOwnedBy("trader-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        // Act & Assert — OperationCanceledException should propagate, not be caught
+        await Assert.ThrowsAsync<OperationCanceledException>(() => controller.Close(position.Id));
+    }
+
+    // Test 11: Admin close succeeds even when audit save fails
+    [Fact]
+    public async Task Close_WhenAuditSaveFails_StillReturnsSuccess()
+    {
+        // Arrange
+        var position = OpenPositionOwnedBy("some-other-user-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("some-other-user-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
+            .Returns(Task.CompletedTask);
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Microsoft.EntityFrameworkCore.DbUpdateException("DB connection lost", new Exception()));
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — close succeeded, so user sees success despite audit failure
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Success"].Should().Be("Position closed successfully.");
+    }
+
+    // Test 12: Trader's Index only returns positions owned by that trader
     [Fact]
     public async Task Index_TraderSeesOnlyOwnPositions()
     {

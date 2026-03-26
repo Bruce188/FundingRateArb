@@ -14,6 +14,12 @@ public class KpiAggregateDto
     public decimal BestPnl { get; set; }
     public decimal WorstPnl { get; set; }
     public double TotalHoldHours { get; set; }
+
+    /// <summary>
+    /// Number of positions used to compute TotalHoldHours (capped at 10K for memory safety).
+    /// Use Math.Min(TotalTrades, HoldDataCount) as denominator for AvgHoldTimeHours.
+    /// </summary>
+    public int HoldDataCount { get; set; }
 }
 
 /// <summary>

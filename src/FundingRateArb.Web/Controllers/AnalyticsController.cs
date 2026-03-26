@@ -39,9 +39,10 @@ public class AnalyticsController : Controller
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
         var since = DateTime.UtcNow.AddDays(-days);
 
-        // B1: EF Core DbContext is not thread-safe — all queries sharing the same scoped DbContext
+        // EF Core DbContext is not thread-safe — all queries sharing the same scoped DbContext
         // must execute sequentially. _tradeAnalytics also uses IUnitOfWork (same scoped DbContext),
         // so it cannot run concurrently with _uow.Positions calls.
+        // If latency becomes an issue, inject IDbContextFactory to create a separate DbContext per query.
         var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
         var kpi = await _uow.Positions.GetKpiAggregatesAsync(since, effectiveUserId, ct);
         var perAsset = await _uow.Positions.GetPerAssetKpiAsync(since, effectiveUserId, ct);
@@ -58,7 +59,11 @@ public class AnalyticsController : Controller
             TotalRealizedPnl7d = kpi.Pnl7d,
             TotalRealizedPnl30d = kpi.Pnl30d,
             WinRate = kpi.TotalTrades > 0 ? (decimal)kpi.WinCount / kpi.TotalTrades : 0,
-            AvgHoldTimeHours = kpi.TotalTrades > 0 ? (decimal)kpi.TotalHoldHours / kpi.TotalTrades : 0,
+            // TotalHoldHours is computed from a capped subset (10K positions max) while TotalTrades
+            // counts all rows. Use the capped count as denominator for a consistent average.
+            AvgHoldTimeHours = kpi.TotalTrades > 0 && kpi.HoldDataCount > 0
+                ? (decimal)kpi.TotalHoldHours / Math.Min(kpi.TotalTrades, kpi.HoldDataCount)
+                : kpi.TotalTrades > 0 ? (decimal)kpi.TotalHoldHours / kpi.TotalTrades : 0,
             AvgPnlPerTrade = kpi.TotalTrades > 0 ? kpi.TotalPnl / kpi.TotalTrades : 0,
             BestTradePnl = kpi.TotalTrades > 0 ? kpi.BestPnl : 0,
             WorstTradePnl = kpi.TotalTrades > 0 ? kpi.WorstPnl : 0,
@@ -115,7 +120,7 @@ public class AnalyticsController : Controller
         var from = DateTime.UtcNow.AddDays(-days);
         var to = DateTime.UtcNow;
 
-        // N8: Run independent queries concurrently
+        // Run independent queries concurrently
         var snapshotsTask = _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
         var statsTask = _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
         await Task.WhenAll(snapshotsTask, statsTask);
@@ -194,7 +199,7 @@ public class AnalyticsController : Controller
     }
 
     /// <summary>
-    /// F6: Validates that the given assetId is within the user's enabled scope.
+    /// Validates that the given assetId is within the user's enabled scope.
     /// Returns true if valid (or admin), false if out of scope.
     /// </summary>
     private static bool IsAssetInScope(int assetId, HashSet<int>? scopeAssetIds)
@@ -203,7 +208,7 @@ public class AnalyticsController : Controller
     }
 
     /// <summary>
-    /// F6: Validates that the given exchangeId is within the user's enabled scope.
+    /// Validates that the given exchangeId is within the user's enabled scope.
     /// </summary>
     private static bool IsExchangeInScope(int exchangeId, HashSet<int>? scopeExchangeIds)
     {
@@ -221,7 +226,7 @@ public class AnalyticsController : Controller
             return Forbid();
         }
 
-        // F4: Fetch assets and exchanges once, reuse for dropdown + scope filtering
+        // Fetch assets and exchanges once, reuse for dropdown + scope filtering
         var assets = await _uow.Assets.GetActiveAsync();
         var exchanges = await _uow.Exchanges.GetActiveAsync();
 
@@ -263,7 +268,7 @@ public class AnalyticsController : Controller
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
         }
 
-        // F17: Validate exchangeId against scope before calling service
+        // Validate exchangeId against scope before calling service
         if (exchangeId.HasValue && !IsExchangeInScope(exchangeId.Value, scopeExchangeIds))
         {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
@@ -285,7 +290,7 @@ public class AnalyticsController : Controller
         days = Math.Clamp(days, 1, 30);
         var (scopeAssetIds, _, _, scopeExchangeNames) = await GetUserScopeWithNamesAsync();
 
-        // F6: Validate asset scope
+        // Validate asset scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
         {
             return Forbid();
@@ -320,7 +325,7 @@ public class AnalyticsController : Controller
         days = Math.Clamp(days, 1, 30);
         var (scopeAssetIds, scopeExchangeIds) = await GetUserScopeAsync();
 
-        // F6: Validate both asset and exchange scope
+        // Validate both asset and exchange scope
         if (!IsAssetInScope(assetId, scopeAssetIds))
         {
             return new JsonResult(new { error = "Access denied" }) { StatusCode = 403 };
@@ -338,7 +343,7 @@ public class AnalyticsController : Controller
     [HttpGet]
     public async Task<IActionResult> ZScoreAlerts(decimal threshold = 2.0m, CancellationToken ct = default)
     {
-        // F15: Clamp threshold to prevent unbounded values
+        // Clamp threshold to prevent unbounded values
         threshold = Math.Clamp(threshold, 0.5m, 10.0m);
         var (_, _, scopeAssetSymbols, scopeExchangeNames) = await GetUserScopeWithNamesAsync();
 

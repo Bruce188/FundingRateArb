@@ -89,7 +89,7 @@ public class PositionRepository : IPositionRepository
             query = query.Where(p => p.UserId == userId);
         }
 
-        // B1: Apply row limit in SQL (TOP/LIMIT) to prevent unbounded memory usage
+        // Apply row limit in SQL (TOP/LIMIT) to prevent unbounded memory usage
         return query
             .OrderByDescending(p => p.ClosedAt)
             .Take(maxRows)
@@ -168,7 +168,7 @@ public class PositionRepository : IPositionRepository
         }
 
         // Lightweight projection for hold-hours — only 2 columns, no full entity materialization.
-        // NB4: Safety cap prevents unbounded memory usage for large date windows.
+        // Safety cap prevents unbounded memory usage for large date windows.
         // Computes client-side since DateTime subtraction doesn't translate to all EF providers.
         var holdData = await query
             .OrderByDescending(p => p.ClosedAt)
@@ -187,6 +187,7 @@ public class PositionRepository : IPositionRepository
             BestPnl = scalarResult.BestPnl,
             WorstPnl = scalarResult.WorstPnl,
             TotalHoldHours = totalHoldHours,
+            HoldDataCount = holdData.Count,
         };
     }
 
@@ -208,7 +209,7 @@ public class PositionRepository : IPositionRepository
                 AssetSymbol = g.Key,
                 Trades = g.Count(),
                 WinCount = g.Count(p => p.RealizedPnl > 0),
-                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+                TotalPnl = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
             })
             .OrderByDescending(a => a.TotalPnl)
             .Take(100)
@@ -238,7 +239,7 @@ public class PositionRepository : IPositionRepository
                 ShortExchangeName = g.Key.Short,
                 Trades = g.Count(),
                 WinCount = g.Count(p => p.RealizedPnl > 0),
-                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+                TotalPnl = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
             })
             .OrderByDescending(e => e.TotalPnl)
             .Take(100)

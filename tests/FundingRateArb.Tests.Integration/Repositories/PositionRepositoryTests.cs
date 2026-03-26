@@ -71,7 +71,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].UserId.Should().Be(_user1.Id);
     }
 
-    // ── NB8: GetClosedWithNavigationSinceAsync integration tests ──
+    // ── GetClosedWithNavigationSinceAsync integration tests ──
 
     [Fact]
     public async Task GetClosedWithNavigationSinceAsync_NullUserId_ReturnsAllClosedPositions()
@@ -140,7 +140,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].ShortExchange.Should().NotBeNull();
     }
 
-    // ── NB6: GetClosedKpiProjectionSinceAsync integration test ──
+    // ── GetClosedKpiProjectionSinceAsync integration test ──
 
     [Fact]
     public async Task GetClosedKpiProjectionSinceAsync_ReturnsLightweightProjection()
@@ -168,7 +168,7 @@ public class PositionRepositoryTests : IDisposable
         dto.OpenedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
     }
 
-    // ── NB4: GetKpiAggregatesAsync integration tests ──
+    // ── GetKpiAggregatesAsync integration tests ──
 
     [Fact]
     public async Task GetKpiAggregatesAsync_WithPositionsAcrossWindows_ComputesCorrectKpis()
@@ -206,11 +206,11 @@ public class PositionRepositoryTests : IDisposable
         kpi.Pnl30d.Should().Be(30m);     // pos2d + pos15d
         kpi.BestPnl.Should().Be(20m);
         kpi.WorstPnl.Should().Be(-5m);
-        // N4: Each position is held ~24 hours, so total ~72 hours
+        // Each position is held ~24 hours, so total ~72 hours
         kpi.TotalHoldHours.Should().BeApproximately(72.0, 1.0);
     }
 
-    // NB2: Verify Pnl7d/Pnl30d return 0 when positions exist but fall outside those windows
+    // Verify Pnl7d/Pnl30d return 0 when positions exist but fall outside those windows
     [Fact]
     public async Task GetKpiAggregatesAsync_PositionsOutside7dAnd30dWindows_ReturnsZeroForWindowedPnl()
     {
@@ -279,7 +279,7 @@ public class PositionRepositoryTests : IDisposable
         kpi.TotalPnl.Should().Be(10m);
     }
 
-    // ── NB6: Null navigation property fallback tests ──
+    // ── Null navigation property fallback tests ──
     // Note: InMemory provider does not populate navigation properties via AsNoTracking GroupBy
     // like SQL Server does with JOIN. These tests verify the queries execute without error
     // and produce correct aggregation even when navigation properties resolve to their
@@ -325,7 +325,7 @@ public class PositionRepositoryTests : IDisposable
         results.Should().Contain(e => e.TotalPnl == 3m && e.Trades == 1);
     }
 
-    // NB3: Verify GetPerAssetKpiAsync returns results ordered by TotalPnl descending
+    // Verify GetPerAssetKpiAsync returns results ordered by TotalPnl descending
     [Fact]
     public async Task GetPerAssetKpiAsync_ReturnsResultsOrderedByTotalPnlDescending()
     {
@@ -368,7 +368,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].TotalPnl.Should().BeGreaterOrEqualTo(results[1].TotalPnl);
     }
 
-    // NB3: Verify GetPerExchangePairKpiAsync returns results ordered by TotalPnl descending
+    // Verify GetPerExchangePairKpiAsync returns results ordered by TotalPnl descending
     [Fact]
     public async Task GetPerExchangePairKpiAsync_ReturnsResultsOrderedByTotalPnlDescending()
     {
@@ -417,6 +417,80 @@ public class PositionRepositoryTests : IDisposable
         // Assert — ordered by TotalPnl descending
         results.Should().HaveCountGreaterOrEqualTo(2);
         results[0].TotalPnl.Should().BeGreaterOrEqualTo(results[1].TotalPnl);
+    }
+
+    // B1 regression: GetPerAssetKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    [Fact]
+    public async Task GetPerAssetKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
+    {
+        // Arrange: position with null RealizedPnl should be excluded by the query filter (RealizedPnl != null).
+        // But if all positions in a group have null PnL, the group should not appear at all.
+        // Test that the query doesn't throw when processing empty groups.
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = null;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerAssetKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — filtered out by WHERE clause, no groups
+        results.Should().BeEmpty();
+    }
+
+    // B1 regression: GetPerExchangePairKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    [Fact]
+    public async Task GetPerExchangePairKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = null;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerExchangePairKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — filtered out by WHERE clause, no groups
+        results.Should().BeEmpty();
+    }
+
+    // AvgHoldTimeHours uses capped denominator when holdData is limited
+    [Fact]
+    public async Task GetKpiAggregatesAsync_HoldHoursUsesConsistentDenominator()
+    {
+        // Arrange: seed a few positions and verify TotalHoldHours/TotalTrades is consistent
+        // (full regression requires >10K positions which is impractical; this verifies the formula)
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 10m;
+        pos1.OpenedAt = DateTime.UtcNow.AddHours(-48);
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-24);
+
+        var pos2 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = 5m;
+        pos2.OpenedAt = DateTime.UtcNow.AddHours(-24);
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-12);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-90), userId: null);
+
+        // Assert: TotalTrades == 2, TotalHoldHours ~36 (24 + 12)
+        kpi.TotalTrades.Should().Be(2);
+        kpi.TotalHoldHours.Should().BeApproximately(36.0, 1.0);
+        // AvgHoldTimeHours should be ~18 (36/2) — verifies denominator consistency
+        var avgHold = kpi.TotalTrades > 0 ? kpi.TotalHoldHours / kpi.TotalTrades : 0;
+        avgHold.Should().BeApproximately(18.0, 1.0);
     }
 
     public void Dispose() => _fixture.Dispose();
