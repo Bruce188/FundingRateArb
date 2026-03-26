@@ -93,6 +93,7 @@ public class PositionsControllerTests
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
         _mockExecution.Setup(e => e.ClosePositionAsync("some-other-user-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(AdminUser("admin-id"));
@@ -148,6 +149,7 @@ public class PositionsControllerTests
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
         _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(TraderUser("trader-id"));
@@ -179,6 +181,7 @@ public class PositionsControllerTests
         _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
             .ReturnsAsync(position);
         _mockExecution.Setup(e => e.ClosePositionAsync(null!, position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
             .Returns(Task.CompletedTask);
 
         var controller = CreateControllerForUser(AdminUser("admin-id"));
@@ -216,7 +219,57 @@ public class PositionsControllerTests
         _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // Test 7: Trader's Index only returns positions owned by that trader
+    // Test 7: ClosePositionAsync throws — no audit alert, no success TempData
+    [Fact]
+    public async Task Close_WhenEngineThrows_ReturnsErrorFeedback()
+    {
+        // Arrange
+        var position = OpenPositionOwnedBy("some-other-user-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("some-other-user-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange timeout"));
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — redirects with error, no audit alert, no success message
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Error"].Should().NotBeNull();
+        controller.TempData.ContainsKey("Success").Should().BeFalse();
+        _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Test 8: ClosePositionAsync returns normally but position not closed — no audit, error feedback
+    [Fact]
+    public async Task Close_WhenEngineSilentlyFails_ReturnsErrorFeedback()
+    {
+        // Arrange — engine returns without error but position stays Open
+        var position = OpenPositionOwnedBy("some-other-user-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("some-other-user-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask); // Does NOT change position.Status
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — redirects with error, no audit alert, no success message
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Error"].Should().NotBeNull();
+        controller.TempData.ContainsKey("Success").Should().BeFalse();
+        _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Test 9: Trader's Index only returns positions owned by that trader
     [Fact]
     public async Task Index_TraderSeesOnlyOwnPositions()
     {

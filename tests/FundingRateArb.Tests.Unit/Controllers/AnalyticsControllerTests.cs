@@ -402,6 +402,8 @@ public class AnalyticsControllerTests
 
         await _controller.Index();
 
+        // N3: Verify _tradeAnalytics is called with correct parameters
+        _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()), Times.Once);
         // effectiveUserId should be null for admin (passes through to all SQL aggregate queries)
         _mockPositionRepo.Verify(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()), Times.Once);
         _mockPositionRepo.Verify(r => r.GetPerAssetKpiAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()), Times.Once);
@@ -423,6 +425,8 @@ public class AnalyticsControllerTests
 
         await _controller.Index();
 
+        // N3: Verify _tradeAnalytics is called with the user's ID
+        _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync("test-user-id", 0, 50, It.IsAny<CancellationToken>()), Times.Once);
         // effectiveUserId should be the user's ID for non-admin
         _mockPositionRepo.Verify(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()), Times.Once);
         _mockPositionRepo.Verify(r => r.GetPerAssetKpiAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()), Times.Once);

@@ -154,11 +154,11 @@ public class PositionRepository : IPositionRepository
             {
                 TotalTrades = g.Count(),
                 WinCount = g.Count(p => p.RealizedPnl > 0),
-                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+                TotalPnl = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
                 Pnl7d = g.Where(p => p.ClosedAt >= cutoff7d).Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
                 Pnl30d = g.Where(p => p.ClosedAt >= cutoff30d).Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
-                BestPnl = g.Max(p => p.RealizedPnl!.Value),
-                WorstPnl = g.Min(p => p.RealizedPnl!.Value),
+                BestPnl = g.Max(p => (decimal?)p.RealizedPnl) ?? 0m,
+                WorstPnl = g.Min(p => (decimal?)p.RealizedPnl) ?? 0m,
             })
             .FirstOrDefaultAsync(ct);
 
@@ -168,9 +168,11 @@ public class PositionRepository : IPositionRepository
         }
 
         // Lightweight projection for hold-hours — only 2 columns, no full entity materialization.
-        // Capped to match the aggregate query scope; computes client-side since DateTime
-        // subtraction doesn't translate to all EF providers.
+        // NB4: Safety cap prevents unbounded memory usage for large date windows.
+        // Computes client-side since DateTime subtraction doesn't translate to all EF providers.
         var holdData = await query
+            .OrderByDescending(p => p.ClosedAt)
+            .Take(10_000)
             .Select(p => new { p.OpenedAt, p.ClosedAt })
             .ToListAsync(ct);
         var totalHoldHours = holdData.Sum(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0);
