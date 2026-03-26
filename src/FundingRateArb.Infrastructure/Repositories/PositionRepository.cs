@@ -145,8 +145,9 @@ public class PositionRepository : IPositionRepository
         var cutoff7d = now.AddDays(-7);
         var cutoff30d = now.AddDays(-30);
 
-        // Compute scalar KPIs via SQL GROUP BY. TotalHoldHours is computed
-        // client-side since EF.Functions.DateDiffSecond is not available on all providers.
+        // Compute scalar KPIs via SQL GROUP BY — single round-trip for all aggregates.
+        // Hold-hours computed from a lightweight two-column projection (second query) because
+        // EF.Functions.DateDiffSecond is SQL Server-only and incompatible with InMemory test provider.
         var scalarResult = await query
             .GroupBy(_ => 1)
             .Select(g => new
@@ -154,8 +155,8 @@ public class PositionRepository : IPositionRepository
                 TotalTrades = g.Count(),
                 WinCount = g.Count(p => p.RealizedPnl > 0),
                 TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
-                Pnl7d = g.Where(p => p.ClosedAt >= cutoff7d).Sum(p => p.RealizedPnl!.Value),
-                Pnl30d = g.Where(p => p.ClosedAt >= cutoff30d).Sum(p => p.RealizedPnl!.Value),
+                Pnl7d = g.Where(p => p.ClosedAt >= cutoff7d).Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
+                Pnl30d = g.Where(p => p.ClosedAt >= cutoff30d).Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
                 BestPnl = g.Max(p => p.RealizedPnl!.Value),
                 WorstPnl = g.Min(p => p.RealizedPnl!.Value),
             })
@@ -166,13 +167,15 @@ public class PositionRepository : IPositionRepository
             return new KpiAggregateDto();
         }
 
-        // Compute total hold hours from a lightweight projection (only OpenedAt + ClosedAt)
+        // Lightweight projection for hold-hours — only 2 columns, no full entity materialization.
+        // Capped to match the aggregate query scope; computes client-side since DateTime
+        // subtraction doesn't translate to all EF providers.
         var holdData = await query
             .Select(p => new { p.OpenedAt, p.ClosedAt })
             .ToListAsync(ct);
         var totalHoldHours = holdData.Sum(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0);
 
-        var result = new KpiAggregateDto
+        return new KpiAggregateDto
         {
             TotalTrades = scalarResult.TotalTrades,
             WinCount = scalarResult.WinCount,
@@ -183,8 +186,6 @@ public class PositionRepository : IPositionRepository
             WorstPnl = scalarResult.WorstPnl,
             TotalHoldHours = totalHoldHours,
         };
-
-        return result ?? new KpiAggregateDto();
     }
 
     public Task<List<AssetKpiAggregateDto>> GetPerAssetKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default)
@@ -208,6 +209,7 @@ public class PositionRepository : IPositionRepository
                 TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
             })
             .OrderByDescending(a => a.TotalPnl)
+            .Take(100)
             .ToListAsync(ct);
     }
 
@@ -237,6 +239,7 @@ public class PositionRepository : IPositionRepository
                 TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
             })
             .OrderByDescending(e => e.TotalPnl)
+            .Take(100)
             .ToListAsync(ct);
     }
 

@@ -144,8 +144,12 @@ public class PositionsController : Controller
         // The audit log records both the acting admin and the position owner for accountability.
         _logger.LogInformation("User {ActingUserId} closing position {PositionId} owned by {OwnerUserId}", userId, id, position.UserId);
 
+        await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
+
         // Persist a durable audit record when an admin closes a position on behalf of another user.
         // This ensures admin closures remain traceable even if logs are rotated.
+        // Deferred until after ClosePositionAsync succeeds to avoid misleading audit records
+        // when the close operation fails (e.g., exchange error, timeout).
         if (User.IsInRole("Admin") && position.UserId != userId)
         {
             _uow.Alerts.Add(new Domain.Entities.Alert
@@ -160,7 +164,6 @@ public class PositionsController : Controller
             await _uow.SaveAsync(ct);
         }
 
-        await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
     }

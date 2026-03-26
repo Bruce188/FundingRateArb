@@ -40,17 +40,13 @@ public class AnalyticsController : Controller
         var since = DateTime.UtcNow.AddDays(-days);
 
         // NB6: Push KPI aggregation to SQL — avoids materializing up to 10K rows for in-memory computation.
-        // Run all independent queries concurrently.
+        // NB3: EF Core DbContext is not thread-safe — execute repository queries sequentially.
+        // Only overlap with _tradeAnalytics (uses its own service/scope).
         var summariesTask = _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
-        var kpiTask = _uow.Positions.GetKpiAggregatesAsync(since, effectiveUserId, ct);
-        var perAssetTask = _uow.Positions.GetPerAssetKpiAsync(since, effectiveUserId, ct);
-        var perExchangeTask = _uow.Positions.GetPerExchangePairKpiAsync(since, effectiveUserId, ct);
-        await Task.WhenAll(summariesTask, kpiTask, perAssetTask, perExchangeTask);
-
-        var summaries = summariesTask.Result;
-        var kpi = kpiTask.Result;
-        var perAsset = perAssetTask.Result;
-        var perExchange = perExchangeTask.Result;
+        var kpi = await _uow.Positions.GetKpiAggregatesAsync(since, effectiveUserId, ct);
+        var perAsset = await _uow.Positions.GetPerAssetKpiAsync(since, effectiveUserId, ct);
+        var perExchange = await _uow.Positions.GetPerExchangePairKpiAsync(since, effectiveUserId, ct);
+        var summaries = await summariesTask;
 
         var vm = new PositionAnalyticsIndexViewModel
         {
