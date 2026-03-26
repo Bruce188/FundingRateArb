@@ -236,10 +236,10 @@ public class PositionsControllerTests
         // Act
         var result = await controller.Close(position.Id);
 
-        // Assert — redirects with error, no audit alert, no success message
+        // Assert — redirects with exact error message, no audit alert, no success message
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
-        controller.TempData["Error"].Should().NotBeNull();
+        controller.TempData["Error"].Should().Be("Failed to close position. Please try again or contact support.");
         controller.TempData.ContainsKey("Success").Should().BeFalse();
         _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
@@ -265,6 +265,31 @@ public class PositionsControllerTests
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
         controller.TempData["Error"].Should().NotBeNull();
+        controller.TempData.ContainsKey("Success").Should().BeFalse();
+        _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Test 8b: Non-admin trader gets error feedback on silent close failure, no audit alert
+    [Fact]
+    public async Task Close_WhenEngineSilentlyFails_TraderGetsErrorFeedback()
+    {
+        // Arrange — engine returns without error but position stays Open (non-admin user)
+        var position = OpenPositionOwnedBy("trader-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask); // Does NOT change position.Status
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — redirects with error, no audit alert persisted, no success message
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Error"].Should().Be("Position close was submitted but did not complete. Check position status.");
         controller.TempData.ContainsKey("Success").Should().BeFalse();
         _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);

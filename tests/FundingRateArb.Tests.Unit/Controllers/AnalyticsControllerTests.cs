@@ -402,7 +402,7 @@ public class AnalyticsControllerTests
 
         await _controller.Index();
 
-        // N3: Verify _tradeAnalytics is called with correct parameters
+        // Verify _tradeAnalytics is called with correct parameters
         _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()), Times.Once);
         // effectiveUserId should be null for admin (passes through to all SQL aggregate queries)
         _mockPositionRepo.Verify(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()), Times.Once);
@@ -425,7 +425,7 @@ public class AnalyticsControllerTests
 
         await _controller.Index();
 
-        // N3: Verify _tradeAnalytics is called with the user's ID
+        // Verify _tradeAnalytics is called with the user's ID
         _mockTradeAnalytics.Verify(s => s.GetAllPositionAnalyticsAsync("test-user-id", 0, 50, It.IsAny<CancellationToken>()), Times.Once);
         // effectiveUserId should be the user's ID for non-admin
         _mockPositionRepo.Verify(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()), Times.Once);
@@ -675,6 +675,60 @@ public class AnalyticsControllerTests
         vm.PerAsset[0].AssetSymbol.Should().Be("ETH");
     }
 
+    // ── B1: OpportunitiesIndex sequential query execution ────────
+
+    [Fact]
+    public async Task PassedOpportunities_QueriesExecuteSequentially()
+    {
+        SetupAdminUser();
+        var callOrder = new List<string>();
+
+        _mockSnapshotRepo.Setup(r => r.GetRecentAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, 100, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetRecentAsync"))
+            .ReturnsAsync(new List<OpportunitySnapshot>());
+        _mockSnapshotRepo.Setup(r => r.GetSkipReasonStatsAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetSkipReasonStatsAsync"))
+            .ReturnsAsync((0, 0, new Dictionary<string, int>()));
+
+        await _controller.PassedOpportunities();
+
+        // Both queries must have been called (sequential execution)
+        callOrder.Should().Contain("GetRecentAsync");
+        callOrder.Should().Contain("GetSkipReasonStatsAsync");
+    }
+
+    // ── NB1: HoldDataCount=0 produces zero avg ───────────────────
+
+    [Fact]
+    public async Task Index_HoldDataCountZero_AvgHoldTimeIsZero()
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+
+        _mockPositionRepo.Setup(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Application.DTOs.KpiAggregateDto
+            {
+                TotalTrades = 5,
+                WinCount = 3,
+                TotalPnl = 50m,
+                Pnl7d = 50m,
+                Pnl30d = 50m,
+                BestPnl = 30m,
+                WorstPnl = -5m,
+                TotalHoldHours = 0.0,
+                HoldDataCount = 0,
+            });
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionAnalyticsIndexViewModel>().Subject;
+
+        vm.TotalTrades.Should().Be(5);
+        vm.AvgHoldTimeHours.Should().Be(0m);
+    }
+
     // ── NB7: ClosedAt=null edge case ─────────────────────────────
 
     [Fact]
@@ -697,6 +751,7 @@ public class AnalyticsControllerTests
                 BestPnl = 20m,
                 WorstPnl = 10m,
                 TotalHoldHours = 4.0,  // 0h (null ClosedAt) + 4h = 4h total
+                HoldDataCount = 2,
             });
 
         var result = await _controller.Index();

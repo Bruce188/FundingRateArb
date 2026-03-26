@@ -155,7 +155,7 @@ public class PositionsController : Controller
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to close position {PositionId} (action by {ActingUserId})", id, userId);
-            TempData["Error"] = "Failed to close position. The exchange returned an error.";
+            TempData["Error"] = "Failed to close position. Please try again or contact support.";
             return RedirectToAction(nameof(Index));
         }
 

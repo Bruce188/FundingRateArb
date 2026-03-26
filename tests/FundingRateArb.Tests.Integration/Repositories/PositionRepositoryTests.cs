@@ -208,6 +208,7 @@ public class PositionRepositoryTests : IDisposable
         kpi.WorstPnl.Should().Be(-5m);
         // Each position is held ~24 hours, so total ~72 hours
         kpi.TotalHoldHours.Should().BeApproximately(72.0, 1.0);
+        kpi.HoldDataCount.Should().Be(3);
     }
 
     // Verify Pnl7d/Pnl30d return 0 when positions exist but fall outside those windows
@@ -252,6 +253,33 @@ public class PositionRepositoryTests : IDisposable
         kpi.TotalPnl.Should().Be(0);
         kpi.WinCount.Should().Be(0);
         kpi.TotalHoldHours.Should().Be(0);
+        kpi.HoldDataCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetKpiAggregatesAsync_AllNullRealizedPnl_ReturnsZeroPnl()
+    {
+        // Arrange: closed positions with null RealizedPnl
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = null;
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        var pos2 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = null;
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-2);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-7), userId: null);
+
+        // Assert — nullable cast (decimal?)p.RealizedPnl ?? 0m returns 0 for all-null groups
+        kpi.TotalPnl.Should().Be(0m);
+        kpi.BestPnl.Should().Be(0m);
+        kpi.WorstPnl.Should().Be(0m);
     }
 
     [Fact]
@@ -419,7 +447,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].TotalPnl.Should().BeGreaterOrEqualTo(results[1].TotalPnl);
     }
 
-    // B1 regression: GetPerAssetKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    // GetPerAssetKpiAsync must return 0 PnL for groups where all RealizedPnl are null
     [Fact]
     public async Task GetPerAssetKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
     {
@@ -441,7 +469,7 @@ public class PositionRepositoryTests : IDisposable
         results.Should().BeEmpty();
     }
 
-    // B1 regression: GetPerExchangePairKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    // GetPerExchangePairKpiAsync must return 0 PnL for groups where all RealizedPnl are null
     [Fact]
     public async Task GetPerExchangePairKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
     {
@@ -485,11 +513,12 @@ public class PositionRepositoryTests : IDisposable
         var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
             DateTime.UtcNow.AddDays(-90), userId: null);
 
-        // Assert: TotalTrades == 2, TotalHoldHours ~36 (24 + 12)
+        // Assert: TotalTrades == 2, TotalHoldHours ~36 (24 + 12), HoldDataCount == 2
         kpi.TotalTrades.Should().Be(2);
         kpi.TotalHoldHours.Should().BeApproximately(36.0, 1.0);
+        kpi.HoldDataCount.Should().Be(2);
         // AvgHoldTimeHours should be ~18 (36/2) — verifies denominator consistency
-        var avgHold = kpi.TotalTrades > 0 ? kpi.TotalHoldHours / kpi.TotalTrades : 0;
+        var avgHold = kpi.HoldDataCount > 0 ? kpi.TotalHoldHours / kpi.HoldDataCount : 0;
         avgHold.Should().BeApproximately(18.0, 1.0);
     }
 

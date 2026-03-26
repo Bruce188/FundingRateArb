@@ -59,11 +59,9 @@ public class AnalyticsController : Controller
             TotalRealizedPnl7d = kpi.Pnl7d,
             TotalRealizedPnl30d = kpi.Pnl30d,
             WinRate = kpi.TotalTrades > 0 ? (decimal)kpi.WinCount / kpi.TotalTrades : 0,
-            // TotalHoldHours is computed from a capped subset (10K positions max) while TotalTrades
-            // counts all rows. Use the capped count as denominator for a consistent average.
-            AvgHoldTimeHours = kpi.TotalTrades > 0 && kpi.HoldDataCount > 0
-                ? (decimal)kpi.TotalHoldHours / Math.Min(kpi.TotalTrades, kpi.HoldDataCount)
-                : kpi.TotalTrades > 0 ? (decimal)kpi.TotalHoldHours / kpi.TotalTrades : 0,
+            AvgHoldTimeHours = kpi.HoldDataCount > 0
+                ? (decimal)kpi.TotalHoldHours / kpi.HoldDataCount
+                : 0m,
             AvgPnlPerTrade = kpi.TotalTrades > 0 ? kpi.TotalPnl / kpi.TotalTrades : 0,
             BestTradePnl = kpi.TotalTrades > 0 ? kpi.BestPnl : 0,
             WorstTradePnl = kpi.TotalTrades > 0 ? kpi.WorstPnl : 0,
@@ -120,14 +118,10 @@ public class AnalyticsController : Controller
         var from = DateTime.UtcNow.AddDays(-days);
         var to = DateTime.UtcNow;
 
-        // Run independent queries concurrently
-        var snapshotsTask = _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
-        var statsTask = _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
-        await Task.WhenAll(snapshotsTask, statsTask);
-
-        var snapshots = snapshotsTask.Result;
-        // Compute skip reason distribution via SQL aggregate (single query, no double-fetch)
-        var (totalSeen, opened, skipReasonDict) = statsTask.Result;
+        // EF Core DbContext is not thread-safe — queries sharing the same scoped DbContext
+        // must execute sequentially, consistent with the Index() action fix.
+        var snapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
+        var (totalSeen, opened, skipReasonDict) = await _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
         var skipReasons = skipReasonDict
             .Select(kvp => new SkipReasonStat { Reason = kvp.Key, Count = kvp.Value })
             .OrderByDescending(s => s.Count)
