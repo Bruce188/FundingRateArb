@@ -143,6 +143,23 @@ public class PositionsController : Controller
         // Admin close intentionally uses the position owner's credentials (admin acts on behalf of user).
         // The audit log records both the acting admin and the position owner for accountability.
         _logger.LogInformation("User {ActingUserId} closing position {PositionId} owned by {OwnerUserId}", userId, id, position.UserId);
+
+        // Persist a durable audit record when an admin closes a position on behalf of another user.
+        // This ensures admin closures remain traceable even if logs are rotated.
+        if (User.IsInRole("Admin") && position.UserId != userId)
+        {
+            _uow.Alerts.Add(new Domain.Entities.Alert
+            {
+                UserId = position.UserId,
+                ArbitragePositionId = position.Id,
+                Type = AlertType.PositionClosed,
+                Severity = AlertSeverity.Info,
+                Message = $"Position manually closed by administrator.",
+                ActingUserId = userId,
+            });
+            await _uow.SaveAsync(ct);
+        }
+
         await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));

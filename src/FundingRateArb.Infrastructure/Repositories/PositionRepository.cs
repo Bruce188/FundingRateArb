@@ -130,6 +130,116 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == status)
             .ToListAsync();
 
+    public async Task<KpiAggregateDto> GetKpiAggregatesAsync(DateTime since, string? userId = null, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since && p.RealizedPnl != null);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        var now = DateTime.UtcNow;
+        var cutoff7d = now.AddDays(-7);
+        var cutoff30d = now.AddDays(-30);
+
+        // Compute scalar KPIs via SQL GROUP BY. TotalHoldHours is computed
+        // client-side since EF.Functions.DateDiffSecond is not available on all providers.
+        var scalarResult = await query
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalTrades = g.Count(),
+                WinCount = g.Count(p => p.RealizedPnl > 0),
+                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+                Pnl7d = g.Where(p => p.ClosedAt >= cutoff7d).Sum(p => p.RealizedPnl!.Value),
+                Pnl30d = g.Where(p => p.ClosedAt >= cutoff30d).Sum(p => p.RealizedPnl!.Value),
+                BestPnl = g.Max(p => p.RealizedPnl!.Value),
+                WorstPnl = g.Min(p => p.RealizedPnl!.Value),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (scalarResult is null)
+        {
+            return new KpiAggregateDto();
+        }
+
+        // Compute total hold hours from a lightweight projection (only OpenedAt + ClosedAt)
+        var holdData = await query
+            .Select(p => new { p.OpenedAt, p.ClosedAt })
+            .ToListAsync(ct);
+        var totalHoldHours = holdData.Sum(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0);
+
+        var result = new KpiAggregateDto
+        {
+            TotalTrades = scalarResult.TotalTrades,
+            WinCount = scalarResult.WinCount,
+            TotalPnl = scalarResult.TotalPnl,
+            Pnl7d = scalarResult.Pnl7d,
+            Pnl30d = scalarResult.Pnl30d,
+            BestPnl = scalarResult.BestPnl,
+            WorstPnl = scalarResult.WorstPnl,
+            TotalHoldHours = totalHoldHours,
+        };
+
+        return result ?? new KpiAggregateDto();
+    }
+
+    public Task<List<AssetKpiAggregateDto>> GetPerAssetKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since && p.RealizedPnl != null);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        return query
+            .GroupBy(p => p.Asset != null ? p.Asset.Symbol : "Unknown")
+            .Select(g => new AssetKpiAggregateDto
+            {
+                AssetSymbol = g.Key,
+                Trades = g.Count(),
+                WinCount = g.Count(p => p.RealizedPnl > 0),
+                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+            })
+            .OrderByDescending(a => a.TotalPnl)
+            .ToListAsync(ct);
+    }
+
+    public Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since && p.RealizedPnl != null);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        return query
+            .GroupBy(p => new
+            {
+                Long = p.LongExchange != null ? p.LongExchange.Name : "?",
+                Short = p.ShortExchange != null ? p.ShortExchange.Name : "?",
+            })
+            .Select(g => new ExchangePairKpiAggregateDto
+            {
+                LongExchangeName = g.Key.Long,
+                ShortExchangeName = g.Key.Short,
+                Trades = g.Count(),
+                WinCount = g.Count(p => p.RealizedPnl > 0),
+                TotalPnl = g.Sum(p => p.RealizedPnl!.Value),
+            })
+            .OrderByDescending(e => e.TotalPnl)
+            .ToListAsync(ct);
+    }
+
     public void Add(ArbitragePosition position) =>
         _context.ArbitragePositions.Add(position);
 

@@ -18,11 +18,14 @@ public class PositionsControllerTests
 {
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IPositionRepository> _mockPositions = new();
+    private readonly Mock<IAlertRepository> _mockAlerts = new();
     private readonly Mock<IExecutionEngine> _mockExecution = new();
 
     public PositionsControllerTests()
     {
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
+        _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
     }
 
     private PositionsController CreateControllerForUser(ClaimsPrincipal user)
@@ -102,6 +105,13 @@ public class PositionsControllerTests
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
         // Verify the position owner's userId is passed (not the admin's userId)
         _mockExecution.Verify(e => e.ClosePositionAsync("some-other-user-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        // Verify durable audit alert is persisted with ActingUserId
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.UserId == "some-other-user-id" &&
+            al.ActingUserId == "admin-id" &&
+            al.Severity == AlertSeverity.Info &&
+            al.Type == AlertType.PositionClosed)), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
     }
 
     // Test 3: Closing an already-closed position returns BadRequest
@@ -129,7 +139,7 @@ public class PositionsControllerTests
         _mockExecution.Verify(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
-    // Test 4: Happy path - owner closes own open position, gets redirect
+    // Test 4: Happy path - owner closes own open position, gets redirect (no audit alert)
     [Fact]
     public async Task Close_Success_RedirectsToIndex()
     {
@@ -150,6 +160,8 @@ public class PositionsControllerTests
         redirect.ActionName.Should().Be(nameof(PositionsController.Index));
         controller.TempData["Success"].Should().Be("Position closed successfully.");
         _mockExecution.Verify(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()), Times.Once);
+        // No admin audit alert when owner closes their own position
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.ActingUserId != null)), Times.Never);
     }
 
     // Test 5: Admin closing position with null UserId — engine handles gracefully

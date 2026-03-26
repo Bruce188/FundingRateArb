@@ -1346,6 +1346,36 @@ public class ExecutionEngineTests
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── NB3: Short credential decryption failure disposes long connector ──────────
+
+    [Fact]
+    public async Task OpenPositionAsync_ShortDecryptCredentialThrows_DisposesLongConnector()
+    {
+        // Long credential decrypts successfully, short credential throws
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+
+        // DecryptCredential succeeds for long (ExchangeId=1) but throws for short (ExchangeId=2)
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
+            .Returns(("key", "secret", "wallet", "pk"));
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 2)))
+            .Throws(new System.Security.Cryptography.CryptographicException("Corrupt short key"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Credential validation failed");
+        // Verify long connector was disposed after short decryption failure
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+    }
+
     // ── B2: Null/empty userId tests ──────────────────────────────────────────────
 
     [Theory]
