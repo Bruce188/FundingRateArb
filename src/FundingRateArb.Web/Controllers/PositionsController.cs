@@ -143,7 +143,63 @@ public class PositionsController : Controller
         // Admin close intentionally uses the position owner's credentials (admin acts on behalf of user).
         // The audit log records both the acting admin and the position owner for accountability.
         _logger.LogInformation("User {ActingUserId} closing position {PositionId} owned by {OwnerUserId}", userId, id, position.UserId);
-        await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
+
+        try
+        {
+            await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // Let ASP.NET Core handle client disconnects gracefully
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to close position {PositionId} (action by {ActingUserId})", id, userId);
+            TempData["Error"] = "Failed to close position. Please try again or contact support.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Verify the close actually took effect — ClosePositionAsync may return without error
+        // but leave the position in a non-closed state (e.g., partial fill, exchange rejection).
+        // This relies on ClosePositionAsync mutating the passed entity in-place. If the engine's
+        // DbContext scope changes, re-fetch the position after close.
+        if (position.Status != PositionStatus.Closed)
+        {
+            _logger.LogWarning("Position {PositionId} not closed after ClosePositionAsync (status: {Status})", id, position.Status);
+            TempData["Error"] = "Position close was submitted but did not complete. Check position status.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        // Persist a durable audit record when an admin closes a position on behalf of another user.
+        // This ensures admin closures remain traceable even if logs are rotated.
+        // The close operation saves internally via the execution engine's own UoW call.
+        // The audit alert is a separate save because the engine's save is encapsulated and
+        // cannot be extended. Both are on the same scoped DbContext, but if the audit save
+        // fails after a successful close, the close still persists — acceptable since the
+        // structured log above provides a fallback audit trail.
+        if (User.IsInRole("Admin") && position.UserId != userId)
+        {
+            try
+            {
+                _uow.Alerts.Add(new Domain.Entities.Alert
+                {
+                    UserId = position.UserId,
+                    ArbitragePositionId = position.Id,
+                    Type = AlertType.PositionClosed,
+                    Severity = AlertSeverity.Info,
+                    Message = "Position manually closed by administrator.",
+                    ActingUserId = userId,
+                });
+                await _uow.SaveAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                // Audit persistence failure after a successful close should not surface as a 500.
+                // The structured log above provides a fallback audit trail.
+                _logger.LogError(ex, "Failed to persist audit alert for position {PositionId} closed by admin {AdminUserId}", id, userId);
+            }
+        }
+
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
     }

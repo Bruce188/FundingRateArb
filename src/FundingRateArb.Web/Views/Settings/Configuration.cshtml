@@ -1,9 +1,10 @@
 @model FundingRateArb.Web.ViewModels.UserConfigViewModel
 @using FundingRateArb.Domain.Enums
+@using FundingRateArb.Application.DTOs
 
 @{
     ViewData["Title"] = "Bot Configuration";
-    var d = Model.AdminDefaults!;
+    var d = Model.AdminDefaults ?? new DefaultConfigSummaryDto();
 }
 
 <h2 class="mb-3">Settings</h2>
