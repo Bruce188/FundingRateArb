@@ -229,6 +229,8 @@ public class RateAnalyticsServiceTests
         var aggregates = new List<FundingRateHourlyAggregate>();
 
         // Add data for 3 days covering all 24 hours (3 samples per hour bucket)
+        // Use dates relative to now so all data falls within the 7-day window
+        var baseDate = now.Date.AddDays(-3);
         for (int day = 0; day < 3; day++)
         {
             for (int hour = 0; hour < 24; hour++)
@@ -237,7 +239,7 @@ public class RateAnalyticsServiceTests
                 {
                     AssetId = 1,
                     ExchangeId = 1,
-                    HourUtc = new DateTime(2026, 3, 19 + day, hour, 0, 0, DateTimeKind.Utc),
+                    HourUtc = baseDate.AddDays(day).AddHours(hour),
                     AvgRatePerHour = 0.001m + hour * 0.0001m,
                     MinRate = 0.001m,
                     MaxRate = 0.002m,

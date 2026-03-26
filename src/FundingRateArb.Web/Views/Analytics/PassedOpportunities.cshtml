@@ -7,6 +7,51 @@
 <h2>Passed Opportunities</h2>
 <p class="text-muted">Snapshot of every detected opportunity per bot cycle, showing which were opened and why others were skipped.</p>
 
+@* ── Summary Stats ── *@
+<div class="alert alert-light border mb-3">
+    <strong>Total opportunities seen:</strong> @Model.TotalOpportunitiesSeen |
+    <strong>Opened:</strong> @Model.TotalOpened (@Model.OpenedPct.ToString("F1")%) |
+    <strong>Top skip reason:</strong> @Model.TopSkipReason
+</div>
+
+@if (Model.SkipReasons.Any())
+{
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Skip Reason Breakdown</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Reason</th>
+                            <th class="text-end">Count</th>
+                            <th>Distribution</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @{
+                            var totalSkipped = Model.SkipReasons.Sum(s => s.Count);
+                        }
+                        @foreach (var sr in Model.SkipReasons)
+                        {
+                            var pct = totalSkipped > 0 ? (decimal)sr.Count / totalSkipped * 100 : 0;
+                            <tr>
+                                <td>@sr.Reason</td>
+                                <td class="text-end">@sr.Count</td>
+                                <td>
+                                    <div class="progress" style="height: 20px;">
+                                        <div class="progress-bar bg-info" style="width: @pct.ToString("F0")%;">@pct.ToString("F0")%</div>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
 <form method="get" class="row g-2 mb-3 align-items-end">
     <div class="col-auto">
         <label class="form-label">Lookback</label>

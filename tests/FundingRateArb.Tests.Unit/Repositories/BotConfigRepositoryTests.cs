@@ -1,5 +1,7 @@
+using System.Reflection;
 using FluentAssertions;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
@@ -126,6 +128,68 @@ public class BotConfigRepositoryCachingTests : IDisposable
         // Next call should reload from DB and return updated value
         var second = await _repository.GetActiveAsync();
         second.TotalCapitalUsdc.Should().Be(2000m);
+    }
+
+    [Fact]
+    public async Task ShallowCopy_CopiesAllProperties()
+    {
+        // Build a BotConfiguration with every settable property set to a non-default value
+        // so we can detect any property omitted from the ShallowCopy method.
+        var source = new BotConfiguration
+        {
+            Id = 42,
+            IsEnabled = true,
+            OpenThreshold = 0.999m,
+            AlertThreshold = 0.888m,
+            CloseThreshold = -0.0009m,
+            StopLossPct = 0.77m,
+            MaxHoldTimeHours = 99,
+            VolumeFraction = 0.05m,
+            MaxCapitalPerPosition = 0.55m,
+            BreakevenHoursMax = 100,
+            TotalCapitalUsdc = 5555m,
+            DefaultLeverage = 7,
+            MaxConcurrentPositions = 8,
+            AllocationStrategy = AllocationStrategy.EqualSpread,
+            AllocationTopN = 11,
+            FeeAmortizationHours = 36,
+            MinPositionSizeUsdc = 99m,
+            MinVolume24hUsdc = 123_456m,
+            RateStalenessMinutes = 60,
+            DailyDrawdownPausePct = 0.22m,
+            ConsecutiveLossPause = 7,
+            FundingWindowMinutes = 30,
+            MaxExposurePerAsset = 0.33m,
+            MaxExposurePerExchange = 0.44m,
+            TargetPnlMultiplier = 5.5m,
+            AdaptiveHoldEnabled = true,
+            RebalanceEnabled = true,
+            RebalanceMinImprovement = 0.001m,
+            MaxRebalancesPerCycle = 10,
+            LastUpdatedAt = new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc),
+            UpdatedByUserId = "test-user-id",
+        };
+
+        // Seed with the custom config
+        _context.BotConfigurations.Add(source);
+        await _context.SaveChangesAsync();
+        _context.ChangeTracker.Clear();
+
+        // GetActiveAsync internally calls ShallowCopy
+        var copy = await _repository.GetActiveAsync();
+
+        // Use reflection to verify every public settable property was copied
+        var properties = typeof(BotConfiguration)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.CanRead && p.CanWrite);
+
+        foreach (var prop in properties)
+        {
+            var expected = prop.GetValue(source);
+            var actual = prop.GetValue(copy);
+            actual.Should().Be(expected,
+                because: $"ShallowCopy must copy property '{prop.Name}'");
+        }
     }
 
     public void Dispose()

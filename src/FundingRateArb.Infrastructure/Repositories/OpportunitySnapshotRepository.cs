@@ -37,4 +37,28 @@ public class OpportunitySnapshotRepository : IOpportunitySnapshotRepository
             .Where(s => s.RecordedAt < cutoff)
             .ExecuteDeleteAsync(ct);
     }
+
+    public async Task<(int TotalCount, int OpenedCount, Dictionary<string, int> SkipReasons)> GetSkipReasonStatsAsync(
+        DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        var baseQuery = _context.OpportunitySnapshots
+            .Where(s => s.RecordedAt >= from && s.RecordedAt <= to);
+
+        // Combine total and opened counts into a single SQL query (2 round-trips instead of 3)
+        var summary = await baseQuery
+            .GroupBy(_ => 1)
+            .Select(g => new { Total = g.Count(), Opened = g.Count(s => s.WasOpened) })
+            .FirstOrDefaultAsync(ct);
+
+        var totalCount = summary?.Total ?? 0;
+        var openedCount = summary?.Opened ?? 0;
+
+        var skipReasons = await baseQuery
+            .Where(s => !s.WasOpened && s.SkipReason != null && s.SkipReason != "")
+            .GroupBy(s => s.SkipReason!)
+            .Select(g => new { Reason = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Reason, x => x.Count, ct);
+
+        return (totalCount, openedCount, skipReasons);
+    }
 }

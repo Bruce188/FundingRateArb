@@ -19,7 +19,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     {
         { "Hyperliquid", typeof(HyperliquidConnector) },
         { "Lighter",     typeof(LighterConnector) },
-        { "Aster",       typeof(AsterConnector) }
+        { "Aster",       typeof(AsterConnector) },
+        { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
     public ExchangeConnectorFactory(IServiceProvider serviceProvider)
@@ -103,6 +104,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey),
             "aster" => CreateAsterConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKey),
+            "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
         };
 

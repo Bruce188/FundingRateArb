@@ -10,7 +10,11 @@
         Alerts
         @if (Model.UnreadCount > 0)
         {
-            <span class="badge bg-danger ms-2">@Model.UnreadCount unread</span>
+            <span id="alerts-unread-badge" class="badge bg-danger ms-2">@Model.UnreadCount unread</span>
+        }
+        else
+        {
+            <span id="alerts-unread-badge" class="badge bg-danger ms-2 d-none"></span>
         }
     </h2>
     @if (Model.UnreadCount > 0)
@@ -40,7 +44,7 @@ else
                     <th>Actions</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="alerts-table-body">
                 @foreach (var alert in Model.Alerts)
                 {
                     <tr class="@(!alert.IsRead ? "table-warning" : string.Empty)">
@@ -99,4 +103,8 @@ else
             </tbody>
         </table>
     </div>
+}
+
+@section Scripts {
+    <script src="~/js/alerts.js" asp-append-version="true"></script>
 }

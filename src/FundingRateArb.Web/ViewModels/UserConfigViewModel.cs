@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
 using Microsoft.AspNetCore.Mvc.Rendering;
 
@@ -83,4 +84,8 @@ public class UserConfigViewModel
 
     // Status message passed via TempData
     public string? StatusMessage { get; set; }
+
+    // Admin default values for display in the UI (e.g., "(Default: 39 USDC)")
+    // Uses a DTO projection to avoid exposing admin-only fields to user views.
+    public DefaultConfigSummaryDto? AdminDefaults { get; set; }
 }

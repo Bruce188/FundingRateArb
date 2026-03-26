@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,7 +25,7 @@ public class AnalyticsController : Controller
     }
 
     [HttpGet]
-    public async Task<IActionResult> Index(int skip = 0, int take = 50, CancellationToken ct = default)
+    public async Task<IActionResult> Index(int skip = 0, int take = 50, int days = 90, CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null)
@@ -32,8 +33,99 @@ public class AnalyticsController : Controller
             return Unauthorized();
         }
 
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 200);
+        days = Math.Clamp(days, 1, 365);
         var effectiveUserId = User.IsInRole("Admin") ? null : userId;
-        var summaries = await _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
+        var since = DateTime.UtcNow.AddDays(-days);
+
+        // NB8: Run independent queries concurrently
+        var summariesTask = _tradeAnalytics.GetAllPositionAnalyticsAsync(effectiveUserId, skip, take, ct);
+        var projectionsTask = _uow.Positions.GetClosedKpiProjectionSinceAsync(since, effectiveUserId, maxRows: 10_000, ct);
+        await Task.WhenAll(summariesTask, projectionsTask);
+
+        var summaries = summariesTask.Result;
+        // B1: Use lightweight projection to avoid loading full entity graphs with 3 Include joins.
+        // Only scalar fields needed for KPI computation are fetched from the database.
+        var closedProjections = projectionsTask.Result;
+
+        // N1: Single-pass accumulator for all scalar KPIs — avoids ~9 separate list traversals
+        var now = DateTime.UtcNow;
+        var cutoff7d = now.AddDays(-7);
+        var cutoff30d = now.AddDays(-30);
+
+        var totalPnl = 0m;
+        var pnl7d = 0m;
+        var pnl30d = 0m;
+        var winCount = 0;
+        var totalHoldHours = 0.0;
+        var bestPnl = decimal.MinValue;
+        var worstPnl = decimal.MaxValue;
+        var kpiCount = 0;
+
+        // Per-asset and per-exchange accumulators
+        var assetAccum = new Dictionary<string, (decimal pnl, int trades, int wins)>();
+        var exchangeAccum = new Dictionary<string, (decimal pnl, int trades, int wins)>();
+
+        foreach (var p in closedProjections)
+        {
+            if (!p.RealizedPnl.HasValue)
+            {
+                continue;
+            }
+
+            var pnl = p.RealizedPnl.Value;
+            kpiCount++;
+            totalPnl += pnl;
+            if (pnl > 0)
+            {
+                winCount++;
+            }
+
+            if (pnl > bestPnl)
+            {
+                bestPnl = pnl;
+            }
+
+            if (pnl < worstPnl)
+            {
+                worstPnl = pnl;
+            }
+
+            totalHoldHours += (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0;
+
+            if (p.ClosedAt >= cutoff7d)
+            {
+                pnl7d += pnl;
+            }
+
+            if (p.ClosedAt >= cutoff30d)
+            {
+                pnl30d += pnl;
+            }
+
+            // Per-asset accumulation
+            var assetKey = p.AssetSymbol;
+            if (assetAccum.TryGetValue(assetKey, out var assetData))
+            {
+                assetAccum[assetKey] = (assetData.pnl + pnl, assetData.trades + 1, assetData.wins + (pnl > 0 ? 1 : 0));
+            }
+            else
+            {
+                assetAccum[assetKey] = (pnl, 1, pnl > 0 ? 1 : 0);
+            }
+
+            // Per-exchange pair accumulation
+            var exchangeKey = $"{p.LongExchangeName}/{p.ShortExchangeName}";
+            if (exchangeAccum.TryGetValue(exchangeKey, out var exchData))
+            {
+                exchangeAccum[exchangeKey] = (exchData.pnl + pnl, exchData.trades + 1, exchData.wins + (pnl > 0 ? 1 : 0));
+            }
+            else
+            {
+                exchangeAccum[exchangeKey] = (pnl, 1, pnl > 0 ? 1 : 0);
+            }
+        }
 
         var vm = new PositionAnalyticsIndexViewModel
         {
@@ -41,6 +133,36 @@ public class AnalyticsController : Controller
             Skip = skip,
             Take = take,
             HasMore = summaries.Count == take,
+            TotalTrades = kpiCount,
+            TotalRealizedPnl = totalPnl,
+            TotalRealizedPnl7d = pnl7d,
+            TotalRealizedPnl30d = pnl30d,
+            WinRate = kpiCount > 0 ? (decimal)winCount / kpiCount : 0,
+            AvgHoldTimeHours = kpiCount > 0 ? (decimal)totalHoldHours / kpiCount : 0,
+            AvgPnlPerTrade = kpiCount > 0 ? totalPnl / kpiCount : 0,
+            BestTradePnl = kpiCount > 0 ? bestPnl : 0,
+            WorstTradePnl = kpiCount > 0 ? worstPnl : 0,
+            PerAsset = assetAccum
+                .Select(kvp => new AssetPerformance
+                {
+                    AssetSymbol = kvp.Key,
+                    Trades = kvp.Value.trades,
+                    TotalPnl = kvp.Value.pnl,
+                    WinRate = (decimal)kvp.Value.wins / kvp.Value.trades,
+                    AvgPnl = kvp.Value.pnl / kvp.Value.trades,
+                })
+                .OrderByDescending(a => a.TotalPnl)
+                .ToList(),
+            PerExchangePair = exchangeAccum
+                .Select(kvp => new ExchangePairPerformance
+                {
+                    Pair = kvp.Key,
+                    Trades = kvp.Value.trades,
+                    TotalPnl = kvp.Value.pnl,
+                    WinRate = (decimal)kvp.Value.wins / kvp.Value.trades,
+                })
+                .OrderByDescending(e => e.TotalPnl)
+                .ToList(),
         };
 
         return View(vm);
@@ -68,10 +190,25 @@ public class AnalyticsController : Controller
     [HttpGet]
     public async Task<IActionResult> PassedOpportunities(int days = 1, int skip = 0, int take = 100, CancellationToken ct = default)
     {
+        days = Math.Clamp(days, 1, 30);
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 200);
+
         var from = DateTime.UtcNow.AddDays(-days);
         var to = DateTime.UtcNow;
 
-        var snapshots = await _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
+        // N8: Run independent queries concurrently
+        var snapshotsTask = _uow.OpportunitySnapshots.GetRecentAsync(from, to, skip, take, ct);
+        var statsTask = _uow.OpportunitySnapshots.GetSkipReasonStatsAsync(from, to, ct);
+        await Task.WhenAll(snapshotsTask, statsTask);
+
+        var snapshots = snapshotsTask.Result;
+        // Compute skip reason distribution via SQL aggregate (single query, no double-fetch)
+        var (totalSeen, opened, skipReasonDict) = statsTask.Result;
+        var skipReasons = skipReasonDict
+            .Select(kvp => new SkipReasonStat { Reason = kvp.Key, Count = kvp.Value })
+            .OrderByDescending(s => s.Count)
+            .ToList();
 
         var vm = new PassedOpportunitiesViewModel
         {
@@ -80,6 +217,11 @@ public class AnalyticsController : Controller
             Skip = skip,
             Take = take,
             HasMore = snapshots.Count == take,
+            TotalOpportunitiesSeen = totalSeen,
+            TotalOpened = opened,
+            OpenedPct = totalSeen > 0 ? (decimal)opened / totalSeen * 100 : 0,
+            TopSkipReason = skipReasons.FirstOrDefault()?.Reason ?? "N/A",
+            SkipReasons = skipReasons,
         };
 
         return View(vm);

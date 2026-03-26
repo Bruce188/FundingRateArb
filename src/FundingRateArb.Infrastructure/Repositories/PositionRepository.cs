@@ -1,4 +1,5 @@
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
@@ -73,6 +74,53 @@ public class PositionRepository : IPositionRepository
             .AsNoTracking()
             .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since)
             .ToListAsync();
+
+    public Task<List<ArbitragePosition>> GetClosedWithNavigationSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        // B1: Apply row limit in SQL (TOP/LIMIT) to prevent unbounded memory usage
+        return query
+            .OrderByDescending(p => p.ClosedAt)
+            .Take(maxRows)
+            .ToListAsync(ct);
+    }
+
+    public Task<List<ClosedPositionKpiDto>> GetClosedKpiProjectionSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default)
+    {
+        var query = _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Closed && p.ClosedAt >= since);
+
+        if (userId is not null)
+        {
+            query = query.Where(p => p.UserId == userId);
+        }
+
+        return query
+            .OrderByDescending(p => p.ClosedAt)
+            .Take(maxRows)
+            .Select(p => new ClosedPositionKpiDto
+            {
+                RealizedPnl = p.RealizedPnl,
+                ClosedAt = p.ClosedAt,
+                OpenedAt = p.OpenedAt,
+                AssetSymbol = p.Asset != null ? p.Asset.Symbol : "Unknown",
+                LongExchangeName = p.LongExchange != null ? p.LongExchange.Name : "?",
+                ShortExchangeName = p.ShortExchange != null ? p.ShortExchange.Name : "?",
+            })
+            .ToListAsync(ct);
+    }
 
     public Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status) =>
         _context.ArbitragePositions

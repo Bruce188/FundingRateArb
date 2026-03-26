@@ -71,5 +71,102 @@ public class PositionRepositoryTests : IDisposable
         results[0].UserId.Should().Be(_user1.Id);
     }
 
+    // ── NB8: GetClosedWithNavigationSinceAsync integration tests ──
+
+    [Fact]
+    public async Task GetClosedWithNavigationSinceAsync_NullUserId_ReturnsAllClosedPositions()
+    {
+        // Arrange
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.ClosedAt = DateTime.UtcNow.AddDays(-1);
+        var pos2 = BuildPosition(_user2.Id, PositionStatus.Closed);
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-2);
+        var openPos = BuildPosition(_user1.Id, PositionStatus.Open);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        _fixture.UnitOfWork.Positions.Add(openPos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — null userId returns all users' closed positions
+        var results = await _fixture.UnitOfWork.Positions.GetClosedWithNavigationSinceAsync(
+            DateTime.UtcNow.AddDays(-7), userId: null);
+
+        // Assert
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(p => p.Status == PositionStatus.Closed);
+    }
+
+    [Fact]
+    public async Task GetClosedWithNavigationSinceAsync_SpecificUserId_ReturnsOnlyThatUsersPositions()
+    {
+        // Arrange
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.ClosedAt = DateTime.UtcNow.AddDays(-1);
+        var pos2 = BuildPosition(_user2.Id, PositionStatus.Closed);
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-2);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetClosedWithNavigationSinceAsync(
+            DateTime.UtcNow.AddDays(-7), userId: _user1.Id);
+
+        // Assert
+        results.Should().HaveCount(1);
+        results[0].UserId.Should().Be(_user1.Id);
+    }
+
+    [Fact]
+    public async Task GetClosedWithNavigationSinceAsync_LoadsNavigationProperties()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetClosedWithNavigationSinceAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — navigation properties should be loaded (not null)
+        results.Should().HaveCount(1);
+        results[0].Asset.Should().NotBeNull();
+        results[0].LongExchange.Should().NotBeNull();
+        results[0].ShortExchange.Should().NotBeNull();
+    }
+
+    // ── NB6: GetClosedKpiProjectionSinceAsync integration test ──
+
+    [Fact]
+    public async Task GetClosedKpiProjectionSinceAsync_ReturnsLightweightProjection()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+        pos.RealizedPnl = 12.5m;
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetClosedKpiProjectionSinceAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — projection fields should be populated correctly
+        results.Should().HaveCount(1);
+        var dto = results[0];
+        dto.RealizedPnl.Should().Be(12.5m);
+        dto.AssetSymbol.Should().Be("BTC");
+        dto.LongExchangeName.Should().NotBeNullOrEmpty();
+        dto.ShortExchangeName.Should().NotBeNullOrEmpty();
+        dto.ClosedAt.Should().NotBeNull();
+        dto.OpenedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
     public void Dispose() => _fixture.Dispose();
 }
