@@ -12,6 +12,9 @@ public class PositionRepository : IPositionRepository
     /// <summary>Maximum number of grouped results returned by per-asset/per-exchange KPI queries.</summary>
     private const int MaxGroupResults = 100;
 
+    /// <summary>Maximum number of rows fetched for hold-time computation. Caps memory usage for large date windows.</summary>
+    private const int MaxHoldDataRows = 10_000;
+
     private readonly AppDbContext _context;
 
     public PositionRepository(AppDbContext context) => _context = context;
@@ -176,7 +179,7 @@ public class PositionRepository : IPositionRepository
         // At scale, a composite index on (Status, ClosedAt) INCLUDE (OpenedAt, RealizedPnl) benefits this query.
         var holdData = await query
             .OrderByDescending(p => p.ClosedAt)
-            .Take(10_000)
+            .Take(MaxHoldDataRows)
             .Select(p => new { p.OpenedAt, p.ClosedAt })
             .ToListAsync(ct);
         var totalHoldHours = holdData.Sum(p => (p.ClosedAt - p.OpenedAt)?.TotalHours ?? 0);

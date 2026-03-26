@@ -675,7 +675,7 @@ public class AnalyticsControllerTests
         vm.PerAsset[0].AssetSymbol.Should().Be("ETH");
     }
 
-    // ── B1: OpportunitiesIndex sequential query execution ────────
+    // ── OpportunitiesIndex sequential query execution ────────────
 
     [Fact]
     public async Task PassedOpportunities_QueriesExecuteSequentially()
@@ -696,7 +696,38 @@ public class AnalyticsControllerTests
         callOrder.Should().ContainInOrder("GetRecentAsync", "GetSkipReasonStatsAsync");
     }
 
-    // ── NB1: HoldDataCount=0 produces zero avg ───────────────────
+    // ── Index sequential query execution ───────────────────────────
+
+    [Fact]
+    public async Task Index_QueriesExecuteSequentially()
+    {
+        SetupAdminUser();
+        var callOrder = new List<string>();
+
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetAllPositionAnalyticsAsync"))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+        _mockPositionRepo.Setup(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetKpiAggregatesAsync"))
+            .ReturnsAsync(new Application.DTOs.KpiAggregateDto());
+        _mockPositionRepo.Setup(r => r.GetPerAssetKpiAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetPerAssetKpiAsync"))
+            .ReturnsAsync(new List<Application.DTOs.AssetKpiAggregateDto>());
+        _mockPositionRepo.Setup(r => r.GetPerExchangePairKpiAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("GetPerExchangePairKpiAsync"))
+            .ReturnsAsync(new List<Application.DTOs.ExchangePairKpiAggregateDto>());
+
+        await _controller.Index();
+
+        // All four queries must have been called in order (sequential execution)
+        callOrder.Should().ContainInOrder(
+            "GetAllPositionAnalyticsAsync",
+            "GetKpiAggregatesAsync",
+            "GetPerAssetKpiAsync",
+            "GetPerExchangePairKpiAsync");
+    }
+
+    // ── HoldDataCount=0 produces zero avg ─────────────────────────
 
     [Fact]
     public async Task Index_HoldDataCountZero_AvgHoldTimeIsZero()
@@ -728,7 +759,7 @@ public class AnalyticsControllerTests
         vm.AvgHoldTimeHours.Should().Be(0m);
     }
 
-    // ── NB2-v40: Capped HoldDataCount denominator ─────────────────
+    // ── Capped HoldDataCount denominator ───────────────────────────
 
     [Fact]
     public async Task Index_AvgHoldTime_UsesCappedDenominator()

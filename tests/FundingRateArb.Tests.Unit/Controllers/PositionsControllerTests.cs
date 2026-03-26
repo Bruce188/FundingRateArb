@@ -344,7 +344,7 @@ public class PositionsControllerTests
             .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
             .Returns(Task.CompletedTask);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new Microsoft.EntityFrameworkCore.DbUpdateException("DB connection lost", new Exception()));
+            .ThrowsAsync(new DbUpdateException("DB connection lost", new Exception()));
 
         var controller = CreateControllerForUser(AdminUser("admin-id"));
 
@@ -360,7 +360,32 @@ public class PositionsControllerTests
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionClosed)), Times.Once);
     }
 
-    // Test 12: Trader's Index only returns positions owned by that trader
+    // Test 12: Admin closing their own position does not create an audit alert
+    [Fact]
+    public async Task Close_AdminClosingOwnPosition_NoAuditAlertCreated()
+    {
+        // Arrange — admin's userId matches position.UserId
+        var position = OpenPositionOwnedBy("admin-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("admin-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = PositionStatus.Closed)
+            .Returns(Task.CompletedTask);
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — close succeeds but no audit alert since admin is closing own position
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Success"].Should().Be("Position closed successfully.");
+        _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // Test 13: Trader's Index only returns positions owned by that trader
     [Fact]
     public async Task Index_TraderSeesOnlyOwnPositions()
     {
