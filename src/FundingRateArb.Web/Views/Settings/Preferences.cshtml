@@ -63,12 +63,16 @@
                                     @exchange.ExchangeName
                                 </label>
                             </div>
-                            @if (exchange.IsEnabled && !exchange.HasCredentials)
+                            @if (exchange.HasCredentials)
                             {
-                                <span class="badge text-bg-warning">No API keys configured</span>
+                                <span class="badge bg-success">API Keys Configured</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger">Not Configured</span>
                             }
                         </div>
-                        @if (exchange.IsEnabled && !exchange.HasCredentials)
+                        @if (!exchange.HasCredentials)
                         {
                             <a href="/Settings/ApiKeys" class="btn btn-outline-warning btn-sm">Set Up Keys</a>
                         }

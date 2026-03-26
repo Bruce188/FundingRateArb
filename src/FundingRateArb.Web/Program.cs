@@ -328,6 +328,11 @@ try
         options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
     });
     builder.Services.AddScoped<AsterConnector>();
+    builder.Services.AddHttpClient<CoinGlassConnector>(client =>
+    {
+        client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- WebSocket Market Data Streaming ---

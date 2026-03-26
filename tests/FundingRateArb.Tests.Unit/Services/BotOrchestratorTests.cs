@@ -176,7 +176,7 @@ public class BotOrchestratorTests
             .ReturnsAsync([100m, 100m]);
 
         // First opp fails with generic error, second succeeds
-        _mockExecutionEngine.SetupSequence(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+        _mockExecutionEngine.SetupSequence(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Exchange timeout"))
             .ReturnsAsync((true, (string?)null));
 
@@ -184,7 +184,7 @@ public class BotOrchestratorTests
 
         // Both were attempted
         _mockExecutionEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Exactly(2));
     }
 
@@ -229,14 +229,14 @@ public class BotOrchestratorTests
             .ReturnsAsync([100m, 100m]);
 
         // First opp fails with balance error
-        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Insufficient margin for order"));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Only first was attempted — balance error stops iteration
         _mockExecutionEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -290,14 +290,14 @@ public class BotOrchestratorTests
         _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([250m, 250m]);
 
-        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Both positions should have been opened
         _mockExecutionEngine.Verify(
-            e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Exactly(2));
     }
 
@@ -485,7 +485,7 @@ public class BotOrchestratorTests
             .ReturnsAsync([100m]);
 
         // Only first opportunity (Concentrated strategy takes 1) is opened successfully
-        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         List<OpportunitySnapshot>? captured = null;
@@ -611,11 +611,11 @@ public class BotOrchestratorTests
             .ReturnsAsync(new decimal[] { 100m, 100m });
 
         _mockExecutionEngine.Setup(e => e.OpenPositionAsync(
-            It.Is<ArbitrageOpportunityDto>(o => o.AssetSymbol == "ETH"), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            It.IsAny<string>(), It.Is<ArbitrageOpportunityDto>(o => o.AssetSymbol == "ETH"), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
         _mockExecutionEngine.Setup(e => e.OpenPositionAsync(
-            It.Is<ArbitrageOpportunityDto>(o => o.AssetSymbol == "BTC"), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            It.IsAny<string>(), It.Is<ArbitrageOpportunityDto>(o => o.AssetSymbol == "BTC"), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((false, "Insufficient margin on Hyperliquid"));
 
         List<OpportunitySnapshot>? captured = null;

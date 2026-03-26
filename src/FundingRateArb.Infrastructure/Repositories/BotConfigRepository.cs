@@ -85,6 +85,11 @@ public class BotConfigRepository : IBotConfigRepository
         FundingWindowMinutes = src.FundingWindowMinutes,
         MaxExposurePerAsset = src.MaxExposurePerAsset,
         MaxExposurePerExchange = src.MaxExposurePerExchange,
+        TargetPnlMultiplier = src.TargetPnlMultiplier,
+        AdaptiveHoldEnabled = src.AdaptiveHoldEnabled,
+        RebalanceEnabled = src.RebalanceEnabled,
+        RebalanceMinImprovement = src.RebalanceMinImprovement,
+        MaxRebalancesPerCycle = src.MaxRebalancesPerCycle,
         LastUpdatedAt = src.LastUpdatedAt,
         UpdatedByUserId = src.UpdatedByUserId,
     };

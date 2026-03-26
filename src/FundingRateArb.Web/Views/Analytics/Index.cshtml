@@ -5,91 +5,212 @@
 }
 
 <h2>Trade Analytics</h2>
-<p class="text-muted">Comparison of actual PnL vs. projected PnL at entry time for all positions.</p>
+<p class="text-muted">Performance metrics and position analysis.</p>
 
-<div class="mb-3">
-    <a asp-action="PassedOpportunities" class="btn btn-sm btn-outline-secondary">Passed Opportunities</a>
+@* ── KPI Cards ── *@
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card text-center shadow-sm">
+            <div class="card-body">
+                <h6 class="card-subtitle text-muted">Total PnL (All Time)</h6>
+                <h3 class="@(Model.TotalRealizedPnl >= 0 ? "text-success" : "text-danger")">
+                    $@Model.TotalRealizedPnl.ToString("F2")
+                </h3>
+                <small class="text-muted">
+                    7d: $@Model.TotalRealizedPnl7d.ToString("F2") |
+                    30d: $@Model.TotalRealizedPnl30d.ToString("F2")
+                </small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center shadow-sm">
+            <div class="card-body">
+                <h6 class="card-subtitle text-muted">Win Rate</h6>
+                <h3>@((Model.WinRate * 100).ToString("F1"))%</h3>
+                <small class="text-muted">@Model.TotalTrades total trades</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center shadow-sm">
+            <div class="card-body">
+                <h6 class="card-subtitle text-muted">Avg Hold Time</h6>
+                <h3>@Model.AvgHoldTimeHours.ToString("F1")h</h3>
+                <small class="text-muted">Avg PnL/trade: $@Model.AvgPnlPerTrade.ToString("F2")</small>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center shadow-sm">
+            <div class="card-body">
+                <h6 class="card-subtitle text-muted">Best / Worst Trade</h6>
+                <h3>
+                    <span class="text-success">$@Model.BestTradePnl.ToString("F2")</span>
+                    <span class="text-muted mx-1">/</span>
+                    <span class="text-danger">$@Model.WorstTradePnl.ToString("F2")</span>
+                </h3>
+            </div>
+        </div>
+    </div>
 </div>
 
-@if (!Model.Summaries.Any())
+@* ── Per-Asset Performance ── *@
+@if (Model.PerAsset.Any())
 {
-    <div class="alert alert-info">No positions found for analytics.</div>
-}
-else
-{
-    <div class="table-responsive">
-        <table class="table table-striped table-hover table-sm">
-            <thead class="table-dark">
-                <tr>
-                    <th>Position</th>
-                    <th>Asset</th>
-                    <th>Long / Short</th>
-                    <th>Status</th>
-                    <th class="text-end">Hours Held</th>
-                    <th class="text-end">Actual PnL</th>
-                    <th class="text-end">Projected PnL</th>
-                    <th class="text-end">Difference</th>
-                    <th class="text-end">Accuracy</th>
-                    <th>Details</th>
-                </tr>
-            </thead>
-            <tbody>
-                @foreach (var s in Model.Summaries)
-                {
-                    var diffClass = s.PnlDifference >= 0 ? "text-success" : "text-danger";
-                    <tr>
-                        <td>#@s.PositionId</td>
-                        <td>@s.AssetSymbol</td>
-                        <td>@s.LongExchangeName / @s.ShortExchangeName</td>
-                        <td>
-                            @if (s.IsClosed)
-                            {
-                                <span class="badge bg-secondary">Closed</span>
-                            }
-                            else
-                            {
-                                <span class="badge bg-success">Open</span>
-                            }
-                        </td>
-                        <td class="text-end">@s.HoursHeld.ToString("F1")</td>
-                        <td class="text-end">@s.ActualPnl.ToString("F2") USDC</td>
-                        <td class="text-end">@s.ProjectedPnl.ToString("F2") USDC</td>
-                        <td class="text-end @diffClass">@s.PnlDifference.ToString("F2")</td>
-                        <td class="text-end">
-                            @if (s.AccuracyPct.HasValue)
-                            {
-                                <span>@s.AccuracyPct.Value.ToString("F0")%</span>
-                            }
-                            else
-                            {
-                                <span class="text-muted">--</span>
-                            }
-                        </td>
-                        <td>
-                            <a asp-action="PositionAnalysis" asp-route-id="@s.PositionId" class="btn btn-sm btn-outline-primary">View</a>
-                        </td>
-                    </tr>
-                }
-            </tbody>
-        </table>
+    <div class="card shadow-sm mb-4">
+        <div class="card-header"><strong>Per-Asset Performance</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Asset</th>
+                            <th class="text-end">Trades</th>
+                            <th class="text-end">Total PnL</th>
+                            <th class="text-end">Win Rate</th>
+                            <th class="text-end">Avg PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in Model.PerAsset)
+                        {
+                            <tr>
+                                <td><strong>@a.AssetSymbol</strong></td>
+                                <td class="text-end">@a.Trades</td>
+                                <td class="text-end @(a.TotalPnl >= 0 ? "text-success" : "text-danger")">$@a.TotalPnl.ToString("F2")</td>
+                                <td class="text-end">@((a.WinRate * 100).ToString("F0"))%</td>
+                                <td class="text-end">$@a.AvgPnl.ToString("F2")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
-
-    <nav>
-        <ul class="pagination pagination-sm">
-            @if (Model.Skip > 0)
-            {
-                var prevSkip = Math.Max(0, Model.Skip - Model.Take);
-                <li class="page-item">
-                    <a class="page-link" href="?skip=@prevSkip&take=@Model.Take">Previous</a>
-                </li>
-            }
-            @if (Model.HasMore)
-            {
-                var nextSkip = Model.Skip + Model.Take;
-                <li class="page-item">
-                    <a class="page-link" href="?skip=@nextSkip&take=@Model.Take">Next</a>
-                </li>
-            }
-        </ul>
-    </nav>
 }
+
+@* ── Per-Exchange Pair Performance ── *@
+@if (Model.PerExchangePair.Any())
+{
+    <div class="card shadow-sm mb-4">
+        <div class="card-header"><strong>Per-Exchange Pair Performance</strong></div>
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Exchange Pair (Long/Short)</th>
+                            <th class="text-end">Trades</th>
+                            <th class="text-end">Total PnL</th>
+                            <th class="text-end">Win Rate</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var e in Model.PerExchangePair)
+                        {
+                            <tr>
+                                <td><strong>@e.Pair</strong></td>
+                                <td class="text-end">@e.Trades</td>
+                                <td class="text-end @(e.TotalPnl >= 0 ? "text-success" : "text-danger")">$@e.TotalPnl.ToString("F2")</td>
+                                <td class="text-end">@((e.WinRate * 100).ToString("F0"))%</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+@* ── Position History (existing paginated table) ── *@
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <strong>Position History</strong>
+        <a asp-action="PassedOpportunities" class="btn btn-sm btn-outline-secondary float-end">Passed Opportunities</a>
+    </div>
+    <div class="card-body p-0">
+        @if (!Model.Summaries.Any())
+        {
+            <div class="alert alert-info m-3">No positions found for analytics.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-striped table-hover table-sm mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Position</th>
+                            <th>Asset</th>
+                            <th>Long / Short</th>
+                            <th>Status</th>
+                            <th class="text-end">Hours Held</th>
+                            <th class="text-end">Actual PnL</th>
+                            <th class="text-end">Projected PnL</th>
+                            <th class="text-end">Difference</th>
+                            <th class="text-end">Accuracy</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var s in Model.Summaries)
+                        {
+                            var diffClass = s.PnlDifference >= 0 ? "text-success" : "text-danger";
+                            <tr>
+                                <td>#@s.PositionId</td>
+                                <td>@s.AssetSymbol</td>
+                                <td>@s.LongExchangeName / @s.ShortExchangeName</td>
+                                <td>
+                                    @if (s.IsClosed)
+                                    {
+                                        <span class="badge bg-secondary">Closed</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-success">Open</span>
+                                    }
+                                </td>
+                                <td class="text-end">@s.HoursHeld.ToString("F1")</td>
+                                <td class="text-end">@s.ActualPnl.ToString("F2") USDC</td>
+                                <td class="text-end">@s.ProjectedPnl.ToString("F2") USDC</td>
+                                <td class="text-end @diffClass">@s.PnlDifference.ToString("F2")</td>
+                                <td class="text-end">
+                                    @if (s.AccuracyPct.HasValue)
+                                    {
+                                        <span>@s.AccuracyPct.Value.ToString("F0")%</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-muted">--</span>
+                                    }
+                                </td>
+                                <td>
+                                    <a asp-action="PositionAnalysis" asp-route-id="@s.PositionId" class="btn btn-sm btn-outline-primary">View</a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            <nav class="p-3">
+                <ul class="pagination pagination-sm mb-0">
+                    @if (Model.Skip > 0)
+                    {
+                        var prevSkip = Math.Max(0, Model.Skip - Model.Take);
+                        <li class="page-item">
+                            <a class="page-link" href="?skip=@prevSkip&take=@Model.Take">Previous</a>
+                        </li>
+                    }
+                    @if (Model.HasMore)
+                    {
+                        var nextSkip = Model.Skip + Model.Take;
+                        <li class="page-item">
+                            <a class="page-link" href="?skip=@nextSkip&take=@Model.Take">Next</a>
+                        </li>
+                    }
+                </ul>
+            </nav>
+        }
+    </div>
+</div>

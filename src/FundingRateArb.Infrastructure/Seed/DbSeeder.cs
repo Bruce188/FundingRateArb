@@ -110,6 +110,18 @@ public static class DbSeeder
                 SupportsSubAccounts = false,
                 IsActive = true,
                 Description = "Aster DEX — HMAC-SHA256, USDT collateral, 8-hour funding"
+            },
+            new Exchange
+            {
+                Name = "CoinGlass",
+                ApiBaseUrl = "https://open-api-v3.coinglass.com",
+                WsBaseUrl = "",
+                FundingInterval = FundingInterval.EightHourly,
+                FundingIntervalHours = 8,
+                SupportsSubAccounts = false,
+                IsActive = true,
+                // Data-only source: cannot be used for trading. CreateForUserAsync throws NotSupportedException.
+                Description = "CoinGlass aggregator — read-only funding rate data source. Not a trading venue."
             }
         );
         await context.SaveChangesAsync();

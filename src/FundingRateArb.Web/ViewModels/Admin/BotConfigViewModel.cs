@@ -76,4 +76,19 @@ public class BotConfigViewModel
 
     [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Exchange (%)")]
     public decimal? MaxExposurePerExchange { get; set; } = 0.7m;
+
+    [Required, Range(0.5, 100.0), Display(Name = "Target PnL Multiplier")]
+    public decimal? TargetPnlMultiplier { get; set; } = 2.0m;
+
+    [Display(Name = "Adaptive Hold Enabled")]
+    public bool AdaptiveHoldEnabled { get; set; } = true;
+
+    [Display(Name = "Rebalance Enabled")]
+    public bool RebalanceEnabled { get; set; }
+
+    [Required, Range(0.0, 0.01), Display(Name = "Rebalance Min Improvement")]
+    public decimal? RebalanceMinImprovement { get; set; } = 0.0002m;
+
+    [Required, Range(1, 20), Display(Name = "Max Rebalances Per Cycle")]
+    public int? MaxRebalancesPerCycle { get; set; } = 2;
 }
