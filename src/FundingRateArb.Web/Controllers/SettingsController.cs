@@ -180,13 +180,16 @@ public class SettingsController : Controller
         var activeCredentials = await _settings.GetActiveCredentialsAsync(userId);
         var credentialExchangeIds = activeCredentials.Select(c => c.ExchangeId).ToHashSet();
 
-        var exchangeItems = exchanges.Select(e => new ExchangePreferenceItem
-        {
-            ExchangeId = e.Id,
-            ExchangeName = e.Name,
-            IsEnabled = enabledExchangeIds.Contains(e.Id),
-            HasCredentials = credentialExchangeIds.Contains(e.Id)
-        }).ToList();
+        // Exclude data-only exchanges from trading preferences (e.g. CoinGlass)
+        var exchangeItems = exchanges
+            .Where(e => !e.IsDataOnly)
+            .Select(e => new ExchangePreferenceItem
+            {
+                ExchangeId = e.Id,
+                ExchangeName = e.Name,
+                IsEnabled = enabledExchangeIds.Contains(e.Id),
+                HasCredentials = credentialExchangeIds.Contains(e.Id)
+            }).ToList();
 
         var assets = await _settings.GetAvailableAssetsAsync();
         var enabledAssetIds = await _settings.GetUserEnabledAssetIdsAsync(userId);

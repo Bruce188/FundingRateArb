@@ -849,4 +849,110 @@ public class ExchangeConnectorFactoryTests
         act.Should().Throw<ArgumentException>()
             .WithMessage("*Unknown exchange*");
     }
+
+    /// <summary>
+    /// Builds a factory with full DI (loggers + ResiliencePipelineProvider) for CreateForUserAsync tests.
+    /// </summary>
+    private static ExchangeConnectorFactory BuildFactoryForUserCreation()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        // Mock the ResiliencePipelineProvider that Hyperliquid/Aster connectors need
+        var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
+        mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
+        services.AddSingleton(mockProvider.Object);
+
+        var sp = services.BuildServiceProvider();
+        return new ExchangeConnectorFactory(sp);
+    }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithNumericAccountIndex_ReturnsConnector()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: "1", apiSecret: null,
+            walletAddress: "12345", privateKey: "0xabc123def456");
+
+        connector.Should().NotBeNull();
+        connector.Should().BeOfType<LighterConnector>();
+    }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithHexWalletAddress_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: "1", apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey");
+
+        connector.Should().BeNull("Lighter requires a numeric account index, not a hex wallet address");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithNonNumericString_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: "1", apiSecret: null,
+            walletAddress: "not-a-number", privateKey: "0xprivatekey");
+
+        connector.Should().BeNull("Lighter requires a numeric account index");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithMissingPrivateKey_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: "1", apiSecret: null,
+            walletAddress: "12345", privateKey: null);
+
+        connector.Should().BeNull("private key is required for Lighter");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithBothCredentials_ReturnsConnector()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey123");
+
+        connector.Should().NotBeNull();
+        connector.Should().BeOfType<HyperliquidConnector>();
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithMissingWallet_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: null, privateKey: "0xprivatekey123");
+
+        connector.Should().BeNull("wallet address is required for Hyperliquid");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithMissingPrivateKey_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: null);
+
+        connector.Should().BeNull("private key is required for Hyperliquid");
+    }
 }

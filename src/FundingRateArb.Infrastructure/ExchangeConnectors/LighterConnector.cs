@@ -556,10 +556,17 @@ public class LighterConnector : IExchangeConnector, IDisposable
             return _accountIndex;
         }
 
-        var indexStr = _configuration["Exchanges:Lighter:AccountIndex"] ?? "281474976624240";
+        var indexStr = _configuration["Exchanges:Lighter:AccountIndex"];
+        if (string.IsNullOrEmpty(indexStr))
+        {
+            throw new InvalidOperationException(
+                "Lighter Account Index is required and must be numeric. Check your API key settings.");
+        }
+
         if (!long.TryParse(indexStr, out var accountIndex))
         {
-            throw new InvalidOperationException($"Invalid Lighter AccountIndex: {indexStr}");
+            throw new InvalidOperationException(
+                $"Lighter Account Index must be numeric but got '{indexStr}'. Check your API key settings.");
         }
 
         return accountIndex;

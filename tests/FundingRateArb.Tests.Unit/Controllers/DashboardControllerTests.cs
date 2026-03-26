@@ -46,6 +46,8 @@ public class DashboardControllerTests
             .ReturnsAsync(new List<int> { 1, 2, 3 });
         _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(It.IsAny<string>()))
             .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int>());
 
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfigRepo.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
@@ -348,5 +350,154 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.PnlProgressByPosition.Should().ContainKey(1);
         model.PnlProgressByPosition[1].Should().Be(2.0m);
+    }
+
+    // ── Data-only exchange (CoinGlass) visibility ──────────────────────
+
+    [Fact]
+    public async Task Index_CoinGlassOpportunity_ShownWithoutPreference()
+    {
+        // Arrange — user has exchanges 1 and 2 enabled; CoinGlass (id=4) is data-only
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 1, 2 });
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int> { 4 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 10 });
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>
+                {
+                    new()
+                    {
+                        AssetId = 10,
+                        LongExchangeId = 1,  // user-enabled
+                        ShortExchangeId = 4, // CoinGlass (data-only, NOT in user prefs)
+                        SpreadPerHour = 0.01m,
+                    }
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — opportunity should be visible because data-only exchanges are auto-included
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.Opportunities.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Index_CoinGlassOpportunity_NotFilteredByExchangePrefs()
+    {
+        // Arrange — user has only exchange 1 enabled; CoinGlass (id=4) is data-only
+        // Opportunity has both exchanges as CoinGlass-related
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 1 });
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int> { 4 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<int> { 10 });
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>
+                {
+                    // This opportunity has exchange 3 which is NOT in user prefs and NOT data-only
+                    new()
+                    {
+                        AssetId = 10,
+                        LongExchangeId = 1,
+                        ShortExchangeId = 3, // not enabled, not data-only
+                        SpreadPerHour = 0.01m,
+                    }
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — opportunity should be filtered out because exchange 3 is not in user prefs
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.Opportunities.Should().BeEmpty();
+    }
+
+    // ── Anonymous dashboard access ─────────────────────────────────
+
+    [Fact]
+    public async Task Index_AnonymousUser_ReturnsViewWithOpportunities()
+    {
+        // Arrange — unauthenticated user (no claims)
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        var opportunities = new List<ArbitrageOpportunityDto>
+        {
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SpreadPerHour = 0.005m }
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = opportunities });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — returns view (not redirect/unauthorized) with opportunities
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.Opportunities.Should().HaveCount(1);
+        model.IsAuthenticated.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Index_AnonymousUser_NoUserSpecificData()
+    {
+        // Arrange — unauthenticated user
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — no user-specific data
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.OpenPositions.Should().BeEmpty();
+        model.TotalUnreadAlerts.Should().Be(0);
+        model.OpenPositionCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Index_AuthenticatedUser_ReturnsFullDashboard()
+    {
+        // Arrange — authenticated user (from constructor setup)
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>
+                {
+                    new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SpreadPerHour = 0.005m }
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — returns view with IsAuthenticated = true
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.IsAuthenticated.Should().BeTrue();
     }
 }

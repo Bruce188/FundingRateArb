@@ -23,6 +23,13 @@ public class Exchange
     public bool IsActive { get; set; } = true;
 
     /// <summary>
+    /// True for data-only aggregators (e.g. CoinGlass) that provide funding rate data
+    /// but cannot execute trades. These exchanges are auto-included in dashboard views
+    /// but excluded from trading preferences and position opening.
+    /// </summary>
+    public bool IsDataOnly { get; set; }
+
+    /// <summary>
     /// Taker fee rate as a fraction (e.g. 0.00045 = 0.045%). Null means use the built-in fallback.
     /// </summary>
     public decimal? TakerFeeRate { get; set; }

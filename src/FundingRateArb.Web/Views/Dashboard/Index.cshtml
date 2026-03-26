@@ -30,6 +30,19 @@
     }
 </div>
 
+@if (!Model.IsAuthenticated)
+{
+    <div class="alert alert-primary d-flex align-items-center mb-4" role="alert">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-person-lock me-2 flex-shrink-0" viewBox="0 0 16 16">
+            <path d="M11 5a3 3 0 1 1-6 0 3 3 0 0 1 6 0M8 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4m0 5.996V14H3s-1 0-1-1 1-4 6-4q.564 0 1.077.07M9.5 12.5a.5.5 0 0 0-1 0V14a.5.5 0 0 0 1 0zM11 12a2 2 0 0 0-2 2v.5c0 .28.22.5.5.5h3a.5.5 0 0 0 .5-.5V14a2 2 0 0 0-2-2"/>
+        </svg>
+        <div class="flex-grow-1">
+            <strong>Welcome!</strong> Sign in to enable trading, track your positions, and customize your bot settings.
+        </div>
+        <a asp-area="" asp-controller="Account" asp-action="Login" class="btn btn-primary btn-sm ms-3">Sign In</a>
+    </div>
+}
+
 <!-- KPI Cards -->
 <div class="row mb-4">
     <!-- Bot Status -->
@@ -116,27 +129,30 @@
     </div>
 </div>
 
-<!-- Exchange Balances -->
-<div class="row mb-3" id="exchange-balances-row" style="display:none;">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-body py-2 px-3">
-                <div class="d-flex align-items-center">
-                    <span class="text-muted small me-3">Balances:</span>
-                    <div id="exchange-balances" class="d-flex flex-wrap gap-3 small"></div>
-                    <span class="text-muted small ms-auto" id="balance-total"></span>
+@if (Model.IsAuthenticated)
+{
+    <!-- Exchange Balances -->
+    <div class="row mb-3" id="exchange-balances-row" style="display:none;">
+        <div class="col-12">
+            <div class="card border-0 shadow-sm">
+                <div class="card-body py-2 px-3">
+                    <div class="d-flex align-items-center">
+                        <span class="text-muted small me-3">Balances:</span>
+                        <div id="exchange-balances" class="d-flex flex-wrap gap-3 small"></div>
+                        <span class="text-muted small ms-auto" id="balance-total"></span>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<!-- B4: Persistent status explanation area -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div id="status-explanation" class="alert alert-info mb-0 py-2 px-3 small" style="display:none;"></div>
+    <!-- B4: Persistent status explanation area -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div id="status-explanation" class="alert alert-info mb-0 py-2 px-3 small" style="display:none;"></div>
+        </div>
     </div>
-</div>
+}
 
 @if (Model.Diagnostics is not null)
 {
@@ -326,7 +342,7 @@
     </div>
 </div>
 
-@if (Model.OpenPositions.Count > 0)
+@if (Model.IsAuthenticated && Model.OpenPositions.Count > 0)
 {
     <div class="row mt-4">
         <div class="col-12">

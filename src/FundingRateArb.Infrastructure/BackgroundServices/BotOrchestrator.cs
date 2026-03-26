@@ -303,9 +303,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var enabledExchangeSet = enabledExchangeIds.ToHashSet();
         var enabledAssetSet = enabledAssetIds.ToHashSet();
 
-        // Filter global opportunities to user's preferences
+        // Exclude data-only exchanges from trading (e.g. CoinGlass cannot execute trades)
+        var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
+
+        // Filter global opportunities to user's preferences, excluding data-only exchanges
         var userOpportunities = allOpportunities
             .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
+            .Where(o => !dataOnlyExchangeIds.Contains(o.LongExchangeId) && !dataOnlyExchangeIds.Contains(o.ShortExchangeId))
             .Where(o => enabledAssetSet.Contains(o.AssetId))
             .Where(o => o.NetYieldPerHour >= userConfig.OpenThreshold)
             .ToList();

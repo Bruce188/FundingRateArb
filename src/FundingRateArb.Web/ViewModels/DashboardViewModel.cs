@@ -4,6 +4,7 @@ namespace FundingRateArb.Web.ViewModels;
 
 public class DashboardViewModel
 {
+    public bool IsAuthenticated { get; set; }
     public bool BotEnabled { get; set; }
     public int OpenPositionCount { get; set; }
     public decimal TotalPnl { get; set; }

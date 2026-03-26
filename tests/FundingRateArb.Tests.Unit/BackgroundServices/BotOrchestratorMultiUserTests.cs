@@ -96,6 +96,9 @@ public class BotOrchestratorMultiUserTests
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int>());
+
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,

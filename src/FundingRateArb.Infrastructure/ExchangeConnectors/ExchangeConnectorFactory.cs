@@ -180,6 +180,18 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         if (!string.IsNullOrEmpty(walletAddress))
         {
+            // Lighter expects a numeric account index, not a hex wallet address
+            if (walletAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                || !long.TryParse(walletAddress, out _))
+            {
+                var factoryLogger = _serviceProvider.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+                factoryLogger.LogWarning(
+                    "Lighter Account Index must be numeric but received '{Value}'. " +
+                    "Update your API key settings with a numeric account index",
+                    walletAddress);
+                return null;
+            }
+
             configData["Exchanges:Lighter:AccountIndex"] = walletAddress;
         }
 
