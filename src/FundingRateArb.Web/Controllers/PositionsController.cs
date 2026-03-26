@@ -187,7 +187,7 @@ public class PositionsController : Controller
                     ArbitragePositionId = position.Id,
                     Type = AlertType.PositionClosed,
                     Severity = AlertSeverity.Info,
-                    Message = $"Position manually closed by administrator.",
+                    Message = "Position manually closed by administrator.",
                     ActingUserId = userId,
                 });
                 await _uow.SaveAsync(ct);

@@ -692,9 +692,8 @@ public class AnalyticsControllerTests
 
         await _controller.PassedOpportunities();
 
-        // Both queries must have been called (sequential execution)
-        callOrder.Should().Contain("GetRecentAsync");
-        callOrder.Should().Contain("GetSkipReasonStatsAsync");
+        // Both queries must have been called in order (sequential execution)
+        callOrder.Should().ContainInOrder("GetRecentAsync", "GetSkipReasonStatsAsync");
     }
 
     // ── NB1: HoldDataCount=0 produces zero avg ───────────────────
@@ -727,6 +726,38 @@ public class AnalyticsControllerTests
 
         vm.TotalTrades.Should().Be(5);
         vm.AvgHoldTimeHours.Should().Be(0m);
+    }
+
+    // ── NB2-v40: Capped HoldDataCount denominator ─────────────────
+
+    [Fact]
+    public async Task Index_AvgHoldTime_UsesCappedDenominator()
+    {
+        SetupAdminUser();
+        _mockTradeAnalytics.Setup(s => s.GetAllPositionAnalyticsAsync(null, 0, 50, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PositionAnalyticsSummaryDto>());
+
+        _mockPositionRepo.Setup(r => r.GetKpiAggregatesAsync(It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Application.DTOs.KpiAggregateDto
+            {
+                TotalTrades = 15000,
+                WinCount = 10000,
+                TotalPnl = 100m,
+                Pnl7d = 50m,
+                Pnl30d = 100m,
+                BestPnl = 30m,
+                WorstPnl = -5m,
+                TotalHoldHours = 50000.0,
+                HoldDataCount = 10000,
+            });
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionAnalyticsIndexViewModel>().Subject;
+
+        // AvgHoldTimeHours = 50000.0 / 10000 = 5.0 (uses HoldDataCount, not TotalTrades)
+        vm.AvgHoldTimeHours.Should().Be(5m);
     }
 
     // ── NB7: ClosedAt=null edge case ─────────────────────────────

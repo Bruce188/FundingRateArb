@@ -16,8 +16,8 @@ public class KpiAggregateDto
     public double TotalHoldHours { get; set; }
 
     /// <summary>
-    /// Number of positions used to compute TotalHoldHours (capped at 10K for memory safety).
-    /// Use Math.Min(TotalTrades, HoldDataCount) as denominator for AvgHoldTimeHours.
+    /// Denominator for AvgHoldTimeHours — equals TotalTrades when below the 10K cap.
+    /// Capped at 10,000 for memory safety when computing TotalHoldHours.
     /// </summary>
     public int HoldDataCount { get; set; }
 }

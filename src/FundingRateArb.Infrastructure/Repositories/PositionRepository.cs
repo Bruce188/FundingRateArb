@@ -9,6 +9,9 @@ namespace FundingRateArb.Infrastructure.Repositories;
 
 public class PositionRepository : IPositionRepository
 {
+    /// <summary>Maximum number of grouped results returned by per-asset/per-exchange KPI queries.</summary>
+    private const int MaxGroupResults = 100;
+
     private readonly AppDbContext _context;
 
     public PositionRepository(AppDbContext context) => _context = context;
@@ -170,6 +173,7 @@ public class PositionRepository : IPositionRepository
         // Lightweight projection for hold-hours — only 2 columns, no full entity materialization.
         // Safety cap prevents unbounded memory usage for large date windows.
         // Computes client-side since DateTime subtraction doesn't translate to all EF providers.
+        // At scale, a composite index on (Status, ClosedAt) INCLUDE (OpenedAt, RealizedPnl) benefits this query.
         var holdData = await query
             .OrderByDescending(p => p.ClosedAt)
             .Take(10_000)
@@ -212,7 +216,7 @@ public class PositionRepository : IPositionRepository
                 TotalPnl = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
             })
             .OrderByDescending(a => a.TotalPnl)
-            .Take(100)
+            .Take(MaxGroupResults)
             .ToListAsync(ct);
     }
 
@@ -242,7 +246,7 @@ public class PositionRepository : IPositionRepository
                 TotalPnl = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
             })
             .OrderByDescending(e => e.TotalPnl)
-            .Take(100)
+            .Take(MaxGroupResults)
             .ToListAsync(ct);
     }
 
