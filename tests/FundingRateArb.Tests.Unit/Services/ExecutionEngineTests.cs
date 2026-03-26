@@ -1241,15 +1241,22 @@ public class ExecutionEngineTests
     [Fact]
     public async Task OpenPositionAsync_FactoryReturnsNullConnector_ReturnsError()
     {
-        // Credentials exist but factory returns null for long exchange
+        // Credentials exist but factory returns null for long exchange.
+        // Set up both exchanges explicitly so test doesn't depend on execution order.
         _mockFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(_mockShortConnector.Object);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Hyperliquid");
+        // Verify the long connector factory was called
+        _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1283,15 +1290,23 @@ public class ExecutionEngineTests
     public async Task ClosePositionAsync_FactoryReturnsNullConnector_CreatesCriticalAlertAndPreservesStatus()
     {
         var position = MakeOpenPosition();
-        // Credentials exist but factory returns null for long exchange
+        // Credentials exist but factory returns null for long exchange.
+        // Set up both exchanges explicitly so test doesn't depend on execution order.
         _mockFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(_mockShortConnector.Object);
 
         await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
 
         // Position status must NOT change — remains Open for manual intervention
         position.Status.Should().Be(PositionStatus.Open);
+
+        // Verify the long connector factory was called
+        _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         // A critical alert must be created
         _mockAlerts.Verify(
@@ -1344,6 +1359,36 @@ public class ExecutionEngineTests
             Times.Once);
 
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── NB3: Short credential decryption failure disposes long connector ──────────
+
+    [Fact]
+    public async Task OpenPositionAsync_ShortDecryptCredentialThrows_DisposesLongConnector()
+    {
+        // Long credential decrypts successfully, short credential throws
+        var mockDisposableLong = new Mock<IExchangeConnector>();
+        mockDisposableLong.As<IAsyncDisposable>()
+            .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockDisposableLong.Object);
+
+        // DecryptCredential succeeds for long (ExchangeId=1) but throws for short (ExchangeId=2)
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
+            .Returns(("key", "secret", "wallet", "pk"));
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 2)))
+            .Throws(new System.Security.Cryptography.CryptographicException("Corrupt short key"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Credential validation failed");
+        // Verify long connector was disposed after short decryption failure
+        mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
     }
 
     // ── B2: Null/empty userId tests ──────────────────────────────────────────────

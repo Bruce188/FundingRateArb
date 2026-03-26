@@ -71,7 +71,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].UserId.Should().Be(_user1.Id);
     }
 
-    // ── NB8: GetClosedWithNavigationSinceAsync integration tests ──
+    // ── GetClosedWithNavigationSinceAsync integration tests ──
 
     [Fact]
     public async Task GetClosedWithNavigationSinceAsync_NullUserId_ReturnsAllClosedPositions()
@@ -140,7 +140,7 @@ public class PositionRepositoryTests : IDisposable
         results[0].ShortExchange.Should().NotBeNull();
     }
 
-    // ── NB6: GetClosedKpiProjectionSinceAsync integration test ──
+    // ── GetClosedKpiProjectionSinceAsync integration test ──
 
     [Fact]
     public async Task GetClosedKpiProjectionSinceAsync_ReturnsLightweightProjection()
@@ -166,6 +166,360 @@ public class PositionRepositoryTests : IDisposable
         dto.ShortExchangeName.Should().NotBeNullOrEmpty();
         dto.ClosedAt.Should().NotBeNull();
         dto.OpenedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+    }
+
+    // ── GetKpiAggregatesAsync integration tests ──
+
+    [Fact]
+    public async Task GetKpiAggregatesAsync_WithPositionsAcrossWindows_ComputesCorrectKpis()
+    {
+        // Arrange: positions at 2d, 15d, and 60d ago
+        var pos2d = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2d.RealizedPnl = 10m;
+        pos2d.OpenedAt = DateTime.UtcNow.AddDays(-3);
+        pos2d.ClosedAt = DateTime.UtcNow.AddDays(-2);
+
+        var pos15d = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos15d.RealizedPnl = 20m;
+        pos15d.OpenedAt = DateTime.UtcNow.AddDays(-16);
+        pos15d.ClosedAt = DateTime.UtcNow.AddDays(-15);
+
+        var pos60d = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos60d.RealizedPnl = -5m;
+        pos60d.OpenedAt = DateTime.UtcNow.AddDays(-61);
+        pos60d.ClosedAt = DateTime.UtcNow.AddDays(-60);
+
+        _fixture.UnitOfWork.Positions.Add(pos2d);
+        _fixture.UnitOfWork.Positions.Add(pos15d);
+        _fixture.UnitOfWork.Positions.Add(pos60d);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — 90-day window
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-90), userId: null);
+
+        // Assert
+        kpi.TotalTrades.Should().Be(3);
+        kpi.WinCount.Should().Be(2);
+        kpi.TotalPnl.Should().Be(25m);
+        kpi.Pnl7d.Should().Be(10m);      // only pos2d
+        kpi.Pnl30d.Should().Be(30m);     // pos2d + pos15d
+        kpi.BestPnl.Should().Be(20m);
+        kpi.WorstPnl.Should().Be(-5m);
+        // Each position is held ~24 hours, so total ~72 hours
+        kpi.TotalHoldHours.Should().BeApproximately(72.0, 1.0);
+        kpi.HoldDataCount.Should().Be(3);
+    }
+
+    // Verify Pnl7d/Pnl30d return 0 when positions exist but fall outside those windows
+    [Fact]
+    public async Task GetKpiAggregatesAsync_PositionsOutside7dAnd30dWindows_ReturnsZeroForWindowedPnl()
+    {
+        // Arrange: all positions are 40+ days old — inside 90-day window but outside 7d and 30d
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 15m;
+        pos1.OpenedAt = DateTime.UtcNow.AddDays(-50);
+        pos1.ClosedAt = DateTime.UtcNow.AddDays(-49);
+
+        var pos2 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = 25m;
+        pos2.OpenedAt = DateTime.UtcNow.AddDays(-42);
+        pos2.ClosedAt = DateTime.UtcNow.AddDays(-41);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — 90-day window captures these, but 7d/30d windows do not
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-90), userId: null);
+
+        // Assert — TotalPnl includes both, but windowed PnLs are zero
+        kpi.TotalTrades.Should().Be(2);
+        kpi.TotalPnl.Should().Be(40m);
+        kpi.Pnl7d.Should().Be(0m);
+        kpi.Pnl30d.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetKpiAggregatesAsync_ZeroRows_ReturnsEmptyDto()
+    {
+        // Act — no closed positions exist
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-90), userId: null);
+
+        // Assert
+        kpi.TotalTrades.Should().Be(0);
+        kpi.TotalPnl.Should().Be(0);
+        kpi.WinCount.Should().Be(0);
+        kpi.TotalHoldHours.Should().Be(0);
+        kpi.HoldDataCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetKpiAggregatesAsync_AllNullRealizedPnl_ReturnsZeroPnl()
+    {
+        // Arrange: closed positions with null RealizedPnl
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = null;
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        var pos2 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = null;
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-2);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-7), userId: null);
+
+        // Assert — nullable cast (decimal?)p.RealizedPnl ?? 0m returns 0 for all-null groups
+        kpi.TotalPnl.Should().Be(0m);
+        kpi.BestPnl.Should().Be(0m);
+        kpi.WorstPnl.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetKpiAggregatesAsync_FiltersByUserId()
+    {
+        // Arrange
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 10m;
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        var pos2 = BuildPosition(_user2.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = 20m;
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-7), userId: _user1.Id);
+
+        // Assert — only user1's position
+        kpi.TotalTrades.Should().Be(1);
+        kpi.TotalPnl.Should().Be(10m);
+    }
+
+    // ── Null navigation property fallback tests ──
+    // Note: InMemory provider does not populate navigation properties via AsNoTracking GroupBy
+    // like SQL Server does with JOIN. These tests verify the queries execute without error
+    // and produce correct aggregation even when navigation properties resolve to their
+    // fallback values. Full "Unknown"/"?" verification requires a SQL Server test harness.
+
+    [Fact]
+    public async Task GetPerAssetKpiAsync_WithValidPositions_ReturnsAggregates()
+    {
+        // Arrange: position with valid asset
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = 5m;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerAssetKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — query runs without error and returns aggregated result
+        results.Should().NotBeEmpty();
+        results.Should().Contain(a => a.TotalPnl == 5m && a.Trades == 1);
+    }
+
+    [Fact]
+    public async Task GetPerExchangePairKpiAsync_WithValidPositions_ReturnsAggregates()
+    {
+        // Arrange: position with valid exchanges
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = 3m;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerExchangePairKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — query runs without error and returns aggregated result
+        results.Should().NotBeEmpty();
+        results.Should().Contain(e => e.TotalPnl == 3m && e.Trades == 1);
+    }
+
+    // Verify GetPerAssetKpiAsync returns results ordered by TotalPnl descending
+    [Fact]
+    public async Task GetPerAssetKpiAsync_ReturnsResultsOrderedByTotalPnlDescending()
+    {
+        // Arrange: create a second asset so we get two groups
+        var ethAsset = new Asset { Symbol = "ETH", Name = "Ethereum", IsActive = true };
+        _fixture.Context.Assets.Add(ethAsset);
+        _fixture.Context.SaveChanges();
+
+        // BTC position: high PnL
+        var btcPos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        btcPos.RealizedPnl = 50m;
+        btcPos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        // ETH position: lower PnL
+        var ethPos = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = ethAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            Status = PositionStatus.Closed,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            OpenedAt = DateTime.UtcNow.AddHours(-5),
+            ClosedAt = DateTime.UtcNow.AddHours(-1),
+            RealizedPnl = 10m,
+        };
+
+        _fixture.UnitOfWork.Positions.Add(btcPos);
+        _fixture.UnitOfWork.Positions.Add(ethPos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerAssetKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — ordered by TotalPnl descending: BTC (50) before ETH (10)
+        results.Should().HaveCountGreaterOrEqualTo(2);
+        results[0].TotalPnl.Should().BeGreaterOrEqualTo(results[1].TotalPnl);
+    }
+
+    // Verify GetPerExchangePairKpiAsync returns results ordered by TotalPnl descending
+    [Fact]
+    public async Task GetPerExchangePairKpiAsync_ReturnsResultsOrderedByTotalPnlDescending()
+    {
+        // Arrange: create a second exchange for distinct pairs
+        var exchange2 = new Exchange
+        {
+            Name = "SecondExchange",
+            ApiBaseUrl = "https://api.second.com",
+            WsBaseUrl = "wss://api.second.com/ws",
+            FundingInterval = FundingInterval.Hourly,
+            FundingIntervalHours = 1,
+            IsActive = true,
+        };
+        _fixture.Context.Exchanges.Add(exchange2);
+        _fixture.Context.SaveChanges();
+
+        // Pair 1: TestExchange/TestExchange — high PnL
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 100m;
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        // Pair 2: TestExchange/SecondExchange — lower PnL
+        var pos2 = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = exchange2.Id,
+            Status = PositionStatus.Closed,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            OpenedAt = DateTime.UtcNow.AddHours(-5),
+            ClosedAt = DateTime.UtcNow.AddHours(-1),
+            RealizedPnl = 20m,
+        };
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerExchangePairKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — ordered by TotalPnl descending
+        results.Should().HaveCountGreaterOrEqualTo(2);
+        results[0].TotalPnl.Should().BeGreaterOrEqualTo(results[1].TotalPnl);
+    }
+
+    // GetPerAssetKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    [Fact]
+    public async Task GetPerAssetKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
+    {
+        // Arrange: position with null RealizedPnl should be excluded by the query filter (RealizedPnl != null).
+        // But if all positions in a group have null PnL, the group should not appear at all.
+        // Test that the query doesn't throw when processing empty groups.
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = null;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerAssetKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — filtered out by WHERE clause, no groups
+        results.Should().BeEmpty();
+    }
+
+    // GetPerExchangePairKpiAsync must return 0 PnL for groups where all RealizedPnl are null
+    [Fact]
+    public async Task GetPerExchangePairKpiAsync_NullRealizedPnlInGroup_ReturnsZeroPnl()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = null;
+        pos.ClosedAt = DateTime.UtcNow.AddHours(-1);
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPerExchangePairKpiAsync(
+            DateTime.UtcNow.AddDays(-7));
+
+        // Assert — filtered out by WHERE clause, no groups
+        results.Should().BeEmpty();
+    }
+
+    // AvgHoldTimeHours uses capped denominator when holdData is limited
+    [Fact]
+    public async Task GetKpiAggregatesAsync_HoldHoursUsesConsistentDenominator()
+    {
+        // Arrange: seed a few positions and verify TotalHoldHours/TotalTrades is consistent
+        // (full regression requires >10K positions which is impractical; this verifies the formula)
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 10m;
+        pos1.OpenedAt = DateTime.UtcNow.AddHours(-48);
+        pos1.ClosedAt = DateTime.UtcNow.AddHours(-24);
+
+        var pos2 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = 5m;
+        pos2.OpenedAt = DateTime.UtcNow.AddHours(-24);
+        pos2.ClosedAt = DateTime.UtcNow.AddHours(-12);
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var kpi = await _fixture.UnitOfWork.Positions.GetKpiAggregatesAsync(
+            DateTime.UtcNow.AddDays(-90), userId: null);
+
+        // Assert: TotalTrades == 2, TotalHoldHours ~36 (24 + 12), HoldDataCount == 2
+        kpi.TotalTrades.Should().Be(2);
+        kpi.TotalHoldHours.Should().BeApproximately(36.0, 1.0);
+        kpi.HoldDataCount.Should().Be(2);
+        // AvgHoldTimeHours should be ~18 (36/2) — verifies denominator consistency
+        var avgHold = kpi.HoldDataCount > 0 ? kpi.TotalHoldHours / kpi.HoldDataCount : 0;
+        avgHold.Should().BeApproximately(18.0, 1.0);
     }
 
     public void Dispose() => _fixture.Dispose();

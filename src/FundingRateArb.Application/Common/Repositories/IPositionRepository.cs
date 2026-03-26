@@ -31,6 +31,16 @@ public interface IPositionRepository
     /// Projects only scalar fields needed for aggregation, avoiding full entity graph materialization.</summary>
     Task<List<ClosedPositionKpiDto>> GetClosedKpiProjectionSinceAsync(DateTime since, string? userId = null, int maxRows = 10_000, CancellationToken ct = default);
 
+    /// <summary>Returns pre-computed scalar KPIs (total PnL, win count, best/worst, hold time)
+    /// via SQL aggregation. Includes 7d and 30d PnL windows. No row materialization.</summary>
+    Task<KpiAggregateDto> GetKpiAggregatesAsync(DateTime since, string? userId = null, CancellationToken ct = default);
+
+    /// <summary>Returns per-asset KPI breakdown via SQL GROUP BY. No row materialization.</summary>
+    Task<List<AssetKpiAggregateDto>> GetPerAssetKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
+
+    /// <summary>Returns per-exchange-pair KPI breakdown via SQL GROUP BY. No row materialization.</summary>
+    Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
+
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }
