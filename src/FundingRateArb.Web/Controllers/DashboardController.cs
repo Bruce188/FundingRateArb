@@ -6,6 +6,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace FundingRateArb.Web.Controllers;
 
@@ -17,19 +18,24 @@ public class DashboardController : Controller
     private readonly ISignalEngine _signalEngine;
     private readonly IBotControl _botControl;
     private readonly IUserSettingsService _userSettings;
+    private readonly IMemoryCache _cache;
+
+    private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
 
     public DashboardController(
         IUnitOfWork uow,
         ILogger<DashboardController> logger,
         ISignalEngine signalEngine,
         IBotControl botControl,
-        IUserSettingsService userSettings)
+        IUserSettingsService userSettings,
+        IMemoryCache cache)
     {
         _uow = uow;
         _logger = logger;
         _signalEngine = signalEngine;
         _botControl = botControl;
         _userSettings = userSettings;
+        _cache = cache;
     }
 
     [AllowAnonymous]
@@ -38,29 +44,37 @@ public class DashboardController : Controller
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         var isAuthenticated = userId is not null;
 
-        // Fetch global data available to all users
-        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-        var allOpportunities = result.Opportunities;
-        var botConfig = await _uow.BotConfig.GetActiveAsync();
-
         if (!isAuthenticated)
         {
-            // Anonymous path: show global opportunities and diagnostics only
-            var bestSpreadAnon = allOpportunities.Count > 0
-                ? allOpportunities.Max(o => o.SpreadPerHour)
-                : result.Diagnostics?.BestRawSpread ?? 0m;
+            // Anonymous path: cache opportunity result to avoid expensive queries on every request (NB1)
+            if (!_cache.TryGetValue(AnonymousOpportunityCacheKey, out OpportunityResultDto? cachedResult))
+            {
+                cachedResult = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+                _cache.Set(AnonymousOpportunityCacheKey, cachedResult, TimeSpan.FromSeconds(30));
+            }
 
+            var anonOpportunities = cachedResult!.Opportunities;
+            var bestSpreadAnon = anonOpportunities.Count > 0
+                ? anonOpportunities.Max(o => o.SpreadPerHour)
+                : cachedResult.Diagnostics?.BestRawSpread ?? 0m;
+
+            // Design decision: full opportunity data is shown to anonymous visitors as a public showcase. See review-v45 NB3.
             var anonVm = new DashboardViewModel
             {
                 IsAuthenticated = false,
-                BotEnabled = botConfig?.IsEnabled ?? false,
+                BotEnabled = false, // NB2: never expose bot status to anonymous visitors
                 BestSpread = bestSpreadAnon,
-                Opportunities = allOpportunities,
+                Opportunities = anonOpportunities,
                 Diagnostics = null,
             };
 
             return View(anonVm);
         }
+
+        // Fetch global data for authenticated users
+        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var allOpportunities = result.Opportunities;
+        var botConfig = await _uow.BotConfig.GetActiveAsync();
 
         // Authenticated path: full dashboard with user-specific data
         // Lazy initialization: ensure user has default settings on first visit
@@ -72,10 +86,10 @@ public class DashboardController : Controller
             enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
         }
 
-        var allOpenPositions = await _uow.Positions.GetOpenAsync();
+        // NB4: Admin loads all positions; non-admin pushes user filter to SQL
         var openPositions = User.IsInRole("Admin")
-            ? allOpenPositions
-            : allOpenPositions.Where(p => p.UserId == userId).ToList();
+            ? await _uow.Positions.GetOpenAsync()
+            : await _uow.Positions.GetOpenByUserAsync(userId!);
         var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
 
         // Filter opportunities by user's enabled exchanges and assets (non-admin)

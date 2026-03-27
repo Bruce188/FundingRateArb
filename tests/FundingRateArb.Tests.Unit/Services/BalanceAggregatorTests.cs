@@ -38,16 +38,16 @@ public class BalanceAggregatorTests
 
         _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
-            .Returns((null, null, "wallet", "key"));
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
 
         var mockHl = new Mock<IExchangeConnector>();
         mockHl.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(50m);
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(30m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockLighter.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -68,11 +68,11 @@ public class BalanceAggregatorTests
 
         _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
-            .Returns((null, null, "wallet", "key"));
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(100m);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // First call
@@ -96,16 +96,16 @@ public class BalanceAggregatorTests
 
         _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
-            .Returns((null, null, "wallet", "key"));
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
 
         var mockHl = new Mock<IExchangeConnector>();
         mockHl.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("timeout"));
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(30m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockLighter.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -125,11 +125,11 @@ public class BalanceAggregatorTests
 
         _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
-            .Returns((null, null, "wallet", "key"));
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new Exception("down"));
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key"))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");

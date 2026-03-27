@@ -17,7 +17,8 @@ public class UserSettingsService : IUserSettingsService
     // --- Credentials ---
 
     public async Task SaveCredentialAsync(string userId, int exchangeId,
-        string? apiKey, string? apiSecret, string? walletAddress, string? privateKey)
+        string? apiKey, string? apiSecret, string? walletAddress, string? privateKey,
+        string? subAccountAddress = null, string? apiKeyIndex = null)
     {
         var existing = await _uow.UserCredentials.GetByUserAndExchangeAsync(userId, exchangeId);
 
@@ -27,6 +28,8 @@ public class UserSettingsService : IUserSettingsService
             existing.EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : null;
             existing.EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : null;
             existing.EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : null;
+            existing.EncryptedSubAccountAddress = subAccountAddress is not null ? _vault.Encrypt(subAccountAddress) : existing.EncryptedSubAccountAddress;
+            existing.EncryptedApiKeyIndex = apiKeyIndex is not null ? _vault.Encrypt(apiKeyIndex) : existing.EncryptedApiKeyIndex;
             existing.IsActive = true;
             existing.LastUpdatedAt = DateTime.UtcNow;
             _uow.UserCredentials.Update(existing);
@@ -41,6 +44,8 @@ public class UserSettingsService : IUserSettingsService
                 EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : null,
                 EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : null,
                 EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : null,
+                EncryptedSubAccountAddress = subAccountAddress is not null ? _vault.Encrypt(subAccountAddress) : null,
+                EncryptedApiKeyIndex = apiKeyIndex is not null ? _vault.Encrypt(apiKeyIndex) : null,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
@@ -69,14 +74,17 @@ public class UserSettingsService : IUserSettingsService
         }
     }
 
-    public (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey) DecryptCredential(
+    public (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey,
+        string? SubAccountAddress, string? ApiKeyIndex) DecryptCredential(
         UserExchangeCredential credential)
     {
         return (
             credential.EncryptedApiKey is not null ? _vault.Decrypt(credential.EncryptedApiKey) : null,
             credential.EncryptedApiSecret is not null ? _vault.Decrypt(credential.EncryptedApiSecret) : null,
             credential.EncryptedWalletAddress is not null ? _vault.Decrypt(credential.EncryptedWalletAddress) : null,
-            credential.EncryptedPrivateKey is not null ? _vault.Decrypt(credential.EncryptedPrivateKey) : null
+            credential.EncryptedPrivateKey is not null ? _vault.Decrypt(credential.EncryptedPrivateKey) : null,
+            credential.EncryptedSubAccountAddress is not null ? _vault.Decrypt(credential.EncryptedSubAccountAddress) : null,
+            credential.EncryptedApiKeyIndex is not null ? _vault.Decrypt(credential.EncryptedApiKeyIndex) : null
         );
     }
 

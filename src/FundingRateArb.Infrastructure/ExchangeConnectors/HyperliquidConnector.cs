@@ -14,15 +14,18 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly MarkPriceCacheHelper _markPriceCache = new();
     private readonly ConcurrentDictionary<string, int> _szDecimalsCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string? _vaultAddress;
 
     private const decimal SlippagePct = 0.005m; // 0.5% max slippage
 
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
-        ResiliencePipelineProvider<string> pipelineProvider)
+        ResiliencePipelineProvider<string> pipelineProvider,
+        string? vaultAddress = null)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
+        _vaultAddress = vaultAddress;
     }
 
     public string ExchangeName => "Hyperliquid";
@@ -106,7 +109,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                     triggerPrice: null,
                     tpSlType: null,
                     tpSlGrouping: null,
-                    vaultAddress: null,
+                    vaultAddress: _vaultAddress,
                     expireAfter: null,
                     ct: token),
                 ct);
