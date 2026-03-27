@@ -632,7 +632,7 @@ public class AnalyticsControllerTests
             It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, expectedTake, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // ── N4: Null RealizedPnl exclusion ──────────────────────────
+    // ── Null RealizedPnl exclusion ──────────────────────────
 
     [Fact]
     public async Task Index_NullRealizedPnl_ExcludedFromKPIs()

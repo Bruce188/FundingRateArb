@@ -470,6 +470,45 @@ public class BotOrchestratorMultiUserTests
         _mockHubClients.Verify(c => c.Group($"user-{UserA}"), Times.AtLeastOnce);
     }
 
+    // ── DataOnlyExchangeIds fetched once per cycle, not per user ─────────────────
+
+    [Fact]
+    public async Task RunCycle_DataOnlyExchangeIds_FetchedOncePerCycle()
+    {
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { UserA, UserB });
+
+        SetupUser(UserA, new UserConfiguration
+        {
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+        });
+        SetupUser(UserB, new UserConfiguration
+        {
+            UserId = UserB,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.0001m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+        });
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [] });
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Data-only exchange IDs should be fetched exactly once per cycle,
+        // not once per user (NB3: hoisted out of per-user loop)
+        _mockUserSettings.Verify(s => s.GetDataOnlyExchangeIdsAsync(), Times.Once);
+    }
+
     // ── RecordCloseResult with null userId is ignored ────────────────────────────
 
     [Fact]

@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace FundingRateArb.Web.Controllers;
 
+[Authorize]
 public class DashboardController : Controller
 {
     private readonly IUnitOfWork _uow;
@@ -55,7 +56,7 @@ public class DashboardController : Controller
                 BotEnabled = botConfig?.IsEnabled ?? false,
                 BestSpread = bestSpreadAnon,
                 Opportunities = allOpportunities,
-                Diagnostics = result.Diagnostics,
+                Diagnostics = null,
             };
 
             return View(anonVm);
@@ -64,10 +65,11 @@ public class DashboardController : Controller
         // Authenticated path: full dashboard with user-specific data
         // Lazy initialization: ensure user has default settings on first visit
         var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
-        var enabledExchangeIdsForInit = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
-        if (enabledExchangeIdsForInit.Count == 0)
+        var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
+        if (enabledExchangeIds.Count == 0)
         {
             await _userSettings.InitializeDefaultsForNewUserAsync(userId!);
+            enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
         }
 
         var allOpenPositions = await _uow.Positions.GetOpenAsync();
@@ -84,14 +86,14 @@ public class DashboardController : Controller
         }
         else
         {
-            var enabledExchangeIds = (await _userSettings.GetUserEnabledExchangeIdsAsync(userId!)).ToHashSet();
+            var enabledExchangeIdSet = enabledExchangeIds.ToHashSet();
             var dataOnlyExchangeIds = await _userSettings.GetDataOnlyExchangeIdsAsync();
-            enabledExchangeIds.UnionWith(dataOnlyExchangeIds);
+            enabledExchangeIdSet.UnionWith(dataOnlyExchangeIds);
             var enabledAssetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId!)).ToHashSet();
 
             opportunities = allOpportunities
-                .Where(o => enabledExchangeIds.Contains(o.LongExchangeId)
-                         && enabledExchangeIds.Contains(o.ShortExchangeId))
+                .Where(o => enabledExchangeIdSet.Contains(o.LongExchangeId)
+                         && enabledExchangeIdSet.Contains(o.ShortExchangeId))
                 .Where(o => enabledAssetIds.Contains(o.AssetId))
                 .ToList();
         }

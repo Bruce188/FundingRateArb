@@ -566,7 +566,7 @@ public class LighterConnector : IExchangeConnector, IDisposable
         if (!long.TryParse(indexStr, out var accountIndex))
         {
             throw new InvalidOperationException(
-                $"Lighter Account Index must be numeric but got '{indexStr}'. Check your API key settings.");
+                "Lighter Account Index must be numeric. Check your API key settings.");
         }
 
         return accountIndex;

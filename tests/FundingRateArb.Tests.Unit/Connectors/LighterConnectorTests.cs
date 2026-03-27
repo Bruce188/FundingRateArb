@@ -485,6 +485,32 @@ public class LighterConnectorTests
         balance.Should().Be(0m);
     }
 
+    [Fact]
+    public async Task GetAvailableBalance_WhenAccountIndexNull_ThrowsInvalidOperationException()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns((string?)null);
+
+        var sut = CreateConnector(AccountJson);
+
+        var act = () => sut.GetAvailableBalanceAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Account Index is required*");
+    }
+
+    [Fact]
+    public async Task GetAvailableBalance_WhenAccountIndexNonNumeric_ThrowsInvalidOperationException()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("0xABCDEF");
+
+        var sut = CreateConnector(AccountJson);
+
+        var act = () => sut.GetAvailableBalanceAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Account Index must be numeric*");
+    }
+
     // ── PlaceMarketOrderAsync ────────────────────────────────────
     // Note: Full integration tests for PlaceMarketOrder/ClosePosition require
     // the native signer library. These tests verify the error handling when
@@ -795,7 +821,8 @@ public class ExchangeConnectorFactoryTests
         });
 
         var sp = services.BuildServiceProvider();
-        return new ExchangeConnectorFactory(sp);
+        var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+        return new ExchangeConnectorFactory(sp, factoryLogger);
     }
 
     [Theory]
@@ -864,7 +891,8 @@ public class ExchangeConnectorFactoryTests
         services.AddSingleton(mockProvider.Object);
 
         var sp = services.BuildServiceProvider();
-        return new ExchangeConnectorFactory(sp);
+        var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+        return new ExchangeConnectorFactory(sp, factoryLogger);
     }
 
     [Fact]

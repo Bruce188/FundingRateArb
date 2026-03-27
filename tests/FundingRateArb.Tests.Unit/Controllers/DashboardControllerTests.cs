@@ -500,4 +500,49 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.IsAuthenticated.Should().BeTrue();
     }
+
+    // ── Defense-in-depth: class-level [Authorize] attribute ─────────────────
+
+    [Fact]
+    public void DashboardController_HasClassLevelAuthorizeAttribute()
+    {
+        // B1: class-level [Authorize] ensures new actions default to authenticated
+        var authorizeAttr = typeof(DashboardController)
+            .GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: false);
+        authorizeAttr.Should().NotBeEmpty(
+            "DashboardController must have a class-level [Authorize] attribute for defense-in-depth");
+    }
+
+    // ── Anonymous user: diagnostics not exposed ────────────────────────────
+
+    [Fact]
+    public async Task Index_AnonymousUser_DiagnosticsIsNull()
+    {
+        // Arrange — unauthenticated user
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Diagnostics = new PipelineDiagnosticsDto
+                {
+                    BestRawSpread = 0.005m,
+                    OpenThreshold = 0.01m,
+                    TotalRatesLoaded = 100,
+                }
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — NB1: diagnostics must not be exposed to anonymous users
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.Diagnostics.Should().BeNull(
+            "anonymous users must not see pipeline diagnostics containing strategy parameters");
+    }
 }

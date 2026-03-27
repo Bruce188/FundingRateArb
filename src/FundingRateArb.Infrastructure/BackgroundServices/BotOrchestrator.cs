@@ -249,11 +249,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var capitalExhaustedKeys = new HashSet<string>();
         var maxPositionsKeys = new HashSet<string>();
 
+        // Fetch data-only exchange IDs once per cycle (same for all users)
+        var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
+
         foreach (var userId in enabledUserIds)
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
             }
             catch (Exception ex)
             {
@@ -277,6 +280,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         ISignalEngine signalEngine,
         IExecutionEngine executionEngine,
         IUserSettingsService userSettings,
+        HashSet<int> dataOnlyExchangeIds,
         HashSet<string> openedOppKeys,
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
@@ -302,9 +306,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         var enabledExchangeSet = enabledExchangeIds.ToHashSet();
         var enabledAssetSet = enabledAssetIds.ToHashSet();
-
-        // Exclude data-only exchanges from trading (e.g. CoinGlass cannot execute trades)
-        var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
 
         // Filter global opportunities to user's preferences, excluding data-only exchanges
         var userOpportunities = allOpportunities
