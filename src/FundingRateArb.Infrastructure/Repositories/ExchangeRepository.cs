@@ -60,6 +60,7 @@ public class ExchangeRepository : IExchangeRepository
         FundingSettlementType = src.FundingSettlementType,
         SupportsSubAccounts = src.SupportsSubAccounts,
         IsActive = src.IsActive,
+        IsDataOnly = src.IsDataOnly,
         TakerFeeRate = src.TakerFeeRate,
         Description = src.Description,
     };

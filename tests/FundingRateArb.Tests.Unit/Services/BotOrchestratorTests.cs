@@ -99,6 +99,8 @@ public class BotOrchestratorTests
             .ReturnsAsync(new List<int> { 1, 2, 3 });
         _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
             .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int>());
 
         // Mock readiness signal — completes immediately
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))

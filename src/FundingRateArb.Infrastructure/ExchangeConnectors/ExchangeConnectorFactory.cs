@@ -13,6 +13,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 public class ExchangeConnectorFactory : IExchangeConnectorFactory
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<ExchangeConnectorFactory> _logger;
     private readonly ConcurrentDictionary<string, KeyPool> _keyPools = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly Dictionary<string, Type> ConnectorTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -23,8 +24,11 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
-    public ExchangeConnectorFactory(IServiceProvider serviceProvider)
-        => _serviceProvider = serviceProvider;
+    public ExchangeConnectorFactory(IServiceProvider serviceProvider, ILogger<ExchangeConnectorFactory> logger)
+    {
+        _serviceProvider = serviceProvider;
+        _logger = logger;
+    }
 
     /// <summary>
     /// Registers additional infrastructure connectors for an exchange, enabling round-robin key rotation.
@@ -180,6 +184,18 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         if (!string.IsNullOrEmpty(walletAddress))
         {
+            // Lighter expects a numeric account index, not a hex wallet address
+            if (walletAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                || !long.TryParse(walletAddress, out _))
+            {
+                var masked = MaskValue(walletAddress);
+                _logger.LogWarning(
+                    "Lighter Account Index must be numeric but received '{MaskedValue}'. " +
+                    "Update your API key settings with a numeric account index",
+                    masked);
+                return null;
+            }
+
             configData["Exchanges:Lighter:AccountIndex"] = walletAddress;
         }
 
@@ -196,6 +212,19 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var logger = _serviceProvider.GetRequiredService<ILogger<LighterConnector>>();
         return new LighterConnector(httpClient, logger, userConfig);
+    }
+
+    /// <summary>
+    /// Masks a credential value for safe logging — shows first 4 and last 4 characters.
+    /// </summary>
+    private static string MaskValue(string value)
+    {
+        if (value.Length <= 8)
+        {
+            return new string('*', value.Length);
+        }
+
+        return string.Concat(value.AsSpan(0, 4), "****", value.AsSpan(value.Length - 4));
     }
 
     /// <summary>

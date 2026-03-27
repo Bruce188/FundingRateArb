@@ -411,4 +411,33 @@ public class PositionsControllerTests
         _mockPositions.Verify(p => p.GetByUserAsync(traderId, It.IsAny<int>(), It.IsAny<int>()), Times.Once);
         _mockPositions.Verify(p => p.GetAllAsync(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
     }
+
+    // ── Post-close status verification for non-Closed statuses ──
+
+    [Theory]
+    [InlineData(PositionStatus.Closing)]
+    [InlineData(PositionStatus.EmergencyClosed)]
+    public async Task Close_WhenEngineSetNonClosedStatus_ReturnsDidNotCompleteError(PositionStatus postCloseStatus)
+    {
+        // Arrange — engine sets status to a non-Closed value via callback
+        var position = OpenPositionOwnedBy("trader-id");
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id))
+            .ReturnsAsync(position);
+        _mockExecution.Setup(e => e.ClosePositionAsync("trader-id", position, CloseReason.Manual, It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitragePosition, CloseReason, CancellationToken>((_, p, _, _) => p.Status = postCloseStatus)
+            .Returns(Task.CompletedTask);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        // Act
+        var result = await controller.Close(position.Id);
+
+        // Assert — controller treats anything except Closed as incomplete
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be(nameof(PositionsController.Index));
+        controller.TempData["Error"].Should().Be("Position close was submitted but did not complete. Check position status.");
+        controller.TempData.ContainsKey("Success").Should().BeFalse();
+        _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

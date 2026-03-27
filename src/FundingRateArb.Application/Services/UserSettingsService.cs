@@ -112,6 +112,12 @@ public class UserSettingsService : IUserSettingsService
     public Task<List<Exchange>> GetAvailableExchangesAsync() =>
         _uow.Exchanges.GetActiveAsync();
 
+    public async Task<List<int>> GetDataOnlyExchangeIdsAsync()
+    {
+        var exchanges = await _uow.Exchanges.GetActiveAsync();
+        return exchanges.Where(e => e.IsDataOnly).Select(e => e.Id).ToList();
+    }
+
     public Task<List<Asset>> GetAvailableAssetsAsync() =>
         _uow.Assets.GetActiveAsync();
 
