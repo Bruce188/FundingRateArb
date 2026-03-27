@@ -126,13 +126,15 @@ public class UserSettingsServiceTests
         _mockVault.Setup(v => v.Decrypt("enc-priv")).Returns("priv-key");
 
         // Act
-        var (apiKey, apiSecret, walletAddress, privateKey) = _sut.DecryptCredential(credential);
+        var (apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex) = _sut.DecryptCredential(credential);
 
         // Assert
         apiKey.Should().Be("api-key");
         apiSecret.Should().Be("api-secret");
         walletAddress.Should().Be("wallet-addr");
         privateKey.Should().Be("priv-key");
+        subAccountAddress.Should().BeNull();
+        apiKeyIndex.Should().BeNull();
     }
 
     [Fact]
@@ -149,13 +151,15 @@ public class UserSettingsServiceTests
         _mockVault.Setup(v => v.Decrypt("enc-key")).Returns("api-key");
 
         // Act
-        var (apiKey, apiSecret, walletAddress, privateKey) = _sut.DecryptCredential(credential);
+        var (apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex) = _sut.DecryptCredential(credential);
 
         // Assert
         apiKey.Should().Be("api-key");
         apiSecret.Should().BeNull();
         walletAddress.Should().BeNull();
         privateKey.Should().BeNull();
+        subAccountAddress.Should().BeNull();
+        apiKeyIndex.Should().BeNull();
     }
 
     [Fact]
@@ -409,5 +413,145 @@ public class UserSettingsServiceTests
 
         // Assert
         result.Should().BeTrue();
+    }
+
+    // --- New DEX Credential Field Tests ---
+
+    [Fact]
+    public async Task SaveCredentialAsync_WithSubAccountAddress_EncryptsAndStores()
+    {
+        // Arrange
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync((UserExchangeCredential?)null);
+
+        _mockVault.Setup(v => v.Encrypt(It.IsAny<string>()))
+            .Returns<string>(s => $"enc({s})");
+
+        // Act
+        await _sut.SaveCredentialAsync(UserId, 1, null, null, "0xWallet", "privKey",
+            subAccountAddress: "0xSubAccount");
+
+        // Assert
+        _mockCredentials.Verify(r => r.Add(It.Is<UserExchangeCredential>(c =>
+            c.EncryptedSubAccountAddress == "enc(0xSubAccount)" &&
+            c.EncryptedApiKeyIndex == null)), Times.Once);
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_WithApiKeyIndex_EncryptsAndStores()
+    {
+        // Arrange
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 2))
+            .ReturnsAsync((UserExchangeCredential?)null);
+
+        _mockVault.Setup(v => v.Encrypt(It.IsAny<string>()))
+            .Returns<string>(s => $"enc({s})");
+
+        // Act
+        await _sut.SaveCredentialAsync(UserId, 2, null, null, "12345", "privKey",
+            apiKeyIndex: "42");
+
+        // Assert
+        _mockCredentials.Verify(r => r.Add(It.Is<UserExchangeCredential>(c =>
+            c.EncryptedApiKeyIndex == "enc(42)" &&
+            c.EncryptedSubAccountAddress == null)), Times.Once);
+    }
+
+    [Fact]
+    public void DecryptCredential_ReturnsAllSixFields()
+    {
+        // Arrange
+        var credential = new UserExchangeCredential
+        {
+            EncryptedApiKey = "enc-key",
+            EncryptedApiSecret = "enc-secret",
+            EncryptedWalletAddress = "enc-wallet",
+            EncryptedPrivateKey = "enc-priv",
+            EncryptedSubAccountAddress = "enc-sub",
+            EncryptedApiKeyIndex = "enc-idx"
+        };
+        _mockVault.Setup(v => v.Decrypt("enc-key")).Returns("api-key");
+        _mockVault.Setup(v => v.Decrypt("enc-secret")).Returns("api-secret");
+        _mockVault.Setup(v => v.Decrypt("enc-wallet")).Returns("wallet-addr");
+        _mockVault.Setup(v => v.Decrypt("enc-priv")).Returns("priv-key");
+        _mockVault.Setup(v => v.Decrypt("enc-sub")).Returns("sub-addr");
+        _mockVault.Setup(v => v.Decrypt("enc-idx")).Returns("key-idx");
+
+        // Act
+        var (apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex) =
+            _sut.DecryptCredential(credential);
+
+        // Assert
+        apiKey.Should().Be("api-key");
+        apiSecret.Should().Be("api-secret");
+        walletAddress.Should().Be("wallet-addr");
+        privateKey.Should().Be("priv-key");
+        subAccountAddress.Should().Be("sub-addr");
+        apiKeyIndex.Should().Be("key-idx");
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_PartialUpdate_PreservesExistingNewFields()
+    {
+        // Arrange — existing credential already has SubAccountAddress and ApiKeyIndex
+        var existing = new UserExchangeCredential
+        {
+            Id = 10,
+            UserId = UserId,
+            ExchangeId = 1,
+            EncryptedPrivateKey = "old-priv",
+            EncryptedSubAccountAddress = "existing-enc-sub",
+            EncryptedApiKeyIndex = "existing-enc-idx"
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(existing);
+
+        _mockVault.Setup(v => v.Encrypt("new-priv")).Returns("encrypted-new-priv");
+
+        // Act — update only privateKey, leave subAccountAddress and apiKeyIndex as null
+        await _sut.SaveCredentialAsync(UserId, 1, null, null, null, "new-priv");
+
+        // Assert — new fields should be preserved (not overwritten with null)
+        existing.EncryptedPrivateKey.Should().Be("encrypted-new-priv");
+        existing.EncryptedSubAccountAddress.Should().Be("existing-enc-sub");
+        existing.EncryptedApiKeyIndex.Should().Be("existing-enc-idx");
+    }
+
+    // --- Data-Only Exchange Tests (NB5) ---
+
+    [Fact]
+    public async Task GetDataOnlyExchangeIdsAsync_ReturnsOnlyDataOnlyIds()
+    {
+        // Arrange
+        var exchanges = new List<Exchange>
+        {
+            new() { Id = 1, Name = "Hyperliquid", IsActive = true, IsDataOnly = false },
+            new() { Id = 2, Name = "Lighter", IsActive = true, IsDataOnly = false },
+            new() { Id = 3, Name = "Aster", IsActive = true, IsDataOnly = false },
+            new() { Id = 4, Name = "CoinGlass", IsActive = true, IsDataOnly = true },
+        };
+        _mockExchanges.Setup(r => r.GetActiveAsync()).ReturnsAsync(exchanges);
+
+        // Act
+        var result = await _sut.GetDataOnlyExchangeIdsAsync();
+
+        // Assert
+        result.Should().ContainSingle().Which.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetDataOnlyExchangeIdsAsync_EmptyExchanges_ReturnsEmpty()
+    {
+        // Arrange
+        _mockExchanges.Setup(r => r.GetActiveAsync()).ReturnsAsync(new List<Exchange>());
+
+        // Act
+        var result = await _sut.GetDataOnlyExchangeIdsAsync();
+
+        // Assert
+        result.Should().BeEmpty();
     }
 }

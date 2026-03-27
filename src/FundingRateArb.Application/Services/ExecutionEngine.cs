@@ -595,7 +595,8 @@ public class ExecutionEngine : IExecutionEngine
 
                 longConnector = await _connectorFactory.CreateForUserAsync(
                     longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
-                    longDecrypted.WalletAddress, longDecrypted.PrivateKey);
+                    longDecrypted.WalletAddress, longDecrypted.PrivateKey,
+                    longDecrypted.SubAccountAddress, longDecrypted.ApiKeyIndex);
             }
 
             // Decrypt + create short connector in tight scope
@@ -609,7 +610,8 @@ public class ExecutionEngine : IExecutionEngine
 
                 shortConnector = await _connectorFactory.CreateForUserAsync(
                     shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
-                    shortDecrypted.WalletAddress, shortDecrypted.PrivateKey);
+                    shortDecrypted.WalletAddress, shortDecrypted.PrivateKey,
+                    shortDecrypted.SubAccountAddress, shortDecrypted.ApiKeyIndex);
             }
         }
         catch (Exception ex)
@@ -644,20 +646,20 @@ public class ExecutionEngine : IExecutionEngine
     /// Note: .NET strings are immutable — decrypted credentials persist in memory until GC.
     /// This is an inherent platform limitation; SecureString is deprecated and not supported by exchange SDKs.
     /// </summary>
-    private (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? Error) DecryptAndCreateConnectorArgs(
+    private (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? SubAccountAddress, string? ApiKeyIndex, string? Error) DecryptAndCreateConnectorArgs(
         UserExchangeCredential cred, string exchangeName, string userId)
     {
         try
         {
             var decrypted = _userSettings.DecryptCredential(cred);
-            return (decrypted.ApiKey, decrypted.ApiSecret, decrypted.WalletAddress, decrypted.PrivateKey, null);
+            return (decrypted.ApiKey, decrypted.ApiSecret, decrypted.WalletAddress, decrypted.PrivateKey, decrypted.SubAccountAddress, decrypted.ApiKeyIndex, null);
         }
         catch (Exception ex)
         {
             // N2: Log only the exception type name, not the full exception which may contain cryptographic metadata
             _logger.LogError("Failed to decrypt credentials for {Exchange} (user {UserId}): {ExceptionType}",
                 exchangeName, userId, ex.GetType().Name);
-            return (null, null, null, null, "Credential validation failed");
+            return (null, null, null, null, null, null, "Credential validation failed");
         }
     }
 

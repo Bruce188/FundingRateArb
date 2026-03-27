@@ -13,12 +13,14 @@ public class ExchangeCredentialItem
     public bool IsConfigured { get; set; }
 
     /// <summary>
-    /// True for wallet-based exchanges (Lighter, HyperLiquid).
-    /// False for API-key exchanges (Aster).
+    /// Identifies the exchange type for per-exchange form rendering.
+    /// Values: "cex", "hyperliquid", "lighter".
     /// </summary>
-    public bool RequiresWallet { get; set; }
+    public string ExchangeType { get; set; } = "cex";
 
     // Masked display values — never shows plain-text credentials
     public string? MaskedApiKey { get; set; }
     public string? MaskedWalletAddress { get; set; }
+    public string? MaskedApiKeyIndex { get; set; }
+    public string? MaskedSubAccountAddress { get; set; }
 }

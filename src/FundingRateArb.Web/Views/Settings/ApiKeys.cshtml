@@ -48,7 +48,7 @@ else
                             @Html.AntiForgeryToken()
                             <input type="hidden" name="exchangeId" value="@exchange.ExchangeId" />
 
-                            @if (!exchange.RequiresWallet)
+                            @if (exchange.ExchangeType == "cex")
                             {
                                 @* CEX-style: API Key + API Secret (e.g. Aster) *@
                                 <div class="mb-3">
@@ -77,52 +77,95 @@ else
                                            placeholder="@(exchange.IsConfigured ? "Enter new API secret to replace" : "Enter API secret")" />
                                 </div>
                             }
-                            else
+                            else if (exchange.ExchangeType == "hyperliquid")
                             {
-                                @* DEX-style: Wallet Address / Account Index + Private Key *@
+                                @* Hyperliquid: Master Wallet Address + Agent Private Key + optional Sub-Account Address *@
                                 <div class="mb-3">
-                                    @if (string.Equals(exchange.ExchangeName, "Lighter", StringComparison.OrdinalIgnoreCase))
+                                    <label class="form-label fw-semibold">Master Wallet Address</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
                                     {
-                                        <label class="form-label fw-semibold">Account Index</label>
-                                        @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
-                                        {
-                                            <div class="input-group mb-1">
-                                                <span class="input-group-text bg-light text-muted font-monospace small">
-                                                    @exchange.MaskedWalletAddress
-                                                </span>
-                                            </div>
-                                            <div class="form-text">Leave blank to keep the existing account index.</div>
-                                        }
-                                        <input type="password" class="form-control" name="walletAddress"
-                                               autocomplete="new-password"
-                                               placeholder="@(exchange.IsConfigured ? "Enter new account index to replace" : "Enter your numeric account index (e.g. 12345)")" />
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedWalletAddress
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing address.</div>
                                     }
-                                    else
-                                    {
-                                        <label class="form-label fw-semibold">Wallet Address</label>
-                                        @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
-                                        {
-                                            <div class="input-group mb-1">
-                                                <span class="input-group-text bg-light text-muted font-monospace small">
-                                                    @exchange.MaskedWalletAddress
-                                                </span>
-                                            </div>
-                                            <div class="form-text">Leave blank to keep the existing address.</div>
-                                        }
-                                        <input type="password" class="form-control" name="walletAddress"
-                                               autocomplete="new-password"
-                                               placeholder="@(exchange.IsConfigured ? "Enter new wallet address to replace" : "Enter wallet address (0x...)")" />
-                                    }
+                                    <input type="password" class="form-control" name="walletAddress"
+                                           autocomplete="new-password"
+                                           placeholder="Enter your Ethereum wallet address (0x...)" />
+                                    <div class="form-text">42-character hex address starting with 0x</div>
                                 </div>
                                 <div class="mb-3">
-                                    <label class="form-label fw-semibold">Private Key</label>
+                                    <label class="form-label fw-semibold">Agent Private Key</label>
+                                    @if (exchange.IsConfigured)
+                                    {
+                                        <div class="form-text mb-1">Leave blank to keep the existing key.</div>
+                                    }
+                                    <input type="password" class="form-control" name="privateKey"
+                                           autocomplete="new-password"
+                                           placeholder="Enter agent wallet private key from app.hyperliquid.xyz" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Sub-Account Address <span class="text-muted fw-normal">(optional)</span></label>
+                                    @if (exchange.IsConfigured && exchange.MaskedSubAccountAddress is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedSubAccountAddress
+                                            </span>
+                                        </div>
+                                    }
+                                    <input type="text" class="form-control" name="subAccountAddress"
+                                           autocomplete="off"
+                                           placeholder="Optional — enter sub-account address for vault trading (0x...)" />
+                                    <div class="form-text">Leave blank if trading on your main account. Required only for sub-account trading.</div>
+                                </div>
+                            }
+                            else if (exchange.ExchangeType == "lighter")
+                            {
+                                @* Lighter: Account Index + API Key Index + API Private Key *@
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Account Index</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedWalletAddress
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing account index.</div>
+                                    }
+                                    <input type="text" class="form-control" name="walletAddress"
+                                           autocomplete="off"
+                                           placeholder="Enter your numeric account index (e.g. 12345)" />
+                                    <div class="form-text">Numeric integer</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">API Key Index</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedApiKeyIndex is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedApiKeyIndex
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing API key index.</div>
+                                    }
+                                    <input type="text" class="form-control" name="apiKeyIndex"
+                                           autocomplete="off"
+                                           placeholder="Enter API key index (2-254)" />
+                                    <div class="form-text">Integer between 2 and 254</div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">API Private Key</label>
                                     @if (exchange.IsConfigured)
                                     {
                                         <div class="form-text mb-1">Leave blank to keep the existing private key.</div>
                                     }
                                     <input type="password" class="form-control" name="privateKey"
                                            autocomplete="new-password"
-                                           placeholder="@(exchange.IsConfigured ? "Enter new private key to replace" : "Enter private key")" />
+                                           placeholder="Enter the private key for this API key index" />
                                 </div>
                             }
 

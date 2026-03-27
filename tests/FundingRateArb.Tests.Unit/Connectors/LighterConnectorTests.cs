@@ -983,4 +983,113 @@ public class ExchangeConnectorFactoryTests
 
         connector.Should().BeNull("private key is required for Hyperliquid");
     }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithOverflowNumericIndex_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        // A numeric string that overflows long.MaxValue should fail long.TryParse
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: null, apiSecret: null,
+            walletAddress: "99999999999999999999", privateKey: "0xprivatekey",
+            apiKeyIndex: "42");
+
+        connector.Should().BeNull("an overflow numeric index should fail validation");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Lighter_WithHexWalletAddress_LogsMaskedValue()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+
+        var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
+        mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
+        services.AddSingleton(mockProvider.Object);
+
+        var sp = services.BuildServiceProvider();
+
+        // Use a mock logger to verify masked output
+        var mockLogger = new Mock<ILogger<ExchangeConnectorFactory>>();
+        var factory = new ExchangeConnectorFactory(sp, mockLogger.Object);
+
+        var hexWallet = "0xAbC123DeF456789012345678901234567890aBcD";
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: null, apiSecret: null,
+            walletAddress: hexWallet, privateKey: "0xprivatekey",
+            apiKeyIndex: "42");
+
+        connector.Should().BeNull();
+
+        // Verify logger was called and the raw wallet address does NOT appear in log output
+        mockLogger.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, _) => !v.ToString()!.Contains(hexWallet)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithSubAccount_ReturnsConnector()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey123",
+            subAccountAddress: "0x1234567890AbCdEf1234567890AbCdEf12345678");
+
+        connector.Should().NotBeNull();
+        connector.Should().BeOfType<HyperliquidConnector>();
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithoutSubAccount_ReturnsConnector()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey123",
+            subAccountAddress: null);
+
+        connector.Should().NotBeNull();
+        connector.Should().BeOfType<HyperliquidConnector>();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void GetAccountIndex_WithNullOrEmpty_Throws(string? indexValue)
+    {
+        var configData = new Dictionary<string, string?>();
+        if (indexValue is not null)
+        {
+            configData["Exchanges:Lighter:AccountIndex"] = indexValue;
+        }
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(configData)
+            .Build();
+
+        var handler = new MockHttpMessageHandler("{}");
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+        };
+        var logger = new Mock<ILogger<LighterConnector>>();
+        var connector = new LighterConnector(httpClient, logger.Object, config);
+
+        // GetAccountIndex is called internally by GetAvailableBalanceAsync
+        var act = () => connector.GetAvailableBalanceAsync();
+
+        act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*Account Index*required*");
+    }
 }

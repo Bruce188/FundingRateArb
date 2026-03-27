@@ -14,5 +14,7 @@ public interface IExchangeConnectorFactory
         string? apiKey,
         string? apiSecret,
         string? walletAddress,
-        string? privateKey);
+        string? privateKey,
+        string? subAccountAddress = null,
+        string? apiKeyIndex = null);
 }

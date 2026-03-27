@@ -40,7 +40,8 @@ public class SettingsController : Controller
         var credentialByExchange = allCredentials.ToDictionary(c => c.ExchangeId);
         var items = new List<ExchangeCredentialItem>();
 
-        foreach (var exchange in exchanges)
+        // Exclude data-only exchanges (e.g. CoinGlass) — they don't need credentials
+        foreach (var exchange in exchanges.Where(e => !e.IsDataOnly))
         {
             credentialByExchange.TryGetValue(exchange.Id, out var credential);
             items.Add(BuildCredentialItem(exchange.Id, exchange.Name, credential));
@@ -61,7 +62,9 @@ public class SettingsController : Controller
         string? apiKey,
         string? apiSecret,
         string? walletAddress,
-        string? privateKey)
+        string? privateKey,
+        string? subAccountAddress,
+        string? apiKeyIndex)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (userId is null)
@@ -72,7 +75,8 @@ public class SettingsController : Controller
         // Input validation: reject suspiciously long or whitespace-only values
         const int maxCredentialLength = 500;
         if (apiKey?.Length > maxCredentialLength || apiSecret?.Length > maxCredentialLength
-            || walletAddress?.Length > maxCredentialLength || privateKey?.Length > maxCredentialLength)
+            || walletAddress?.Length > maxCredentialLength || privateKey?.Length > maxCredentialLength
+            || subAccountAddress?.Length > maxCredentialLength || apiKeyIndex?.Length > maxCredentialLength)
         {
             TempData["Error"] = "Credential value exceeds maximum allowed length.";
             return RedirectToAction(nameof(ApiKeys));
@@ -83,7 +87,7 @@ public class SettingsController : Controller
             return RedirectToAction(nameof(ApiKeys));
         }
 
-        await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey);
+        await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex);
         TempData["Success"] = "API key saved successfully.";
         _logger.LogInformation("User {UserId} saved credentials for exchange {ExchangeId}", userId, exchangeId);
 
@@ -114,16 +118,20 @@ public class SettingsController : Controller
         string exchangeName,
         UserExchangeCredential? credential)
     {
-        bool requiresWallet = IsWalletExchange(exchangeName);
+        var exchangeType = GetExchangeType(exchangeName);
 
         string? maskedApiKey = null;
         string? maskedWallet = null;
+        string? maskedSubAccount = null;
+        string? maskedApiKeyIndex = null;
 
         if (credential is not null)
         {
-            var (decryptedApiKey, _, decryptedWallet, _) = _settings.DecryptCredential(credential);
-            maskedApiKey = MaskSecret(decryptedApiKey);
-            maskedWallet = MaskSecret(decryptedWallet);
+            var decrypted = _settings.DecryptCredential(credential);
+            maskedApiKey = MaskSecret(decrypted.ApiKey);
+            maskedWallet = MaskSecret(decrypted.WalletAddress);
+            maskedSubAccount = MaskSecret(decrypted.SubAccountAddress);
+            maskedApiKeyIndex = MaskSecret(decrypted.ApiKeyIndex);
         }
 
         return new ExchangeCredentialItem
@@ -131,21 +139,24 @@ public class SettingsController : Controller
             ExchangeId = exchangeId,
             ExchangeName = exchangeName,
             IsConfigured = credential is not null && credential.IsActive,
-            RequiresWallet = requiresWallet,
+            ExchangeType = exchangeType,
             MaskedApiKey = maskedApiKey,
             MaskedWalletAddress = maskedWallet,
+            MaskedSubAccountAddress = maskedSubAccount,
+            MaskedApiKeyIndex = maskedApiKeyIndex,
         };
     }
 
     /// <summary>
-    /// Returns true for DEX-style exchanges that use wallet address + private key
-    /// (Lighter, HyperLiquid). Returns false for CEX-style exchanges that use
-    /// API key + API secret (Aster).
+    /// Returns the exchange type string for per-exchange form rendering.
     /// </summary>
-    private static bool IsWalletExchange(string exchangeName) =>
-        exchangeName.Contains("Lighter", StringComparison.OrdinalIgnoreCase)
-        || exchangeName.Contains("Hyperliquid", StringComparison.OrdinalIgnoreCase)
-        || exchangeName.Contains("HyperLiquid", StringComparison.OrdinalIgnoreCase);
+    private static string GetExchangeType(string exchangeName) =>
+        exchangeName.ToLowerInvariant() switch
+        {
+            "hyperliquid" => "hyperliquid",
+            "lighter" => "lighter",
+            _ => "cex"
+        };
 
     private static string? MaskSecret(string? value)
     {

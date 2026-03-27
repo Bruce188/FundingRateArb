@@ -256,4 +256,31 @@ public class SettingsControllerTests
         redirect.ActionName.Should().Be("Configuration");
         _mockSettings.Verify(s => s.UpdateConfigAsync("test-user-id", It.Is<UserConfiguration>(c => c.IsEnabled == true)), Times.Once);
     }
+
+    [Fact]
+    public async Task Preferences_FiltersOutDataOnlyExchanges()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+        var exchanges = new List<Exchange>
+        {
+            new() { Id = 1, Name = "Hyperliquid", IsActive = true, IsDataOnly = false },
+            new() { Id = 2, Name = "Lighter", IsActive = true, IsDataOnly = false },
+            new() { Id = 4, Name = "CoinGlass", IsActive = true, IsDataOnly = true },
+        };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync()).ReturnsAsync(exchanges);
+        _mockSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync("test-user-id")).ReturnsAsync(new List<int> { 1, 2 });
+        _mockSettings.Setup(s => s.GetActiveCredentialsAsync("test-user-id")).ReturnsAsync(new List<UserExchangeCredential>());
+        _mockSettings.Setup(s => s.GetAvailableAssetsAsync()).ReturnsAsync(new List<Asset>());
+        _mockSettings.Setup(s => s.GetUserEnabledAssetIdsAsync("test-user-id")).ReturnsAsync(new List<int>());
+
+        // Act
+        var result = await _controller.Preferences();
+
+        // Assert — CoinGlass (data-only) should NOT appear in the ViewModel
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<PreferencesViewModel>().Subject;
+        model.Exchanges.Should().HaveCount(2);
+        model.Exchanges.Should().NotContain(e => e.ExchangeName == "CoinGlass");
+    }
 }
