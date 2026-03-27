@@ -48,7 +48,7 @@ public class DashboardController : Controller
             // Anonymous path: show global opportunities and diagnostics only
             var bestSpreadAnon = allOpportunities.Count > 0
                 ? allOpportunities.Max(o => o.SpreadPerHour)
-                : result.Diagnostics.BestRawSpread;
+                : result.Diagnostics?.BestRawSpread ?? 0m;
 
             var anonVm = new DashboardViewModel
             {
@@ -120,7 +120,7 @@ public class DashboardController : Controller
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
             : opportunities.Count > 0
                 ? opportunities.Max(o => o.SpreadPerHour)
-                : result.Diagnostics.BestRawSpread;
+                : result.Diagnostics?.BestRawSpread ?? 0m;
 
         // Compute PnL progress for positions when adaptive hold is enabled
         var pnlProgress = new Dictionary<int, decimal>();

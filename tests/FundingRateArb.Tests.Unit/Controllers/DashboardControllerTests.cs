@@ -513,6 +513,54 @@ public class DashboardControllerTests
             "DashboardController must have a class-level [Authorize] attribute for defense-in-depth");
     }
 
+    // ── B1: null-safe Diagnostics access on anonymous path ─────────────────
+
+    [Fact]
+    public async Task Index_AnonymousUser_WhenDiagnosticsNull_DoesNotThrow()
+    {
+        // Arrange — unauthenticated user with null Diagnostics
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>(),
+                Diagnostics = null,
+            });
+
+        // Act — should not throw NullReferenceException
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.BestSpread.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task Index_AuthenticatedUser_WhenDiagnosticsNull_DoesNotThrow()
+    {
+        // Arrange — authenticated user (from constructor), null Diagnostics, no opportunities or positions
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>(),
+                Diagnostics = null,
+            });
+
+        // Act — should not throw NullReferenceException
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.BestSpread.Should().Be(0m);
+    }
+
     // ── Anonymous user: diagnostics not exposed ────────────────────────────
 
     [Fact]
