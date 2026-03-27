@@ -20,6 +20,7 @@ public interface IUserSettingsService
 
     // Preferences
     Task<List<Exchange>> GetAvailableExchangesAsync();
+    Task<List<int>> GetDataOnlyExchangeIdsAsync();
     Task<List<Asset>> GetAvailableAssetsAsync();
     Task<List<int>> GetUserEnabledExchangeIdsAsync(string userId);
     Task<List<int>> GetUserEnabledAssetIdsAsync(string userId);

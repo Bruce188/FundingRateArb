@@ -32,30 +32,51 @@ public class DashboardController : Controller
         _userSettings = userSettings;
     }
 
+    [AllowAnonymous]
     public async Task<IActionResult> Index(CancellationToken ct = default)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null)
-        {
-            return Unauthorized();
-        }
+        var isAuthenticated = userId is not null;
 
-        // Lazy initialization: ensure user has default settings on first visit
-        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
-        var enabledExchangeIdsForInit = await _userSettings.GetUserEnabledExchangeIdsAsync(userId);
-        if (enabledExchangeIdsForInit.Count == 0)
-        {
-            await _userSettings.InitializeDefaultsForNewUserAsync(userId);
-        }
-
+        // Fetch global data available to all users
+        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var allOpportunities = result.Opportunities;
         var botConfig = await _uow.BotConfig.GetActiveAsync();
+
+        if (!isAuthenticated)
+        {
+            // Anonymous path: show global opportunities and diagnostics only
+            var bestSpreadAnon = allOpportunities.Count > 0
+                ? allOpportunities.Max(o => o.SpreadPerHour)
+                : result.Diagnostics?.BestRawSpread ?? 0m;
+
+            var anonVm = new DashboardViewModel
+            {
+                IsAuthenticated = false,
+                BotEnabled = botConfig?.IsEnabled ?? false,
+                BestSpread = bestSpreadAnon,
+                Opportunities = allOpportunities,
+                Diagnostics = null,
+            };
+
+            return View(anonVm);
+        }
+
+        // Authenticated path: full dashboard with user-specific data
+        // Lazy initialization: ensure user has default settings on first visit
+        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
+        var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
+        if (enabledExchangeIds.Count == 0)
+        {
+            await _userSettings.InitializeDefaultsForNewUserAsync(userId!);
+            enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
+        }
+
         var allOpenPositions = await _uow.Positions.GetOpenAsync();
         var openPositions = User.IsInRole("Admin")
             ? allOpenPositions
             : allOpenPositions.Where(p => p.UserId == userId).ToList();
-        var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId, unreadOnly: true);
-        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-        var allOpportunities = result.Opportunities;
+        var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
 
         // Filter opportunities by user's enabled exchanges and assets (non-admin)
         List<ArbitrageOpportunityDto> opportunities;
@@ -65,12 +86,14 @@ public class DashboardController : Controller
         }
         else
         {
-            var enabledExchangeIds = (await _userSettings.GetUserEnabledExchangeIdsAsync(userId)).ToHashSet();
-            var enabledAssetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId)).ToHashSet();
+            var enabledExchangeIdSet = enabledExchangeIds.ToHashSet();
+            var dataOnlyExchangeIds = await _userSettings.GetDataOnlyExchangeIdsAsync();
+            enabledExchangeIdSet.UnionWith(dataOnlyExchangeIds);
+            var enabledAssetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId!)).ToHashSet();
 
             opportunities = allOpportunities
-                .Where(o => enabledExchangeIds.Contains(o.LongExchangeId)
-                         && enabledExchangeIds.Contains(o.ShortExchangeId))
+                .Where(o => enabledExchangeIdSet.Contains(o.LongExchangeId)
+                         && enabledExchangeIdSet.Contains(o.ShortExchangeId))
                 .Where(o => enabledAssetIds.Contains(o.AssetId))
                 .ToList();
         }
@@ -97,7 +120,7 @@ public class DashboardController : Controller
             ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
             : opportunities.Count > 0
                 ? opportunities.Max(o => o.SpreadPerHour)
-                : result.Diagnostics.BestRawSpread;
+                : result.Diagnostics?.BestRawSpread ?? 0m;
 
         // Compute PnL progress for positions when adaptive hold is enabled
         var pnlProgress = new Dictionary<int, decimal>();
@@ -123,6 +146,7 @@ public class DashboardController : Controller
 
         var vm = new DashboardViewModel
         {
+            IsAuthenticated = true,
             BotEnabled = botConfig?.IsEnabled ?? false,
             OpenPositionCount = openPositions.Count,
             TotalPnl = totalPnl,

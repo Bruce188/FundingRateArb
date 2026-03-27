@@ -171,4 +171,89 @@ public class SettingsControllerTests
         redirect.ActionName.Should().Be("Configuration");
         _controller.TempData["Error"].Should().Be("No global configuration found. Cannot reset to defaults.");
     }
+
+    [Fact]
+    public async Task Configuration_Post_WithDefaultValues_Succeeds()
+    {
+        // Arrange — simulate a new user POSTing with entity default values
+        SetupAuthenticatedUser();
+        var config = new UserConfiguration { UserId = "test-user-id" };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        // Build a ViewModel with all the entity defaults
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 39m,
+            MaxCapitalPerPosition = 0.90m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.10m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12m,
+            MinPositionSizeUsdc = 5m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.08m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+        };
+
+        // Act
+        var result = await _controller.Configuration(model);
+
+        // Assert — should redirect to Configuration (success), not return View (validation failure)
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("Configuration");
+        _mockSettings.Verify(s => s.UpdateConfigAsync("test-user-id", It.IsAny<UserConfiguration>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Configuration_Post_WithOnlyIsEnabledChanged_Succeeds()
+    {
+        // Arrange — simulate toggling the "Enable my bot" switch with all other defaults
+        SetupAuthenticatedUser();
+        var config = new UserConfiguration { UserId = "test-user-id" };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = true, // changed from default false
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 39m,
+            MaxCapitalPerPosition = 0.90m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.10m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12m,
+            MinPositionSizeUsdc = 5m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.08m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+        };
+
+        // Act
+        var result = await _controller.Configuration(model);
+
+        // Assert — should succeed
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("Configuration");
+        _mockSettings.Verify(s => s.UpdateConfigAsync("test-user-id", It.Is<UserConfiguration>(c => c.IsEnabled == true)), Times.Once);
+    }
 }

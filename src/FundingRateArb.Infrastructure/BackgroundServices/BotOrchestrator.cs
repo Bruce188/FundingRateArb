@@ -249,11 +249,14 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var capitalExhaustedKeys = new HashSet<string>();
         var maxPositionsKeys = new HashSet<string>();
 
+        // Fetch data-only exchange IDs once per cycle (same for all users)
+        var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
+
         foreach (var userId in enabledUserIds)
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
             }
             catch (Exception ex)
             {
@@ -277,6 +280,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         ISignalEngine signalEngine,
         IExecutionEngine executionEngine,
         IUserSettingsService userSettings,
+        HashSet<int> dataOnlyExchangeIds,
         HashSet<string> openedOppKeys,
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
@@ -303,9 +307,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var enabledExchangeSet = enabledExchangeIds.ToHashSet();
         var enabledAssetSet = enabledAssetIds.ToHashSet();
 
-        // Filter global opportunities to user's preferences
+        // Filter global opportunities to user's preferences, excluding data-only exchanges
         var userOpportunities = allOpportunities
             .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
+            .Where(o => !dataOnlyExchangeIds.Contains(o.LongExchangeId) && !dataOnlyExchangeIds.Contains(o.ShortExchangeId))
             .Where(o => enabledAssetSet.Contains(o.AssetId))
             .Where(o => o.NetYieldPerHour >= userConfig.OpenThreshold)
             .ToList();

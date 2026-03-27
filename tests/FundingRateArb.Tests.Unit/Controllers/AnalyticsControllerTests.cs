@@ -195,7 +195,7 @@ public class AnalyticsControllerTests
         jsonResult.StatusCode.Should().Be(403);
     }
 
-    // ── NB7: RateAnalytics view Forbid for out-of-scope asset ────
+    // ── RateAnalytics view Forbid for out-of-scope asset ────
 
     [Fact]
     public async Task RateAnalytics_NormalUser_OutOfScopeAsset_ReturnsForbid()
@@ -208,7 +208,7 @@ public class AnalyticsControllerTests
         result.Should().BeOfType<ForbidResult>();
     }
 
-    // ── NB5: Correlation scope enforcement ───────────────────────
+    // ── Correlation scope enforcement ───────────────────────
 
     [Fact]
     public async Task Correlation_OutOfScopeAsset_ReturnsForbid()
@@ -244,7 +244,7 @@ public class AnalyticsControllerTests
         model.Correlations[0].Exchange2.Should().Be("Hyperliquid");
     }
 
-    // ── NB6: ZScoreAlerts tests ─────────────────────────────────
+    // ── ZScoreAlerts tests ─────────────────────────────────
 
     [Fact]
     public async Task ZScoreAlerts_AdminUser_ReturnsUnfilteredAlerts()
@@ -301,7 +301,7 @@ public class AnalyticsControllerTests
         _mockRateAnalytics.Verify(s => s.GetZScoreAlertsAsync(10.0m, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // ── Index KPI tests (NB3) ───────────────────────────────────
+    // ── Index KPI tests ───────────────────────────────────
 
     [Fact]
     public async Task Index_WithClosedPositions_PopulatesKPIs()
@@ -353,7 +353,7 @@ public class AnalyticsControllerTests
         vm.PerAsset.Should().HaveCount(2);
         vm.PerExchangePair.Should().HaveCount(2);
 
-        // NB4: Assert specific PerAsset AvgPnl and WinRate values
+        // Assert specific PerAsset AvgPnl and WinRate values
         // ETH: PnL = 5, trades = 2, wins = 1 -> AvgPnl = 2.5, WinRate = 0.5
         var eth = vm.PerAsset.First(a => a.AssetSymbol == "ETH");
         eth.TotalPnl.Should().Be(5m);
@@ -433,9 +433,9 @@ public class AnalyticsControllerTests
         _mockPositionRepo.Verify(r => r.GetPerExchangePairKpiAsync(It.IsAny<DateTime>(), "test-user-id", It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // ── PassedOpportunities tests (NB4) ─────────────────────────
+    // ── PassedOpportunities tests ─────────────────────────
 
-    // ── NB6: 7d/30d PnL window filtering ───────────────────────
+    // ── 7d/30d PnL window filtering ───────────────────────
 
     [Fact]
     public async Task Index_PnlWindowFiltering_ReflectsSqlAggregateWindows()
@@ -468,7 +468,7 @@ public class AnalyticsControllerTests
         vm.TotalRealizedPnl.Should().Be(80m);
     }
 
-    // ── PassedOpportunities tests (NB4) ─────────────────────────
+    // ── PassedOpportunities tests ─────────────────────────
 
     [Fact]
     public async Task PassedOpportunities_PopulatesSkipReasonStats()
@@ -542,7 +542,7 @@ public class AnalyticsControllerTests
         vm.SkipReasons[0].Reason.Should().Be("cooldown");
     }
 
-    // ── NB5: Parameter clamping tests ───────────────────────────
+    // ── Parameter clamping tests ───────────────────────────
 
     [Theory]
     [InlineData(0, 1)]      // days=0 → clamps to 1
@@ -632,7 +632,7 @@ public class AnalyticsControllerTests
             It.IsAny<DateTime>(), It.IsAny<DateTime>(), 0, expectedTake, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // ── N4: Null RealizedPnl exclusion ──────────────────────────
+    // ── Null RealizedPnl exclusion ──────────────────────────
 
     [Fact]
     public async Task Index_NullRealizedPnl_ExcludedFromKPIs()
@@ -791,7 +791,7 @@ public class AnalyticsControllerTests
         vm.AvgHoldTimeHours.Should().Be(5m);
     }
 
-    // ── NB7: ClosedAt=null edge case ─────────────────────────────
+    // ── ClosedAt=null edge case ─────────────────────────────
 
     [Fact]
     public async Task Index_ClosedAtNull_UsesZeroFallbackForHoldTime()

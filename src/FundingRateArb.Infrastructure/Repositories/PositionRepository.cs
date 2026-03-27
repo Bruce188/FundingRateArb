@@ -10,7 +10,7 @@ namespace FundingRateArb.Infrastructure.Repositories;
 public class PositionRepository : IPositionRepository
 {
     /// <summary>Maximum number of grouped results returned by per-asset/per-exchange KPI queries.</summary>
-    private const int MaxGroupResults = 100;
+    internal const int MaxGroupResults = 100;
 
     /// <summary>Maximum number of rows fetched for hold-time computation. Caps memory usage for large date windows.</summary>
     private const int MaxHoldDataRows = 10_000;

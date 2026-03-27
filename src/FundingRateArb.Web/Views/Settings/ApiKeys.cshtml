@@ -79,21 +79,40 @@ else
                             }
                             else
                             {
-                                @* DEX-style: Wallet Address + Private Key (e.g. Lighter, HyperLiquid) *@
+                                @* DEX-style: Wallet Address / Account Index + Private Key *@
                                 <div class="mb-3">
-                                    <label class="form-label fw-semibold">Wallet Address</label>
-                                    @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                    @if (string.Equals(exchange.ExchangeName, "Lighter", StringComparison.OrdinalIgnoreCase))
                                     {
-                                        <div class="input-group mb-1">
-                                            <span class="input-group-text bg-light text-muted font-monospace small">
-                                                @exchange.MaskedWalletAddress
-                                            </span>
-                                        </div>
-                                        <div class="form-text">Leave blank to keep the existing address.</div>
+                                        <label class="form-label fw-semibold">Account Index</label>
+                                        @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                        {
+                                            <div class="input-group mb-1">
+                                                <span class="input-group-text bg-light text-muted font-monospace small">
+                                                    @exchange.MaskedWalletAddress
+                                                </span>
+                                            </div>
+                                            <div class="form-text">Leave blank to keep the existing account index.</div>
+                                        }
+                                        <input type="password" class="form-control" name="walletAddress"
+                                               autocomplete="new-password"
+                                               placeholder="@(exchange.IsConfigured ? "Enter new account index to replace" : "Enter your numeric account index (e.g. 12345)")" />
                                     }
-                                    <input type="password" class="form-control" name="walletAddress"
-                                           autocomplete="new-password"
-                                           placeholder="@(exchange.IsConfigured ? "Enter new wallet address to replace" : "Enter wallet address (0x...)")" />
+                                    else
+                                    {
+                                        <label class="form-label fw-semibold">Wallet Address</label>
+                                        @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                        {
+                                            <div class="input-group mb-1">
+                                                <span class="input-group-text bg-light text-muted font-monospace small">
+                                                    @exchange.MaskedWalletAddress
+                                                </span>
+                                            </div>
+                                            <div class="form-text">Leave blank to keep the existing address.</div>
+                                        }
+                                        <input type="password" class="form-control" name="walletAddress"
+                                               autocomplete="new-password"
+                                               placeholder="@(exchange.IsConfigured ? "Enter new wallet address to replace" : "Enter wallet address (0x...)")" />
+                                    }
                                 </div>
                                 <div class="mb-3">
                                     <label class="form-label fw-semibold">Private Key</label>

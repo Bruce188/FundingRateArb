@@ -125,6 +125,8 @@ public class BotOrchestratorTests
             .ReturnsAsync(new List<int> { 1, 2, 3 });
         _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
             .ReturnsAsync(new List<int> { 1, 2, 3, 4, 5 });
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int>());
 
         // Wire hub — Clients.All for dashboard/position/notification broadcasts
         _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
@@ -1118,5 +1120,38 @@ public class BotOrchestratorTests
 
         alertPushed.Should().BeTrue(
             "_lastAlertPushUtc initialized to UtcNow.AddMinutes(-5) should catch alerts created 3 min ago");
+    }
+
+    // ── Data-only exchange filtering ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteUserCycle_OpportunityWithDataOnlyExchange_Skipped()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        // CoinGlass (id=4) is data-only
+        _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int> { 4 });
+
+        // Opportunity pairs exchange 1 (tradeable) with exchange 4 (data-only)
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 4, // CoinGlass — data-only
+            NetYieldPerHour = 0.01m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Execution engine should NOT be called — data-only exchange opportunities are skipped
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

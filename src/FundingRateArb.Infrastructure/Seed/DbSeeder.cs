@@ -120,7 +120,7 @@ public static class DbSeeder
                 FundingIntervalHours = 8,
                 SupportsSubAccounts = false,
                 IsActive = true,
-                // Data-only source: cannot be used for trading. CreateForUserAsync throws NotSupportedException.
+                IsDataOnly = true,
                 Description = "CoinGlass aggregator — read-only funding rate data source. Not a trading venue."
             }
         );

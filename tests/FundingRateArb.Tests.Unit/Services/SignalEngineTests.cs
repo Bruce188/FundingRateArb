@@ -545,8 +545,8 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.TotalRatesLoaded.Should().Be(0);
-        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Diagnostics!.TotalRatesLoaded.Should().Be(0);
+        result.Diagnostics!.PairsPassing.Should().Be(0);
         result.Opportunities.Should().BeEmpty();
     }
 
@@ -566,9 +566,9 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
-        result.Diagnostics.RatesAfterStalenessFilter.Should().Be(0);
-        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Diagnostics!.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics!.RatesAfterStalenessFilter.Should().Be(0);
+        result.Diagnostics!.PairsPassing.Should().Be(0);
         result.Opportunities.Should().BeEmpty();
     }
 
@@ -588,9 +588,9 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.TotalPairsEvaluated.Should().Be(1);
-        result.Diagnostics.PairsFilteredByVolume.Should().Be(1);
-        result.Diagnostics.PairsPassing.Should().Be(0);
+        result.Diagnostics!.TotalPairsEvaluated.Should().Be(1);
+        result.Diagnostics!.PairsFilteredByVolume.Should().Be(1);
+        result.Diagnostics!.PairsPassing.Should().Be(0);
         result.Opportunities.Should().BeEmpty();
     }
 
@@ -612,9 +612,9 @@ public class SignalEngineTests
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
         // Net yield is positive but below threshold — goes to NetPositiveBelowThreshold
-        (result.Diagnostics.PairsFilteredByThreshold + result.Diagnostics.NetPositiveBelowThreshold).Should().BeGreaterThan(0);
-        result.Diagnostics.BestRawSpread.Should().BeGreaterThan(0);
-        result.Diagnostics.PairsPassing.Should().Be(0);
+        (result.Diagnostics!.PairsFilteredByThreshold + result.Diagnostics!.NetPositiveBelowThreshold).Should().BeGreaterThan(0);
+        result.Diagnostics!.BestRawSpread.Should().BeGreaterThan(0);
+        result.Diagnostics!.PairsPassing.Should().Be(0);
         result.Opportunities.Should().BeEmpty();
     }
 
@@ -634,11 +634,11 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
-        result.Diagnostics.RatesAfterStalenessFilter.Should().Be(2);
-        result.Diagnostics.TotalPairsEvaluated.Should().Be(1);
-        result.Diagnostics.PairsFilteredByVolume.Should().Be(0);
-        result.Diagnostics.PairsPassing.Should().Be(1);
+        result.Diagnostics!.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics!.RatesAfterStalenessFilter.Should().Be(2);
+        result.Diagnostics!.TotalPairsEvaluated.Should().Be(1);
+        result.Diagnostics!.PairsFilteredByVolume.Should().Be(0);
+        result.Diagnostics!.PairsPassing.Should().Be(1);
         result.Opportunities.Should().HaveCount(1);
     }
 
@@ -657,9 +657,9 @@ public class SignalEngineTests
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        result.Diagnostics.StalenessMinutes.Should().Be(20);
-        result.Diagnostics.MinVolumeThreshold.Should().Be(75_000m);
-        result.Diagnostics.OpenThreshold.Should().Be(0.0005m);
+        result.Diagnostics!.StalenessMinutes.Should().Be(20);
+        result.Diagnostics!.MinVolumeThreshold.Should().Be(75_000m);
+        result.Diagnostics!.OpenThreshold.Should().Be(0.0005m);
     }
 
     // ── AllNetPositive tests ──────────────────────────────────────────────
@@ -686,7 +686,7 @@ public class SignalEngineTests
         result.Opportunities.Should().BeEmpty();
         result.AllNetPositive.Should().HaveCount(1);
         result.AllNetPositive[0].NetYieldPerHour.Should().BeGreaterThan(0);
-        result.Diagnostics.NetPositiveBelowThreshold.Should().Be(1);
+        result.Diagnostics!.NetPositiveBelowThreshold.Should().Be(1);
     }
 
     [Fact]
@@ -729,7 +729,7 @@ public class SignalEngineTests
 
         result.Opportunities.Should().BeEmpty();
         result.AllNetPositive.Should().BeEmpty();
-        result.Diagnostics.PairsFilteredByThreshold.Should().BeGreaterThan(0);
+        result.Diagnostics!.PairsFilteredByThreshold.Should().BeGreaterThan(0);
     }
 
     // ── Funding window boost tests ─────────────────────────────────────────
@@ -877,8 +877,8 @@ public class SignalEngineTests
 
         // Diagnostics should show rates were loaded but 0 pairs evaluated
         // (each asset group has only 1 rate, so inner loop never runs)
-        result.Diagnostics.TotalRatesLoaded.Should().Be(2);
-        result.Diagnostics.TotalPairsEvaluated.Should().Be(0);
+        result.Diagnostics!.TotalRatesLoaded.Should().Be(2);
+        result.Diagnostics!.TotalPairsEvaluated.Should().Be(0);
     }
 
     // ── F5: Prediction integration tests ──────────────────────────────────────
