@@ -1124,8 +1124,10 @@ public class BotOrchestratorTests
 
     // ── Data-only exchange filtering ─────────────────────────────────────────
 
-    [Fact]
-    public async Task ExecuteUserCycle_OpportunityWithDataOnlyExchange_Skipped()
+    [Theory]
+    [InlineData(4, 2)]  // data-only on Long side
+    [InlineData(2, 4)]  // data-only on Short side
+    public async Task ExecuteUserCycle_OpportunityWithDataOnlyExchange_Skipped(int longExchangeId, int shortExchangeId)
     {
         SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
@@ -1135,13 +1137,13 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
             .ReturnsAsync(new List<int> { 4 });
 
-        // Opportunity pairs exchange 1 (tradeable) with exchange 4 (data-only)
+        // Opportunity pairs a tradeable exchange with a data-only one
         var opp = new ArbitrageOpportunityDto
         {
             AssetId = 1,
             AssetSymbol = "ETH",
-            LongExchangeId = 1,
-            ShortExchangeId = 4, // CoinGlass — data-only
+            LongExchangeId = longExchangeId,
+            ShortExchangeId = shortExchangeId,
             NetYieldPerHour = 0.01m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))

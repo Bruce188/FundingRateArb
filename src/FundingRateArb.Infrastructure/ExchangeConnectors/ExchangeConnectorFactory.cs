@@ -101,13 +101,15 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         string? apiKey,
         string? apiSecret,
         string? walletAddress,
-        string? privateKey)
+        string? privateKey,
+        string? subAccountAddress = null,
+        string? apiKeyIndex = null)
     {
         IExchangeConnector? connector = exchangeName.ToLowerInvariant() switch
         {
-            "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey),
+            "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey, subAccountAddress),
             "aster" => CreateAsterConnector(apiKey, apiSecret),
-            "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKey),
+            "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
             "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
         };
@@ -129,7 +131,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         }
     }
 
-    private HyperliquidConnector? CreateHyperliquidConnector(string? walletAddress, string? privateKey)
+    private HyperliquidConnector? CreateHyperliquidConnector(string? walletAddress, string? privateKey, string? subAccountAddress)
     {
         if (string.IsNullOrEmpty(walletAddress) || string.IsNullOrEmpty(privateKey))
         {
@@ -142,7 +144,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
-        return new HyperliquidConnector(restClient, pipelineProvider);
+        return new HyperliquidConnector(restClient, pipelineProvider, subAccountAddress);
     }
 
     private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
@@ -215,11 +217,12 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     }
 
     /// <summary>
-    /// Masks a credential value for safe logging — shows first 4 and last 4 characters.
+    /// Masks a credential value for safe logging. Fully masks short values;
+    /// shows first 4 and last 4 characters only for values longer than 12 characters.
     /// </summary>
     private static string MaskValue(string value)
     {
-        if (value.Length <= 8)
+        if (value.Length <= 12)
         {
             return new string('*', value.Length);
         }

@@ -59,7 +59,8 @@ public class BalanceAggregator : IBalanceAggregator
             var decrypted = _userSettings.DecryptCredential(cred);
             var connector = await _connectorFactory.CreateForUserAsync(
                 exchangeName, decrypted.ApiKey, decrypted.ApiSecret,
-                decrypted.WalletAddress, decrypted.PrivateKey);
+                decrypted.WalletAddress, decrypted.PrivateKey,
+                decrypted.SubAccountAddress, decrypted.ApiKeyIndex);
 
             if (connector is null)
             {

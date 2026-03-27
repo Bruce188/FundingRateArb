@@ -15,6 +15,8 @@ public class UserExchangeCredentialConfiguration : IEntityTypeConfiguration<User
         builder.Property(c => c.EncryptedApiSecret).HasMaxLength(2000);
         builder.Property(c => c.EncryptedWalletAddress).HasMaxLength(2000);
         builder.Property(c => c.EncryptedPrivateKey).HasMaxLength(2000);
+        builder.Property(c => c.EncryptedSubAccountAddress).HasMaxLength(2000);
+        builder.Property(c => c.EncryptedApiKeyIndex).HasMaxLength(2000);
 
         builder.HasIndex(c => new { c.UserId, c.ExchangeId }).IsUnique();
 

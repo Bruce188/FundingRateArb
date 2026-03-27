@@ -10,6 +10,7 @@ using FundingRateArb.Web.Controllers;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -26,6 +27,7 @@ public class DashboardControllerTests
     private readonly Mock<ISignalEngine> _mockSignalEngine;
     private readonly Mock<IBotControl> _mockBotControl;
     private readonly Mock<IUserSettingsService> _mockUserSettings;
+    private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
     public DashboardControllerTests()
@@ -58,6 +60,8 @@ public class DashboardControllerTests
             .ReturnsAsync(new BotConfiguration { IsEnabled = false });
         _mockPositionRepo.Setup(r => r.GetOpenAsync())
             .ReturnsAsync([]);
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync(It.IsAny<string>()))
+            .ReturnsAsync([]);
         _mockFundingRateRepo.Setup(r => r.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync([]);
         _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
@@ -65,7 +69,9 @@ public class DashboardControllerTests
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FundingRateArb.Application.DTOs.OpportunityResultDto());
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object);
+        _cache = new MemoryCache(new MemoryCacheOptions());
+
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -105,7 +111,7 @@ public class DashboardControllerTests
                 SizeUsdc = 150m, CurrentSpreadPerHour = 0.002m
             }
         };
-        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync(positions);
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id")).ReturnsAsync(positions);
 
         // Act
         var result = await _controller.Index();
@@ -237,7 +243,7 @@ public class DashboardControllerTests
         // Arrange — both exchanges are Lighter (fee = 0), so target = 0, division skipped
         _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
-        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id"))
             .ReturnsAsync(new List<ArbitragePosition>
             {
                 new()
@@ -269,7 +275,7 @@ public class DashboardControllerTests
         // progress = 0.45 / 0.9 = 0.5
         _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
-        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id"))
             .ReturnsAsync(new List<ArbitragePosition>
             {
                 new()
@@ -298,7 +304,7 @@ public class DashboardControllerTests
         // Arrange — AdaptiveHoldEnabled but position has zero accumulated funding
         _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
-        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id"))
             .ReturnsAsync(new List<ArbitragePosition>
             {
                 new()
@@ -329,7 +335,7 @@ public class DashboardControllerTests
         // raw progress = 10.0 / 0.9 ≈ 11.1 → capped to 2.0
         _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration { AdaptiveHoldEnabled = true, TargetPnlMultiplier = 2.0m });
-        _mockPositionRepo.Setup(r => r.GetOpenAsync())
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id"))
             .ReturnsAsync(new List<ArbitragePosition>
             {
                 new()
@@ -592,5 +598,77 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.Diagnostics.Should().BeNull(
             "anonymous users must not see pipeline diagnostics containing strategy parameters");
+    }
+
+    // ── NB2: BotEnabled hardcoded to false for anonymous ─────────────────
+
+    [Fact]
+    public async Task Index_AnonymousUser_BotEnabledIsFalse()
+    {
+        // Arrange — unauthenticated user with bot enabled globally
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { IsEnabled = true });
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — BotEnabled must be false regardless of global config
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.BotEnabled.Should().BeFalse("anonymous users must never see bot status");
+    }
+
+    // ── NB1: Anonymous path caches opportunity result ────────────────────
+
+    [Fact]
+    public async Task Index_AnonymousUser_SecondCall_UsesCachedOpportunities()
+    {
+        // Arrange — unauthenticated user
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext { User = anonUser }
+        };
+
+        var opportunities = new List<ArbitrageOpportunityDto>
+        {
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SpreadPerHour = 0.005m }
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = opportunities });
+
+        // Act — call twice
+        await _controller.Index();
+        await _controller.Index();
+
+        // Assert — signal engine should only be called once (second call uses cache)
+        _mockSignalEngine.Verify(
+            s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── NB4: Non-admin uses GetOpenByUserAsync ──────────────────────────
+
+    [Fact]
+    public async Task Index_AuthenticatedNonAdmin_UsesGetOpenByUserAsync()
+    {
+        // Arrange — authenticated non-admin user (from constructor setup)
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — should call GetOpenByUserAsync, not GetOpenAsync
+        _mockPositionRepo.Verify(r => r.GetOpenByUserAsync("test-user-id"), Times.Once);
+        _mockPositionRepo.Verify(r => r.GetOpenAsync(), Times.Never);
     }
 }

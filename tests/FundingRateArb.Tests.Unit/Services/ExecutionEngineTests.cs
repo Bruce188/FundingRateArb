@@ -66,13 +66,13 @@ public class ExecutionEngineTests
             .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
-            .Returns(("key", "secret", "wallet", "pk"));
+            .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockLongConnector.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockShortConnector.Object);
 
         // Default: both exchanges have ample balance for pre-flight margin check
@@ -1244,10 +1244,10 @@ public class ExecutionEngineTests
         // Credentials exist but factory returns null for long exchange.
         // Set up both exchanges explicitly so test doesn't depend on execution order.
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockShortConnector.Object);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
@@ -1256,7 +1256,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Hyperliquid");
         // Verify the long connector factory was called
         _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1293,10 +1293,10 @@ public class ExecutionEngineTests
         // Credentials exist but factory returns null for long exchange.
         // Set up both exchanges explicitly so test doesn't depend on execution order.
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockShortConnector.Object);
 
         await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
@@ -1306,7 +1306,7 @@ public class ExecutionEngineTests
 
         // Verify the long connector factory was called
         _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
 
         // A critical alert must be created
         _mockAlerts.Verify(
@@ -1372,13 +1372,13 @@ public class ExecutionEngineTests
             .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableLong.Object);
 
         // DecryptCredential succeeds for long (ExchangeId=1) but throws for short (ExchangeId=2)
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
-            .Returns(("key", "secret", "wallet", "pk"));
+            .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 2)))
             .Throws(new System.Security.Cryptography.CryptographicException("Corrupt short key"));
@@ -1406,7 +1406,7 @@ public class ExecutionEngineTests
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockFactory.Verify(f => f.CreateForUserAsync(
-            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Theory]
@@ -1446,10 +1446,10 @@ public class ExecutionEngineTests
             .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableShort.Object);
 
         mockDisposableLong
@@ -1483,10 +1483,10 @@ public class ExecutionEngineTests
             .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableShort.Object);
 
         mockDisposableLong
@@ -1516,7 +1516,7 @@ public class ExecutionEngineTests
     {
         // CreateForUserAsync throws (not returns null) for long exchange
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ThrowsAsync(new HttpRequestException("Exchange SDK initialization failed"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
@@ -1553,9 +1553,9 @@ public class ExecutionEngineTests
         result.Success.Should().BeTrue();
         // Verify connectors were created (credentials matched despite different casing)
         _mockFactory.Verify(f => f.CreateForUserAsync("Hyperliquid",
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         _mockFactory.Verify(f => f.CreateForUserAsync("Lighter",
-            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
     }
 
     // ── B2: CoinGlass guard in CreateForUserAsync ─────────────────────────────
@@ -1585,7 +1585,7 @@ public class ExecutionEngineTests
             .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("CoinGlass", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("CoinGlass", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ThrowsAsync(new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, opp, 100m, CancellationToken.None);
@@ -1627,10 +1627,10 @@ public class ExecutionEngineTests
             .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableShort.Object);
 
         mockDisposableLong
@@ -1675,10 +1675,10 @@ public class ExecutionEngineTests
             .Setup(d => d.DisposeAsync()).Returns(ValueTask.CompletedTask);
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockDisposableShort.Object);
 
         mockDisposableLong
@@ -1710,5 +1710,32 @@ public class ExecutionEngineTests
 
         mockDisposableLong.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
         mockDisposableShort.As<IAsyncDisposable>().Verify(d => d.DisposeAsync(), Times.Once);
+    }
+
+    // ── DEX credential pipeline: SubAccountAddress + ApiKeyIndex ────
+
+    [Fact]
+    public async Task CreateUserConnectors_PassesSubAccountAndApiKeyIndex()
+    {
+        // Arrange — DecryptCredential returns all 6 fields
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 1)))
+            .Returns(("key", "secret", "wallet", "pk", "0xSubAccount", (string?)null));
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 2)))
+            .Returns(("key2", "secret2", "wallet2", "pk2", (string?)null, "42"));
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert — verify factory received the subAccountAddress and apiKeyIndex
+        _mockFactory.Verify(f => f.CreateForUserAsync(
+            "Hyperliquid",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            "0xSubAccount", It.IsAny<string?>()), Times.Once);
+        _mockFactory.Verify(f => f.CreateForUserAsync(
+            "Lighter",
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), "42"), Times.Once);
     }
 }

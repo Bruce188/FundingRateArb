@@ -6,12 +6,14 @@ public interface IUserSettingsService
 {
     // Credentials
     Task SaveCredentialAsync(string userId, int exchangeId,
-        string? apiKey, string? apiSecret, string? walletAddress, string? privateKey);
+        string? apiKey, string? apiSecret, string? walletAddress, string? privateKey,
+        string? subAccountAddress = null, string? apiKeyIndex = null);
     Task<UserExchangeCredential?> GetCredentialAsync(string userId, int exchangeId);
     Task<List<UserExchangeCredential>> GetActiveCredentialsAsync(string userId);
     Task<List<UserExchangeCredential>> GetAllCredentialsAsync(string userId);
     Task DeleteCredentialAsync(string userId, int exchangeId);
-    (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey) DecryptCredential(
+    (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey,
+        string? SubAccountAddress, string? ApiKeyIndex) DecryptCredential(
         UserExchangeCredential credential);
 
     // Configuration
