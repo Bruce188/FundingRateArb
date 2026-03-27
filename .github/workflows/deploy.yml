@@ -12,6 +12,7 @@ permissions:
 env:
   DOTNET_VERSION: '8.0.x'
   APP_NAME: 'fundingratearb'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-and-test:

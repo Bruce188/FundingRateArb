@@ -1064,6 +1064,24 @@ public class ExchangeConnectorFactoryTests
     }
 
     [Theory]
+    [InlineData("1")]
+    [InlineData("255")]
+    [InlineData("0")]
+    [InlineData("999")]
+    public async Task CreateForUser_Lighter_WithOutOfRangeApiKeyIndex_ReturnsNull(string apiKeyIndex)
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "lighter", apiKey: null, apiSecret: null,
+            walletAddress: "12345", privateKey: "0xprivatekey",
+            apiKeyIndex: apiKeyIndex);
+
+        connector.Should().BeNull(
+            $"apiKeyIndex={apiKeyIndex} is outside the valid range 2-254 and should be rejected");
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     public void GetAccountIndex_WithNullOrEmpty_Throws(string? indexValue)

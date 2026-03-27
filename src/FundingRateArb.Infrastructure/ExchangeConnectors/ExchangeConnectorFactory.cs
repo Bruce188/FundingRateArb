@@ -181,6 +181,15 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         if (!string.IsNullOrEmpty(apiKeyIndex))
         {
+            if (!int.TryParse(apiKeyIndex, out var idx) || idx < 2 || idx > 254)
+            {
+                var masked = MaskValue(apiKeyIndex);
+                _logger.LogWarning(
+                    "Lighter API Key Index must be an integer between 2 and 254 but received '{MaskedValue}'",
+                    masked);
+                return null;
+            }
+
             configData["Exchanges:Lighter:ApiKey"] = apiKeyIndex;
         }
 

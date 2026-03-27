@@ -68,7 +68,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
             {
-                _logger.LogCritical("Position #{Id} has zero entry prices — stop-loss check disabled, skipping", pos.Id);
+                if (_logger.IsEnabled(LogLevel.Critical))
+                {
+                    _logger.LogCritical("Position #{Id} has zero entry prices — stop-loss check disabled, skipping", pos.Id);
+                }
                 continue;
             }
 
@@ -185,9 +188,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 continue;
             }
 
-            _logger.LogCritical(
-                "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
-                status, pos.Id, pos.Asset?.Symbol ?? "?", referenceTime);
+            if (_logger.IsEnabled(LogLevel.Critical))
+            {
+                _logger.LogCritical(
+                    "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
+                    status, pos.Id, pos.Asset?.Symbol ?? "?", referenceTime);
+            }
 
             pos.Status = PositionStatus.EmergencyClosed;
             _uow.Positions.Update(pos);

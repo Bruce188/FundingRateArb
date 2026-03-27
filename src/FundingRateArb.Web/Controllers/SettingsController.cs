@@ -81,10 +81,15 @@ public class SettingsController : Controller
             TempData["Error"] = "Credential value exceeds maximum allowed length.";
             return RedirectToAction(nameof(ApiKeys));
         }
-        if (string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrEmpty(apiKey))
+        foreach (var (name, value) in new[] {
+            ("API key", apiKey), ("API secret", apiSecret), ("Wallet address", walletAddress),
+            ("Private key", privateKey), ("Sub-account address", subAccountAddress), ("API key index", apiKeyIndex) })
         {
-            TempData["Error"] = "API key cannot be whitespace only.";
-            return RedirectToAction(nameof(ApiKeys));
+            if (string.IsNullOrWhiteSpace(value) && !string.IsNullOrEmpty(value))
+            {
+                TempData["Error"] = $"{name} cannot be whitespace only.";
+                return RedirectToAction(nameof(ApiKeys));
+            }
         }
 
         await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex);

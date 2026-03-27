@@ -490,6 +490,88 @@ public class HyperliquidConnectorTests
         balance.Should().Be(250.50m);
     }
 
+    [Fact]
+    public async Task GetAvailableBalance_WithVaultAddress_PassesVaultToApi()
+    {
+        // Arrange — connector with vault address set
+        var vaultConnector = new HyperliquidConnector(
+            _mockRestClient.Object, _mockPipelineProvider.Object, vaultAddress: "0xVaultAddr123");
+
+        var accountInfo = new HyperLiquidFuturesAccount { Withdrawable = 500m };
+        var successResult = new WebCallResult<HyperLiquidFuturesAccount>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            accountInfo,
+            null);
+
+        string? capturedUser = null;
+        _mockAccount
+            .Setup(a => a.GetAccountInfoAsync(
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string?, string?, CancellationToken>((user, sub, ct) => capturedUser = user)
+            .ReturnsAsync(successResult);
+
+        // Act
+        await vaultConnector.GetAvailableBalanceAsync();
+
+        // Assert — vault address must be passed to GetAccountInfoAsync
+        capturedUser.Should().Be("0xVaultAddr123",
+            "when _vaultAddress is set, it should be passed to GetAccountInfoAsync so balance reflects the sub-account");
+    }
+
+    [Fact]
+    public async Task ClosePosition_WithVaultAddress_PassesVaultToPlaceOrder()
+    {
+        // Arrange — connector with vault address set
+        var vaultConnector = new HyperliquidConnector(
+            _mockRestClient.Object, _mockPipelineProvider.Object, vaultAddress: "0xVaultAddr123");
+
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
+        SetupExchangeInfoSuccess(tickers);
+
+        string? capturedVaultAddress = null;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, HyperLiquid.Net.Enums.OrderSide, HyperLiquid.Net.Enums.OrderType,
+                      decimal, decimal, HyperLiquid.Net.Enums.TimeInForce?, bool?, string?,
+                      decimal?, HyperLiquid.Net.Enums.TpSlType?, HyperLiquid.Net.Enums.TpSlGrouping?,
+                      string?, DateTime?, CancellationToken>(
+                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
+                {
+                    capturedVaultAddress = vault;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
+            {
+                OrderId = 1L,
+                FilledQuantity = 0.1m,
+                AveragePrice = 3000m
+            }));
+
+        // Act
+        await vaultConnector.ClosePositionAsync("ETH", Side.Long);
+
+        // Assert — vault address must be passed to PlaceOrderAsync
+        capturedVaultAddress.Should().Be("0xVaultAddr123",
+            "ClosePositionAsync must pass _vaultAddress to the order call");
+    }
+
     // ── Private Helpers ───────────────────────────────────────────────────────
 
     private static HyperLiquidFuturesTicker CreateTicker(

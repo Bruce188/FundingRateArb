@@ -47,11 +47,12 @@ public class DashboardController : Controller
         if (!isAuthenticated)
         {
             // Anonymous path: cache opportunity result to avoid expensive queries on every request (NB1)
-            if (!_cache.TryGetValue(AnonymousOpportunityCacheKey, out OpportunityResultDto? cachedResult))
+            // GetOrCreateAsync holds a per-key lock to prevent cache stampede under concurrent requests
+            var cachedResult = await _cache.GetOrCreateAsync(AnonymousOpportunityCacheKey, async entry =>
             {
-                cachedResult = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-                _cache.Set(AnonymousOpportunityCacheKey, cachedResult, TimeSpan.FromSeconds(30));
-            }
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30);
+                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+            });
 
             var anonOpportunities = cachedResult!.Opportunities;
             var bestSpreadAnon = anonOpportunities.Count > 0
@@ -71,26 +72,33 @@ public class DashboardController : Controller
             return View(anonVm);
         }
 
-        // Fetch global data for authenticated users
-        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-        var allOpportunities = result.Opportunities;
-        var botConfig = await _uow.BotConfig.GetActiveAsync();
+        // Authenticated path: parallelize independent async calls to reduce total latency
+        var resultTask = _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var botConfigTask = _uow.BotConfig.GetActiveAsync();
+        var userConfigTask = _userSettings.GetOrCreateConfigAsync(userId!);
+        var exchangeIdsTask = _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
+        // NB4: Admin loads all positions; non-admin pushes user filter to SQL
+        var positionsTask = User.IsInRole("Admin")
+            ? _uow.Positions.GetOpenAsync()
+            : _uow.Positions.GetOpenByUserAsync(userId!);
+        var alertsTask = _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
 
-        // Authenticated path: full dashboard with user-specific data
+        await Task.WhenAll(resultTask, botConfigTask, userConfigTask, exchangeIdsTask, positionsTask, alertsTask);
+
+        var result = await resultTask;
+        var allOpportunities = result.Opportunities;
+        var botConfig = await botConfigTask;
+        var userConfig = await userConfigTask;
+        var enabledExchangeIds = await exchangeIdsTask;
+        var openPositions = await positionsTask;
+        var unreadAlerts = await alertsTask;
+
         // Lazy initialization: ensure user has default settings on first visit
-        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
-        var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
         if (enabledExchangeIds.Count == 0)
         {
             await _userSettings.InitializeDefaultsForNewUserAsync(userId!);
             enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
         }
-
-        // NB4: Admin loads all positions; non-admin pushes user filter to SQL
-        var openPositions = User.IsInRole("Admin")
-            ? await _uow.Positions.GetOpenAsync()
-            : await _uow.Positions.GetOpenByUserAsync(userId!);
-        var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
 
         // Filter opportunities by user's enabled exchanges and assets (non-admin)
         List<ArbitrageOpportunityDto> opportunities;
