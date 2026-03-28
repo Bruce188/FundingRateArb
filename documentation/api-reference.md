@@ -9,7 +9,7 @@ FundingRateArb is a server-rendered MVC application with SignalR for real-time u
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/` | Yes | Main dashboard (redirects to `/Dashboard`) |
-| GET | `/Dashboard` | Yes | Dashboard with bot status, positions, opportunities, alerts, P&L |
+| GET | `/Dashboard` | No* | Dashboard with bot status, opportunities. Authenticated users also see positions, alerts, P&L. *Anonymous users see cached opportunities with 30s TTL. |
 
 ### Positions
 
@@ -17,6 +17,7 @@ FundingRateArb is a server-rendered MVC application with SignalR for real-time u
 |--------|-------|------|-------------|
 | GET | `/Positions` | Yes | List positions (user's own, or all if admin) |
 | GET | `/Positions/Details/{id}` | Yes | Position detail: entry/exit prices, fees, funding history, P&L chart |
+| POST | `/Positions/Close/{id}` | Yes | Close an open position (triggers dual-leg close via ExecutionEngine) |
 
 ### Alerts
 
@@ -35,7 +36,7 @@ FundingRateArb is a server-rendered MVC application with SignalR for real-time u
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
 | GET | `/Settings` | Yes | User preferences page |
-| POST | `/Settings/ApiKeys` | Yes | Save exchange API credentials (encrypted) |
+| POST | `/Settings/ApiKeys` | Yes | Save exchange API credentials (encrypted). Validates Ethereum address format for SubAccountAddress and integer range 2-254 for ApiKeyIndex. |
 | POST | `/Settings/Preferences` | Yes | Update exchange/asset toggles, email settings |
 
 ### Analytics
@@ -159,7 +160,7 @@ public interface IExchangeConnector
 }
 ```
 
-Implementations: `HyperliquidConnector`, `AsterConnector`, `LighterConnector`
+Implementations: `HyperliquidConnector`, `AsterConnector`, `LighterConnector`, `CoinGlassConnector` (data-only)
 
 ### IMarketDataStream
 

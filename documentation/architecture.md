@@ -59,7 +59,8 @@ FundingRateArb follows **Clean Architecture** with strict dependency inversion. 
    +------v----------------v------+
    |        Service Layer          |
    |  SignalEngine, ExecutionEngine|
-   |  PositionSizer, YieldCalc    |
+   |  PositionSizer, YieldCalc,   |
+   |  BalanceAggregator            |
    +------+-----------+-----------+
           |           |
    +------v------+  +-v-----------+
@@ -75,26 +76,33 @@ FundingRateArb follows **Clean Architecture** with strict dependency inversion. 
 
 ## Background Services
 
-Four hosted services run continuously alongside the web server:
+Five hosted services run continuously alongside the web server:
 
 ```
-+-------------------+     signals ready     +-------------------+
-| FundingRateFetcher|--------------------->| BotOrchestrator   |
-| (60s poll cycle)  |                      | (60s trade cycle) |
-+-------------------+                      +-------------------+
-        |                                          |
-        v                                          v
-+-------------------+                      +-------------------+
-| MarketDataStream  |                      | DailySummary      |
-| Manager           |                      | Service           |
-| (WebSocket mgmt)  |                      | (email reports)   |
-+-------------------+                      +-------------------+
++-------------------+     signals ready     +-------------------------+
+| FundingRateFetcher|--------------------->| FundingRateReadiness    |
+| (60s poll cycle)  |                      | Signal                  |
++-------------------+                      +------------+------------+
+        |                                               |
+        v                                    signals ready
++-------------------+                      +------------v------------+
+| MarketDataStream  |                      | BotOrchestrator         |
+| Manager           |                      | (60s trade cycle)       |
+| (WebSocket mgmt)  |                      +-------------------------+
++-------------------+                               |
+                                                     v
+                                             +-------------------+
+                                             | DailySummary      |
+                                             | Service           |
+                                             | (email reports)   |
+                                             +-------------------+
 ```
 
 1. **MarketDataStreamManager** - Starts WebSocket connections to all exchanges, monitors health every 30 seconds, auto-reconnects on failure
 2. **FundingRateFetcher** - Polls funding rates via REST every 60 seconds, stores snapshots, updates the in-memory cache, signals readiness on first fetch
 3. **BotOrchestrator** - Waits for FundingRateFetcher readiness, then runs the trading cycle every 60 seconds: score opportunities, size positions, execute trades, monitor health
 4. **DailySummaryService** - Sends daily P&L summary emails to opted-in users
+5. **FundingRateReadinessSignal** - Waits for FundingRateFetcher to complete the first rate fetch, then signals readiness so BotOrchestrator can begin its trading cycle
 
 ## Data Flow: Trading Cycle
 
@@ -134,9 +142,12 @@ The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and
 
 | Exchange | Type | Settlement | Auth |
 |----------|------|-----------|------|
-| HyperLiquid | CEX | Continuous | Wallet-based (HyperLiquid.Net SDK) |
+| HyperLiquid | DEX | Continuous | Wallet-based (HyperLiquid.Net SDK) |
 | Lighter | DEX | Continuous | Custom signer (zkLighter protocol) |
 | Aster | DEX | Periodic (8h) | API key (Aster.Net SDK) |
+| CoinGlass | Data | N/A | API key (REST only) |
+
+CoinGlass is a data-only source (`IsDataOnly = true`) providing supplementary volume data. It implements `IExchangeConnector` but is excluded from trading.
 
 ## Resilience
 
@@ -170,6 +181,7 @@ SQL Server 2022 with EF Core 8 (code-first migrations). Key tables:
 - `UserExchangeCredentials` - Encrypted API keys
 - `Alerts` - Notification history
 - `Exchanges`, `Assets` - Reference data
+- `ExchangeAssetConfigs` - Per-exchange asset configuration (min size, fee overrides)
 - `OpportunitySnapshots` - Historical opportunity records
 
 ## Authentication and Authorization

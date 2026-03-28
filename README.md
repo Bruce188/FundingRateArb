@@ -18,7 +18,7 @@
 ![xUnit](https://img.shields.io/badge/xUnit-512BD4?style=flat-square&logo=dotnet&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
 
-Automated funding rate arbitrage bot for perpetual futures. Monitors funding rate differentials across DEXs (Lighter, Aster) and CEXs (HyperLiquid), opens hedged long/short positions when spreads exceed a configurable threshold, and collects the funding rate differential as yield.
+Automated funding rate arbitrage bot for perpetual futures. Monitors funding rate differentials across DEXs (Lighter, Aster, HyperLiquid), opens hedged long/short positions when spreads exceed a configurable threshold, and collects the funding rate differential as yield.
 
 ## How It Works
 
@@ -68,16 +68,19 @@ FundingRateArb.sln
 | **PositionHealthMonitor** | Monitors open positions for spread collapse, max hold time, stop loss, P&L targets, and stale price feeds |
 | **YieldCalculator** | Computes annualized yield, projected/unrealized P&L, and break-even hours |
 | **MarketDataCache** | In-memory cache of latest rates from both REST polling and WebSocket streams |
-| **DashboardHub** | SignalR hub pushing real-time rate updates, opportunities, position changes, and alerts to connected clients |
+| **DashboardHub** | SignalR hub pushing real-time rate updates, opportunities, position changes, and alerts to connected clients; Dashboard supports anonymous access with cached opportunities |
 | **ApiKeyVault** | Encrypted exchange credential storage using ASP.NET Core Data Protection API |
 
 ## Exchange Integrations
 
 | Exchange | Type | Settlement | Connection | Auth |
 |----------|------|-----------|------------|------|
-| **HyperLiquid** | CEX | Continuous | SDK (HyperLiquid.Net) + WebSocket | Wallet-based |
+| **HyperLiquid** | DEX | Continuous | SDK (HyperLiquid.Net) + WebSocket | Wallet-based |
 | **Lighter** | DEX | Continuous | Custom REST + WebSocket | Custom signer (zkLighter) |
 | **Aster** | DEX | Periodic (8h) | SDK (Aster.Net) + WebSocket | API key |
+| **CoinGlass** | Data | N/A | REST | API key |
+
+CoinGlass provides supplementary volume data and is flagged as `IsDataOnly` (not used for trading).
 
 Each exchange implements `IExchangeConnector` (REST) and `IMarketDataStream` (WebSocket). The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and rate-limit cooldown.
 
@@ -116,15 +119,19 @@ dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
 # Admin seed password
 dotnet user-secrets set "Seed:AdminPassword" "<YOUR_ADMIN_PASSWORD>"
 
-# Exchange credentials
-dotnet user-secrets set "Exchanges:Lighter:SignerPrivateKey" "<your-key>"
-dotnet user-secrets set "Exchanges:Lighter:ApiKey" "2"
+# Lighter (DEX)
+dotnet user-secrets set "Exchanges:Lighter:SignerPrivateKey" "<your-private-key>"
+dotnet user-secrets set "Exchanges:Lighter:ApiKey" "<api-key-index-2-to-254>"
+dotnet user-secrets set "Exchanges:Lighter:AccountIndex" "<your-numeric-account-index>"
+
+# Aster (DEX)
 dotnet user-secrets set "Exchanges:Aster:ApiKey" "<your-key>"
 dotnet user-secrets set "Exchanges:Aster:ApiSecret" "<your-secret>"
 
-# Optional: HyperLiquid
+# Hyperliquid (DEX)
 dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "<0x...>"
 dotnet user-secrets set "Exchanges:Hyperliquid:PrivateKey" "<your-key>"
+dotnet user-secrets set "Exchanges:Hyperliquid:SubAccountAddress" "<0x... optional vault address>"
 ```
 
 ### 4. Run
@@ -144,8 +151,11 @@ SA_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
 ADMIN_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
 LIGHTER_SIGNER_KEY=<your-key>
 LIGHTER_API_KEY=2
+LIGHTER_ACCOUNT_INDEX=<your-account-index>
 ASTER_API_KEY=<your-key>
 ASTER_API_SECRET=<your-secret>
+HYPERLIQUID_WALLET=<0x...>
+HYPERLIQUID_KEY=<your-key>
 EOF
 
 # Build and run
@@ -184,15 +194,15 @@ Requires the app running at `http://localhost:5273` with a seeded database.
 
 | Suite | Framework | Scope |
 |-------|-----------|-------|
-| Unit | xUnit, Moq, FluentAssertions | SignalEngine, PositionSizer, ExecutionEngine, YieldCalculator, ConfigValidator, ApiKeyVault, Connectors |
-| Integration | xUnit, EF Core InMemory | Repositories, UnitOfWork, database persistence |
+| Unit (747 tests) | xUnit, Moq, FluentAssertions | SignalEngine, PositionSizer, ExecutionEngine, YieldCalculator, ConfigValidator, ApiKeyVault, Connectors |
+| Integration (28 tests) | xUnit, EF Core InMemory | Repositories, UnitOfWork, database persistence |
 | E2E | Playwright (Python), pytest | Authentication, dashboard, admin panel, settings, mobile responsiveness |
 
 ## CI/CD
 
 Two GitHub Actions workflows automate the build and deployment pipeline:
 
-**Pull Requests** (`ci.yml`) — builds the solution, runs unit and integration tests against SQL Server, and verifies the Docker image builds and starts successfully.
+**Pull Requests** (`ci.yml`) — builds the solution, checks code formatting, runs unit tests with coverage enforcement (15% threshold) and integration tests against SQL Server, scans for vulnerable packages and exposed secrets, checks license compliance, detects code duplication, verifies all NuGet packages exist on nuget.org, and verifies the Docker image builds.
 
 **Deploy** (`deploy.yml`) — triggers on merge to `main`. Runs the full test suite, generates an EF Core migration bundle, and deploys to Azure App Service using OIDC federation (no stored credentials).
 
