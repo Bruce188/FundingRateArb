@@ -46,8 +46,11 @@ SA_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
 ADMIN_PASSWORD=<REPLACE_WITH_STRONG_PASSWORD>
 LIGHTER_SIGNER_KEY=<your-key>
 LIGHTER_API_KEY=2
+LIGHTER_ACCOUNT_INDEX=<your-account-index>
 ASTER_API_KEY=<your-key>
 ASTER_API_SECRET=<your-secret>
+HYPERLIQUID_WALLET=<0x...>
+HYPERLIQUID_KEY=<your-key>
 EOF
 
 # Build and run
@@ -69,13 +72,20 @@ The multi-stage Dockerfile:
 Two GitHub Actions workflows:
 
 **`ci.yml`** (Pull Requests):
-- Builds the solution
-- Runs unit and integration tests against SQL Server
+- Restores dependencies and verifies all NuGet packages exist on nuget.org
+- Checks code formatting (`dotnet format`)
+- Builds the solution (Release)
+- Runs unit tests with code coverage enforcement (15% threshold)
+- Runs integration tests against SQL Server
+- Scans for vulnerable NuGet packages
+- Scans for exposed secrets in the diff
+- Checks package license compliance (advisory)
+- Detects code duplication with jscpd (advisory)
 - Verifies Docker image builds and starts
 
 **`deploy.yml`** (Merge to main):
 - Runs full test suite
-- Generates EF Core migration bundle
+- Generates EF Core migration bundle (self-contained)
 - Deploys to Azure App Service via OIDC federation (no stored credentials)
 
 ### Azure Resources
@@ -87,6 +97,7 @@ Two GitHub Actions workflows:
 | Azure Key Vault | Secrets management |
 | Azure Blob Storage | Data Protection key persistence |
 | Application Insights | Telemetry and monitoring |
+| GitHub Actions CI/CD | Build, test, deploy automation |
 
 ### Required Configuration
 
@@ -98,8 +109,12 @@ KeyVaultName=<your-keyvault>
 ApplicationInsights__ConnectionString=InstrumentationKey=...
 DataProtection__BlobStorageConnection=DefaultEndpointsProtocol=https;...
 Exchanges__Lighter__SignerPrivateKey=...
+Exchanges__Lighter__AccountIndex=<numeric>
 Exchanges__Aster__ApiKey=...
 Exchanges__Aster__ApiSecret=...
+Exchanges__Hyperliquid__WalletAddress=0x...
+Exchanges__Hyperliquid__PrivateKey=...
+Exchanges__Hyperliquid__SubAccountAddress=0x... (optional)
 SendGrid__ApiKey=...
 ```
 
