@@ -280,6 +280,10 @@ public class BalanceAggregatorTests
         result.TotalAvailableUsdc.Should().Be(5000m, "failed exchange must be excluded from total");
         result.Balances.Should().HaveCount(2);
         result.Balances.Should().Contain(b => b.ExchangeName == "Lighter" && b.ErrorMessage != null);
+
+        // Structural property: TotalAvailableUsdc must equal the sum of non-error balances
+        result.Balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc)
+            .Should().Be(result.TotalAvailableUsdc, "TotalAvailableUsdc must only sum non-error balances");
     }
 
     [Fact]
@@ -309,5 +313,9 @@ public class BalanceAggregatorTests
         result.Balances.Should().HaveCount(2);
         result.Balances.Should().Contain(b => b.ExchangeName == "Hyperliquid" && b.AvailableUsdc == 500m && b.ErrorMessage == null);
         result.Balances.Should().Contain(b => b.ExchangeName == "Lighter" && b.AvailableUsdc == 0m && b.ErrorMessage == "Credentials not configured");
+
+        // Structural property: TotalAvailableUsdc must equal the sum of non-error balances
+        result.Balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc)
+            .Should().Be(result.TotalAvailableUsdc, "TotalAvailableUsdc must only sum non-error balances");
     }
 }

@@ -282,4 +282,24 @@ public class PortfolioRebalancerTests
 
         result.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task EvaluateAsync_UseRawNetYield_NotBoosted()
+    {
+        // Position with very low spread (0.00001) so almost any opportunity improves it
+        var pos = MakePosition(currentSpread: 0.00001m);
+
+        // Opportunity with NetYieldPerHour (raw) too low to trigger rebalance,
+        // but BoostedNetYieldPerHour high enough — proves rebalancer uses raw value
+        var opp = MakeOpportunity(netYield: 0.00002m, spread: 0.00002m);
+        opp.BoostedNetYieldPerHour = 0.01m; // much higher boosted value
+
+        // Set high min improvement so only boosted value would trigger rebalance
+        var config = MakeConfig(rebalanceMinImprovement: 0.005m);
+
+        var result = await _sut.EvaluateAsync([pos], [opp], config);
+
+        // Should NOT recommend rebalance because the raw NetYieldPerHour is used, not BoostedNetYieldPerHour
+        result.Should().BeEmpty("rebalancer must use raw NetYieldPerHour, not BoostedNetYieldPerHour");
+    }
 }

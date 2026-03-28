@@ -144,6 +144,14 @@ public class PositionRepository : IPositionRepository
             .Where(p => statuses.Contains(p.Status))
             .ToListAsync();
 
+    public Task<List<ArbitragePosition>> GetByUserAndStatusesAsync(string userId, params PositionStatus[] statuses) =>
+        _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .Where(p => p.UserId == userId && statuses.Contains(p.Status))
+            .ToListAsync();
+
     public async Task<KpiAggregateDto> GetKpiAggregatesAsync(DateTime since, string? userId = null, CancellationToken ct = default)
     {
         var query = _context.ArbitragePositions
