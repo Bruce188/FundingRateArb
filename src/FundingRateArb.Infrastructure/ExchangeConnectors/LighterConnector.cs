@@ -102,7 +102,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
                 if (account?.Positions is null)
                 {
-                    _logger.LogInformation(
+                    _logger.LogDebug(
                         "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
                         attempt + 1, maxAttempts, asset, side);
                     continue;
@@ -124,7 +124,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     // Long = positive size, Short = negative size
                     if (side == Side.Long && size > 0)
                     {
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
                             attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
@@ -132,14 +132,14 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
                     if (side == Side.Short && size < 0)
                     {
-                        _logger.LogInformation(
+                        _logger.LogDebug(
                             "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
                             attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
                     }
                 }
 
-                _logger.LogInformation(
+                _logger.LogDebug(
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
             }
@@ -313,7 +313,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
             var markPrice = market.LastTradePrice;
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Market detail: {Asset} marketId={MarketId} price={Price} sizeDecimals={SizeDecimals}",
                 asset, market.MarketId, markPrice, market.SizeDecimals);
 
@@ -398,7 +398,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             var nonce = await GetNextNonceAsync(ct);
             var clientOrderIndex = (int)(Interlocked.Increment(ref _orderCounter) % int.MaxValue);
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Nonce for order: {Nonce} accountIndex={AccountIndex}",
                 nonce, _accountIndex);
 
@@ -406,7 +406,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 market.MarketId, clientOrderIndex, baseAmount, (int)priceInt,
                 isAsk, reduceOnly: false, nonce);
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Signed order: txHash={TxHash} baseAmount={BaseAmount} price={PriceInt} isAsk={IsAsk}",
                 txHash, baseAmount, priceInt, isAsk);
 
@@ -637,7 +637,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             _signer.Initialize(baseUrl, privateKey, apiKeyIndex, accountIndex);
             _signerInitialized = true;
 
-            _logger.LogInformation(
+            _logger.LogDebug(
                 "Lighter signer initialized: accountIndex={AccountIndex} apiKeyIndex={ApiKeyIndex}",
                 _accountIndex, _apiKeyIndexStr);
         }
@@ -716,7 +716,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         var response = await _httpClient.PostAsync("sendTx", form, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "SendTransaction response: statusCode={StatusCode} body={Body}",
             (int)response.StatusCode, responseBody);
 

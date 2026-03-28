@@ -23,10 +23,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                 type: "int",
                 nullable: false,
                 defaultValue: 3);
-
-            // Set sensible defaults for existing rows
-            migrationBuilder.Sql(
-                "UPDATE BotConfigurations SET ExchangeCircuitBreakerThreshold = 3, ExchangeCircuitBreakerMinutes = 15");
         }
 
         /// <inheritdoc />

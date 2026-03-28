@@ -80,9 +80,16 @@
     });
 
     connection.on("ReceivePositionRemoval", function (positionId) {
-        var positionRow = document.getElementById("position-" + positionId);
+        var parsedId = parseInt(positionId, 10);
+        if (isNaN(parsedId)) return;
+        var positionRow = document.getElementById("position-" + parsedId);
         if (positionRow) {
             positionRow.remove();
+        }
+        // Also remove the mobile card variant
+        var positionCard = document.getElementById("position-card-" + parsedId);
+        if (positionCard) {
+            positionCard.remove();
         }
         // Update the open positions count if displayed
         var openPositions = document.getElementById("open-positions");

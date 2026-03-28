@@ -828,10 +828,10 @@ public class LighterConnectorTests
 
         result.Should().BeFalse();
 
-        // Verify that 3 poll attempt log entries were generated (Information level)
+        // Verify that 3 poll attempt log entries were generated (Debug level)
         _loggerMock.Verify(
             l => l.Log(
-                LogLevel.Information,
+                LogLevel.Debug,
                 It.IsAny<EventId>(),
                 It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
                 It.IsAny<Exception>(),
