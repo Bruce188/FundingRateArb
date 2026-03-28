@@ -1765,7 +1765,10 @@ public class ExecutionEngineTests
             {
                 callCount++;
                 if (callCount == 1)
+                {
                     return new OrderResultDto { Success = false, Error = errorMessage };
+                }
+
                 return new OrderResultDto { Success = true, OrderId = "close-1", FilledPrice = 3000m, FilledQuantity = 0.1m };
             });
 
