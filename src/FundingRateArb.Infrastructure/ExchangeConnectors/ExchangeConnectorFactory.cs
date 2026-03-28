@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Aster.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
@@ -138,6 +139,18 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             return null;
         }
 
+        if (!string.IsNullOrEmpty(subAccountAddress))
+        {
+            if (!Regex.IsMatch(subAccountAddress, @"^0x[0-9a-fA-F]{40}$"))
+            {
+                var masked = MaskValue(subAccountAddress);
+                _logger.LogWarning(
+                    "Hyperliquid sub-account address must be a valid Ethereum address but received '{MaskedValue}'",
+                    masked);
+                return null;
+            }
+        }
+
         var restClient = new HyperLiquidRestClient(options =>
         {
             options.ApiCredentials = new ApiCredentials(walletAddress, privateKey);
@@ -181,6 +194,15 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         if (!string.IsNullOrEmpty(apiKeyIndex))
         {
+            if (!int.TryParse(apiKeyIndex, out var idx) || idx < 2 || idx > 254)
+            {
+                var masked = MaskValue(apiKeyIndex);
+                _logger.LogWarning(
+                    "Lighter API Key Index must be an integer between 2 and 254 but received '{MaskedValue}'",
+                    masked);
+                return null;
+            }
+
             configData["Exchanges:Lighter:ApiKey"] = apiKeyIndex;
         }
 
