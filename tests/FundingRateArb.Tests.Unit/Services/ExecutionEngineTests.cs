@@ -214,23 +214,24 @@ public class ExecutionEngineTests
     }
 
     [Fact]
-    public async Task OpenPosition_LongLegFails_ClosesShortLeg_ReturnsError()
+    public async Task OpenPosition_FirstLegFails_AbortsWithoutOpeningSecondLeg()
     {
+        // With sequential execution, long opens first (both mocks have IsEstimatedFillExchange=false).
+        // If first leg fails, second leg is never opened — no emergency close needed.
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long failed"));
-        _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
-        _mockShortConnector
-            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Long failed");
-        _mockShortConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()), Times.Once);
+        // Second leg should never be called
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        // No emergency close needed
+        _mockLongConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -271,25 +272,53 @@ public class ExecutionEngineTests
     }
 
     /// <summary>
-    /// C1: If one leg throws an exception (not just returns Success=false), the other
-    /// successful leg must be emergency-closed and the position marked EmergencyClosed.
+    /// C1: If the first leg throws an exception, the position is marked EmergencyClosed
+    /// and the second leg is never opened (no emergency close needed).
     /// </summary>
     [Fact]
-    public async Task OpenPosition_OneLegThrows_EmergencyClosesOtherLeg()
+    public async Task OpenPosition_FirstLegThrows_AbortsWithoutSecondLeg()
     {
-        // Long leg throws (simulating SDK exception from Hyperliquid/Aster)
+        // Long leg throws (first leg with default mock config)
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
-        // Short leg succeeds
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        // Second leg should never be called
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
+    }
+
+    /// <summary>
+    /// C1: If the second leg throws an exception, the first leg must be emergency-closed
+    /// and the position marked EmergencyClosed.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_SecondLegThrows_EmergencyClosesFirstLeg()
+    {
+        // Long leg succeeds (first with default mock config)
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+
+        // Short leg throws (second leg)
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
 
-        // Emergency close on the short leg must be called
-        _mockShortConnector
-            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+        // Emergency close on the long leg must be called
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         ArbitragePosition? addedPosition = null;
@@ -302,25 +331,21 @@ public class ExecutionEngineTests
         result.Error.Should().NotBeNullOrEmpty();
         addedPosition.Should().NotBeNull();
         addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
-        _mockShortConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
     }
 
     /// <summary>
-    /// C1: If both legs throw exceptions, the position must be marked EmergencyClosed
-    /// and an alert created with both error details.
+    /// C1: If the first leg throws, the position must be marked EmergencyClosed
+    /// and no second leg or emergency close is attempted (sequential execution).
     /// </summary>
     [Fact]
-    public async Task OpenPosition_BothLegsThrow_MarksEmergencyClosed()
+    public async Task OpenPosition_FirstLegThrows_MarksEmergencyClosed_NoSecondLeg()
     {
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Long connection refused"));
 
-        _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Short SDK error"));
-
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
             .Callback<ArbitragePosition>(p => addedPosition = p);
@@ -331,38 +356,38 @@ public class ExecutionEngineTests
         result.Error.Should().NotBeNullOrEmpty();
         addedPosition.Should().NotBeNull();
         addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
-        // No emergency close attempted since neither leg succeeded
+        // No emergency close and no second leg attempted since first leg threw
         _mockLongConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
-        _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
     }
 
     /// <summary>
-    /// Root cause of the leg size mismatch: emergency close returned Success=false
+    /// When the second leg fails and emergency close of the first leg also returns Success=false
     /// (e.g. "No open position found" on Lighter before on-chain settlement),
-    /// but the old code discarded the return value. Now we check it and create a critical alert.
+    /// a critical alert must be created for the emergency close failure.
     /// </summary>
     [Fact]
     public async Task OpenPosition_EmergencyCloseReturnsFailure_CreatesCriticalAlert()
     {
-        // Short leg succeeds, long leg fails → emergency close fires on short
+        // Long leg succeeds (first leg), short leg fails → emergency close fires on long
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(FailOrder("Long margin insufficient"));
+            .ReturnsAsync(SuccessOrder());
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder());
+            .ReturnsAsync(FailOrder("Short margin insufficient"));
 
         // Emergency close returns failure (position not settled yet / not found)
-        _mockShortConnector
-            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("No open position found"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
         result.Success.Should().BeFalse();
 
-        // Must create TWO LegFailed alerts: one for the failed emergency close, one for the overall failure
+        // Must create a LegFailed alert for the emergency close failure
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Type == AlertType.LegFailed &&
@@ -730,24 +755,23 @@ public class ExecutionEngineTests
     // ── D4: Emergency close serialization ──────────────────────
 
     [Fact]
-    public async Task OpenPosition_EmergencyClose_RunsSequentially()
+    public async Task OpenPosition_SecondLegFails_EmergencyClosesFirstLeg_BeforeSave()
     {
-        // Long leg returns Success=false (triggers emergency close of successful short leg)
-        // Short leg succeeds with a real order
-        // Verify: short close completes before SaveAsync is called (sequential, not WhenAll)
+        // Long leg succeeds (first leg), short leg fails (second leg)
+        // Verify: long emergency close completes before final SaveAsync
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(FailOrder("Long margin insufficient"));
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+            .ReturnsAsync(FailOrder("Short margin insufficient"));
 
         var callOrder = new List<string>();
 
-        _mockShortConnector
-            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("ShortEmergencyClose"))
-            .ReturnsAsync(SuccessOrder("close-short"));
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .Callback(() => callOrder.Add("LongEmergencyClose"))
+            .ReturnsAsync(SuccessOrder("close-long"));
 
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>()))
             .Callback<CancellationToken>(_ => callOrder.Add("SaveAsync"))
@@ -757,13 +781,13 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeFalse();
 
-        // Verify the short emergency close completes before the final SaveAsync
-        var closeIndex = callOrder.IndexOf("ShortEmergencyClose");
+        // Verify the long emergency close completes before the final SaveAsync
+        var closeIndex = callOrder.IndexOf("LongEmergencyClose");
         var lastSaveIndex = callOrder.LastIndexOf("SaveAsync");
 
-        closeIndex.Should().BeGreaterThanOrEqualTo(0, "short emergency close must be called");
+        closeIndex.Should().BeGreaterThanOrEqualTo(0, "long emergency close must be called");
         lastSaveIndex.Should().BeGreaterThan(closeIndex,
-            "emergency close must complete before SaveAsync — verifies sequential not parallel execution");
+            "emergency close must complete before SaveAsync — verifies sequential execution");
     }
 
     // ── D1: Fee tracking tests ──────────────────────────────────────────────────
@@ -1528,6 +1552,94 @@ public class ExecutionEngineTests
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // ── Sequential leg ordering: estimated fill leg opens first ──────────────────
+
+    [Fact]
+    public async Task OpenPosition_EstimatedFillLeg_OpensFirst()
+    {
+        // Configure short connector as estimated fill (like Lighter)
+        _mockShortConnector
+            .Setup(c => c.IsEstimatedFillExchange).Returns(true);
+
+        var callOrder = new List<string>();
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Long"))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Short"))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        callOrder.Should().ContainInOrder(new[] { "Short", "Long" },
+            "estimated fill leg (short/Lighter) should open before reliable leg (long/Hyperliquid)");
+    }
+
+    [Fact]
+    public async Task OpenPosition_EstimatedFillVerificationFails_AbortsWithoutSecondLeg()
+    {
+        // Configure short connector as estimated fill + verifiable
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("verification failed");
+        addedPosition.Should().NotBeNull();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        // Long leg (second leg) should never be called
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_SecondLegFails_EmergencyClosesFirstLeg()
+    {
+        // Long opens first (default: both IsEstimatedFillExchange=false, so firstIsLong=true)
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short exchange error"));
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Short exchange error");
+        addedPosition.Should().NotBeNull();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        // First leg (long) must be emergency-closed
+        _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     // ── NB7: Case-insensitive credential matching ───────────────────────────────
 
     [Fact]
@@ -1724,6 +1836,14 @@ public class ExecutionEngineTests
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 2)))
             .Returns(("key2", "secret2", "wallet2", "pk2", (string?)null, "42"));
+
+        // Set up PlaceMarketOrderAsync so test doesn't NullRef after connector creation
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         // Act
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
