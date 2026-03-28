@@ -20,7 +20,6 @@ public class PositionSizerEdgeCaseTests
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
-        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync(It.IsAny<string>(), It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         var mockBalanceAggregator = new Mock<IBalanceAggregator>();
         mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))

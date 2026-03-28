@@ -8,7 +8,7 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
-    // B1: Dynamic decimal formatting for small prices
+    // Dynamic decimal formatting for small prices
     function formatPrice(price) {
         if (price === 0) return "$0.00";
         if (price >= 1) return "$" + price.toFixed(2);
@@ -229,7 +229,7 @@
             tdAsset.appendChild(strongEl);
             row.appendChild(tdAsset);
 
-            // B1: Use formatPrice for mark prices
+            // Format mark prices as average of long/short
             var tdPrice = document.createElement("td");
             var lp = opp.longMarkPrice || 0;
             var sp = opp.shortMarkPrice || 0;

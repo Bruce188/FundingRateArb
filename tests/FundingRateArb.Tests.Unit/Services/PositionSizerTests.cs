@@ -21,7 +21,6 @@ public class PositionSizerTests
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
-        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync(It.IsAny<string>(), It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         // Default balance: high enough that config cap applies
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
@@ -292,6 +291,36 @@ public class PositionSizerTests
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m, "negative entryFeeRate means corrupted opportunity");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_BreakevenUsesRawNetNotBoosted()
+    {
+        // SpreadPerHour = 0.002, NetYieldPerHour (raw) = 0.0001
+        // entryFeeRate = 0.002 - 0.0001 = 0.0019
+        // breakEvenHours = 0.0019 / 0.0001 = 19 hours → exceeds BreakevenHoursMax (6) → rejected
+        // BoostedNetYieldPerHour = 0.005 would give entryFeeRate = -0.003 → would be rejected differently
+        // This proves break-even uses raw NetYieldPerHour, not BoostedNetYieldPerHour
+        var config = DefaultConfig();
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.002m,
+                NetYieldPerHour = 0.0001m,
+                BoostedNetYieldPerHour = 0.005m,
+                LongVolume24h = 100_000_000m, ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        sizes[0].Should().Be(0m, "break-even uses raw NetYieldPerHour (19hrs > 6hr max), not BoostedNetYieldPerHour");
     }
 
     // -----------------------------------------------------------------------
