@@ -47,6 +47,7 @@ public class BalanceAggregator : IBalanceAggregator
         }
 
         var balanceTasks = new List<(int ExchangeId, string ExchangeName, Task<decimal> BalanceTask)>();
+        var balances = new List<ExchangeBalanceDto>();
 
         foreach (var cred in credentials)
         {
@@ -66,8 +67,14 @@ public class BalanceAggregator : IBalanceAggregator
             if (connector is null)
             {
                 _logger.LogWarning("Could not create connector for {Exchange} (user {UserId})", exchangeName, userId);
-                balanceTasks.Add((cred.ExchangeId, exchangeName, Task.FromException<decimal>(
-                    new InvalidOperationException(CredentialsNotConfiguredMessage))));
+                balances.Add(new ExchangeBalanceDto
+                {
+                    ExchangeId = cred.ExchangeId,
+                    ExchangeName = exchangeName,
+                    AvailableUsdc = 0m,
+                    ErrorMessage = CredentialsNotConfiguredMessage,
+                    FetchedAt = DateTime.UtcNow,
+                });
                 continue;
             }
 
@@ -75,7 +82,6 @@ public class BalanceAggregator : IBalanceAggregator
         }
 
         var now = DateTime.UtcNow;
-        var balances = new List<ExchangeBalanceDto>();
 
         // Await all balance tasks, handling individual failures
         foreach (var (exchangeId, exchangeName, task) in balanceTasks)

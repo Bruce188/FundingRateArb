@@ -21,8 +21,7 @@ public class PositionSizerTests
     {
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
-        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         // Default balance: high enough that config cap applies
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
@@ -342,7 +341,7 @@ public class PositionSizerTests
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
-        _mockPositions.Setup(p => p.GetOpenAsync())
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
                 new() { SizeUsdc = 300m },
@@ -409,7 +408,7 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
         // Existing open position for asset 1 with 20 USDC
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
             new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 20m }
         });
@@ -432,7 +431,7 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
         // Existing open position on exchange 1 with 35 USDC
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
             new() { AssetId = 2, LongExchangeId = 1, ShortExchangeId = 3, SizeUsdc = 35m }
         });
@@ -453,7 +452,7 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 1.0m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
@@ -471,7 +470,7 @@ public class PositionSizerTests
         config.MaxExposurePerExchange = 1.0m;
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         // Two opportunities for the same asset on different exchanges
         var opps = new List<ArbitrageOpportunityDto>
@@ -513,7 +512,7 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 50m, FetchedAt = DateTime.UtcNow });
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
@@ -532,7 +531,7 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
         // Existing positions already at the 50 USDC asset limit
-        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
             new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 50m }
         });
@@ -554,15 +553,11 @@ public class PositionSizerTests
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
-        _mockPositions.Setup(p => p.GetOpenAsync())
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { SizeUsdc = 50m },
-            });
-        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
-            .ReturnsAsync(new List<ArbitragePosition>
-            {
-                new() { SizeUsdc = 50m },
+                new() { SizeUsdc = 50m, Status = PositionStatus.Open },
+                new() { SizeUsdc = 50m, Status = PositionStatus.Opening },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -583,15 +578,11 @@ public class PositionSizerTests
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
-        _mockPositions.Setup(p => p.GetOpenAsync())
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m },
-            });
-        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
-            .ReturnsAsync(new List<ArbitragePosition>
-            {
-                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m },
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Open },
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Opening },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -604,26 +595,25 @@ public class PositionSizerTests
     }
 
     [Fact]
-    public async Task CalculateBatchSizesAsync_DuplicatePositionInOpenAndOpening_NotDoubleCounted()
+    public async Task CalculateBatchSizesAsync_SingleQueryReturnsOpenAndOpening()
     {
-        // Same position appears in both GetOpenAsync and GetByStatusAsync(Opening)
-        // This simulates a race condition where a position transitions mid-query
-        var sharedPosition = new ArbitragePosition { Id = 42, SizeUsdc = 50m, AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2 };
-
+        // Verifies GetByStatusesAsync is called with both Open and Opening statuses
         var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
-        _mockPositions.Setup(p => p.GetOpenAsync())
-            .ReturnsAsync(new List<ArbitragePosition> { sharedPosition });
-        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
-            .ReturnsAsync(new List<ArbitragePosition> { sharedPosition });
+        _mockPositions.Setup(p => p.GetByStatusesAsync(PositionStatus.Open, PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { Id = 1, SizeUsdc = 50m, Status = PositionStatus.Open },
+                new() { Id = 2, SizeUsdc = 50m, Status = PositionStatus.Opening },
+            });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // With dedup: allocatedCapital = 50 (not 100), available = (1000-50)*0.8 = 760
-        // Without dedup: allocatedCapital = 100, available = (1000-100)*0.8 = 720
-        sizes[0].Should().Be(760m, "duplicate position should not be double-counted");
+        // allocatedCapital = 100, available = (1000-100)*0.8 = 720
+        sizes[0].Should().Be(720m, "single query should return both Open and Opening positions");
+        _mockPositions.Verify(p => p.GetByStatusesAsync(PositionStatus.Open, PositionStatus.Opening), Times.Once);
     }
 }

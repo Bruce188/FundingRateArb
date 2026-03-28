@@ -6,7 +6,7 @@ namespace FundingRateArb.Application.Common;
 /// </summary>
 public static class ExchangeFeeConstants
 {
-    public static decimal GetTakerFeeRate(string exchangeName) => exchangeName switch
+    public static decimal GetTakerFeeRate(string? exchangeName) => exchangeName switch
     {
         "Hyperliquid" => 0.00045m,
         "Lighter" => 0m,
