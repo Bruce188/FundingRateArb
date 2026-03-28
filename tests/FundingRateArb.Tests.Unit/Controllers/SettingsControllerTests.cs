@@ -258,6 +258,95 @@ public class SettingsControllerTests
     }
 
     [Fact]
+    public async Task SaveApiKey_WithInvalidEthereumSubAccountAddress_ReturnsError()
+    {
+        SetupAuthenticatedUser();
+
+        var result = await _controller.SaveApiKey(
+            exchangeId: 1,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: "0xabc",
+            privateKey: "some-key",
+            subAccountAddress: "not-an-address",
+            apiKeyIndex: null);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().NotBeNull();
+        _controller.TempData["Error"]!.ToString().Should().Contain("Ethereum address");
+    }
+
+    [Fact]
+    public async Task SaveApiKey_WithValidSubAccountAddress_Succeeds()
+    {
+        SetupAuthenticatedUser();
+
+        var result = await _controller.SaveApiKey(
+            exchangeId: 1,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: "0xabc123",
+            privateKey: "some-key",
+            subAccountAddress: "0x1234567890abcdef1234567890abcdef12345678",
+            apiKeyIndex: null);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().BeNull();
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 1, null, null, "0xabc123", "some-key",
+            "0x1234567890abcdef1234567890abcdef12345678", null), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("255")]
+    [InlineData("abc")]
+    public async Task SaveApiKey_WithOutOfRangeApiKeyIndex_ReturnsError(string apiKeyIndex)
+    {
+        SetupAuthenticatedUser();
+
+        var result = await _controller.SaveApiKey(
+            exchangeId: 2,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: null,
+            privateKey: "some-key",
+            subAccountAddress: null,
+            apiKeyIndex: apiKeyIndex);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().NotBeNull();
+        _controller.TempData["Error"]!.ToString().Should().Contain("2 and 254");
+    }
+
+    [Theory]
+    [InlineData("2")]
+    [InlineData("254")]
+    public async Task SaveApiKey_WithValidApiKeyIndex_Succeeds(string apiKeyIndex)
+    {
+        SetupAuthenticatedUser();
+
+        var result = await _controller.SaveApiKey(
+            exchangeId: 2,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: null,
+            privateKey: "some-key",
+            subAccountAddress: null,
+            apiKeyIndex: apiKeyIndex);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().BeNull();
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 2, null, null, null, "some-key",
+            null, apiKeyIndex), Times.Once);
+    }
+
+    [Fact]
     public async Task Preferences_FiltersOutDataOnlyExchanges()
     {
         // Arrange

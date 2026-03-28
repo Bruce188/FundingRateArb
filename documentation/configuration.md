@@ -17,16 +17,22 @@ dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
 dotnet user-secrets set "Seed:AdminPassword" "<YOUR_ADMIN_PASSWORD>"
 
 # Lighter (DEX)
-dotnet user-secrets set "Exchanges:Lighter:SignerPrivateKey" "<your-key>"
-dotnet user-secrets set "Exchanges:Lighter:ApiKey" "2"
+# SignerPrivateKey: Your signing private key
+# ApiKey: Integer 2-254 — the key index assigned when creating an API key on Lighter
+# AccountIndex: Your numeric account index on Lighter
+dotnet user-secrets set "Exchanges:Lighter:SignerPrivateKey" "<your-private-key>"
+dotnet user-secrets set "Exchanges:Lighter:ApiKey" "<api-key-index-2-to-254>"
+dotnet user-secrets set "Exchanges:Lighter:AccountIndex" "<your-numeric-account-index>"
 
 # Aster (DEX)
 dotnet user-secrets set "Exchanges:Aster:ApiKey" "<your-key>"
 dotnet user-secrets set "Exchanges:Aster:ApiSecret" "<your-secret>"
 
-# HyperLiquid (CEX) — optional
+# Hyperliquid (DEX)
+# SubAccountAddress: Optional vault address for sub-account trading. Leave empty for main account.
 dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "<0x...>"
 dotnet user-secrets set "Exchanges:Hyperliquid:PrivateKey" "<your-key>"
+dotnet user-secrets set "Exchanges:Hyperliquid:SubAccountAddress" "<0x... optional vault address>"
 
 # OAuth — optional
 dotnet user-secrets set "Authentication:Google:ClientId" "<id>"
@@ -49,11 +55,19 @@ If environment variables must be used directly:
 ConnectionStrings__DefaultConnection="Server=...;Database=...;Password=..."
 Seed__AdminPassword="..."
 
-# Exchange credentials
+# Lighter (DEX)
 Exchanges__Lighter__SignerPrivateKey="..."
-Exchanges__Lighter__ApiKey="2"
+Exchanges__Lighter__ApiKey="<2-254>"
+Exchanges__Lighter__AccountIndex="<numeric>"
+
+# Aster (DEX)
 Exchanges__Aster__ApiKey="..."
 Exchanges__Aster__ApiSecret="..."
+
+# Hyperliquid (DEX)
+Exchanges__Hyperliquid__WalletAddress="0x..."
+Exchanges__Hyperliquid__PrivateKey="..."
+Exchanges__Hyperliquid__SubAccountAddress="0x... (optional)"
 
 # Azure Key Vault (auto-loads all secrets when set)
 KeyVaultName="your-keyvault-name"
