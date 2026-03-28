@@ -188,7 +188,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // NB4: Cap per-cycle retry count to bound total wall time (N x 45s)
         const int maxRetriesPerCycle = 6;
 
-        foreach (var pos in positions.Take(maxRetriesPerCycle))
+        foreach (var pos in positions.OrderBy(p => p.ClosingStartedAt ?? p.OpenedAt).Take(maxRetriesPerCycle))
         {
             try
             {

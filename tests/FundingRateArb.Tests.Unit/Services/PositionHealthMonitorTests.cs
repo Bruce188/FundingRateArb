@@ -1184,6 +1184,16 @@ public class PositionHealthMonitorTests
         _mockExecutionEngine.Verify(
             e => e.ClosePositionAsync(It.IsAny<string>(), oldPosition, It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
             Times.Never);
+
+        // N4: Verify alert created for reaped position
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.ArbitragePositionId == 20 &&
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical)),
+            Times.Once);
+
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
     }
 
     // ── NB8: CloseReason parameter for retried closes ──────────────────
@@ -1328,5 +1338,40 @@ public class PositionHealthMonitorTests
         // Act: should not throw
         var act = async () => await _sut.CheckAndActAsync();
         await act.Should().NotThrowAsync("per-position timeout should be caught, not propagated");
+    }
+
+    // ── N5: Take(6) retry cap boundary ──────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_RetryCapAt6_DoesNotRetryBeyondCap()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var closingPositions = Enumerable.Range(1, 8).Select(i => new ArbitragePosition
+        {
+            Id = 100 + i,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-i), // ordered youngest first
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        }).ToList();
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(closingPositions);
+
+        await _sut.CheckAndActAsync();
+
+        // Only 6 positions should be retried (maxRetriesPerCycle = 6)
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(6));
     }
 }
