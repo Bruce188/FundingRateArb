@@ -182,12 +182,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         if (positions.Count == 0) return;
 
-        // NB12: Use bounded concurrency to avoid blocking health monitor for N*14s
-        const int maxConcurrency = 3;
-        using var semaphore = new SemaphoreSlim(maxConcurrency);
-        var tasks = positions.Select(async pos =>
+        // NB4: Cap per-cycle retry count to bound total wall time (N x 45s)
+        const int maxRetriesPerCycle = 6;
+
+        foreach (var pos in positions.Take(maxRetriesPerCycle))
         {
-            await semaphore.WaitAsync(ct);
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -208,12 +207,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             {
                 _logger.LogWarning(ex, "Retry close failed for position #{PositionId}: {Message}", pos.Id, ex.Message);
             }
-            finally
-            {
-                semaphore.Release();
-            }
-        });
-        await Task.WhenAll(tasks);
+        }
     }
 
     private async Task<IReadOnlyList<ArbitragePosition>> ReapStaleClosingPositionsAsync(

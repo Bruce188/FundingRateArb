@@ -1255,4 +1255,78 @@ public class PositionHealthMonitorTests
             Times.Once,
             "retry should fall back to SpreadCollapsed when no original CloseReason");
     }
+
+    // ── NB2: Null ClosingStartedAt fallback to OpenedAt ──────────────────
+
+    [Fact]
+    public async Task CheckAndAct_ClosingPosition_NullClosingStartedAt_FallsBackToOpenedAt()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 60,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = null, // null — should fall back to OpenedAt
+            OpenedAt = DateTime.UtcNow.AddMinutes(-15), // > 10 min → should be reaped
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { pos });
+
+        await _sut.CheckAndActAsync();
+
+        pos.Status.Should().Be(PositionStatus.EmergencyClosed,
+            "when ClosingStartedAt is null and OpenedAt > 10min ago, position should be reaped");
+        // Should NOT be retried (it was reaped)
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), pos, It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    // ── NB3: Retry close timeout does not throw ──────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_RetryCloseTimeout_DoesNotThrow()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var closingPos = new ArbitragePosition
+        {
+            Id = 70,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-2),
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { closingPos });
+
+        // Mock ClosePositionAsync to throw OperationCanceledException (simulating timeout)
+        _mockExecutionEngine
+            .Setup(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException("Per-position retry timeout"));
+
+        // Act: should not throw
+        var act = async () => await _sut.CheckAndActAsync();
+        await act.Should().NotThrowAsync("per-position timeout should be caught, not propagated");
+    }
 }
