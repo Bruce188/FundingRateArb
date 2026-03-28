@@ -702,7 +702,10 @@ public class ExecutionEngine : IExecutionEngine
 
     private static bool IsRetryableCloseError(string? error)
     {
-        if (string.IsNullOrEmpty(error)) return false;
+        if (string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
         return RetryableClosePatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
 

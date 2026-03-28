@@ -180,7 +180,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     private async Task RetryClosingPositionsAsync(IReadOnlyList<ArbitragePosition> positions, CancellationToken ct)
     {
-        if (positions.Count == 0) return;
+        if (positions.Count == 0)
+        {
+            return;
+        }
 
         // NB4: Cap per-cycle retry count to bound total wall time (N x 45s)
         const int maxRetriesPerCycle = 6;
