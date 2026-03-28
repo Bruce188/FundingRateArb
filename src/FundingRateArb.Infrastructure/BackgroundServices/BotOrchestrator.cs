@@ -482,6 +482,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             var size = sizes[idx];
             if (size <= 0)
             {
+                capitalExhaustedKeys.Add($"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}");
                 continue;
             }
 
@@ -522,7 +523,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 _logger.LogWarning("Balance exhausted for user {UserId}: {Error}", userId, error);
                 await PushStatusExplanationAsync(userId,
-                    $"Insufficient balance on {opp.LongExchangeName}/{opp.ShortExchangeName} for {opp.AssetSymbol}", "warning");
+                    $"Insufficient balance on {opp.LongExchangeName}/{opp.ShortExchangeName} for {opp.AssetSymbol} (need {size:F2} USDC per exchange)", "warning");
                 // Track remaining candidates as skipped due to capital exhaustion
                 for (int remaining = idx + 1; remaining < candidates.Count; remaining++)
                 {

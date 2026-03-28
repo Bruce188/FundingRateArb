@@ -23,7 +23,17 @@ public class PositionSizerEdgeCaseTests
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync(It.IsAny<string>(), It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         var mockBalanceAggregator = new Mock<IBalanceAggregator>();
         mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 10_000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "Exchange1", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "Exchange2", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 3, ExchangeName = "Exchange3", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         // Use real YieldCalculator — no external dependencies
         _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), mockBalanceAggregator.Object);
     }

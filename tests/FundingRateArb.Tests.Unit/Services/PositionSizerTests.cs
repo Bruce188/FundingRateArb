@@ -24,7 +24,17 @@ public class PositionSizerTests
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync(It.IsAny<string>(), It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
         // Default balance: high enough that config cap applies
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 10_000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "Exchange1", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "Exchange2", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 3, ExchangeName = "Exchange3", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         // Use real YieldCalculator — no external dependencies
         _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object);
     }
@@ -401,7 +411,15 @@ public class PositionSizerTests
     {
         // Real balance = 80, config cap = 107 → uses 80
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 80m, FetchedAt = DateTime.UtcNow });
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 80m, FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -416,7 +434,15 @@ public class PositionSizerTests
     {
         // Real balance = 200, config cap = 107 → uses 107
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 200m, FetchedAt = DateTime.UtcNow });
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 200m, FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 200m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 200m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig());
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -541,7 +567,16 @@ public class PositionSizerTests
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 50m, FetchedAt = DateTime.UtcNow });
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 50m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "Exchange1", AvailableUsdc = 25m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "Exchange2", AvailableUsdc = 25m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         var opps = MakeOpps((0.001m, 100_000_000m));

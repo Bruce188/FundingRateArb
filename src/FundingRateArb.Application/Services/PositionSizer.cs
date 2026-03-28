@@ -144,6 +144,26 @@ public class PositionSizer : IPositionSizer
             batchExchangeExposure[opp.ShortExchangeId] = batchShort + sizes[i];
         }
 
+        // Per-exchange balance cap: each leg needs the full margin on its own exchange
+        var exchangeBalances = balanceSnapshot.Balances
+            .Where(b => b.ErrorMessage is null)
+            .ToDictionary(b => b.ExchangeId, b => b.AvailableUsdc);
+
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            if (sizes[i] <= 0)
+            {
+                continue;
+            }
+
+            var opp = opportunities[i];
+            var longBalance = exchangeBalances.GetValueOrDefault(opp.LongExchangeId);
+            var shortBalance = exchangeBalances.GetValueOrDefault(opp.ShortExchangeId);
+            var maxByBalance = Math.Min(longBalance, shortBalance);
+            if (maxByBalance <= 0) { sizes[i] = 0; continue; }
+            sizes[i] = Math.Min(sizes[i], maxByBalance);
+        }
+
         // C2: Cap each position by its liquidity limit (compare notional, not margin)
         for (int i = 0; i < sizes.Length; i++)
         {
