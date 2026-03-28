@@ -21,6 +21,7 @@ public class PositionHealthMonitorTests
     private readonly Mock<IExchangeConnectorFactory> _mockFactory = new();
     private readonly Mock<IExchangeConnector> _mockLongConnector = new();
     private readonly Mock<IExchangeConnector> _mockShortConnector = new();
+    private readonly Mock<IExecutionEngine> _mockExecutionEngine = new();
     private readonly PositionHealthMonitor _sut;
 
     private static readonly BotConfiguration DefaultConfig = new()
@@ -51,7 +52,8 @@ public class PositionHealthMonitorTests
             .ReturnsAsync([]);
 
         _sut = new PositionHealthMonitor(_mockUow.Object,
-            _mockFactory.Object, new Mock<IMarketDataCache>().Object, NullLogger<PositionHealthMonitor>.Instance);
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockExecutionEngine.Object,
+            NullLogger<PositionHealthMonitor>.Instance);
     }
 
     private ArbitragePosition MakeOpenPosition(
@@ -1054,5 +1056,75 @@ public class PositionHealthMonitorTests
         BotOrchestrator.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
+    }
+
+    // ── Closing position retry tests ──────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_ClosingPosition_IsRetried()
+    {
+        // Arrange: no open positions, but one position in Closing status
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        var closingPos = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-2),
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        // GetByStatusAsync(Opening) returns empty (default), GetByStatusAsync(Closing) returns the stuck position
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { closingPos });
+
+        // Act
+        await _sut.CheckAndActAsync();
+
+        // Assert: ClosePositionAsync was called for the stuck Closing position
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync("test-user", closingPos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_ClosingPositionRetryFails_DoesNotThrow()
+    {
+        // Arrange: closing position where retry throws
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        var closingPos = new ArbitragePosition
+        {
+            Id = 11,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-3),
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { closingPos });
+        _mockExecutionEngine
+            .Setup(e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange unreachable"));
+
+        // Act & Assert: should not throw
+        var act = async () => await _sut.CheckAndActAsync();
+        await act.Should().NotThrowAsync();
     }
 }

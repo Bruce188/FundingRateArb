@@ -515,6 +515,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
 
                 var updatedPositions = await uow.Positions.GetOpenAsync();
+                // Refresh shared allOpenPositions so subsequent user cycles see the new position
+                allOpenPositions.Clear();
+                allOpenPositions.AddRange(updatedPositions);
                 await PushPositionUpdatesAsync(updatedPositions, globalConfig);
                 await PushNewAlertsAsync(uow);
             }

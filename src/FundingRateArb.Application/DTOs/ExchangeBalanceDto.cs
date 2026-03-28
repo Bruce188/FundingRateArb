@@ -5,6 +5,7 @@ public class ExchangeBalanceDto
     public int ExchangeId { get; set; }
     public string ExchangeName { get; set; } = null!;
     public decimal AvailableUsdc { get; set; }
+    public string? ErrorMessage { get; set; }
     public DateTime FetchedAt { get; set; }
 }
 

@@ -65,6 +65,8 @@ public class BalanceAggregator : IBalanceAggregator
             if (connector is null)
             {
                 _logger.LogWarning("Could not create connector for {Exchange} (user {UserId})", exchangeName, userId);
+                balanceTasks.Add((cred.ExchangeId, exchangeName, Task.FromException<decimal>(
+                    new InvalidOperationException("Credentials not configured"))));
                 continue;
             }
 
@@ -97,6 +99,7 @@ public class BalanceAggregator : IBalanceAggregator
                     ExchangeId = exchangeId,
                     ExchangeName = exchangeName,
                     AvailableUsdc = 0m,
+                    ErrorMessage = ex.Message,
                     FetchedAt = now,
                 });
             }

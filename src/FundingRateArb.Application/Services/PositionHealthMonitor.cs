@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
@@ -12,6 +13,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IMarketDataCache _marketDataCache;
+    private readonly IExecutionEngine _executionEngine;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
 
@@ -19,11 +21,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
         IMarketDataCache marketDataCache,
+        IExecutionEngine executionEngine,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
         _marketDataCache = marketDataCache;
+        _executionEngine = executionEngine;
         _logger = logger;
     }
 
@@ -33,6 +37,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
         // M4: Reap stale Closing positions (stuck > 10 minutes)
         await ReapStalePositionsAsync(PositionStatus.Closing, TimeSpan.FromMinutes(10), ct);
+
+        // Retry close for positions stuck in Closing status (partial fills)
+        await RetryClosingPositionsAsync(ct);
 
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
@@ -170,6 +177,23 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         return toClose;
     }
 
+    private async Task RetryClosingPositionsAsync(CancellationToken ct)
+    {
+        var closingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Closing);
+        foreach (var pos in closingPositions)
+        {
+            try
+            {
+                _logger.LogInformation("Retrying close for position #{PositionId} stuck in Closing status", pos.Id);
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.SpreadCollapsed, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Retry close failed for position #{PositionId}: {Message}", pos.Id, ex.Message);
+            }
+        }
+    }
+
     private async Task ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)
     {
         var positions = await _uow.Positions.GetByStatusAsync(status);
@@ -277,13 +301,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             return dbFeeRate.Value;
         }
 
-        // Hardcoded fallback for when DB rate is not loaded
-        return exchangeName switch
-        {
-            "Hyperliquid" => 0.00045m,
-            "Lighter" => 0.0m,
-            "Aster" => 0.0004m,
-            _ => 0.0005m, // conservative default
-        };
+        // Fallback to shared constants when DB rate is not loaded
+        return ExchangeFeeConstants.GetTakerFeeRate(exchangeName ?? string.Empty);
     }
 }

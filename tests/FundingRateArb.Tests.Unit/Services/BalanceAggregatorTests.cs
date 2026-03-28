@@ -148,4 +148,79 @@ public class BalanceAggregatorTests
         result.TotalAvailableUsdc.Should().Be(0m);
         result.Balances.Should().BeEmpty();
     }
+
+    [Fact]
+    public async Task FailedExchange_PopulatesErrorMessage()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("API key expired"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().NotBeNull();
+        result.Balances[0].ErrorMessage.Should().Contain("API key expired");
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task SuccessfulExchange_HasNullError()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().BeNull();
+        result.Balances[0].AvailableUsdc.Should().Be(100m);
+    }
+
+    [Fact]
+    public async Task NullConnector_PopulatesCredentialsNotConfiguredError()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Be("Credentials not configured");
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+    }
 }

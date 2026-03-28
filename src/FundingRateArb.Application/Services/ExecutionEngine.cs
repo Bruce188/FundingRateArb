@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
@@ -216,8 +217,8 @@ public class ExecutionEngine : IExecutionEngine
 
                 var longNotional = longResult!.FilledPrice * longResult.FilledQuantity;
                 var shortNotional = shortResult!.FilledPrice * shortResult.FilledQuantity;
-                position.EntryFeesUsdc = (longNotional * GetTakerFeeRate(opp.LongExchangeName))
-                                       + (shortNotional * GetTakerFeeRate(opp.ShortExchangeName));
+                position.EntryFeesUsdc = (longNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.LongExchangeName))
+                                       + (shortNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.ShortExchangeName));
 
                 if (longResult.IsEstimatedFill || shortResult.IsEstimatedFill)
                 {
@@ -498,8 +499,8 @@ public class ExecutionEngine : IExecutionEngine
                 ?? (await _uow.Exchanges.GetByIdAsync(position.LongExchangeId))!.Name;
             var shortExName = position.ShortExchange?.Name
                 ?? (await _uow.Exchanges.GetByIdAsync(position.ShortExchangeId))!.Name;
-            position.ExitFeesUsdc = (longCloseNotional * GetTakerFeeRate(longExName))
-                                  + (shortCloseNotional * GetTakerFeeRate(shortExName));
+            position.ExitFeesUsdc = (longCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(longExName))
+                                  + (shortCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(shortExName));
 
             // RealizedPnl = price PnL + funding collected - all fees
             var pricePnl = longPnl + shortPnl;
@@ -696,13 +697,12 @@ public class ExecutionEngine : IExecutionEngine
         }
     }
 
-    private static decimal GetTakerFeeRate(string exchangeName) => exchangeName switch
+    private static bool IsRetryableCloseError(string? error)
     {
-        "Hyperliquid" => 0.00045m,
-        "Lighter" => 0m,
-        "Aster" => 0.0004m,
-        _ => 0.0005m,
-    };
+        if (string.IsNullOrEmpty(error)) return false;
+        var patterns = new[] { "no open", "not found", "position not", "does not exist", "no position" };
+        return patterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
+    }
 
     private async Task TryEmergencyCloseWithRetryAsync(
         IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)
@@ -722,7 +722,7 @@ public class ExecutionEngine : IExecutionEngine
                 }
 
                 if (attempt < maxAttempts - 1
-                    && closeResult.Error?.Contains("No open position") == true)
+                    && IsRetryableCloseError(closeResult.Error))
                 {
                     _logger.LogWarning(
                         "Emergency close attempt {Attempt}/{Max} failed (position not settled yet), retrying in {Delay}ms: {Asset}",

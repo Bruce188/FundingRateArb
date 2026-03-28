@@ -22,6 +22,7 @@ public class PositionSizerTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
         // Default balance: high enough that config cap applies
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
@@ -540,5 +541,65 @@ public class PositionSizerTests
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
         sizes[0].Should().Be(0m, "asset exposure limit already reached");
+    }
+
+    // ── Opening positions counted in capital allocation ────────────────────
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_OpeningPositions_CountedInAllocatedCapital()
+    {
+        // 1 Open (50 USDC) + 1 Opening (50 USDC) = 100 allocated
+        // TotalCapital = 1000, available = 1000 - 100 = 900, * 0.8 = 720
+        var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockPositions.Setup(p => p.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { SizeUsdc = 50m },
+            });
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { SizeUsdc = 50m },
+            });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available = (1000 - 100) * 0.80 = 720
+        sizes[0].Should().Be(720m, "Opening positions should reduce available capital");
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_OpeningPositions_ReduceAvailableSlots()
+    {
+        // 1 Open + 1 Opening on the same asset: total asset exposure = 400
+        // MaxExposurePerAsset = 0.5 → max = 0.5 * 1000 = 500, remaining = 500 - 400 = 100
+        var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 0m;
+        config.MaxExposurePerAsset = 0.5m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockPositions.Setup(p => p.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m },
+            });
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m },
+            });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // Available capital = (1000 - 400) * 0.8 = 480
+        // Asset exposure cap: 0.5 * 1000 = 500, current = 400, remaining = 100
+        // sizes[0] = min(480, 100) = 100
+        sizes[0].Should().Be(100m, "Opening positions should be included in asset exposure calculations");
     }
 }

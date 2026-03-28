@@ -30,7 +30,9 @@ public class PositionSizer : IPositionSizer
 
         var config = await _uow.BotConfig.GetActiveAsync();
         var openPositions = await _uow.Positions.GetOpenAsync();
-        var allocatedCapital = openPositions.Sum(p => p.SizeUsdc);
+        var openingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        var allActivePositions = openPositions.Concat(openingPositions).ToList();
+        var allocatedCapital = allActivePositions.Sum(p => p.SizeUsdc);
 
         // Use real exchange balance, capped by configured TotalCapitalUsdc
         var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
@@ -106,8 +108,8 @@ public class PositionSizer : IPositionSizer
 
             var opp = opportunities[i];
 
-            // Per-asset exposure: sum SizeUsdc of all open positions for this asset + batch allocations
-            var currentAssetExposure = openPositions
+            // Per-asset exposure: sum SizeUsdc of all active positions for this asset + batch allocations
+            var currentAssetExposure = allActivePositions
                 .Where(p => p.AssetId == opp.AssetId)
                 .Sum(p => p.SizeUsdc);
             var batchAsset = batchAssetExposure.GetValueOrDefault(opp.AssetId, 0m);
@@ -116,7 +118,7 @@ public class PositionSizer : IPositionSizer
             sizes[i] = Math.Min(sizes[i], maxNewAsset);
 
             // Per-exchange exposure: check both long and short exchanges + batch allocations
-            var currentLongExposure = openPositions
+            var currentLongExposure = allActivePositions
                 .Where(p => p.LongExchangeId == opp.LongExchangeId || p.ShortExchangeId == opp.LongExchangeId)
                 .Sum(p => p.SizeUsdc);
             var batchLong = batchExchangeExposure.GetValueOrDefault(opp.LongExchangeId, 0m);
@@ -124,7 +126,7 @@ public class PositionSizer : IPositionSizer
             if (maxNewLong <= 0) { sizes[i] = 0; continue; }
             sizes[i] = Math.Min(sizes[i], maxNewLong);
 
-            var currentShortExposure = openPositions
+            var currentShortExposure = allActivePositions
                 .Where(p => p.LongExchangeId == opp.ShortExchangeId || p.ShortExchangeId == opp.ShortExchangeId)
                 .Sum(p => p.SizeUsdc);
             var batchShort = batchExchangeExposure.GetValueOrDefault(opp.ShortExchangeId, 0m);

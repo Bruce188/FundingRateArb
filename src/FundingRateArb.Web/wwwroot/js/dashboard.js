@@ -292,8 +292,14 @@
 
         balances.forEach(function (b) {
             var span = document.createElement("span");
-            span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
-            span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
+            if (b.errorMessage) {
+                span.className = "text-warning balance-error";
+                span.title = b.errorMessage;
+                span.textContent = b.exchangeName + ": \u26A0 error";
+            } else {
+                span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
+                span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
+            }
             container.appendChild(span);
         });
 
