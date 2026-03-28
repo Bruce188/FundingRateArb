@@ -666,7 +666,8 @@ public class UserSettingsServiceTests
         existing.EncryptedSubAccountAddress.Should().Be("new-enc(sub)");
         existing.EncryptedApiKeyIndex.Should().Be("new-enc(idx)");
         existing.IsActive.Should().BeTrue();
-        existing.LastUpdatedAt.Should().NotBeNull();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
         _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Exactly(6));
     }
 
