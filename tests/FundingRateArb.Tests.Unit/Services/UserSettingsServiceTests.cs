@@ -68,7 +68,9 @@ public class UserSettingsServiceTests
             Id = 42,
             UserId = UserId,
             ExchangeId = 1,
-            EncryptedApiKey = "old-encrypted-key"
+            EncryptedApiKey = "old-encrypted-key",
+            EncryptedWalletAddress = "old-encrypted-wallet",
+            EncryptedPrivateKey = "old-encrypted-priv"
         };
         _mockCredentials
             .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
@@ -77,12 +79,18 @@ public class UserSettingsServiceTests
         _mockVault.Setup(v => v.Encrypt("new-key")).Returns("encrypted-new-key");
         _mockVault.Setup(v => v.Encrypt("new-secret")).Returns("encrypted-new-secret");
 
-        // Act
+        // Act — update only apiKey and apiSecret, walletAddress and privateKey are null
         await _sut.SaveCredentialAsync(UserId, 1, "new-key", "new-secret", null, null);
 
-        // Assert
+        // Assert — updated fields change, untouched fields preserve their values
         existing.EncryptedApiKey.Should().Be("encrypted-new-key");
         existing.EncryptedApiSecret.Should().Be("encrypted-new-secret");
+        existing.EncryptedWalletAddress.Should().Be("old-encrypted-wallet");
+        existing.EncryptedPrivateKey.Should().Be("old-encrypted-priv");
+        existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Exactly(2));
         _mockCredentials.Verify(r => r.Update(existing), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(default), Times.Once);
     }
@@ -493,15 +501,18 @@ public class UserSettingsServiceTests
     }
 
     [Fact]
-    public async Task SaveCredentialAsync_PartialUpdate_PreservesExistingNewFields()
+    public async Task SaveCredentialAsync_PartialUpdate_PreservesAllExistingFields()
     {
-        // Arrange — existing credential already has SubAccountAddress and ApiKeyIndex
+        // Arrange — existing credential with all six fields populated
         var existing = new UserExchangeCredential
         {
             Id = 10,
             UserId = UserId,
             ExchangeId = 1,
-            EncryptedPrivateKey = "old-priv",
+            EncryptedApiKey = "existing-enc-key",
+            EncryptedApiSecret = "existing-enc-secret",
+            EncryptedWalletAddress = "existing-enc-wallet",
+            EncryptedPrivateKey = "existing-enc-priv",
             EncryptedSubAccountAddress = "existing-enc-sub",
             EncryptedApiKeyIndex = "existing-enc-idx"
         };
@@ -511,13 +522,153 @@ public class UserSettingsServiceTests
 
         _mockVault.Setup(v => v.Encrypt("new-priv")).Returns("encrypted-new-priv");
 
-        // Act — update only privateKey, leave subAccountAddress and apiKeyIndex as null
+        // Act — update only privateKey, all others null
         await _sut.SaveCredentialAsync(UserId, 1, null, null, null, "new-priv");
 
-        // Assert — new fields should be preserved (not overwritten with null)
+        // Assert — all five untouched fields preserved, privateKey updated, IsActive set
+        existing.EncryptedApiKey.Should().Be("existing-enc-key");
+        existing.EncryptedApiSecret.Should().Be("existing-enc-secret");
+        existing.EncryptedWalletAddress.Should().Be("existing-enc-wallet");
         existing.EncryptedPrivateKey.Should().Be("encrypted-new-priv");
         existing.EncryptedSubAccountAddress.Should().Be("existing-enc-sub");
         existing.EncryptedApiKeyIndex.Should().Be("existing-enc-idx");
+        existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_PartialUpdate_PreservesNullFields_WhenExistingFieldIsNull()
+    {
+        // Arrange — DEX credential that never had apiKey/apiSecret set
+        var existing = new UserExchangeCredential
+        {
+            Id = 30,
+            UserId = UserId,
+            ExchangeId = 3,
+            EncryptedApiKey = null,
+            EncryptedApiSecret = null,
+            EncryptedWalletAddress = "existing-enc-wallet",
+            EncryptedPrivateKey = "existing-enc-priv"
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 3))
+            .ReturnsAsync(existing);
+
+        _mockVault.Setup(v => v.Encrypt("0xNewSub")).Returns("encrypted-new-sub");
+
+        // Act — update only subAccountAddress, apiKey/apiSecret remain null
+        await _sut.SaveCredentialAsync(UserId, 3, null, null, null, null,
+            subAccountAddress: "0xNewSub");
+
+        // Assert — null fields stay null, Encrypt never called for them
+        existing.EncryptedApiKey.Should().BeNull();
+        existing.EncryptedApiSecret.Should().BeNull();
+        existing.EncryptedWalletAddress.Should().Be("existing-enc-wallet");
+        existing.EncryptedPrivateKey.Should().Be("existing-enc-priv");
+        existing.EncryptedSubAccountAddress.Should().Be("encrypted-new-sub");
+        _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_PartialUpdate_HyperliquidScenario()
+    {
+        // Arrange — Hyperliquid credential with walletAddress + privateKey
+        var existing = new UserExchangeCredential
+        {
+            Id = 21,
+            UserId = UserId,
+            ExchangeId = 3,
+            EncryptedWalletAddress = "existing-enc-wallet",
+            EncryptedPrivateKey = "existing-enc-priv"
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 3))
+            .ReturnsAsync(existing);
+
+        _mockVault.Setup(v => v.Encrypt("0xNewSub")).Returns("encrypted-new-sub");
+
+        // Act — update only subAccountAddress
+        await _sut.SaveCredentialAsync(UserId, 3, null, null, null, null,
+            subAccountAddress: "0xNewSub");
+
+        // Assert — walletAddress and privateKey should be preserved, null CEX fields stay null
+        existing.EncryptedApiKey.Should().BeNull();
+        existing.EncryptedApiSecret.Should().BeNull();
+        existing.EncryptedWalletAddress.Should().Be("existing-enc-wallet");
+        existing.EncryptedPrivateKey.Should().Be("existing-enc-priv");
+        existing.EncryptedSubAccountAddress.Should().Be("encrypted-new-sub");
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_PartialUpdate_LighterScenario()
+    {
+        // Arrange — Lighter credential with walletAddress + privateKey + apiKeyIndex
+        var existing = new UserExchangeCredential
+        {
+            Id = 22,
+            UserId = UserId,
+            ExchangeId = 4,
+            EncryptedWalletAddress = "existing-enc-wallet",
+            EncryptedPrivateKey = "existing-enc-priv",
+            EncryptedApiKeyIndex = "existing-enc-idx"
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 4))
+            .ReturnsAsync(existing);
+
+        _mockVault.Setup(v => v.Encrypt("99")).Returns("encrypted-99");
+
+        // Act — update only apiKeyIndex
+        await _sut.SaveCredentialAsync(UserId, 4, null, null, null, null,
+            apiKeyIndex: "99");
+
+        // Assert — walletAddress and privateKey should be preserved, null CEX fields stay null
+        existing.EncryptedApiKey.Should().BeNull();
+        existing.EncryptedApiSecret.Should().BeNull();
+        existing.EncryptedWalletAddress.Should().Be("existing-enc-wallet");
+        existing.EncryptedPrivateKey.Should().Be("existing-enc-priv");
+        existing.EncryptedApiKeyIndex.Should().Be("encrypted-99");
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_FullUpdate_OverwritesAllFields()
+    {
+        // Arrange — existing credential with all fields
+        var existing = new UserExchangeCredential
+        {
+            Id = 23,
+            UserId = UserId,
+            ExchangeId = 1,
+            EncryptedApiKey = "old-key",
+            EncryptedApiSecret = "old-secret",
+            EncryptedWalletAddress = "old-wallet",
+            EncryptedPrivateKey = "old-priv",
+            EncryptedSubAccountAddress = "old-sub",
+            EncryptedApiKeyIndex = "old-idx"
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(existing);
+
+        _mockVault.Setup(v => v.Encrypt(It.IsAny<string>()))
+            .Returns<string>(s => $"new-enc({s})");
+
+        // Act — provide all six fields
+        await _sut.SaveCredentialAsync(UserId, 1, "k", "s", "w", "p",
+            subAccountAddress: "sub", apiKeyIndex: "idx");
+
+        // Assert — all fields should be overwritten with new encrypted values
+        existing.EncryptedApiKey.Should().Be("new-enc(k)");
+        existing.EncryptedApiSecret.Should().Be("new-enc(s)");
+        existing.EncryptedWalletAddress.Should().Be("new-enc(w)");
+        existing.EncryptedPrivateKey.Should().Be("new-enc(p)");
+        existing.EncryptedSubAccountAddress.Should().Be("new-enc(sub)");
+        existing.EncryptedApiKeyIndex.Should().Be("new-enc(idx)");
+        existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Exactly(6));
     }
 
     // --- Data-Only Exchange Tests (NB5) ---
