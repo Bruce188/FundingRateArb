@@ -1,0 +1,14 @@
+{
+  "threshold": 5,
+  "reporters": ["console", "json"],
+  "ignore": [
+    "**/Migrations/**",
+    "**/bin/**",
+    "**/obj/**",
+    "**/*.Designer.cs",
+    "**/wwwroot/lib/**"
+  ],
+  "minLines": 5,
+  "minTokens": 50,
+  "output": "jscpd-report"
+}

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Text.RegularExpressions;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
@@ -88,6 +89,25 @@ public class SettingsController : Controller
             if (string.IsNullOrWhiteSpace(value) && !string.IsNullOrEmpty(value))
             {
                 TempData["Error"] = $"{name} cannot be whitespace only.";
+                return RedirectToAction(nameof(ApiKeys));
+            }
+        }
+
+        // Per-exchange format validation
+        if (!string.IsNullOrEmpty(subAccountAddress))
+        {
+            if (!Regex.IsMatch(subAccountAddress, @"^0x[0-9a-fA-F]{40}$"))
+            {
+                TempData["Error"] = "Sub-account address must be a valid Ethereum address (0x + 40 hex characters).";
+                return RedirectToAction(nameof(ApiKeys));
+            }
+        }
+
+        if (!string.IsNullOrEmpty(apiKeyIndex))
+        {
+            if (!int.TryParse(apiKeyIndex, out var idx) || idx < 2 || idx > 254)
+            {
+                TempData["Error"] = "API key index must be an integer between 2 and 254.";
                 return RedirectToAction(nameof(ApiKeys));
             }
         }
