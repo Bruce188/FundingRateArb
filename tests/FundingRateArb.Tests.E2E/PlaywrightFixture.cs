@@ -18,6 +18,15 @@ public class PlaywrightFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        // N5: Warn when E2E_BASE_URL is HTTP over non-localhost (credentials transit unencrypted)
+        if (BaseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && !BaseUrl.Contains("localhost") && !BaseUrl.Contains("127.0.0.1"))
+        {
+            Console.Error.WriteLine(
+                $"WARNING: E2E_BASE_URL ({BaseUrl}) uses HTTP over a non-localhost address. " +
+                "Credentials will be transmitted unencrypted. Use HTTPS for non-local targets.");
+        }
+
         // Install Chromium if not already present (idempotent)
         var exitCode = Microsoft.Playwright.Program.Main(["install", "chromium"]);
         if (exitCode != 0)

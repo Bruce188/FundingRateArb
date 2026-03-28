@@ -29,8 +29,9 @@ public class CredentialBalanceTests
         var password = Environment.GetEnvironmentVariable("E2E_ADMIN_PASSWORD");
         Skip.If(string.IsNullOrEmpty(password), "E2E_ADMIN_PASSWORD env var is required for E2E tests");
 
+        var adminEmail = Environment.GetEnvironmentVariable("E2E_ADMIN_EMAIL") ?? "admin@fundingratearb.com";
         await page.GotoAsync($"{_fixture.BaseUrl}/Identity/Account/Login");
-        await page.FillAsync("input[name='Input.Email']", "admin@fundingratearb.com");
+        await page.FillAsync("input[name='Input.Email']", adminEmail);
         await page.FillAsync("input[name='Input.Password']", password!);
         await page.ClickAsync("button[type='submit']");
         // Wait for redirect away from login page
@@ -88,19 +89,19 @@ public class CredentialBalanceTests
         Assert.True(walletCount > 0, "Hyperliquid wallet address input not found on ApiKeys page. " +
             "Verify the page contains a form with exchange name 'Hyperliquid' and a WalletAddress field.");
 
-        await walletInput.FillAsync("0x1234567890abcdef1234567890abcdef12345678");
+        await walletInput.FillAsync("0x0000000000000000000000000000000000000001");
 
         var keyInput = page.Locator(
             "[data-exchange='Hyperliquid'] input[name*='PrivateKey'], " +
             "form:has-text('Hyperliquid') input[name*='PrivateKey']").First;
         Assert.True(await keyInput.CountAsync() > 0, "Hyperliquid private key input not found");
-        await keyInput.FillAsync("0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678");
+        await keyInput.FillAsync("0x0000000000000000000000000000000000000000000000000000000000000001");
 
         // Submit the form
         var submitBtn = page.Locator("form:has-text('Hyperliquid') button[type='submit']").First;
         Assert.True(await submitBtn.CountAsync() > 0, "Hyperliquid submit button not found");
         await submitBtn.ClickAsync();
-        await page.WaitForTimeoutAsync(2000);
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         // Verify no error toast/alert is visible (success)
         var errorAlert = page.Locator(".alert-danger:visible");
@@ -136,12 +137,12 @@ public class CredentialBalanceTests
 
         var keyInput = page.Locator("form:has-text('Lighter') input[name*='PrivateKey']").First;
         Assert.True(await keyInput.CountAsync() > 0, "Lighter private key input not found");
-        await keyInput.FillAsync("0xdeadbeef1234567890abcdef1234567890abcdef1234567890abcdef12345678");
+        await keyInput.FillAsync("0x0000000000000000000000000000000000000000000000000000000000000001");
 
         var submitBtn = page.Locator("form:has-text('Lighter') button[type='submit']").First;
         Assert.True(await submitBtn.CountAsync() > 0, "Lighter submit button not found");
         await submitBtn.ClickAsync();
-        await page.WaitForTimeoutAsync(2000);
+        await page.WaitForLoadStateAsync(LoadState.NetworkIdle);
 
         var errorAlert = page.Locator(".alert-danger:visible");
         Assert.Equal(0, await errorAlert.CountAsync());
@@ -159,47 +160,28 @@ public class CredentialBalanceTests
         // Navigate to dashboard
         await page.GotoAsync($"{_fixture.BaseUrl}/");
 
-        // Wait for the balance display to be populated via SignalR (up to 90 seconds)
+        // N7: Use WaitForSelectorAsync instead of polling loop for balance display
         var balanceContainer = page.Locator("#exchange-balances");
-        var balanceFound = false;
-
-        for (int i = 0; i < 90; i++)
+        try
         {
-            await page.WaitForTimeoutAsync(1000);
-
-            var spans = balanceContainer.Locator("span");
-            var count = await spans.CountAsync();
-            if (count > 0)
-            {
-                for (int j = 0; j < count; j++)
-                {
-                    var span = spans.Nth(j);
-                    var className = await span.GetAttributeAsync("class") ?? "";
-
-                    var isSuccess = className.Contains("text-success");
-                    var isError = className.Contains("text-warning") || className.Contains("balance-error");
-                    var isMuted = className.Contains("text-muted");
-
-                    if (isSuccess || isError || isMuted)
-                    {
-                        balanceFound = true;
-                    }
-                }
-
-                if (balanceFound)
-                {
-                    break;
-                }
-            }
+            await balanceContainer.Locator("span.text-success, span.text-warning, span.text-muted")
+                .First.WaitForAsync(new LocatorWaitForOptions { Timeout = 90_000 });
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail("Balance data should appear within 90 seconds via SignalR. " +
+                "Either no ReceiveBalanceUpdate was pushed, or the #exchange-balances container has no spans.");
         }
 
-        // NB4: Assert that balance data was found within the timeout
-        Assert.True(balanceFound, "Balance data should appear within 90 seconds via SignalR. " +
-            "Either no ReceiveBalanceUpdate was pushed, or the #exchange-balances container has no spans.");
-
-        // Verify no plain $0.00 without error indicator
+        // NB1: Verify balance spans have meaningful state.
+        // Dashboard JS renders: text-success for positive balances, text-warning for errors,
+        // text-muted for $0.00 (no title attribute). A $0.00 with text-muted is acceptable
+        // (means the exchange returned zero). A $0.00 with a title attribute would indicate
+        // an error message displayed via tooltip.
         var finalSpans = balanceContainer.Locator("span");
         var finalCount = await finalSpans.CountAsync();
+        Assert.True(finalCount > 0, "Expected at least one balance span in #exchange-balances");
+
         for (int j = 0; j < finalCount; j++)
         {
             var span = finalSpans.Nth(j);
@@ -208,12 +190,15 @@ public class CredentialBalanceTests
 
             if (text.Contains("$0.00"))
             {
-                var hasTitle = await span.GetAttributeAsync("title");
-                if (hasTitle != null && hasTitle.Length > 0)
-                {
-                    Assert.Contains("warning", className,
-                        StringComparison.OrdinalIgnoreCase);
-                }
+                // $0.00 with text-muted (no title) = genuine zero balance — acceptable
+                // $0.00 with title attribute = error indicator shown via tooltip
+                var title = await span.GetAttributeAsync("title");
+                var hasErrorTitle = !string.IsNullOrEmpty(title);
+                var isMuted = className.Contains("text-muted");
+
+                Assert.True(isMuted || hasErrorTitle,
+                    $"Balance showing $0.00 must be either text-muted (zero balance) or have a title (error tooltip). " +
+                    $"Found class=\"{className}\", title=\"{title ?? "(null)"}\"");
             }
         }
     }

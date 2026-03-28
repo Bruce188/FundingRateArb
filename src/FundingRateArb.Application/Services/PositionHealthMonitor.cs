@@ -191,9 +191,14 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             try
             {
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cts.CancelAfter(TimeSpan.FromSeconds(30));
+                cts.CancelAfter(TimeSpan.FromSeconds(45));
+                var closeReason = pos.CloseReason ?? CloseReason.SpreadCollapsed;
+                if (!pos.CloseReason.HasValue)
+                {
+                    _logger.LogWarning("Position #{PositionId} has no CloseReason set, defaulting to {DefaultReason}", pos.Id, closeReason);
+                }
                 _logger.LogInformation("Retrying close for position #{PositionId} stuck in Closing status", pos.Id);
-                await _executionEngine.ClosePositionAsync(pos.UserId, pos, pos.CloseReason ?? CloseReason.SpreadCollapsed, cts.Token);
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, closeReason, cts.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {

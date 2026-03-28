@@ -29,8 +29,11 @@ public class PositionSizer : IPositionSizer
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
-        var openPositions = await _uow.Positions.GetOpenAsync();
-        var openingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        var openTask = _uow.Positions.GetOpenAsync();
+        var openingTask = _uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        await Task.WhenAll(openTask, openingTask);
+        var openPositions = await openTask;
+        var openingPositions = await openingTask;
         var openSet = new HashSet<int>(openPositions.Where(p => p.Id > 0).Select(p => p.Id));
         var allActivePositions = openPositions
             .Concat(openingPositions.Where(p => p.Id <= 0 || !openSet.Contains(p.Id)))
