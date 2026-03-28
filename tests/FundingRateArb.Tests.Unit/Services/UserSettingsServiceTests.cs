@@ -87,6 +87,10 @@ public class UserSettingsServiceTests
         existing.EncryptedApiSecret.Should().Be("encrypted-new-secret");
         existing.EncryptedWalletAddress.Should().Be("old-encrypted-wallet");
         existing.EncryptedPrivateKey.Should().Be("old-encrypted-priv");
+        existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Exactly(2));
         _mockCredentials.Verify(r => r.Update(existing), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(default), Times.Once);
     }
