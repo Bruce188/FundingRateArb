@@ -174,6 +174,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// </summary>
     internal async Task RunCycleAsync(CancellationToken ct)
     {
+        // Sweep expired circuit breaker entries to prevent unbounded dictionary growth
+        var expiredKeys = _exchangeCircuitBreaker
+            .Where(kvp => kvp.Value.BrokenUntil < DateTime.UtcNow && kvp.Value.BrokenUntil != DateTime.MinValue)
+            .Select(kvp => kvp.Key)
+            .ToList();
+        foreach (var key in expiredKeys)
+        {
+            _exchangeCircuitBreaker.TryRemove(key, out _);
+        }
+
         using var scope = _scopeFactory.CreateScope();
         var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var globalConfig = await uow.BotConfig.GetActiveAsync();
@@ -245,7 +255,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
                             rec.PositionId, rec.PositionAsset, rec.ReplacementAsset,
                             rec.ReplacementLongExchange, rec.ReplacementShortExchange);
                         await executionEngine.ClosePositionAsync(posToClose.UserId, posToClose, CloseReason.Rebalanced, ct);
-                        closedIds.Add(rec.PositionId);
+                        // Only track as closed if the position actually transitioned
+                        if (posToClose.Status is PositionStatus.Closed or PositionStatus.Closing or PositionStatus.EmergencyClosed)
+                        {
+                            closedIds.Add(rec.PositionId);
+                        }
                     }
                 }
 
@@ -311,7 +325,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Select(kvp => kvp.Key)
             .ToHashSet();
 
-        // Pre-compute opportunity key strings once to avoid repeated allocations
+        // Pre-compute opportunity key strings once to avoid repeated allocations.
+        // Uses reference equality for ArbitrageOpportunityDto keys — same object instances flow
+        // through the entire cycle. GetValueOrDefault fallbacks handle adaptive-path DTOs
+        // that may not be in this dictionary.
         var opportunityKeys = allOpportunities
             .ToDictionary(o => o, o => $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}");
 
@@ -497,6 +514,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 var adaptiveCandidates = opportunityResult.AllNetPositive
                     .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
+                    .Where(o => !dataOnlyExchangeIds.Contains(o.LongExchangeId) && !dataOnlyExchangeIds.Contains(o.ShortExchangeId))
+                    .Where(o => !circuitBrokenExchangeIds.Contains(o.LongExchangeId) && !circuitBrokenExchangeIds.Contains(o.ShortExchangeId))
                     .Where(o => enabledAssetSet.Contains(o.AssetId))
                     .Where(opp =>
                     {
@@ -615,7 +634,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 tracker.OpenedOppKeys.Add(key);
                 positionsChanged = true;
 
-                // Reset circuit breaker on success
+                // Reset circuit breaker on success.
+                // Note: TryRemove could race with concurrent IncrementExchangeFailure, but user
+                // processing is sequential in the current design. If parallelism is introduced,
+                // switch to AddOrUpdate with a conditional reset instead.
                 _exchangeCircuitBreaker.TryRemove(opp.LongExchangeId, out _);
                 _exchangeCircuitBreaker.TryRemove(opp.ShortExchangeId, out _);
 
@@ -1032,10 +1054,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// <summary>
     /// Groups skip-reason tracking sets to reduce parameter count.
     /// Per-user sets are cleared at the start of each user iteration to prevent cross-user leakage.
+    /// Global sets (CapitalExhaustedKeys, MaxPositionsKeys, CooldownKeys) accumulate across all users
+    /// and represent "any-user" aggregate status — User B's snapshot may report a skip reason
+    /// that was only triggered by User A. This is acceptable for the current snapshot model
+    /// which records one reason per opportunity per cycle (not per-user). If per-user accuracy
+    /// is needed, scope these sets inside the user loop.
     /// </summary>
     internal sealed class SkipReasonTracker
     {
-        // Global sets (accumulated across all users)
+        // Global sets (accumulated across all users — represents "any-user" aggregate status)
         public HashSet<string> OpenedOppKeys { get; } = new();
         public HashSet<string> CapitalExhaustedKeys { get; } = new();
         public HashSet<string> MaxPositionsKeys { get; } = new();

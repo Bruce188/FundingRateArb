@@ -717,14 +717,15 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
         _logger.LogDebug(
-            "SendTransaction response: statusCode={StatusCode} body={Body}",
-            (int)response.StatusCode, responseBody);
+            "SendTransaction response: statusCode={StatusCode}",
+            (int)response.StatusCode);
 
         if (!response.IsSuccessStatusCode)
         {
+            var truncatedBody = responseBody.Length > 500 ? responseBody[..500] : responseBody;
             _logger.LogWarning(
                 "SendTransaction failed: statusCode={StatusCode} body={Body}",
-                (int)response.StatusCode, responseBody);
+                (int)response.StatusCode, truncatedBody);
             throw new HttpRequestException(
                 $"Lighter order submission failed ({response.StatusCode})");
         }

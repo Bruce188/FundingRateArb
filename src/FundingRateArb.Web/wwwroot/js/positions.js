@@ -45,7 +45,9 @@
     });
 
     connection.on("ReceivePositionRemoval", function (positionId) {
-        var row = document.querySelector('tr[data-position-id="' + positionId + '"]');
+        var parsedId = parseInt(positionId, 10);
+        if (isNaN(parsedId)) return;
+        var row = document.querySelector('tr[data-position-id="' + parsedId + '"]');
         if (row) {
             row.remove();
         }

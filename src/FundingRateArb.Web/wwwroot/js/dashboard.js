@@ -91,14 +91,7 @@
         if (positionCard) {
             positionCard.remove();
         }
-        // Update the open positions count if displayed
-        var openPositions = document.getElementById("open-positions");
-        if (openPositions) {
-            var current = parseInt(openPositions.textContent, 10);
-            if (!isNaN(current) && current > 0) {
-                openPositions.textContent = current - 1;
-            }
-        }
+        // Open position count is updated authoritatively by ReceiveDashboardUpdate
     });
 
     var isMobile = window.matchMedia('(max-width: 575.98px)');
