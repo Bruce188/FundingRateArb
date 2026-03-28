@@ -35,6 +35,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
     public string ExchangeName => "Aster";
 
+    public bool IsEstimatedFillExchange => false;
+
     /// <inheritdoc />
     /// <remarks>
     /// Calls <c>UsdFuturesApi.ExchangeData.GetMarkPricesAsync</c> which returns the current

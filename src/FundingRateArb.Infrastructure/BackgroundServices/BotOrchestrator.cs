@@ -248,6 +248,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var openedOppKeys = new HashSet<string>();
         var capitalExhaustedKeys = new HashSet<string>();
         var maxPositionsKeys = new HashSet<string>();
+        var cooldownKeys = new HashSet<string>();
 
         // Fetch data-only exchange IDs once per cycle (same for all users)
         var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
@@ -256,7 +257,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, ct);
             }
             catch (Exception ex)
             {
@@ -265,7 +266,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 6: Persist opportunity snapshots and run 7-day purge
-        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, ct);
+        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, ct);
     }
 
     /// <summary>
@@ -284,6 +285,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         HashSet<string> openedOppKeys,
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
+        HashSet<string> cooldownKeys,
         CancellationToken ct)
     {
         var allOpportunities = opportunityResult.Opportunities;
@@ -382,6 +384,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                         "Skipping {Asset} {Long}/{Short} for user {UserId} — on cooldown until {Until}",
                         opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, cd.CooldownUntil);
                     cooldownSkips.Add((opp.AssetSymbol, cd.CooldownUntil - DateTime.UtcNow));
+                    cooldownKeys.Add(key);
                     return false;
                 }
                 return true;
@@ -408,6 +411,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                         var cooldownKey = $"{userId}:{key}";
                         if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
                         {
+                            cooldownKeys.Add(key);
                             return false;
                         }
 
@@ -568,6 +572,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         HashSet<string> openedOppKeys,
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
+        HashSet<string> cooldownKeys,
         CancellationToken ct)
     {
         try
@@ -593,7 +598,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     {
                         skipReason = "active_position";
                     }
-                    else if (_failedOpCooldowns.Any(cd => cd.Key.EndsWith($":{key}") && DateTime.UtcNow < cd.Value.CooldownUntil))
+                    else if (cooldownKeys.Contains(key))
                     {
                         skipReason = "cooldown";
                     }

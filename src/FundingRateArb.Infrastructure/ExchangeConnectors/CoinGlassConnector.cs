@@ -47,6 +47,8 @@ public class CoinGlassConnector : IExchangeConnector
 
     public string ExchangeName => "CoinGlass";
 
+    public bool IsEstimatedFillExchange => false;
+
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, "api/futures/funding-rates-all");

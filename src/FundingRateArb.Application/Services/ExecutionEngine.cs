@@ -162,144 +162,271 @@ public class ExecutionEngine : IExecutionEngine
             _uow.Positions.Add(position);
             await _uow.SaveAsync(ct);
 
-            // Place both legs concurrently
-            var longTask = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long, sizeUsdc, effectiveLeverage, ct);
-            var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, ct);
+            // B1: Use concurrent path when both connectors are reliable (no estimated fills).
+            // Only use sequential when at least one leg is estimated-fill (fire-and-forget).
+            OrderResultDto longResult;
+            OrderResultDto shortResult;
 
-            // C1: Wrap Task.WhenAll in try/catch — SDK connectors (Hyperliquid, Aster) throw
-            // InvalidOperationException/HttpRequestException on errors. If one task faults, WhenAll
-            // propagates the first exception immediately. We must inspect each task individually to
-            // determine which legs succeeded and need emergency close.
-            OrderResultDto? longResult = null;
-            OrderResultDto? shortResult = null;
-            string? longException = null;
-            string? shortException = null;
-
-            try
+            if (longConnector.IsEstimatedFillExchange || shortConnector.IsEstimatedFillExchange)
             {
-                await Task.WhenAll(longTask, shortTask);
-            }
-            catch
-            {
-                // At least one task faulted. Inspect each task individually.
-                // A completed task has a result; a faulted task has an exception.
-            }
-
-            if (longTask.IsCompletedSuccessfully)
-            {
-                longResult = longTask.Result;
-            }
-            else if (longTask.IsFaulted)
-            {
-                longException = longTask.Exception?.InnerException?.Message ?? longTask.Exception?.Message ?? "Unknown error";
-            }
-
-            if (shortTask.IsCompletedSuccessfully)
-            {
-                shortResult = shortTask.Result;
-            }
-            else if (shortTask.IsFaulted)
-            {
-                shortException = shortTask.Exception?.InnerException?.Message ?? shortTask.Exception?.Message ?? "Unknown error";
-            }
-
-            // If both legs returned results (no exceptions), use the existing Success=true/false logic
-            var longSuccess = longResult?.Success == true;
-            var shortSuccess = shortResult?.Success == true;
-
-            if (longSuccess && shortSuccess)
-            {
-                position.LongEntryPrice = longResult!.FilledPrice;
-                position.ShortEntryPrice = shortResult!.FilledPrice;
-                position.LongOrderId = longResult.OrderId;
-                position.ShortOrderId = shortResult.OrderId;
-                position.Status = PositionStatus.Open;
-
-                var longNotional = longResult!.FilledPrice * longResult.FilledQuantity;
-                var shortNotional = shortResult!.FilledPrice * shortResult.FilledQuantity;
-                position.EntryFeesUsdc = (longNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.LongExchangeName))
-                                       + (shortNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.ShortExchangeName));
-
-                if (longResult.IsEstimatedFill || shortResult.IsEstimatedFill)
+                // NB2: Log warning when both connectors are estimated-fill
+                if (longConnector.IsEstimatedFillExchange && shortConnector.IsEstimatedFillExchange)
                 {
-                    _logger.LogWarning("Position #{Id} has estimated fill prices (Lighter) — PnL may be approximate", position.Id);
+                    _logger.LogWarning(
+                        "Both connectors are estimated-fill for {Asset}: Long={LongExchange}, Short={ShortExchange} — second leg will not be verified",
+                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName);
                 }
 
-                // B7: Validate fill quantities
-                var longQ = longResult.FilledQuantity;
-                var shortQ = shortResult.FilledQuantity;
-                if (longQ > 0 && shortQ > 0)
+                // Sequential path: open unreliable (estimated fill) leg FIRST,
+                // verify it, then open the reliable leg.
+                var firstIsLong = longConnector.IsEstimatedFillExchange || !shortConnector.IsEstimatedFillExchange;
+                var (firstConnector, firstSide, firstExchangeName, secondConnector, secondSide, secondExchangeName) = firstIsLong
+                    ? (longConnector, Side.Long, opp.LongExchangeName, shortConnector, Side.Short, opp.ShortExchangeName)
+                    : (shortConnector, Side.Short, opp.ShortExchangeName, longConnector, Side.Long, opp.LongExchangeName);
+
+                // Open first leg
+                OrderResultDto firstResult;
+                try
                 {
-                    var mismatchPct = Math.Abs(longQ - shortQ) / Math.Max(longQ, shortQ);
-                    if (mismatchPct > 0.05m)
+                    firstResult = await firstConnector.PlaceMarketOrderAsync(opp.AssetSymbol, firstSide, sizeUsdc, effectiveLeverage, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "First leg threw for {Asset} on {Exchange}", opp.AssetSymbol, firstExchangeName);
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    // NB3: Truncate exception message to 200 chars in alerts
+                    var truncatedMsg = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
+                    _uow.Alerts.Add(new Alert
                     {
-                        _logger.LogWarning("Fill quantity mismatch: long={LongQ}, short={ShortQ} ({Pct:P1}) for {Asset}",
-                            longQ, shortQ, mismatchPct, opp.AssetSymbol);
-                        position.Notes = $"Quantity mismatch: long={longQ:F6}, short={shortQ:F6} ({mismatchPct:P1})";
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) threw: {truncatedMsg}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, ex.Message);
+                }
+
+                if (!firstResult.Success)
+                {
+                    // First leg failed cleanly — no fees lost, just abort
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) failed: {firstResult.Error}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, firstResult.Error);
+                }
+
+                // If first leg is estimated fill, verify it actually executed on-chain
+                if (firstResult.IsEstimatedFill && firstConnector is IPositionVerifiable verifiable)
+                {
+                    var verified = await verifiable.VerifyPositionOpenedAsync(opp.AssetSymbol, firstSide, ct);
+                    if (!verified)
+                    {
+                        _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — aborting second leg",
+                            opp.AssetSymbol, firstExchangeName);
+                        // B3: Attempt emergency close — tx may have succeeded on-chain but verification timed out
+                        await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                        position.Status = PositionStatus.EmergencyClosed;
+                        _uow.Positions.Update(position);
+                        _uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.LegFailed,
+                            Severity = AlertSeverity.Critical,
+                            Message = $"Position verification failed on {firstExchangeName} for {opp.AssetSymbol} — tx may have failed on-chain",
+                        });
+                        await _uow.SaveAsync(ct);
+                        return (false, $"Position verification failed on {firstExchangeName} — tx may have failed on-chain");
                     }
                 }
 
-                _uow.Positions.Update(position);
-                _uow.Alerts.Add(new Alert
+                // First leg confirmed — now open second leg
+                OrderResultDto secondResult;
+                try
                 {
-                    UserId = userId,
-                    Type = AlertType.PositionOpened,
-                    Severity = AlertSeverity.Info,
-                    Message = $"Position opened: {opp.AssetSymbol} " +
-                               $"Long/{opp.LongExchangeName} Short/{opp.ShortExchangeName} " +
-                               $"@ {sizeUsdc:F2} USDC",
-                });
-
-                await _uow.SaveAsync(ct);
-
-                if (_logger.IsEnabled(LogLevel.Information))
+                    secondResult = await secondConnector.PlaceMarketOrderAsync(opp.AssetSymbol, secondSide, sizeUsdc, effectiveLeverage, ct);
+                }
+                catch (Exception ex)
                 {
-                    _logger.LogInformation(
-                        "Position opened: {Asset} LongOrderId={LongOrderId} ShortOrderId={ShortOrderId}",
-                        opp.AssetSymbol, longResult.OrderId, shortResult.OrderId);
+                    _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
+                        opp.AssetSymbol, secondExchangeName);
+                    await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    // NB3: Truncate exception message to 200 chars in alerts
+                    var truncatedMsg = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) threw: {truncatedMsg}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, ex.Message);
                 }
 
-                return (true, null);
+                if (!secondResult.Success)
+                {
+                    // Second leg failed — emergency close first leg
+                    _logger.LogError(
+                        "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
+                        opp.AssetSymbol, secondExchangeName, secondResult.Error);
+                    await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) failed: {secondResult.Error}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, secondResult.Error);
+                }
+
+                // Both legs succeeded — assign results back to long/short
+                longResult = firstIsLong ? firstResult : secondResult;
+                shortResult = firstIsLong ? secondResult : firstResult;
             }
-
-            // One or both legs failed (Success=false or threw an exception)
-            var longError = longException ?? longResult?.Error;
-            var shortError = shortException ?? shortResult?.Error;
-
-            _logger.LogError(
-                "EMERGENCY CLOSE — One leg failed: {Asset} Long={LongStatus} Short={ShortStatus}",
-                opp.AssetSymbol,
-                longSuccess ? "OK" : $"FAILED: {longError}",
-                shortSuccess ? "OK" : $"FAILED: {shortError}");
-
-            // Emergency close any leg that succeeded — run sequentially to avoid concurrent exchange state issues
-            if (longSuccess)
+            else
             {
-                await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                // Concurrent path: both connectors are reliable, use Task.WhenAll for speed
+                var longTask = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long, sizeUsdc, effectiveLeverage, ct);
+                var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, ct);
+
+                try
+                {
+                    await Task.WhenAll(longTask, shortTask);
+                }
+                catch
+                {
+                    // One or both tasks threw — inspect individually below
+                }
+
+                // Handle exceptions from individual tasks
+                if (longTask.IsFaulted || shortTask.IsFaulted)
+                {
+                    var longEx = longTask.IsFaulted ? longTask.Exception?.GetBaseException() : null;
+                    var shortEx = shortTask.IsFaulted ? shortTask.Exception?.GetBaseException() : null;
+
+                    // If only one leg threw, try to emergency close the successful one
+                    if (!longTask.IsFaulted && longTask.IsCompletedSuccessfully && longTask.Result.Success)
+                    {
+                        await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                    }
+                    if (!shortTask.IsFaulted && shortTask.IsCompletedSuccessfully && shortTask.Result.Success)
+                    {
+                        await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                    }
+
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";
+                    // NB3: Truncate exception message to 200 chars in alerts
+                    var truncatedMsg = errorMsg.Length > 200 ? errorMsg[..200] : errorMsg;
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — concurrent leg threw: {truncatedMsg}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, errorMsg);
+                }
+
+                longResult = longTask.Result;
+                shortResult = shortTask.Result;
+
+                // Handle non-exception failures
+                if (!longResult.Success || !shortResult.Success)
+                {
+                    // If one succeeded and the other failed, emergency close the successful one
+                    if (longResult.Success && !shortResult.Success)
+                    {
+                        await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                    }
+                    else if (!longResult.Success && shortResult.Success)
+                    {
+                        await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                    }
+
+                    position.Status = PositionStatus.EmergencyClosed;
+                    _uow.Positions.Update(position);
+                    var error = !longResult.Success ? longResult.Error : shortResult.Error;
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Emergency close: {opp.AssetSymbol} — leg failed: {error}",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, error);
+                }
             }
 
-            if (shortSuccess)
+            position.LongEntryPrice = longResult.FilledPrice;
+            position.ShortEntryPrice = shortResult.FilledPrice;
+            position.LongOrderId = longResult.OrderId;
+            position.ShortOrderId = shortResult.OrderId;
+            position.Status = PositionStatus.Open;
+
+            var longNotional = longResult.FilledPrice * longResult.FilledQuantity;
+            var shortNotional = shortResult.FilledPrice * shortResult.FilledQuantity;
+            position.EntryFeesUsdc = (longNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.LongExchangeName))
+                                   + (shortNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.ShortExchangeName));
+
+            if (longResult.IsEstimatedFill || shortResult.IsEstimatedFill)
             {
-                await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                _logger.LogWarning("Position #{Id} has estimated fill prices (Lighter) — PnL may be approximate", position.Id);
             }
 
+            // B7: Validate fill quantities
+            var longQ = longResult.FilledQuantity;
+            var shortQ = shortResult.FilledQuantity;
+            if (longQ > 0 && shortQ > 0)
+            {
+                var mismatchPct = Math.Abs(longQ - shortQ) / Math.Max(longQ, shortQ);
+                if (mismatchPct > 0.05m)
+                {
+                    _logger.LogWarning("Fill quantity mismatch: long={LongQ}, short={ShortQ} ({Pct:P1}) for {Asset}",
+                        longQ, shortQ, mismatchPct, opp.AssetSymbol);
+                    position.Notes = $"Quantity mismatch: long={longQ:F6}, short={shortQ:F6} ({mismatchPct:P1})";
+                }
+            }
+
+            _uow.Positions.Update(position);
             _uow.Alerts.Add(new Alert
             {
                 UserId = userId,
-                Type = AlertType.LegFailed,
-                Severity = AlertSeverity.Critical,
-                Message = $"Emergency close: {opp.AssetSymbol} " +
-                           $"Long={longError ?? "OK"} Short={shortError ?? "OK"}",
+                Type = AlertType.PositionOpened,
+                Severity = AlertSeverity.Info,
+                Message = $"Position opened: {opp.AssetSymbol} " +
+                           $"Long/{opp.LongExchangeName} Short/{opp.ShortExchangeName} " +
+                           $"@ {sizeUsdc:F2} USDC",
             });
-
-            // Mark the pre-persisted sentinel as EmergencyClosed so the position is not orphaned
-            position.Status = PositionStatus.EmergencyClosed;
-            _uow.Positions.Update(position);
 
             await _uow.SaveAsync(ct);
 
-            var error = longError ?? shortError ?? "Both legs failed";
-            return (false, error);
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "Position opened: {Asset} LongOrderId={LongOrderId} ShortOrderId={ShortOrderId}",
+                    opp.AssetSymbol, longResult.OrderId, shortResult.OrderId);
+            }
+
+            return (true, null);
 
         } // end try
         finally

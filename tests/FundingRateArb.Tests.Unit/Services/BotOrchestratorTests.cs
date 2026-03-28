@@ -243,6 +243,50 @@ public class BotOrchestratorTests
     }
 
     [Fact]
+    public async Task RunCycle_CooldownOpportunity_SnapshotShowsCooldownSkipReason()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 1,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = MakeOpp(1, "ETH");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        // Place the opportunity on cooldown (simulating a previous failure)
+        var cooldownKey = $"{TestUserId}:{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+        _sut.FailedOpCooldowns[cooldownKey] = (DateTime.UtcNow.AddMinutes(10), 1);
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        IEnumerable<OpportunitySnapshot>? savedSnapshots = null;
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<OpportunitySnapshot>, CancellationToken>((s, _) => savedSnapshots = s.ToList())
+            .Returns(Task.CompletedTask);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        savedSnapshots.Should().NotBeNull();
+        var snapshot = savedSnapshots!.First();
+        snapshot.SkipReason.Should().Be("cooldown",
+            "cooldown-skipped opportunities should get 'cooldown' skip reason, not 'below_threshold'");
+        snapshot.WasOpened.Should().BeFalse();
+    }
+
+    [Fact]
     public void ClearCooldowns_EmptiesDictionary()
     {
         _sut.FailedOpCooldowns["test_key"] = (DateTime.UtcNow.AddMinutes(30), 3);

@@ -16,7 +16,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// Uses a custom HttpClient for REST API calls and the native lighter-signer
 /// library (via P/Invoke) for cryptographic order signing.
 /// </summary>
-public class LighterConnector : IExchangeConnector, IDisposable
+public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<LighterConnector> _logger;
@@ -70,6 +70,82 @@ public class LighterConnector : IExchangeConnector, IDisposable
     }
 
     public string ExchangeName => "Lighter";
+
+    public bool IsEstimatedFillExchange => true;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Polls GetAccountAsync up to 3 times with 2-second delays to verify the position
+    /// actually exists on-chain after fire-and-forget tx submission.
+    /// </remarks>
+    public async Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        const int maxAttempts = 3;
+        const int delayMs = 2000;
+
+        var accountIndex = GetAccountIndex();
+
+        for (int attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            // NB1: Delay between retries, not before the first attempt
+            if (attempt > 0)
+            {
+                await Task.Delay(delayMs, ct);
+            }
+
+            try
+            {
+                var accountResponse = await GetAccountAsync(accountIndex, ct);
+                var account = accountResponse?.Accounts?.FirstOrDefault();
+                if (account?.Positions is null)
+                {
+                    continue;
+                }
+
+                foreach (var p in account.Positions)
+                {
+                    if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out var size))
+                    {
+                        continue;
+                    }
+
+                    // Long = positive size, Short = negative size
+                    if (side == Side.Long && size > 0)
+                    {
+                        _logger.LogInformation(
+                            "Position verified for {Asset} {Side} on attempt {Attempt}: size={Size}",
+                            asset, side, attempt + 1, size);
+                        return true;
+                    }
+
+                    if (side == Side.Short && size < 0)
+                    {
+                        _logger.LogInformation(
+                            "Position verified for {Asset} {Side} on attempt {Attempt}: size={Size}",
+                            asset, side, attempt + 1, size);
+                        return true;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Position verification attempt {Attempt}/{Max} failed for {Asset}",
+                    attempt + 1, maxAttempts, asset);
+            }
+        }
+
+        _logger.LogWarning(
+            "Position verification failed after {Max} attempts for {Asset} {Side}",
+            maxAttempts, asset, side);
+        return false;
+    }
 
     // ── Funding Rates ──
     // Note: HttpClient has AddStandardResilienceHandler applied at registration (Program.cs).
