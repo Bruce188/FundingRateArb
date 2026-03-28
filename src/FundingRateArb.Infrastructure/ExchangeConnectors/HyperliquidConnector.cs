@@ -177,7 +177,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 triggerPrice: null,
                 tpSlType: null,
                 tpSlGrouping: null,
-                vaultAddress: null,
+                vaultAddress: _vaultAddress,
                 expireAfter: null,
                 ct: token),
             ct);
@@ -277,7 +277,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
         var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(null, null, token),
+            async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(_vaultAddress, null, token),
             ct);
 
         if (!result.Success)
@@ -298,7 +298,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(null, null, token),
+                async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(_vaultAddress, null, token),
                 ct);
 
             if (!result.Success || result.Data.Positions is null)
