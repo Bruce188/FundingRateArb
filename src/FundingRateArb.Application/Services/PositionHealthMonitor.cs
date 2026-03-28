@@ -35,11 +35,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         // M4: Reap stale Opening positions (stuck > 5 minutes)
         await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
-        // M4: Reap stale Closing positions (stuck > 10 minutes)
-        await ReapStalePositionsAsync(PositionStatus.Closing, TimeSpan.FromMinutes(10), ct);
-
-        // Retry close for positions stuck in Closing status (partial fills)
-        await RetryClosingPositionsAsync(ct);
+        // Fetch Closing positions once — shared between reaper and retry logic (NB11)
+        var closingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Closing);
+        // M4: Reap stale Closing positions (stuck > 10 minutes), returns non-reaped positions
+        var nonReaped = await ReapStaleClosingPositionsAsync(closingPositions, TimeSpan.FromMinutes(10), ct);
+        // Retry close for remaining Closing positions (partial fills)
+        await RetryClosingPositionsAsync(nonReaped, ct);
 
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
@@ -177,21 +178,82 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         return toClose;
     }
 
-    private async Task RetryClosingPositionsAsync(CancellationToken ct)
+    private async Task RetryClosingPositionsAsync(IReadOnlyList<ArbitragePosition> positions, CancellationToken ct)
     {
-        var closingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Closing);
-        foreach (var pos in closingPositions)
+        if (positions.Count == 0) return;
+
+        // NB12: Use bounded concurrency to avoid blocking health monitor for N*14s
+        const int maxConcurrency = 3;
+        using var semaphore = new SemaphoreSlim(maxConcurrency);
+        var tasks = positions.Select(async pos =>
         {
+            await semaphore.WaitAsync(ct);
             try
             {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(30));
                 _logger.LogInformation("Retrying close for position #{PositionId} stuck in Closing status", pos.Id);
-                await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.SpreadCollapsed, ct);
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, pos.CloseReason ?? CloseReason.SpreadCollapsed, cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("Retry close timed out for position #{PositionId}", pos.Id);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Retry close failed for position #{PositionId}: {Message}", pos.Id, ex.Message);
             }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+        await Task.WhenAll(tasks);
+    }
+
+    private async Task<IReadOnlyList<ArbitragePosition>> ReapStaleClosingPositionsAsync(
+        IReadOnlyList<ArbitragePosition> closingPositions, TimeSpan maxAge, CancellationToken ct)
+    {
+        var cutoff = DateTime.UtcNow - maxAge;
+        var nonReaped = new List<ArbitragePosition>();
+        var reaped = false;
+
+        foreach (var pos in closingPositions)
+        {
+            var referenceTime = pos.ClosingStartedAt ?? pos.OpenedAt;
+            if (referenceTime >= cutoff)
+            {
+                nonReaped.Add(pos);
+                continue;
+            }
+
+            if (_logger.IsEnabled(LogLevel.Critical))
+            {
+                _logger.LogCritical(
+                    "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
+                    PositionStatus.Closing, pos.Id, pos.Asset?.Symbol ?? "?", referenceTime);
+            }
+
+            pos.Status = PositionStatus.EmergencyClosed;
+            _uow.Positions.Update(pos);
+            _uow.Alerts.Add(new Alert
+            {
+                UserId = pos.UserId,
+                ArbitragePositionId = pos.Id,
+                Type = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message = $"Position #{pos.Id} stuck in Closing for >{maxAge.TotalMinutes:F0} minutes. " +
+                           $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
+            });
+            reaped = true;
         }
+
+        if (reaped)
+        {
+            await _uow.SaveAsync(ct);
+        }
+
+        return nonReaped;
     }
 
     private async Task ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)

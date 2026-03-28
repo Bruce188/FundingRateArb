@@ -697,11 +697,13 @@ public class ExecutionEngine : IExecutionEngine
         }
     }
 
+    private static readonly string[] RetryableClosePatterns =
+        ["no open", "not found", "position not", "does not exist", "no position"];
+
     private static bool IsRetryableCloseError(string? error)
     {
         if (string.IsNullOrEmpty(error)) return false;
-        var patterns = new[] { "no open", "not found", "position not", "does not exist", "no position" };
-        return patterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
+        return RetryableClosePatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task TryEmergencyCloseWithRetryAsync(

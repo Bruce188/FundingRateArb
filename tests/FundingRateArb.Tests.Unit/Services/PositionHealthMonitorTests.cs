@@ -1127,4 +1127,132 @@ public class PositionHealthMonitorTests
         var act = async () => await _sut.CheckAndActAsync();
         await act.Should().NotThrowAsync();
     }
+
+    // ── B1: Reap vs retry ordering ──────────────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_ReapAndRetry_OldPositionReaped_YoungPositionRetried()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var oldPosition = new ArbitragePosition
+        {
+            Id = 20,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-12), // > 10 min → should be reaped
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        var youngPosition = new ArbitragePosition
+        {
+            Id = 21,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-3), // < 10 min → should be retried
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { oldPosition, youngPosition });
+
+        await _sut.CheckAndActAsync();
+
+        // Old position should be reaped to EmergencyClosed, NOT retried
+        oldPosition.Status.Should().Be(PositionStatus.EmergencyClosed);
+
+        // Young position should be retried via ClosePositionAsync, NOT reaped
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync("test-user", youngPosition, It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // Old position should NOT have been passed to ClosePositionAsync
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), oldPosition, It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    // ── NB8: CloseReason parameter for retried closes ──────────────────
+
+    [Fact]
+    public async Task CheckAndAct_RetryClose_UsesOriginalCloseReason()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var closingPos = new ArbitragePosition
+        {
+            Id = 30,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            CloseReason = CloseReason.MaxHoldTimeReached, // original reason
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-2),
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { closingPos });
+
+        await _sut.CheckAndActAsync();
+
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync("test-user", closingPos, CloseReason.MaxHoldTimeReached, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "retry should preserve the original CloseReason");
+    }
+
+    [Fact]
+    public async Task CheckAndAct_RetryClose_FallsBackToSpreadCollapsed_WhenNoOriginalReason()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync())
+            .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+
+        var closingPos = new ArbitragePosition
+        {
+            Id = 31,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            CloseReason = null, // no original reason
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-2),
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync(new List<ArbitragePosition> { closingPos });
+
+        await _sut.CheckAndActAsync();
+
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync("test-user", closingPos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "retry should fall back to SpreadCollapsed when no original CloseReason");
+    }
 }

@@ -99,7 +99,7 @@ public class BalanceAggregator : IBalanceAggregator
                     ExchangeId = exchangeId,
                     ExchangeName = exchangeName,
                     AvailableUsdc = 0m,
-                    ErrorMessage = ex.Message,
+                    ErrorMessage = SanitizeErrorMessage(ex),
                     FetchedAt = now,
                 });
             }
@@ -115,4 +115,11 @@ public class BalanceAggregator : IBalanceAggregator
         _cache.Set(cacheKey, snapshot, CacheTtl);
         return snapshot;
     }
+
+    private static string SanitizeErrorMessage(Exception ex) => ex switch
+    {
+        HttpRequestException => "Exchange unreachable",
+        InvalidOperationException when ex.Message == "Credentials not configured" => "Credentials not configured",
+        _ => "Balance fetch failed",
+    };
 }

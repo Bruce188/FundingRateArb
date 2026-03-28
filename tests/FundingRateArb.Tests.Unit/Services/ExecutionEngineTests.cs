@@ -1803,4 +1803,31 @@ public class ExecutionEngineTests
             Times.Once,
             "should NOT retry on unrelated error like 'Insufficient margin'");
     }
+
+    [Fact]
+    public async Task EmergencyClose_NullError_DoesNotRetry()
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close returns failure with null error
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = null });
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: emergency close was called exactly once (null error is not retryable)
+        result.Success.Should().BeFalse();
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "should NOT retry when close error is null");
+    }
 }

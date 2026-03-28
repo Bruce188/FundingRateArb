@@ -602,4 +602,28 @@ public class PositionSizerTests
         // sizes[0] = min(480, 100) = 100
         sizes[0].Should().Be(100m, "Opening positions should be included in asset exposure calculations");
     }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_DuplicatePositionInOpenAndOpening_NotDoubleCounted()
+    {
+        // Same position appears in both GetOpenAsync and GetByStatusAsync(Opening)
+        // This simulates a race condition where a position transitions mid-query
+        var sharedPosition = new ArbitragePosition { Id = 42, SizeUsdc = 50m, AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2 };
+
+        var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockPositions.Setup(p => p.GetOpenAsync())
+            .ReturnsAsync(new List<ArbitragePosition> { sharedPosition });
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync(new List<ArbitragePosition> { sharedPosition });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // With dedup: allocatedCapital = 50 (not 100), available = (1000-50)*0.8 = 760
+        // Without dedup: allocatedCapital = 100, available = (1000-100)*0.8 = 720
+        sizes[0].Should().Be(760m, "duplicate position should not be double-counted");
+    }
 }

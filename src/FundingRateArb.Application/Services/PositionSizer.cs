@@ -31,7 +31,10 @@ public class PositionSizer : IPositionSizer
         var config = await _uow.BotConfig.GetActiveAsync();
         var openPositions = await _uow.Positions.GetOpenAsync();
         var openingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Opening);
-        var allActivePositions = openPositions.Concat(openingPositions).ToList();
+        var openSet = new HashSet<int>(openPositions.Where(p => p.Id > 0).Select(p => p.Id));
+        var allActivePositions = openPositions
+            .Concat(openingPositions.Where(p => p.Id <= 0 || !openSet.Contains(p.Id)))
+            .ToList();
         var allocatedCapital = allActivePositions.Sum(p => p.SizeUsdc);
 
         // Use real exchange balance, capped by configured TotalCapitalUsdc
