@@ -147,7 +147,8 @@ public class PositionSizer : IPositionSizer
         // Per-exchange balance cap: each leg needs the full margin on its own exchange
         var exchangeBalances = balanceSnapshot.Balances
             .Where(b => b.ErrorMessage is null)
-            .ToDictionary(b => b.ExchangeId, b => b.AvailableUsdc);
+            .GroupBy(b => b.ExchangeId)
+            .ToDictionary(g => g.Key, g => g.Sum(b => b.AvailableUsdc));
 
         for (int i = 0; i < sizes.Length; i++)
         {
