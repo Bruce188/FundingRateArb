@@ -12,6 +12,7 @@ public class ArbitrageOpportunityDto
     public decimal ShortRatePerHour { get; set; }
     public decimal SpreadPerHour { get; set; }
     public decimal NetYieldPerHour { get; set; }
+    public decimal BoostedNetYieldPerHour { get; set; }
     public decimal AnnualizedYield { get; set; }
     public decimal LongVolume24h { get; set; }
     public decimal ShortVolume24h { get; set; }

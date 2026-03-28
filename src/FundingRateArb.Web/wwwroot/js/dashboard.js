@@ -8,7 +8,7 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
-    // B1: Dynamic decimal formatting for small prices
+    // Dynamic decimal formatting for small prices
     function formatPrice(price) {
         if (price === 0) return "$0.00";
         if (price >= 1) return "$" + price.toFixed(2);
@@ -121,7 +121,7 @@
 
                     var spreadDiv = document.createElement("div");
                     spreadDiv.className = "small";
-                    spreadDiv.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + (opp.netYieldPerHour * 100).toFixed(4) + "%/hr";
+                    spreadDiv.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + ((opp.boostedNetYieldPerHour ?? opp.netYieldPerHour) * 100).toFixed(4) + "%/hr";
                     body.appendChild(spreadDiv);
 
                     card.appendChild(body);
@@ -229,7 +229,7 @@
             tdAsset.appendChild(strongEl);
             row.appendChild(tdAsset);
 
-            // B1: Use formatPrice for mark prices
+            // Format mark prices as average of long/short
             var tdPrice = document.createElement("td");
             var lp = opp.longMarkPrice || 0;
             var sp = opp.shortMarkPrice || 0;
@@ -251,7 +251,7 @@
             row.appendChild(tdSpread);
 
             var tdYield = document.createElement("td");
-            tdYield.textContent = (opp.netYieldPerHour * 100).toFixed(4) + "%";
+            tdYield.textContent = ((opp.boostedNetYieldPerHour ?? opp.netYieldPerHour) * 100).toFixed(4) + "%";
             row.appendChild(tdYield);
 
             var tdApr = document.createElement("td");

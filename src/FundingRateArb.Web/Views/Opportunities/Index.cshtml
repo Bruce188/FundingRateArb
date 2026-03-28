@@ -55,7 +55,7 @@
                                 <td>@opp.LongExchangeName</td>
                                 <td>@opp.ShortExchangeName</td>
                                 <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
-                                <td>@((opp.NetYieldPerHour * 100).ToString("F4"))%</td>
+                                <td>@((opp.BoostedNetYieldPerHour * 100).ToString("F4"))%</td>
                                 <td class="@apyClass">
                                     @((opp.AnnualizedYield * 100).ToString("F1"))%
                                     @if (constrained)

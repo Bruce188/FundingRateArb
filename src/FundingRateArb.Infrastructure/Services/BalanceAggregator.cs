@@ -115,7 +115,7 @@ public class BalanceAggregator : IBalanceAggregator
         var snapshot = new BalanceSnapshotDto
         {
             Balances = balances,
-            TotalAvailableUsdc = balances.Sum(b => b.AvailableUsdc),
+            TotalAvailableUsdc = balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc),
             FetchedAt = now,
         };
 

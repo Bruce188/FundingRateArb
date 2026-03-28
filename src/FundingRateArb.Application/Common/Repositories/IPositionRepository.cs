@@ -21,6 +21,9 @@ public interface IPositionRepository
     Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status);
     Task<List<ArbitragePosition>> GetByStatusesAsync(params PositionStatus[] statuses);
+
+    /// <summary>Returns positions for a specific user with the given statuses. Pushes userId filter into SQL.</summary>
+    Task<List<ArbitragePosition>> GetByUserAndStatusesAsync(string userId, params PositionStatus[] statuses);
     Task<List<ArbitragePosition>> GetClosedSinceAsync(DateTime since);
 
     /// <summary>Returns closed positions with navigation properties (Asset, LongExchange, ShortExchange) loaded.

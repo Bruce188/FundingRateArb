@@ -196,7 +196,7 @@
                                         <span class="badge @apyBadge">@((opp.AnnualizedYield * 100).ToString("F0"))% APY</span>
                                     </div>
                                     <small class="text-muted">Long: @opp.LongExchangeName | Short: @opp.ShortExchangeName</small>
-                                    <div class="small">Spread: @((opp.SpreadPerHour * 100).ToString("F4"))%/hr | Net: @((opp.NetYieldPerHour * 100).ToString("F4"))%/hr</div>
+                                    <div class="small">Spread: @((opp.SpreadPerHour * 100).ToString("F4"))%/hr | Net: @((opp.BoostedNetYieldPerHour * 100).ToString("F4"))%/hr</div>
                                     @if (opp.PredictedSpread.HasValue)
                                     {
                                         <div class="small">Predicted: @((opp.PredictedSpread.Value * 100).ToString("F4"))%/hr (@(opp.PredictedTrend ?? "n/a"))</div>
@@ -302,7 +302,7 @@
                                         <td>@opp.LongExchangeName</td>
                                         <td>@opp.ShortExchangeName</td>
                                         <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
-                                        <td>@((opp.NetYieldPerHour * 100).ToString("F4"))%</td>
+                                        <td>@((opp.BoostedNetYieldPerHour * 100).ToString("F4"))%</td>
                                         <td>
                                             @if (opp.PredictedSpread.HasValue)
                                             {
@@ -400,7 +400,7 @@
                                             <small class="text-muted">PnL Target: @mPct.ToString("F0")%</small>
                                         </div>
                                     }
-                                    <div><small class="text-muted">Opened @pos.OpenedAt.ToString("MMM dd HH:mm")</small></div>
+                                    <div><small class="text-muted">Opened <time datetime="@pos.OpenedAt.ToString("o")" class="local-time">@pos.OpenedAt.ToString("MMM dd HH:mm") UTC</time></small></div>
                                 </div>
                             </div>
                         }
@@ -475,7 +475,7 @@
                                                 }
                                             </td>
                                         }
-                                        <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                        <td><time datetime="@pos.OpenedAt.ToString("o")" class="local-time">@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm") UTC</time></td>
                                     </tr>
                                 }
                             </tbody>

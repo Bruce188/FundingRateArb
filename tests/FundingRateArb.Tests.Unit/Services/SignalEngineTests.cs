@@ -735,7 +735,7 @@ public class SignalEngineTests
     // ── Funding window boost tests ─────────────────────────────────────────
 
     [Fact]
-    public async Task GetOpportunities_WithinFundingWindow_BoostsNetYield()
+    public async Task GetOpportunities_WithinFundingWindow_NetYieldIsNotBoosted_BoostedFieldIsBoosted()
     {
         var rates = new List<FundingRateSnapshot>
         {
@@ -757,19 +757,21 @@ public class SignalEngineTests
 
         var opp = result.Opportunities.Should().HaveCount(1).And.Subject.First();
 
-        // Net yield should be boosted by 20%
         var spread = 0.0009m;
         var feePerHour = (0.00090m + 0.00000m) / 24m;
         var rawNet = spread - feePerHour;
         var boostedNet = rawNet * 1.2m;
 
-        opp.NetYieldPerHour.Should().BeApproximately(boostedNet, 0.0000001m);
+        // NetYieldPerHour must be the non-boosted value (used for threshold comparison)
+        opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+        // BoostedNetYieldPerHour must be the boosted value (display only)
+        opp.BoostedNetYieldPerHour.Should().BeApproximately(boostedNet, 0.0000001m);
         // AnnualizedYield should use original net (not boosted)
         opp.AnnualizedYield.Should().BeApproximately(rawNet * 24m * 365m, 0.001m);
     }
 
     [Fact]
-    public async Task GetOpportunities_OutsideFundingWindow_NoBoost()
+    public async Task GetOpportunities_OutsideFundingWindow_BothFieldsEqualRawNet()
     {
         var rates = new List<FundingRateSnapshot>
         {
@@ -795,8 +797,41 @@ public class SignalEngineTests
         var feePerHour = (0.00090m + 0.00000m) / 24m;
         var rawNet = spread - feePerHour;
 
-        // No boost — NetYieldPerHour equals raw net
+        // No boost — both fields equal raw net
         opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+        opp.BoostedNetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_BelowThresholdBoosted_GoesToAllNetPositive()
+    {
+        // rawNet < threshold < boostedNet — proves threshold uses raw net, not boosted
+        // Spread = 0.00018, fees = 0 (takerFeeRate=0), net = 0.00018
+        // Threshold = 0.00020 → net < threshold
+        // In funding window: boostedNet = 0.00018 * 1.2 = 0.000216 > threshold
+        // If threshold used boosted value, this would pass. It must NOT pass.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, volume: 100_000m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.00028m, volume: 100_000m, takerFeeRate: 0m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.00020m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Settlement in 5 minutes (within window of 10)
+        var settlementTime = DateTime.UtcNow.AddMinutes(5);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(settlementTime);
+        _mockCache.Setup(c => c.GetNextSettlement("Lighter", "ETH")).Returns((DateTime?)null);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Must NOT be in Opportunities (threshold comparison uses raw net)
+        result.Opportunities.Should().BeEmpty("rawNet (0.00018) < threshold (0.00020) even though boostedNet > threshold");
+        // Must be in AllNetPositive (net > 0)
+        result.AllNetPositive.Should().HaveCount(1, "net > 0 puts it in AllNetPositive");
     }
 
     [Fact]

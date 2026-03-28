@@ -33,3 +33,21 @@ function wireThresholdHelper(inputId, helperId) {
     input.addEventListener('input', function () { updateThresholdHelper(inputId, helperId); });
     updateThresholdHelper(inputId, helperId);
 }
+
+// Convert UTC timestamps to browser-local time
+function formatLocalDateTime(utcString) {
+    var d = new Date(utcString);
+    if (isNaN(d.getTime())) return utcString;
+    return d.getFullYear() + "-" +
+        String(d.getMonth() + 1).padStart(2, "0") + "-" +
+        String(d.getDate()).padStart(2, "0") + " " +
+        String(d.getHours()).padStart(2, "0") + ":" +
+        String(d.getMinutes()).padStart(2, "0");
+}
+
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("time.local-time").forEach(function (el) {
+        var utc = el.getAttribute("datetime");
+        if (utc) el.textContent = formatLocalDateTime(utc);
+    });
+});

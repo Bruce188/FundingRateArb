@@ -29,8 +29,8 @@ public class PositionSizer : IPositionSizer
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
-        var allActivePositions = await _uow.Positions.GetByStatusesAsync(PositionStatus.Open, PositionStatus.Opening);
-        var allocatedCapital = allActivePositions.Sum(p => p.SizeUsdc);
+        var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
+        var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
 
         // Use real exchange balance, capped by configured TotalCapitalUsdc
         var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
@@ -97,6 +97,18 @@ public class PositionSizer : IPositionSizer
         var batchAssetExposure = new Dictionary<int, decimal>();
         var batchExchangeExposure = new Dictionary<int, decimal>();
 
+        // Pre-aggregate existing exposure by asset and exchange for O(1) lookups
+        var existingAssetExposure = userActivePositions
+            .GroupBy(p => p.AssetId)
+            .ToDictionary(g => g.Key, g => g.Sum(p => p.SizeUsdc));
+
+        var existingExchangeExposure = new Dictionary<int, decimal>();
+        foreach (var p in userActivePositions)
+        {
+            existingExchangeExposure[p.LongExchangeId] = existingExchangeExposure.GetValueOrDefault(p.LongExchangeId) + p.SizeUsdc;
+            existingExchangeExposure[p.ShortExchangeId] = existingExchangeExposure.GetValueOrDefault(p.ShortExchangeId) + p.SizeUsdc;
+        }
+
         for (int i = 0; i < sizes.Length; i++)
         {
             if (sizes[i] <= 0)
@@ -106,27 +118,21 @@ public class PositionSizer : IPositionSizer
 
             var opp = opportunities[i];
 
-            // Per-asset exposure: sum SizeUsdc of all active positions for this asset + batch allocations
-            var currentAssetExposure = allActivePositions
-                .Where(p => p.AssetId == opp.AssetId)
-                .Sum(p => p.SizeUsdc);
+            // Per-asset exposure
+            var currentAssetExposure = existingAssetExposure.GetValueOrDefault(opp.AssetId);
             var batchAsset = batchAssetExposure.GetValueOrDefault(opp.AssetId, 0m);
             var maxNewAsset = (config.MaxExposurePerAsset * realCapital) - currentAssetExposure - batchAsset;
             if (maxNewAsset <= 0) { sizes[i] = 0; continue; }
             sizes[i] = Math.Min(sizes[i], maxNewAsset);
 
             // Per-exchange exposure: check both long and short exchanges + batch allocations
-            var currentLongExposure = allActivePositions
-                .Where(p => p.LongExchangeId == opp.LongExchangeId || p.ShortExchangeId == opp.LongExchangeId)
-                .Sum(p => p.SizeUsdc);
+            var currentLongExposure = existingExchangeExposure.GetValueOrDefault(opp.LongExchangeId);
             var batchLong = batchExchangeExposure.GetValueOrDefault(opp.LongExchangeId, 0m);
             var maxNewLong = (config.MaxExposurePerExchange * realCapital) - currentLongExposure - batchLong;
             if (maxNewLong <= 0) { sizes[i] = 0; continue; }
             sizes[i] = Math.Min(sizes[i], maxNewLong);
 
-            var currentShortExposure = allActivePositions
-                .Where(p => p.LongExchangeId == opp.ShortExchangeId || p.ShortExchangeId == opp.ShortExchangeId)
-                .Sum(p => p.SizeUsdc);
+            var currentShortExposure = existingExchangeExposure.GetValueOrDefault(opp.ShortExchangeId);
             var batchShort = batchExchangeExposure.GetValueOrDefault(opp.ShortExchangeId, 0m);
             var maxNewShort = (config.MaxExposurePerExchange * realCapital) - currentShortExposure - batchShort;
             if (maxNewShort <= 0) { sizes[i] = 0; continue; }
