@@ -24,10 +24,10 @@ public class UserSettingsService : IUserSettingsService
 
         if (existing is not null)
         {
-            existing.EncryptedApiKey = apiKey is not null ? _vault.Encrypt(apiKey) : null;
-            existing.EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : null;
-            existing.EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : null;
-            existing.EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : null;
+            existing.EncryptedApiKey = apiKey is not null ? _vault.Encrypt(apiKey) : existing.EncryptedApiKey;
+            existing.EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : existing.EncryptedApiSecret;
+            existing.EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : existing.EncryptedWalletAddress;
+            existing.EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : existing.EncryptedPrivateKey;
             existing.EncryptedSubAccountAddress = subAccountAddress is not null ? _vault.Encrypt(subAccountAddress) : existing.EncryptedSubAccountAddress;
             existing.EncryptedApiKeyIndex = apiKeyIndex is not null ? _vault.Encrypt(apiKeyIndex) : existing.EncryptedApiKeyIndex;
             existing.IsActive = true;
