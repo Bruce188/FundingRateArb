@@ -74,10 +74,9 @@ public class DashboardController : Controller
             return View(anonVm);
         }
 
-        // Start the heavy signal engine call (may use its own scope internally)
-        var resultTask = _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-
-        // Sequential UoW queries — DbContext is not thread-safe
+        // All queries sequential — DbContext is not thread-safe (scoped UoW shared across services)
+        var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+        var allOpportunities = result.Opportunities;
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
         var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
@@ -86,10 +85,6 @@ public class DashboardController : Controller
             ? await _uow.Positions.GetOpenAsync()
             : await _uow.Positions.GetOpenByUserAsync(userId!);
         var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
-
-        // Await the signal engine result (likely already completed)
-        var result = await resultTask;
-        var allOpportunities = result.Opportunities;
 
         // Lazy initialization: ensure user has default settings on first visit
         if (enabledExchangeIds.Count == 0)
