@@ -1738,4 +1738,96 @@ public class ExecutionEngineTests
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(),
             It.IsAny<string?>(), "42"), Times.Once);
     }
+
+    // ── Emergency close retry pattern matching ─────────────────────────────
+
+    [Theory]
+    [InlineData("Position not found")]
+    [InlineData("Order does not exist")]
+    [InlineData("No open position for this market")]
+    [InlineData("no position available")]
+    [InlineData("NOT FOUND")]
+    public async Task EmergencyClose_RetriesOnRetryableError(string errorMessage)
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close: first attempt returns retryable error, second attempt succeeds
+        var callCount = 0;
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return new OrderResultDto { Success = false, Error = errorMessage };
+                return new OrderResultDto { Success = true, OrderId = "close-1", FilledPrice = 3000m, FilledQuantity = 0.1m };
+            });
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: emergency close was called at least 2 times (retry occurred)
+        result.Success.Should().BeFalse();
+        callCount.Should().BeGreaterThanOrEqualTo(2, "should retry on retryable close error");
+    }
+
+    [Fact]
+    public async Task EmergencyClose_DoesNotRetryOnUnrelatedError()
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close returns non-retryable error
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "Insufficient margin" });
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: emergency close was called exactly once (no retry for non-retryable error)
+        result.Success.Should().BeFalse();
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "should NOT retry on unrelated error like 'Insufficient margin'");
+    }
+
+    [Fact]
+    public async Task EmergencyClose_NullError_DoesNotRetry()
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close returns failure with null error
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = null });
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: emergency close was called exactly once (null error is not retryable)
+        result.Success.Should().BeFalse();
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "should NOT retry when close error is null");
+    }
 }

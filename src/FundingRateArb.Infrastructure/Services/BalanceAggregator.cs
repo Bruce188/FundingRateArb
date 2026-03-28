@@ -8,6 +8,7 @@ namespace FundingRateArb.Infrastructure.Services;
 
 public class BalanceAggregator : IBalanceAggregator
 {
+    internal const string CredentialsNotConfiguredMessage = "Credentials not configured";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly IUserSettingsService _userSettings;
@@ -65,6 +66,8 @@ public class BalanceAggregator : IBalanceAggregator
             if (connector is null)
             {
                 _logger.LogWarning("Could not create connector for {Exchange} (user {UserId})", exchangeName, userId);
+                balanceTasks.Add((cred.ExchangeId, exchangeName, Task.FromException<decimal>(
+                    new InvalidOperationException(CredentialsNotConfiguredMessage))));
                 continue;
             }
 
@@ -97,6 +100,7 @@ public class BalanceAggregator : IBalanceAggregator
                     ExchangeId = exchangeId,
                     ExchangeName = exchangeName,
                     AvailableUsdc = 0m,
+                    ErrorMessage = SanitizeErrorMessage(ex),
                     FetchedAt = now,
                 });
             }
@@ -112,4 +116,11 @@ public class BalanceAggregator : IBalanceAggregator
         _cache.Set(cacheKey, snapshot, CacheTtl);
         return snapshot;
     }
+
+    private static string SanitizeErrorMessage(Exception ex) => ex switch
+    {
+        HttpRequestException => "Exchange unreachable",
+        InvalidOperationException when ex.Message == CredentialsNotConfiguredMessage => CredentialsNotConfiguredMessage,
+        _ => "Balance fetch failed",
+    };
 }

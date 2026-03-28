@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
@@ -12,6 +13,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IMarketDataCache _marketDataCache;
+    private readonly IExecutionEngine _executionEngine;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
 
@@ -19,11 +21,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
         IMarketDataCache marketDataCache,
+        IExecutionEngine executionEngine,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
         _marketDataCache = marketDataCache;
+        _executionEngine = executionEngine;
         _logger = logger;
     }
 
@@ -31,8 +35,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         // M4: Reap stale Opening positions (stuck > 5 minutes)
         await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
-        // M4: Reap stale Closing positions (stuck > 10 minutes)
-        await ReapStalePositionsAsync(PositionStatus.Closing, TimeSpan.FromMinutes(10), ct);
+        // Fetch Closing positions once — shared between reaper and retry logic (NB11)
+        var closingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Closing);
+        // M4: Reap stale Closing positions (stuck > 10 minutes), returns non-reaped positions
+        var nonReaped = await ReapStaleClosingPositionsAsync(closingPositions, TimeSpan.FromMinutes(10), ct);
+        // Retry close for remaining Closing positions (partial fills)
+        await RetryClosingPositionsAsync(nonReaped, ct);
 
         // C-PR1: Use tracked query so mutations (CurrentSpreadPerHour) are persisted by EF
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
@@ -170,6 +178,83 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         return toClose;
     }
 
+    private async Task RetryClosingPositionsAsync(IReadOnlyList<ArbitragePosition> positions, CancellationToken ct)
+    {
+        if (positions.Count == 0) return;
+
+        // NB4: Cap per-cycle retry count to bound total wall time (N x 45s)
+        const int maxRetriesPerCycle = 6;
+
+        foreach (var pos in positions.Take(maxRetriesPerCycle))
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(45));
+                var closeReason = pos.CloseReason ?? CloseReason.SpreadCollapsed;
+                if (!pos.CloseReason.HasValue)
+                {
+                    _logger.LogWarning("Position #{PositionId} has no CloseReason set, defaulting to {DefaultReason}", pos.Id, closeReason);
+                }
+                _logger.LogInformation("Retrying close for position #{PositionId} stuck in Closing status", pos.Id);
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, closeReason, cts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("Retry close timed out for position #{PositionId}", pos.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Retry close failed for position #{PositionId}: {Message}", pos.Id, ex.Message);
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<ArbitragePosition>> ReapStaleClosingPositionsAsync(
+        IReadOnlyList<ArbitragePosition> closingPositions, TimeSpan maxAge, CancellationToken ct)
+    {
+        var cutoff = DateTime.UtcNow - maxAge;
+        var nonReaped = new List<ArbitragePosition>();
+        var reaped = false;
+
+        foreach (var pos in closingPositions)
+        {
+            var referenceTime = pos.ClosingStartedAt ?? pos.OpenedAt;
+            if (referenceTime >= cutoff)
+            {
+                nonReaped.Add(pos);
+                continue;
+            }
+
+            if (_logger.IsEnabled(LogLevel.Critical))
+            {
+                _logger.LogCritical(
+                    "Reaping stale {Status} position #{PositionId} ({Asset}) — stuck since {OpenedAt}",
+                    PositionStatus.Closing, pos.Id, pos.Asset?.Symbol ?? "?", referenceTime);
+            }
+
+            pos.Status = PositionStatus.EmergencyClosed;
+            _uow.Positions.Update(pos);
+            _uow.Alerts.Add(new Alert
+            {
+                UserId = pos.UserId,
+                ArbitragePositionId = pos.Id,
+                Type = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message = $"Position #{pos.Id} stuck in Closing for >{maxAge.TotalMinutes:F0} minutes. " +
+                           $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
+            });
+            reaped = true;
+        }
+
+        if (reaped)
+        {
+            await _uow.SaveAsync(ct);
+        }
+
+        return nonReaped;
+    }
+
     private async Task ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)
     {
         var positions = await _uow.Positions.GetByStatusAsync(status);
@@ -277,13 +362,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             return dbFeeRate.Value;
         }
 
-        // Hardcoded fallback for when DB rate is not loaded
-        return exchangeName switch
-        {
-            "Hyperliquid" => 0.00045m,
-            "Lighter" => 0.0m,
-            "Aster" => 0.0004m,
-            _ => 0.0005m, // conservative default
-        };
+        // Fallback to shared constants when DB rate is not loaded
+        return ExchangeFeeConstants.GetTakerFeeRate(exchangeName ?? string.Empty);
     }
 }

@@ -474,6 +474,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _logger.LogWarning(ex, "Failed to push balance update for user {UserId}", userId);
         }
         var slotsAvailable = userConfig.MaxConcurrentPositions - userOpenPositions.Count - userOpeningPositions.Count;
+        var positionsChanged = false;
 
         for (int idx = 0; idx < candidates.Count; idx++)
         {
@@ -509,13 +510,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 slotsAvailable--;
                 _failedOpCooldowns.TryRemove(cooldownKey, out _);
                 openedOppKeys.Add(key);
+                positionsChanged = true;
 
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{userId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
-
-                var updatedPositions = await uow.Positions.GetOpenAsync();
-                await PushPositionUpdatesAsync(updatedPositions, globalConfig);
                 await PushNewAlertsAsync(uow);
             }
             else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
@@ -545,6 +544,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 _logger.LogError("Failed to open position: {Error}", error);
                 await PushNewAlertsAsync(uow);
             }
+        }
+
+        // NB4: Refresh open positions once after the entire user loop, not per-open
+        if (positionsChanged)
+        {
+            var updatedPositions = await uow.Positions.GetOpenAsync();
+            allOpenPositions.Clear();
+            allOpenPositions.AddRange(updatedPositions);
+            await PushPositionUpdatesAsync(updatedPositions, globalConfig);
         }
     }
 

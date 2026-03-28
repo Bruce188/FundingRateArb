@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
@@ -11,16 +12,6 @@ public class SignalEngine : ISignalEngine
     private readonly IMarketDataCache _cache;
     private readonly IRatePredictionService? _predictionService;
     private readonly ILogger<SignalEngine>? _logger;
-
-    /// <summary>
-    /// Fallback round-trip fee constants used when Exchange.TakerFeeRate is not set in the DB.
-    /// </summary>
-    private static readonly Dictionary<string, decimal> FallbackRoundTripFees = new()
-    {
-        { "Hyperliquid", 0.00090m },
-        { "Lighter",     0.00000m },
-        { "Aster",       0.00080m }
-    };
 
     public SignalEngine(IUnitOfWork uow, IMarketDataCache cache, IRatePredictionService? predictionService = null, ILogger<SignalEngine>? logger = null)
     {
@@ -107,11 +98,11 @@ public class SignalEngine : ISignalEngine
                         continue;
                     }
 
-                    // Use DB-stored TakerFeeRate when available; fall back to built-in constants.
+                    // Use DB-stored TakerFeeRate when available; fall back to shared constants.
                     var longFee = longR.Exchange.TakerFeeRate * 2
-                                   ?? FallbackRoundTripFees.GetValueOrDefault(longR.Exchange.Name, 0.001m);
+                                   ?? ExchangeFeeConstants.GetTakerFeeRate(longR.Exchange.Name) * 2;
                     var shortFee = shortR.Exchange.TakerFeeRate * 2
-                                   ?? FallbackRoundTripFees.GetValueOrDefault(shortR.Exchange.Name, 0.001m);
+                                   ?? ExchangeFeeConstants.GetTakerFeeRate(shortR.Exchange.Name) * 2;
                     var amortHours = Math.Max(config.FeeAmortizationHours, 1);
                     var feePerHour = (longFee + shortFee) / amortHours;
                     var net = diff - feePerHour;
