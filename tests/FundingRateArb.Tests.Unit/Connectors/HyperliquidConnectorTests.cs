@@ -6,6 +6,7 @@ using FundingRateArb.Infrastructure.ExchangeConnectors;
 using HyperLiquid.Net.Enums;
 using HyperLiquid.Net.Interfaces.Clients;
 using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
+using HyperLiquid.Net.Interfaces.Clients.SpotApi;
 using HyperLiquid.Net.Objects.Models;
 using Moq;
 using Polly;
@@ -35,6 +36,22 @@ public class HyperliquidConnectorTests
         _mockFuturesApi.Setup(f => f.ExchangeData).Returns(_mockExchangeData.Object);
         _mockFuturesApi.Setup(f => f.Account).Returns(_mockAccount.Object);
         _mockFuturesApi.Setup(f => f.Trading).Returns(_mockTrading.Object);
+
+        // SpotApi mock — balance tests need this for unified account spot USDC query
+        var mockSpotApi = new Mock<IHyperLiquidRestClientSpotApi>();
+        var mockSpotAccount = new Mock<IHyperLiquidRestClientSpotApiAccount>();
+        _mockRestClient.Setup(c => c.SpotApi).Returns(mockSpotApi.Object);
+        mockSpotApi.Setup(s => s.Account).Returns(mockSpotAccount.Object);
+        // Default: empty spot balances (no spot USDC)
+        var emptySpotResult = new WebCallResult<HyperLiquidBalance[]>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            Array.Empty<HyperLiquidBalance>(),
+            null);
+        mockSpotAccount
+            .Setup(a => a.GetBalancesAsync(It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(emptySpotResult);
 
         _mockPipelineProvider = new Mock<ResiliencePipelineProvider<string>>();
         _mockPipelineProvider.Setup(p => p.GetPipeline(It.IsAny<string>()))
