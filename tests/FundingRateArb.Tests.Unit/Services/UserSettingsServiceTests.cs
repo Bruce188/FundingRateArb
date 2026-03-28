@@ -533,6 +533,8 @@ public class UserSettingsServiceTests
         existing.EncryptedSubAccountAddress.Should().Be("existing-enc-sub");
         existing.EncryptedApiKeyIndex.Should().Be("existing-enc-idx");
         existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull()
+            .And.BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -663,6 +665,9 @@ public class UserSettingsServiceTests
         existing.EncryptedPrivateKey.Should().Be("new-enc(p)");
         existing.EncryptedSubAccountAddress.Should().Be("new-enc(sub)");
         existing.EncryptedApiKeyIndex.Should().Be("new-enc(idx)");
+        existing.IsActive.Should().BeTrue();
+        existing.LastUpdatedAt.Should().NotBeNull();
+        _mockVault.Verify(v => v.Encrypt(It.IsAny<string>()), Times.Exactly(6));
     }
 
     // --- Data-Only Exchange Tests (NB5) ---
