@@ -87,7 +87,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
-            await Task.Delay(delayMs, ct);
+            // NB1: Delay between retries, not before the first attempt
+            if (attempt > 0)
+            {
+                await Task.Delay(delayMs, ct);
+            }
 
             try
             {
