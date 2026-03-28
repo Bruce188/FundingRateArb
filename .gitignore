@@ -61,3 +61,4 @@ jscpd-report/
 *.tmp
 *.bak
 *.log
+allowed-licenses.json
