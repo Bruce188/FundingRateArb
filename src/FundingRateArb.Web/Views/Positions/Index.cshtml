@@ -60,7 +60,7 @@ else
                         <td class="pos-funding text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
                             @pos.AccumulatedFunding.ToString("F4")
                         </td>
-                        <td>@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td><time datetime="@pos.OpenedAt.ToString("o")" class="local-time">@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm") UTC</time></td>
                         <td>
                             <a asp-action="Details" asp-route-id="@pos.Id" class="btn btn-sm btn-outline-primary me-1">Details</a>
                             @if (pos.Status == PositionStatus.Open)

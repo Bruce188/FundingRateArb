@@ -735,7 +735,7 @@ public class SignalEngineTests
     // ── Funding window boost tests ─────────────────────────────────────────
 
     [Fact]
-    public async Task GetOpportunities_WithinFundingWindow_BoostsNetYield()
+    public async Task GetOpportunities_WithinFundingWindow_NetYieldIsNotBoosted_BoostedFieldIsBoosted()
     {
         var rates = new List<FundingRateSnapshot>
         {
@@ -757,19 +757,21 @@ public class SignalEngineTests
 
         var opp = result.Opportunities.Should().HaveCount(1).And.Subject.First();
 
-        // Net yield should be boosted by 20%
         var spread = 0.0009m;
         var feePerHour = (0.00090m + 0.00000m) / 24m;
         var rawNet = spread - feePerHour;
         var boostedNet = rawNet * 1.2m;
 
-        opp.NetYieldPerHour.Should().BeApproximately(boostedNet, 0.0000001m);
+        // NetYieldPerHour must be the non-boosted value (used for threshold comparison)
+        opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+        // BoostedNetYieldPerHour must be the boosted value (display only)
+        opp.BoostedNetYieldPerHour.Should().BeApproximately(boostedNet, 0.0000001m);
         // AnnualizedYield should use original net (not boosted)
         opp.AnnualizedYield.Should().BeApproximately(rawNet * 24m * 365m, 0.001m);
     }
 
     [Fact]
-    public async Task GetOpportunities_OutsideFundingWindow_NoBoost()
+    public async Task GetOpportunities_OutsideFundingWindow_BothFieldsEqualRawNet()
     {
         var rates = new List<FundingRateSnapshot>
         {
@@ -795,8 +797,9 @@ public class SignalEngineTests
         var feePerHour = (0.00090m + 0.00000m) / 24m;
         var rawNet = spread - feePerHour;
 
-        // No boost — NetYieldPerHour equals raw net
+        // No boost — both fields equal raw net
         opp.NetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
+        opp.BoostedNetYieldPerHour.Should().BeApproximately(rawNet, 0.0000001m);
     }
 
     [Fact]

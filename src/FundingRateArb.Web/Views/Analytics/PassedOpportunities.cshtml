@@ -93,7 +93,7 @@ else
                 {
                     var rowClass = s.WasOpened ? "table-success" : "";
                     <tr class="@rowClass">
-                        <td>@s.RecordedAt.ToString("MM-dd HH:mm")</td>
+                        <td><time datetime="@s.RecordedAt.ToString("o")" class="local-time">@s.RecordedAt.ToString("MM-dd HH:mm") UTC</time></td>
                         <td>@(s.Asset?.Symbol ?? $"#{s.AssetId}")</td>
                         <td>@(s.LongExchange?.Name ?? $"#{s.LongExchangeId}")</td>
                         <td>@(s.ShortExchange?.Name ?? $"#{s.ShortExchangeId}")</td>

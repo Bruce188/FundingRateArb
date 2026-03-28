@@ -78,7 +78,7 @@ else
                             <span class="badge @severityBadge">@alert.Severity</span>
                         </td>
                         <td>@alert.Message</td>
-                        <td>@alert.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td><time datetime="@alert.CreatedAt.ToString("o")" class="local-time">@alert.CreatedAt.ToString("yyyy-MM-dd HH:mm") UTC</time></td>
                         <td>
                             @if (alert.IsRead)
                             {

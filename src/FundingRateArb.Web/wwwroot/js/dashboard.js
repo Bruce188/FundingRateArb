@@ -121,7 +121,7 @@
 
                     var spreadDiv = document.createElement("div");
                     spreadDiv.className = "small";
-                    spreadDiv.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + (opp.netYieldPerHour * 100).toFixed(4) + "%/hr";
+                    spreadDiv.textContent = "Spread: " + (opp.spreadPerHour * 100).toFixed(4) + "%/hr | Net: " + ((opp.boostedNetYieldPerHour || opp.netYieldPerHour) * 100).toFixed(4) + "%/hr";
                     body.appendChild(spreadDiv);
 
                     card.appendChild(body);
@@ -251,7 +251,7 @@
             row.appendChild(tdSpread);
 
             var tdYield = document.createElement("td");
-            tdYield.textContent = (opp.netYieldPerHour * 100).toFixed(4) + "%";
+            tdYield.textContent = ((opp.boostedNetYieldPerHour || opp.netYieldPerHour) * 100).toFixed(4) + "%";
             row.appendChild(tdYield);
 
             var tdApr = document.createElement("td");

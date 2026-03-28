@@ -344,8 +344,8 @@ public class PositionSizerTests
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { SizeUsdc = 300m },
-                new() { SizeUsdc = 200m },
+                new() { SizeUsdc = 300m, UserId = "test-user" },
+                new() { SizeUsdc = 200m, UserId = "test-user" },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -410,7 +410,7 @@ public class PositionSizerTests
         // Existing open position for asset 1 with 20 USDC
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
-            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 20m }
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 20m, UserId = "test-user" }
         });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -433,7 +433,7 @@ public class PositionSizerTests
         // Existing open position on exchange 1 with 35 USDC
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
-            new() { AssetId = 2, LongExchangeId = 1, ShortExchangeId = 3, SizeUsdc = 35m }
+            new() { AssetId = 2, LongExchangeId = 1, ShortExchangeId = 3, SizeUsdc = 35m, UserId = "test-user" }
         });
 
         // New opportunity uses exchange 1 as long
@@ -533,7 +533,7 @@ public class PositionSizerTests
         // Existing positions already at the 50 USDC asset limit
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
         {
-            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 50m }
+            new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 50m, UserId = "test-user" }
         });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -556,8 +556,8 @@ public class PositionSizerTests
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { SizeUsdc = 50m, Status = PositionStatus.Open },
-                new() { SizeUsdc = 50m, Status = PositionStatus.Opening },
+                new() { SizeUsdc = 50m, Status = PositionStatus.Open, UserId = "test-user" },
+                new() { SizeUsdc = 50m, Status = PositionStatus.Opening, UserId = "test-user" },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -581,8 +581,8 @@ public class PositionSizerTests
         _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Open },
-                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Opening },
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Open, UserId = "test-user" },
+                new() { AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 200m, Status = PositionStatus.Opening, UserId = "test-user" },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -605,8 +605,8 @@ public class PositionSizerTests
         _mockPositions.Setup(p => p.GetByStatusesAsync(PositionStatus.Open, PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>
             {
-                new() { Id = 1, SizeUsdc = 50m, Status = PositionStatus.Open },
-                new() { Id = 2, SizeUsdc = 50m, Status = PositionStatus.Opening },
+                new() { Id = 1, SizeUsdc = 50m, Status = PositionStatus.Open, UserId = "test-user" },
+                new() { Id = 2, SizeUsdc = 50m, Status = PositionStatus.Opening, UserId = "test-user" },
             });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
@@ -615,5 +615,30 @@ public class PositionSizerTests
         // allocatedCapital = 100, available = (1000-100)*0.8 = 720
         sizes[0].Should().Be(720m, "single query should return both Open and Opening positions");
         _mockPositions.Verify(p => p.GetByStatusesAsync(PositionStatus.Open, PositionStatus.Opening), Times.Once);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_IgnoresOtherUserPositions()
+    {
+        // User A has 300 USDC allocated, User B has 500 USDC allocated
+        // When sizing for User A, only User A's 300 should be subtracted
+        var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 1.0m);
+        config.MinPositionSizeUsdc = 0m;
+        config.MaxExposurePerAsset = 1.0m;
+        config.MaxExposurePerExchange = 1.0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockPositions.Setup(p => p.GetByStatusesAsync(It.IsAny<PositionStatus[]>()))
+            .ReturnsAsync(new List<ArbitragePosition>
+            {
+                new() { UserId = "user-a", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 300m },
+                new() { UserId = "user-b", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2, SizeUsdc = 500m },
+            });
+
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-a");
+
+        // Available = min(10000, 1000) - 300 (only user-a) = 700, * 1.0 = 700
+        sizes[0].Should().Be(700m, "only user-a's positions (300) should be subtracted, not user-b's (500)");
     }
 }

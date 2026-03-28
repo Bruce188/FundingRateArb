@@ -59,14 +59,9 @@
         tdMessage.textContent = alert.message || "";
         row.appendChild(tdMessage);
 
-        // Created — use server timestamp from payload if available, otherwise UTC
+        // Created — use server timestamp from payload if available, otherwise now
         var tdCreated = document.createElement("td");
-        var ts = alert.createdAt ? new Date(alert.createdAt) : new Date();
-        tdCreated.textContent = ts.getUTCFullYear() + "-" +
-            String(ts.getUTCMonth() + 1).padStart(2, "0") + "-" +
-            String(ts.getUTCDate()).padStart(2, "0") + " " +
-            String(ts.getUTCHours()).padStart(2, "0") + ":" +
-            String(ts.getUTCMinutes()).padStart(2, "0");
+        tdCreated.textContent = formatLocalDateTime(alert.createdAt || new Date().toISOString());
         row.appendChild(tdCreated);
 
         // Status

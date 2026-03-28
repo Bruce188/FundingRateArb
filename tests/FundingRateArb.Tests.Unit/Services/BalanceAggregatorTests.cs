@@ -251,6 +251,38 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public async Task GetBalanceSnapshot_ExcludesFailedExchangeFromTotal()
+    {
+        // When one exchange fails, TotalAvailableUsdc should explicitly exclude
+        // it (filter by ErrorMessage is null), not just happen to add 0.
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+            new() { Id = 2, ExchangeId = 2, Exchange = new Exchange { Id = 2, Name = "Lighter" }, EncryptedPrivateKey = "y" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockHl = new Mock<IExchangeConnector>();
+        mockHl.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(5000m);
+        var mockLighter = new Mock<IExchangeConnector>();
+        mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("timeout"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockHl.Object);
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockLighter.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.TotalAvailableUsdc.Should().Be(5000m, "failed exchange must be excluded from total");
+        result.Balances.Should().HaveCount(2);
+        result.Balances.Should().Contain(b => b.ExchangeName == "Lighter" && b.ErrorMessage != null);
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>
