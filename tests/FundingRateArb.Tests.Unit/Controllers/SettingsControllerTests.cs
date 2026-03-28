@@ -257,8 +257,12 @@ public class SettingsControllerTests
         _mockSettings.Verify(s => s.UpdateConfigAsync("test-user-id", It.Is<UserConfiguration>(c => c.IsEnabled == true)), Times.Once);
     }
 
-    [Fact]
-    public async Task SaveApiKey_WithInvalidEthereumSubAccountAddress_ReturnsError()
+    [Theory]
+    [InlineData("not-an-address")]
+    [InlineData("0x1234567890abcdef1234567890abcdef1234567")]   // 39 hex chars — too short
+    [InlineData("0x1234567890abcdef1234567890abcdef123456789")] // 41 hex chars — too long
+    [InlineData("0xGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG")] // non-hex chars, correct length
+    public async Task SaveApiKey_WithInvalidEthereumSubAccountAddress_ReturnsError(string subAccountAddress)
     {
         SetupAuthenticatedUser();
 
@@ -268,17 +272,22 @@ public class SettingsControllerTests
             apiSecret: null,
             walletAddress: "0xabc",
             privateKey: "some-key",
-            subAccountAddress: "not-an-address",
+            subAccountAddress: subAccountAddress,
             apiKeyIndex: null);
 
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be("ApiKeys");
         _controller.TempData["Error"].Should().NotBeNull();
         _controller.TempData["Error"]!.ToString().Should().Contain("Ethereum address");
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
-    [Fact]
-    public async Task SaveApiKey_WithValidSubAccountAddress_Succeeds()
+    [Theory]
+    [InlineData("0x1234567890abcdef1234567890abcdef12345678")]   // lowercase hex
+    [InlineData("0x1234567890ABCDEF1234567890ABCDEF12345678")]   // uppercase hex
+    public async Task SaveApiKey_WithValidSubAccountAddress_Succeeds(string subAccountAddress)
     {
         SetupAuthenticatedUser();
 
@@ -288,7 +297,7 @@ public class SettingsControllerTests
             apiSecret: null,
             walletAddress: "0xabc123",
             privateKey: "some-key",
-            subAccountAddress: "0x1234567890abcdef1234567890abcdef12345678",
+            subAccountAddress: subAccountAddress,
             apiKeyIndex: null);
 
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
@@ -296,13 +305,16 @@ public class SettingsControllerTests
         _controller.TempData["Error"].Should().BeNull();
         _mockSettings.Verify(s => s.SaveCredentialAsync(
             "test-user-id", 1, null, null, "0xabc123", "some-key",
-            "0x1234567890abcdef1234567890abcdef12345678", null), Times.Once);
+            subAccountAddress, null), Times.Once);
     }
 
     [Theory]
     [InlineData("1")]
     [InlineData("255")]
     [InlineData("abc")]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("99999999999")]
     public async Task SaveApiKey_WithOutOfRangeApiKeyIndex_ReturnsError(string apiKeyIndex)
     {
         SetupAuthenticatedUser();
@@ -320,6 +332,9 @@ public class SettingsControllerTests
         redirect.ActionName.Should().Be("ApiKeys");
         _controller.TempData["Error"].Should().NotBeNull();
         _controller.TempData["Error"]!.ToString().Should().Contain("2 and 254");
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
 
     [Theory]

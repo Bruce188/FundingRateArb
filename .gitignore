@@ -54,6 +54,9 @@ coverage/
 # Docker
 .env
 
+# Code analysis
+jscpd-report/
+
 # Misc
 *.tmp
 *.bak
