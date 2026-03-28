@@ -413,7 +413,8 @@ public class PositionSizerTests
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto
             {
-                TotalAvailableUsdc = 80m, FetchedAt = DateTime.UtcNow,
+                TotalAvailableUsdc = 80m,
+                FetchedAt = DateTime.UtcNow,
                 Balances = new List<ExchangeBalanceDto>
                 {
                     new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
@@ -436,7 +437,8 @@ public class PositionSizerTests
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto
             {
-                TotalAvailableUsdc = 200m, FetchedAt = DateTime.UtcNow,
+                TotalAvailableUsdc = 200m,
+                FetchedAt = DateTime.UtcNow,
                 Balances = new List<ExchangeBalanceDto>
                 {
                     new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 200m, FetchedAt = DateTime.UtcNow },
