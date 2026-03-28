@@ -41,6 +41,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     internal static readonly TimeSpan BaseCooldown = TimeSpan.FromMinutes(5);
     internal static readonly TimeSpan MaxCooldown = TimeSpan.FromMinutes(60);
 
+    // Per-exchange circuit breaker — keyed by exchangeId
+    private readonly ConcurrentDictionary<int, (int Failures, DateTime BrokenUntil)> _exchangeCircuitBreaker = new();
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -110,6 +113,23 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // C6: Cancel the timer wait to trigger an immediate cycle
     public void TriggerImmediateCycle() => _immediateCts.Cancel();
 
+    private void IncrementExchangeFailure(int exchangeId, BotConfiguration config)
+    {
+        var current = _exchangeCircuitBreaker.GetValueOrDefault(exchangeId);
+        var failures = current.Failures + 1;
+        if (failures >= config.ExchangeCircuitBreakerThreshold)
+        {
+            _exchangeCircuitBreaker[exchangeId] = (failures, DateTime.UtcNow.AddMinutes(config.ExchangeCircuitBreakerMinutes));
+            _logger.LogWarning(
+                "Circuit breaker OPEN for exchange {ExchangeId}: {Failures} consecutive failures, excluded for {Minutes}m",
+                exchangeId, failures, config.ExchangeCircuitBreakerMinutes);
+        }
+        else
+        {
+            _exchangeCircuitBreaker[exchangeId] = (failures, DateTime.MinValue);
+        }
+    }
+
     public void RecordCloseResult(decimal realizedPnl, string? userId = null)
     {
         if (string.IsNullOrEmpty(userId))
@@ -136,6 +156,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// <summary>Exposes pushed alert IDs for unit testing.</summary>
     internal ConcurrentDictionary<int, byte> PushedAlertIds => _pushedAlertIds;
 
+    /// <summary>Exposes exchange circuit breaker state for unit testing.</summary>
+    internal ConcurrentDictionary<int, (int Failures, DateTime BrokenUntil)> ExchangeCircuitBreaker => _exchangeCircuitBreaker;
+
     /// <summary>
     /// One bot cycle: health-monitor ALL open positions, then iterate enabled users.
     /// Exposed as internal for unit testing.
@@ -151,15 +174,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var userSettings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
 
         // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
-        var positionsToClose = await healthMonitor.CheckAndActAsync(ct);
-        foreach (var (pos, reason) in positionsToClose)
+        var healthResult = await healthMonitor.CheckAndActAsync(ct);
+        var closedPositionIds = new List<(int PositionId, string UserId)>();
+        foreach (var (pos, reason) in healthResult.ToClose)
         {
             await executionEngine.ClosePositionAsync(pos.UserId, pos, reason, ct);
             if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
             {
                 RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
+                closedPositionIds.Add((pos.Id, pos.UserId));
             }
         }
+
+        // Push removal events for reaped and closed positions
+        await PushPositionRemovalsAsync(healthResult.ReapedPositions, closedPositionIds);
 
         // Fetch ALL open positions after health monitor so closed positions are excluded
         var allOpenPositions = await uow.Positions.GetOpenAsync();
@@ -249,6 +277,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var capitalExhaustedKeys = new HashSet<string>();
         var maxPositionsKeys = new HashSet<string>();
         var cooldownKeys = new HashSet<string>();
+        var exchangeDisabledKeys = new HashSet<string>();
+        var assetDisabledKeys = new HashSet<string>();
+        var circuitBrokenKeys = new HashSet<string>();
+        var notSelectedKeys = new HashSet<string>();
 
         // Fetch data-only exchange IDs once per cycle (same for all users)
         var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
@@ -257,7 +289,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         {
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, exchangeDisabledKeys, assetDisabledKeys, circuitBrokenKeys, notSelectedKeys, ct);
             }
             catch (Exception ex)
             {
@@ -266,7 +298,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 6: Persist opportunity snapshots and run 7-day purge
-        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, ct);
+        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, openedOppKeys, capitalExhaustedKeys, maxPositionsKeys, cooldownKeys, exchangeDisabledKeys, assetDisabledKeys, circuitBrokenKeys, notSelectedKeys, ct);
     }
 
     /// <summary>
@@ -286,6 +318,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
         HashSet<string> cooldownKeys,
+        HashSet<string> exchangeDisabledKeys,
+        HashSet<string> assetDisabledKeys,
+        HashSet<string> circuitBrokenKeys,
+        HashSet<string> notSelectedKeys,
         CancellationToken ct)
     {
         var allOpportunities = opportunityResult.Opportunities;
@@ -309,13 +345,46 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var enabledExchangeSet = enabledExchangeIds.ToHashSet();
         var enabledAssetSet = enabledAssetIds.ToHashSet();
 
-        // Filter global opportunities to user's preferences, excluding data-only exchanges
-        var userOpportunities = allOpportunities
-            .Where(o => enabledExchangeSet.Contains(o.LongExchangeId) && enabledExchangeSet.Contains(o.ShortExchangeId))
-            .Where(o => !dataOnlyExchangeIds.Contains(o.LongExchangeId) && !dataOnlyExchangeIds.Contains(o.ShortExchangeId))
-            .Where(o => enabledAssetSet.Contains(o.AssetId))
-            .Where(o => o.NetYieldPerHour >= userConfig.OpenThreshold)
-            .ToList();
+        // Compute circuit-broken exchange IDs
+        var circuitBrokenExchangeIds = _exchangeCircuitBreaker
+            .Where(kvp => kvp.Value.BrokenUntil > DateTime.UtcNow)
+            .Select(kvp => kvp.Key)
+            .ToHashSet();
+
+        // Filter global opportunities to user's preferences, excluding data-only and circuit-broken exchanges
+        // Track specific skip reasons for each filtered opportunity
+        var userOpportunities = new List<ArbitrageOpportunityDto>();
+        foreach (var o in allOpportunities)
+        {
+            var key = $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}";
+
+            if (!enabledExchangeSet.Contains(o.LongExchangeId) || !enabledExchangeSet.Contains(o.ShortExchangeId))
+            {
+                exchangeDisabledKeys.Add(key);
+                continue;
+            }
+            if (dataOnlyExchangeIds.Contains(o.LongExchangeId) || dataOnlyExchangeIds.Contains(o.ShortExchangeId))
+            {
+                exchangeDisabledKeys.Add(key);
+                continue;
+            }
+            if (circuitBrokenExchangeIds.Contains(o.LongExchangeId) || circuitBrokenExchangeIds.Contains(o.ShortExchangeId))
+            {
+                circuitBrokenKeys.Add(key);
+                continue;
+            }
+            if (!enabledAssetSet.Contains(o.AssetId))
+            {
+                assetDisabledKeys.Add(key);
+                continue;
+            }
+            if (o.NetYieldPerHour < userConfig.OpenThreshold)
+            {
+                // Will be handled by the "below_threshold" fallback in snapshot persistence
+                continue;
+            }
+            userOpportunities.Add(o);
+        }
 
         // Check user's open positions vs their limit
         var userOpenPositions = allOpenPositions.Where(p => p.UserId == userId).ToList();
@@ -368,7 +437,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         var cooldownSkips = new List<(string Asset, TimeSpan Remaining)>();
 
-        var candidates = userOpportunities
+        var filteredCandidates = userOpportunities
             .Where(opp =>
             {
                 var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
@@ -389,8 +458,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 }
                 return true;
             })
-            .Take(userConfig.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : userConfig.AllocationTopN)
             .ToList();
+
+        var takeCount = userConfig.AllocationStrategy == AllocationStrategy.Concentrated ? 1 : userConfig.AllocationTopN;
+        var candidates = filteredCandidates.Take(takeCount).ToList();
+
+        // Track opportunities that passed all filters but weren't selected by allocation strategy
+        foreach (var opp in filteredCandidates.Skip(takeCount))
+        {
+            notSelectedKeys.Add($"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}");
+        }
 
         if (candidates.Count == 0)
         {
@@ -517,6 +594,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 openedOppKeys.Add(key);
                 positionsChanged = true;
 
+                // Reset circuit breaker on success
+                _exchangeCircuitBreaker.TryRemove(opp.LongExchangeId, out _);
+                _exchangeCircuitBreaker.TryRemove(opp.ShortExchangeId, out _);
+
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{userId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
@@ -542,6 +623,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 var delay = TimeSpan.FromTicks(
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
                 _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
+
+                // Increment circuit breaker for both exchanges involved
+                IncrementExchangeFailure(opp.LongExchangeId, globalConfig);
+                IncrementExchangeFailure(opp.ShortExchangeId, globalConfig);
 
                 _logger.LogWarning(
                     "Opportunity {Asset} {Long}/{Short} failed for user {UserId} ({Failures} consecutive). Cooldown until {Until}",
@@ -573,6 +658,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         HashSet<string> capitalExhaustedKeys,
         HashSet<string> maxPositionsKeys,
         HashSet<string> cooldownKeys,
+        HashSet<string> exchangeDisabledKeys,
+        HashSet<string> assetDisabledKeys,
+        HashSet<string> circuitBrokenKeys,
+        HashSet<string> notSelectedKeys,
         CancellationToken ct)
     {
         try
@@ -609,6 +698,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     else if (maxPositionsKeys.Contains(key))
                     {
                         skipReason = "max_positions";
+                    }
+                    else if (circuitBrokenKeys.Contains(key))
+                    {
+                        skipReason = "exchange_circuit_broken";
+                    }
+                    else if (exchangeDisabledKeys.Contains(key))
+                    {
+                        skipReason = "exchange_disabled";
+                    }
+                    else if (assetDisabledKeys.Contains(key))
+                    {
+                        skipReason = "asset_disabled";
+                    }
+                    else if (notSelectedKeys.Contains(key))
+                    {
+                        skipReason = "not_selected";
                     }
                     else
                     {
@@ -694,6 +799,27 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
         });
         await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Pushes ReceivePositionRemoval for reaped and closed positions to their owning user's group.
+    /// </summary>
+    private async Task PushPositionRemovalsAsync(
+        IReadOnlyList<(int PositionId, string UserId)> reapedPositions,
+        List<(int PositionId, string UserId)> closedPositions)
+    {
+        var allRemovals = reapedPositions.Concat(closedPositions);
+        foreach (var (positionId, userId) in allRemovals)
+        {
+            try
+            {
+                await _hubContext.Clients.Group($"user-{userId}").ReceivePositionRemoval(positionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to push position removal for #{PositionId}", positionId);
+            }
+        }
     }
 
     /// <summary>

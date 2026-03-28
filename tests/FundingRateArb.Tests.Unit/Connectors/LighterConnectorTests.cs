@@ -771,6 +771,83 @@ public class LighterConnectorTests
         field!.FieldType.Should().Be<System.Collections.Concurrent.ConcurrentDictionary<int, int>>(
             "leverage cache must be ConcurrentDictionary<int, int> keyed by marketId");
     }
+
+    // ── Diagnostic Logging Tests ─────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderAsync_LogsNonceAndTxResponse()
+    {
+        // Without signer credentials, PlaceMarketOrderAsync fails early but still logs the error.
+        // This verifies that the error path logs at Error level.
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns((string?)null);
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+        });
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 5);
+
+        result.Success.Should().BeFalse();
+
+        // Verify that the error was logged (PlaceMarketOrderAsync catches and logs exceptions)
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("PlaceMarketOrderAsync failed")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task VerifyPositionOpenedAsync_LogsEachPollAttempt()
+    {
+        // Configure account index for the verify call
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Return account with no matching position — all 3 polls will fail
+        var emptyAccountJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": []
+                    }
+                ]
+            }
+            """;
+
+        var sut = CreateConnector(emptyAccountJson);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse();
+
+        // Verify that 3 poll attempt log entries were generated (Information level)
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Exactly(3));
+
+        // Verify final failure warning
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Position verification FAILED")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
 }
 
 /// <summary>

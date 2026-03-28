@@ -74,7 +74,7 @@ public class BotOrchestratorMultiUserTests
         _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
 
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+            .ReturnsAsync(HealthCheckResult.Empty);
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
@@ -92,6 +92,7 @@ public class BotOrchestratorMultiUserTests
         _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+        _mockGroupClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
 
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -518,5 +519,52 @@ public class BotOrchestratorMultiUserTests
 
         _sut.UserConsecutiveLosses.Should().BeEmpty(
             "RecordCloseResult with null userId should not create any entries");
+    }
+
+    // ── Circuit Breaker is global (not per-user) ────────────────────────────
+
+    [Fact]
+    public async Task CircuitBreaker_IsGlobalNotPerUser()
+    {
+        // Pre-seed circuit breaker for exchange 2 (simulating UserA's failures)
+        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+
+        // Setup UserB — the circuit breaker should block them too
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        });
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        // Enable only UserB
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { UserB });
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // UserB should also be blocked because circuit breaker is global
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

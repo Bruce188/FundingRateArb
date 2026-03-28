@@ -96,9 +96,9 @@ public class BotOrchestratorTests
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
         _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
 
-        // Default mock for health monitor — returns empty close list
+        // Default mock for health monitor — returns empty result
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+            .ReturnsAsync(HealthCheckResult.Empty);
 
         // Default mock for Opening status query (used in duplicate check)
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
@@ -143,6 +143,7 @@ public class BotOrchestratorTests
         _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
         _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+        _mockGroupClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
 
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -190,7 +191,7 @@ public class BotOrchestratorTests
         var callOrder = new List<string>();
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("health"))
-            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+            .ReturnsAsync(HealthCheckResult.Empty);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("signal"))
             .ReturnsAsync(new OpportunityResultDto());
@@ -474,7 +475,7 @@ public class BotOrchestratorTests
 
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("health"))
-            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+            .ReturnsAsync(HealthCheckResult.Empty);
 
         _mockPositions.Setup(p => p.GetOpenAsync())
             .Callback(() => callOrder.Add("GetOpen"))
@@ -1038,7 +1039,9 @@ public class BotOrchestratorTests
             RealizedPnl = null, // PnL not set
         };
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { (pos, CloseReason.SpreadCollapsed) });
+            .ReturnsAsync(new HealthCheckResult(
+                new[] { (pos, CloseReason.SpreadCollapsed) },
+                Array.Empty<(int, string)>()));
 
         // After ClosePositionAsync, position stays in Closing (partial fill)
         _mockExecEngine.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
@@ -1155,5 +1158,325 @@ public class BotOrchestratorTests
         _mockExecEngine.Verify(
             e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // ── Ghost Position Removal Tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ReapedPositions_PushRemovalEvent()
+    {
+        // Arrange — health monitor returns reaped position IDs
+        var reapedPositions = new List<(int PositionId, string UserId)>
+        {
+            (42, TestUserId),
+            (99, TestUserId),
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                Array.Empty<(ArbitragePosition, CloseReason)>(),
+                reapedPositions));
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Assert — ReceivePositionRemoval called for each reaped position
+        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(42), Times.Once);
+        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(99), Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosedPositions_PushRemovalEvent()
+    {
+        // Arrange — health monitor returns a position to close
+        var pos = new ArbitragePosition
+        {
+            Id = 55,
+            UserId = TestUserId,
+            Status = PositionStatus.Open,
+            RealizedPnl = -5m,
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                new[] { (pos, CloseReason.SpreadCollapsed) },
+                Array.Empty<(int, string)>()));
+        _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                pos.Status = PositionStatus.Closed;
+                pos.RealizedPnl = -5m;
+            })
+            .Returns(Task.CompletedTask);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Assert — ReceivePositionRemoval called for the closed position
+        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(55), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPositions_NotRemoved()
+    {
+        // Arrange — health monitor returns no reaped/closed positions
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(HealthCheckResult.Empty);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        var openPos = new ArbitragePosition
+        {
+            Id = 77,
+            UserId = TestUserId,
+            Status = PositionStatus.Open,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+        };
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition> { openPos });
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        // Act
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Assert — ReceivePositionRemoval should NOT be called
+        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(It.IsAny<int>()), Times.Never);
+    }
+
+    // ── Circuit Breaker Tests ────────────────────────────────────────────────
+
+    private static readonly BotConfiguration CircuitBreakerConfig = new()
+    {
+        IsEnabled = true,
+        MaxConcurrentPositions = 5,
+        DefaultLeverage = 5,
+        UpdatedByUserId = "admin-user-id",
+        AllocationStrategy = AllocationStrategy.Concentrated,
+        AllocationTopN = 3,
+        TotalCapitalUsdc = 1000m,
+        MaxCapitalPerPosition = 0.5m,
+        VolumeFraction = 0.001m,
+        ExchangeCircuitBreakerThreshold = 3,
+        ExchangeCircuitBreakerMinutes = 15,
+    };
+
+    private void SetupCircuitBreakerScenario(ArbitrageOpportunityDto opp, bool openSuccess)
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(openSuccess ? (true, (string?)null) : (false, "Connection error"));
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_TriggersAfterThresholdFailures()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        SetupCircuitBreakerScenario(opp, openSuccess: false);
+
+        // Fail 3 times (threshold = 3)
+        for (int i = 0; i < 3; i++)
+        {
+            _sut.FailedOpCooldowns.Clear(); // Clear per-user cooldowns so the opp isn't skipped
+            await _sut.RunCycleAsync(CancellationToken.None);
+        }
+
+        // Both exchanges should now be circuit-broken
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
+        _sut.ExchangeCircuitBreaker[1].Failures.Should().BeGreaterThanOrEqualTo(3);
+        _sut.ExchangeCircuitBreaker[2].Failures.Should().BeGreaterThanOrEqualTo(3);
+        _sut.ExchangeCircuitBreaker[1].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
+        _sut.ExchangeCircuitBreaker[2].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_SuccessResetsCounter()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        // Pre-seed 2 failures (below threshold of 3)
+        _sut.ExchangeCircuitBreaker[2] = (2, DateTime.MinValue);
+
+        SetupCircuitBreakerScenario(opp, openSuccess: true);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Both exchange counters should be reset
+        _sut.ExchangeCircuitBreaker.Should().NotContainKey(1);
+        _sut.ExchangeCircuitBreaker.Should().NotContainKey(2);
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_ExcludesExchangeFromOpportunityFiltering()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        // Pre-seed exchange 2 as circuit-broken
+        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+
+        SetupCircuitBreakerScenario(opp, openSuccess: true);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Execution engine should NOT be called — the exchange is circuit-broken
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CircuitBreaker_ResetsAfterTimeout()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        // Pre-seed exchange 2 as circuit-broken but expired
+        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(-1));
+
+        SetupCircuitBreakerScenario(opp, openSuccess: true);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Execution engine SHOULD be called — the circuit breaker has expired
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── Skip Reason Accuracy Tests ───────────────────────────────────────────
+
+    [Fact]
+    public async Task SkipReason_ExchangeDisabled()
+    {
+        SetupEnabledUser();
+        // User has exchanges 1,2,3 enabled (from default setup)
+        // Opportunity uses exchange 4 which is NOT enabled
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 4,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "UnknownExchange",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Verify the snapshot was persisted with "exchange_disabled" skip reason
+        _mockUow.Verify(u => u.OpportunitySnapshots, Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task SkipReason_CircuitBroken()
+    {
+        // Pre-seed circuit breaker for exchange 2
+        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+
+        SetupEnabledUser();
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Execution engine should NOT be called — circuit-broken
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SkipReason_NotSelected()
+    {
+        SetupEnabledUser();
+        // Concentrated strategy takes only 1 candidate, second should be "not_selected"
+        var opp1 = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+        var opp2 = new ArbitrageOpportunityDto
+        {
+            AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 3,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Aster",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // First opp opened, second was "not_selected" by Concentrated strategy
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

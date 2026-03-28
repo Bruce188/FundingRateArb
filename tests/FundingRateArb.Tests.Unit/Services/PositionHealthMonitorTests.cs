@@ -129,7 +129,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
     }
 
     // ── Auto-close: max hold time ──────────────────────────────────────────────
@@ -144,7 +144,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.MaxHoldTimeReached);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.MaxHoldTimeReached);
     }
 
     // ── Auto-close: stop loss ──────────────────────────────────────────────────
@@ -166,7 +166,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
     // ── No close: healthy spread ───────────────────────────────────────────────
@@ -181,7 +181,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().BeEmpty();
+        result.ToClose.Should().BeEmpty();
     }
 
     // ── Alerts: spread warning (with duplicate suppression) ────────────────────
@@ -254,7 +254,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().BeEmpty();
+        result.ToClose.Should().BeEmpty();
     }
 
     // ── C-PR1: Uses GetOpenTrackedAsync (not GetOpenAsync) ─────────────────────
@@ -328,7 +328,7 @@ public class PositionHealthMonitorTests
 
         // One save for the spread update batch, then close list returned
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.SpreadCollapsed);
     }
 
     // ── M5: Stop-loss uses net unrealized PnL ─────────────────────────────────
@@ -345,7 +345,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
     // ── M4: Stale state reaper ──────────────────────────────────────────────────
@@ -433,7 +433,7 @@ public class PositionHealthMonitorTests
             .ReturnsAsync(3001m);
 
         // Act — must not throw
-        IReadOnlyList<(ArbitragePosition Position, CloseReason Reason)>? result = null;
+        HealthCheckResult? result = null;
         var act = async () => { result = await _sut.CheckAndActAsync(); };
         await act.Should().NotThrowAsync();
 
@@ -441,7 +441,7 @@ public class PositionHealthMonitorTests
         pos1.CurrentSpreadPerHour.Should().Be(0.0005m); // shortRate - longRate = 0.0006 - 0.0001
         // pos2 was fully processed — no close triggered (spread is healthy)
         result.Should().NotBeNull();
-        result!.Should().BeEmpty("neither position needs closing with healthy spreads");
+        result!.ToClose.Should().BeEmpty("neither position needs closing with healthy spreads");
         // SaveAsync still called once
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -519,7 +519,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Reason == CloseReason.StopLoss);
+        result.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.StopLoss);
     }
 
     // ── D4: Max hold time exact boundary ────────────────────────────────────────
@@ -535,7 +535,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Reason == CloseReason.MaxHoldTimeReached);
+        result.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.MaxHoldTimeReached);
     }
 
     // ── D4: Zero entry prices guard ─────────────────────────────────────────────
@@ -549,7 +549,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().BeEmpty("position with zero entry prices should be skipped, not closed");
+        result.ToClose.Should().BeEmpty("position with zero entry prices should be skipped, not closed");
     }
 
     // ── D4: Price feed failure — 5 consecutive creates alert ────────────────────
@@ -1032,7 +1032,7 @@ public class PositionHealthMonitorTests
 
         var result = await _sut.CheckAndActAsync();
 
-        result.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.PnlTargetReached);
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.PnlTargetReached);
     }
 
     [Fact]

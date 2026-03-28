@@ -16,4 +16,5 @@ public interface IDashboardClient
     Task ReceiveOpportunityUpdate(OpportunityResultDto result);
     Task ReceiveStatusExplanation(string message, string severity);
     Task ReceiveBalanceUpdate(BalanceSnapshotDto snapshot);
+    Task ReceivePositionRemoval(int positionId);
 }

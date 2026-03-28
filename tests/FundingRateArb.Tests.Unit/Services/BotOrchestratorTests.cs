@@ -65,9 +65,9 @@ public class BotOrchestratorTests
         _mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync([]);
 
-        // Default mock for health monitor — returns empty close list
+        // Default mock for health monitor — returns empty result
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(Array.Empty<(ArbitragePosition, CloseReason)>());
+            .ReturnsAsync(HealthCheckResult.Empty);
 
         // H7: Default mock for GetClosedSinceAsync (returns empty list — no drawdown)
         _mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
@@ -109,6 +109,7 @@ public class BotOrchestratorTests
         // Stub SignalR hub context
         var mockClients = new Mock<IHubClients<IDashboardClient>>();
         var mockClient = new Mock<IDashboardClient>();
+        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
         mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
         _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
 

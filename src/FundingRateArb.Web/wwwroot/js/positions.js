@@ -44,6 +44,15 @@
         else if (warnLevel === 1) row.classList.add("table-info");
     });
 
+    connection.on("ReceivePositionRemoval", function (positionId) {
+        var parsedId = parseInt(positionId, 10);
+        if (isNaN(parsedId)) return;
+        var row = document.querySelector('tr[data-position-id="' + parsedId + '"]');
+        if (row) {
+            row.remove();
+        }
+    });
+
     // Update summary stats from dashboard updates
     connection.on("ReceiveDashboardUpdate", function (data) {
         var totalPnl = document.getElementById("positions-total-pnl");
