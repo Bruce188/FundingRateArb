@@ -24,12 +24,12 @@ public class UserSettingsService : IUserSettingsService
 
         if (existing is not null)
         {
-            existing.EncryptedApiKey = apiKey is not null ? _vault.Encrypt(apiKey) : existing.EncryptedApiKey;
-            existing.EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : existing.EncryptedApiSecret;
-            existing.EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : existing.EncryptedWalletAddress;
-            existing.EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : existing.EncryptedPrivateKey;
-            existing.EncryptedSubAccountAddress = subAccountAddress is not null ? _vault.Encrypt(subAccountAddress) : existing.EncryptedSubAccountAddress;
-            existing.EncryptedApiKeyIndex = apiKeyIndex is not null ? _vault.Encrypt(apiKeyIndex) : existing.EncryptedApiKeyIndex;
+            existing.EncryptedApiKey = !string.IsNullOrEmpty(apiKey) ? _vault.Encrypt(apiKey) : existing.EncryptedApiKey;
+            existing.EncryptedApiSecret = !string.IsNullOrEmpty(apiSecret) ? _vault.Encrypt(apiSecret) : existing.EncryptedApiSecret;
+            existing.EncryptedWalletAddress = !string.IsNullOrEmpty(walletAddress) ? _vault.Encrypt(walletAddress) : existing.EncryptedWalletAddress;
+            existing.EncryptedPrivateKey = !string.IsNullOrEmpty(privateKey) ? _vault.Encrypt(privateKey) : existing.EncryptedPrivateKey;
+            existing.EncryptedSubAccountAddress = !string.IsNullOrEmpty(subAccountAddress) ? _vault.Encrypt(subAccountAddress) : existing.EncryptedSubAccountAddress;
+            existing.EncryptedApiKeyIndex = !string.IsNullOrEmpty(apiKeyIndex) ? _vault.Encrypt(apiKeyIndex) : existing.EncryptedApiKeyIndex;
             existing.IsActive = true;
             existing.LastUpdatedAt = DateTime.UtcNow;
             _uow.UserCredentials.Update(existing);
@@ -40,12 +40,12 @@ public class UserSettingsService : IUserSettingsService
             {
                 UserId = userId,
                 ExchangeId = exchangeId,
-                EncryptedApiKey = apiKey is not null ? _vault.Encrypt(apiKey) : null,
-                EncryptedApiSecret = apiSecret is not null ? _vault.Encrypt(apiSecret) : null,
-                EncryptedWalletAddress = walletAddress is not null ? _vault.Encrypt(walletAddress) : null,
-                EncryptedPrivateKey = privateKey is not null ? _vault.Encrypt(privateKey) : null,
-                EncryptedSubAccountAddress = subAccountAddress is not null ? _vault.Encrypt(subAccountAddress) : null,
-                EncryptedApiKeyIndex = apiKeyIndex is not null ? _vault.Encrypt(apiKeyIndex) : null,
+                EncryptedApiKey = !string.IsNullOrEmpty(apiKey) ? _vault.Encrypt(apiKey) : null,
+                EncryptedApiSecret = !string.IsNullOrEmpty(apiSecret) ? _vault.Encrypt(apiSecret) : null,
+                EncryptedWalletAddress = !string.IsNullOrEmpty(walletAddress) ? _vault.Encrypt(walletAddress) : null,
+                EncryptedPrivateKey = !string.IsNullOrEmpty(privateKey) ? _vault.Encrypt(privateKey) : null,
+                EncryptedSubAccountAddress = !string.IsNullOrEmpty(subAccountAddress) ? _vault.Encrypt(subAccountAddress) : null,
+                EncryptedApiKeyIndex = !string.IsNullOrEmpty(apiKeyIndex) ? _vault.Encrypt(apiKeyIndex) : null,
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
