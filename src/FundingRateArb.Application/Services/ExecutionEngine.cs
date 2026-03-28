@@ -36,11 +36,8 @@ public class ExecutionEngine : IExecutionEngine
         // B6: Absolute order size cap
         if (sizeUsdc > MaxSingleOrderUsdc)
         {
-            if (_logger.IsEnabled(LogLevel.Critical))
-            {
-                _logger.LogCritical("Order size {Size:F2} exceeds safety cap {Max} for {Asset}",
-                    sizeUsdc, MaxSingleOrderUsdc, opp.AssetSymbol);
-            }
+            _logger.LogCritical("Order size {Size:F2} exceeds safety cap {Max} for {Asset}",
+                sizeUsdc, MaxSingleOrderUsdc, opp.AssetSymbol);
             return (false, $"Order size {sizeUsdc:F2} exceeds safety cap of {MaxSingleOrderUsdc} USDC");
         }
 
@@ -87,12 +84,9 @@ public class ExecutionEngine : IExecutionEngine
                 return (false, "Pre-flight balance check failed — exchange connection error");
             }
 
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation(
-                    "Opening position: {Asset} Long={LongExchange} Short={ShortExchange} Size={Size} USDC",
-                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
-            }
+            _logger.LogInformation(
+                "Opening position: {Asset} Long={LongExchange} Short={ShortExchange} Size={Size} USDC",
+                opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
 
             // Pre-flight leverage validation: clamp to exchange maximum if configured leverage exceeds it
             var originalLeverage = config.DefaultLeverage;
@@ -251,12 +245,9 @@ public class ExecutionEngine : IExecutionEngine
 
                 await _uow.SaveAsync(ct);
 
-                if (_logger.IsEnabled(LogLevel.Information))
-                {
-                    _logger.LogInformation(
-                        "Position opened: {Asset} LongOrderId={LongOrderId} ShortOrderId={ShortOrderId}",
-                        opp.AssetSymbol, longResult.OrderId, shortResult.OrderId);
-                }
+                _logger.LogInformation(
+                    "Position opened: {Asset} LongOrderId={LongOrderId} ShortOrderId={ShortOrderId}",
+                    opp.AssetSymbol, longResult.OrderId, shortResult.OrderId);
 
                 return (true, null);
             }
@@ -339,12 +330,9 @@ public class ExecutionEngine : IExecutionEngine
         try
         {
 
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation(
-                    "Closing position #{PositionId}: {Asset} reason={Reason}",
-                    position.Id, assetSymbol, reason);
-            }
+            _logger.LogInformation(
+                "Closing position #{PositionId}: {Asset} reason={Reason}",
+                position.Id, assetSymbol, reason);
 
             position.Status = PositionStatus.Closing;
             position.ClosingStartedAt = DateTime.UtcNow;
@@ -373,15 +361,12 @@ public class ExecutionEngine : IExecutionEngine
                     var longEx = longCloseTask.Exception?.GetBaseException();
                     var shortEx = shortCloseTask.Exception?.GetBaseException();
 
-                    if (_logger.IsEnabled(LogLevel.Critical))
-                    {
-                        _logger.LogCritical(longEx,
-                            "CLOSE FAILED — long leg threw for position #{PositionId} {Asset}: {Message}",
-                            position.Id, assetSymbol, longEx?.Message);
-                        _logger.LogCritical(shortEx,
-                            "CLOSE FAILED — short leg threw for position #{PositionId} {Asset}: {Message}",
-                            position.Id, assetSymbol, shortEx?.Message);
-                    }
+                    _logger.LogCritical(longEx,
+                        "CLOSE FAILED — long leg threw for position #{PositionId} {Asset}: {Message}",
+                        position.Id, assetSymbol, longEx?.Message);
+                    _logger.LogCritical(shortEx,
+                        "CLOSE FAILED — short leg threw for position #{PositionId} {Asset}: {Message}",
+                        position.Id, assetSymbol, shortEx?.Message);
 
                     position.Status = PositionStatus.EmergencyClosed;
                     _uow.Positions.Update(position);
@@ -406,12 +391,9 @@ public class ExecutionEngine : IExecutionEngine
                     ? longCloseTask.Exception?.GetBaseException()
                     : shortCloseTask.Exception?.GetBaseException();
 
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical(failedEx,
-                        "CLOSE PARTIALLY FAILED — {FailedLeg} leg threw for position #{PositionId} {Asset}: {Message}",
-                        failedLegName, position.Id, assetSymbol, failedEx?.Message);
-                }
+                _logger.LogCritical(failedEx,
+                    "CLOSE PARTIALLY FAILED — {FailedLeg} leg threw for position #{PositionId} {Asset}: {Message}",
+                    failedLegName, position.Id, assetSymbol, failedEx?.Message);
 
                 // Leave position.Status = Closing — do NOT mark Closed or EmergencyClosed
                 _uow.Positions.Update(position);
@@ -731,11 +713,8 @@ public class ExecutionEngine : IExecutionEngine
                     continue;
                 }
 
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical("EMERGENCY CLOSE FAILED after {Attempts} attempts: {Asset} {Leg} Error={Error}",
-                        attempt + 1, asset, legName, closeResult.Error);
-                }
+                _logger.LogCritical("EMERGENCY CLOSE FAILED after {Attempts} attempts: {Asset} {Leg} Error={Error}",
+                    attempt + 1, asset, legName, closeResult.Error);
                 _uow.Alerts.Add(new Alert
                 {
                     UserId = userId,
@@ -747,10 +726,7 @@ public class ExecutionEngine : IExecutionEngine
             }
             catch (Exception ex)
             {
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical(ex, "EMERGENCY CLOSE THREW for {Leg} leg: {Asset}", legName, asset);
-                }
+                _logger.LogCritical(ex, "EMERGENCY CLOSE THREW for {Leg} leg: {Asset}", legName, asset);
                 _uow.Alerts.Add(new Alert
                 {
                     UserId = userId,

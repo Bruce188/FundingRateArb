@@ -7,11 +7,13 @@
     <AnalysisLevel>latest-Recommended</AnalysisLevel>
     <!-- Suppress rules that require disproportionate refactoring of existing code:
          CA1848: Use LoggerMessage delegates (52 call sites across Application layer)
+         CA1873: Avoid expensive log argument evaluation — all logging uses structured templates
+                 which defer formatting; arguments are simple properties, not computed values
          CA1711: Type names ending with 'Stream' (IMarketDataStream is a core interface)
          CA1716: Parameter names conflicting with reserved keywords ('to' in repository interfaces)
          CA1725: Parameter name 'ct' vs 'stoppingToken' in BackgroundService overrides
          CA1861: Constant array arguments in EF-generated migrations
          CA1822: Members that can be static in exchange connector helpers -->
-    <NoWarn>CA1848;CA1711;CA1716;CA1725;CA1861;CA1822</NoWarn>
+    <NoWarn>CA1848;CA1873;CA1711;CA1716;CA1725;CA1861;CA1822</NoWarn>
   </PropertyGroup>
 </Project>
