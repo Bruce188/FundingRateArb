@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using Aster.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
@@ -136,6 +137,18 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         if (string.IsNullOrEmpty(walletAddress) || string.IsNullOrEmpty(privateKey))
         {
             return null;
+        }
+
+        if (!string.IsNullOrEmpty(subAccountAddress))
+        {
+            if (!Regex.IsMatch(subAccountAddress, @"^0x[0-9a-fA-F]{40}$"))
+            {
+                var masked = MaskValue(subAccountAddress);
+                _logger.LogWarning(
+                    "Hyperliquid sub-account address must be a valid Ethereum address but received '{MaskedValue}'",
+                    masked);
+                return null;
+            }
         }
 
         var restClient = new HyperLiquidRestClient(options =>

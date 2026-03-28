@@ -46,12 +46,14 @@ public class DashboardController : Controller
 
         if (!isAuthenticated)
         {
-            // Anonymous path: cache opportunity result to avoid expensive queries on every request (NB1)
-            // GetOrCreateAsync holds a per-key lock to prevent cache stampede under concurrent requests
+            // Anonymous path: cache opportunity result with 30-second TTL.
+            // Note: MemoryCache.GetOrCreateAsync does not provide per-key locking in .NET 8.
+            // Under concurrent requests during TTL gap, the factory may execute multiple times.
+            // Acceptable given the 30s TTL and low anonymous traffic volume.
             var cachedResult = await _cache.GetOrCreateAsync(AnonymousOpportunityCacheKey, async entry =>
             {
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(30);
-                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
             });
 
             var anonOpportunities = cachedResult!.Opportunities;

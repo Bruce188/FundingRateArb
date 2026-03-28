@@ -1082,6 +1082,40 @@ public class ExchangeConnectorFactoryTests
     }
 
     [Theory]
+    [InlineData("not-an-address")]
+    [InlineData("0xZZZ")]
+    [InlineData("0x123")]
+    [InlineData("hello")]
+    public async Task CreateForUser_Hyperliquid_WithInvalidSubAccountAddress_ReturnsNull(string subAccountAddress)
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey123",
+            subAccountAddress: subAccountAddress);
+
+        connector.Should().BeNull(
+            $"subAccountAddress='{subAccountAddress}' is not a valid Ethereum address and should be rejected");
+    }
+
+    [Fact]
+    public async Task CreateForUser_Hyperliquid_WithValidSubAccountAddress_ReturnsConnector()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "hyperliquid", apiKey: null, apiSecret: null,
+            walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
+            privateKey: "0xprivatekey123",
+            subAccountAddress: "0x1234567890abcdef1234567890abcdef12345678");
+
+        connector.Should().NotBeNull();
+        connector.Should().BeOfType<HyperliquidConnector>();
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     public void GetAccountIndex_WithNullOrEmpty_Throws(string? indexValue)
