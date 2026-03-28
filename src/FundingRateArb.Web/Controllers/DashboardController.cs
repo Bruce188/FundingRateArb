@@ -74,26 +74,22 @@ public class DashboardController : Controller
             return View(anonVm);
         }
 
-        // Authenticated path: parallelize independent async calls to reduce total latency
+        // Start the heavy signal engine call (may use its own scope internally)
         var resultTask = _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-        var botConfigTask = _uow.BotConfig.GetActiveAsync();
-        var userConfigTask = _userSettings.GetOrCreateConfigAsync(userId!);
-        var exchangeIdsTask = _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
+
+        // Sequential UoW queries — DbContext is not thread-safe
+        var botConfig = await _uow.BotConfig.GetActiveAsync();
+        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
+        var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
         // NB4: Admin loads all positions; non-admin pushes user filter to SQL
-        var positionsTask = User.IsInRole("Admin")
-            ? _uow.Positions.GetOpenAsync()
-            : _uow.Positions.GetOpenByUserAsync(userId!);
-        var alertsTask = _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
+        var openPositions = User.IsInRole("Admin")
+            ? await _uow.Positions.GetOpenAsync()
+            : await _uow.Positions.GetOpenByUserAsync(userId!);
+        var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
 
-        await Task.WhenAll(resultTask, botConfigTask, userConfigTask, exchangeIdsTask, positionsTask, alertsTask);
-
+        // Await the signal engine result (likely already completed)
         var result = await resultTask;
         var allOpportunities = result.Opportunities;
-        var botConfig = await botConfigTask;
-        var userConfig = await userConfigTask;
-        var enabledExchangeIds = await exchangeIdsTask;
-        var openPositions = await positionsTask;
-        var unreadAlerts = await alertsTask;
 
         // Lazy initialization: ensure user has default settings on first visit
         if (enabledExchangeIds.Count == 0)
