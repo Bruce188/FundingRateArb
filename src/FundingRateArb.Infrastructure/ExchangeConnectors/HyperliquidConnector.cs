@@ -276,16 +276,35 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     {
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
-        var result = await pipeline.ExecuteAsync(
+        // Perps balance (withdrawable)
+        var perpsResult = await pipeline.ExecuteAsync(
             async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(_vaultAddress, null, token),
             ct);
 
-        if (!result.Success)
+        if (!perpsResult.Success)
         {
-            throw new InvalidOperationException(result.Error!.ToString());
+            throw new InvalidOperationException(perpsResult.Error!.ToString());
         }
 
-        return result.Data.Withdrawable;
+        var perpsBalance = perpsResult.Data.Withdrawable;
+
+        // Spot balance (USDC available) — unified account may hold funds in spot
+        var spotResult = await pipeline.ExecuteAsync(
+            async token => await _restClient.SpotApi.Account.GetBalancesAsync(_vaultAddress, token),
+            ct);
+
+        decimal spotUsdc = 0m;
+        if (spotResult.Success && spotResult.Data != null)
+        {
+            var usdcBalance = spotResult.Data.FirstOrDefault(b =>
+                string.Equals(b.Asset, "USDC", StringComparison.OrdinalIgnoreCase));
+            if (usdcBalance != null)
+            {
+                spotUsdc = usdcBalance.Total - usdcBalance.Hold;
+            }
+        }
+
+        return perpsBalance + spotUsdc;
     }
 
     /// <summary>
