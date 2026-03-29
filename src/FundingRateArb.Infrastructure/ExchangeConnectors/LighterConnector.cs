@@ -705,7 +705,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     /// <summary>
     /// Submit a signed transaction to the Lighter API via POST /api/v1/sendTx.
     /// </summary>
-    private async Task<LighterSendTxResponse> SendTransactionAsync(
+    internal async Task<LighterSendTxResponse> SendTransactionAsync(
         byte txType, string txInfo, CancellationToken ct)
     {
         // The Lighter API expects multipart/form-data with tx_type and tx_info fields

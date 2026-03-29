@@ -772,6 +772,42 @@ public class LighterConnectorTests
             "leverage cache must be ConcurrentDictionary<int, int> keyed by marketId");
     }
 
+    // ── SendTransaction Sanitization Tests ──────────────────────
+
+    [Fact]
+    public async Task SendTransactionAsync_SanitizesMultilineErrorMessage()
+    {
+        // Arrange: Lighter API returns 200 HTTP but error code with multiline message
+        var errorJson = """{"code": 500, "message": "line1\r\nline2\nline3"}""";
+        var sut = CreateConnector(errorJson);
+
+        // Act & Assert: SendTransactionAsync is internal, call directly
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        ex.Which.Message.Should().NotContain("\r", "newline characters must be stripped from error messages");
+        ex.Which.Message.Should().NotContain("\n", "newline characters must be stripped from error messages");
+    }
+
+    [Fact]
+    public async Task SendTransactionAsync_TruncatesLongErrorMessage()
+    {
+        // Arrange: Lighter API returns error with message >200 chars
+        var longMessage = new string('X', 300);
+        var errorJson = $$$"""{"code": 500, "message": "{{{longMessage}}}"}""";
+        var sut = CreateConnector(errorJson);
+
+        // Act & Assert
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        // The sanitized message is embedded in the exception: "Lighter sendTx returned error code 500: <truncated>"
+        // Extract just the part after the colon to check truncation
+        var messagePart = ex.Which.Message.Split(": ", 2).Last();
+        messagePart.Length.Should().BeLessThanOrEqualTo(200,
+            "error messages longer than 200 chars must be truncated");
+    }
+
     // ── Diagnostic Logging Tests ─────────────────────────────────
 
     [Fact]

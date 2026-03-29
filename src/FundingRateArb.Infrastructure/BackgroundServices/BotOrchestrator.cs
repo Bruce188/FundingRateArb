@@ -480,7 +480,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
         var allActiveKeys = userOpenPositions
             .Concat(userOpeningPositions)
-            .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+            .Select(PositionKey)
             .ToHashSet();
 
         var cooldownSkips = new List<(string Asset, TimeSpan Remaining)>();
@@ -529,7 +529,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     .Where(o => enabledAssetSet.Contains(o.AssetId))
                     .Where(opp =>
                     {
-                        var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                        var key = OpportunityKey(opp);
                         if (allActiveKeys.Contains(key))
                         {
                             return false;
@@ -728,7 +728,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
 
             var activeKeys = allOpenPositions
-                .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+                .Select(PositionKey)
                 .ToHashSet();
 
             var snapshots = opportunities.Select(opp =>
@@ -1081,6 +1081,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// </summary>
     private static string OpportunityKey(ArbitrageOpportunityDto o)
         => $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}";
+
+    private static string PositionKey(ArbitragePosition p)
+        => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}";
 
     /// <summary>
     /// Groups skip-reason tracking sets to reduce parameter count.
