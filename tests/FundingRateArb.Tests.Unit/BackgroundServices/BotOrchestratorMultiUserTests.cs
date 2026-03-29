@@ -532,11 +532,16 @@ public class BotOrchestratorMultiUserTests
         // Setup UserB — the circuit breaker should block them too
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration

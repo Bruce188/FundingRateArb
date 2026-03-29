@@ -1339,10 +1339,16 @@ public class BotOrchestratorTests
     {
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         SetupCircuitBreakerScenario(opp, openSuccess: false);
@@ -1368,10 +1374,16 @@ public class BotOrchestratorTests
     {
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         // Pre-seed 2 failures (below threshold of 3)
@@ -1391,10 +1403,16 @@ public class BotOrchestratorTests
     {
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         // Pre-seed exchange 2 as circuit-broken
@@ -1415,10 +1433,16 @@ public class BotOrchestratorTests
     {
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         // Pre-seed exchange 2 as circuit-broken but expired
@@ -1442,10 +1466,16 @@ public class BotOrchestratorTests
         // Only net-positive opportunities available (below threshold) — triggers adaptive fallback
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.00005m, SpreadPerHour = 0.0001m, // Below threshold (0.0001m)
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.00005m,
+            SpreadPerHour = 0.0001m, // Below threshold (0.0001m)
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         // Pre-seed exchange 2 as circuit-broken
@@ -1493,10 +1523,16 @@ public class BotOrchestratorTests
         // The adaptive candidate is below threshold and only in AllNetPositive, NOT in Opportunities
         var adaptiveOpp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.00005m, SpreadPerHour = 0.0001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.00005m,
+            SpreadPerHour = 0.0001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
@@ -1576,10 +1612,16 @@ public class BotOrchestratorTests
         // Opportunity uses exchange 4 which is NOT enabled
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 4,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "UnknownExchange",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 4,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "UnknownExchange",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
@@ -1603,10 +1645,16 @@ public class BotOrchestratorTests
         SetupEnabledUser();
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
@@ -1630,17 +1678,29 @@ public class BotOrchestratorTests
         // Concentrated strategy takes only 1 candidate, second should be "not_selected"
         var opp1 = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m,
+            SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
         var opp2 = new ArbitrageOpportunityDto
         {
-            AssetId = 2, AssetSymbol = "BTC", LongExchangeId = 1, ShortExchangeId = 3,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Aster",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 2,
+            AssetSymbol = "BTC",
+            LongExchangeId = 1,
+            ShortExchangeId = 3,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Aster",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
