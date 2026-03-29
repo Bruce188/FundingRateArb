@@ -68,6 +68,7 @@ public class BotConfigRepository : IBotConfigRepository
         CloseThreshold = src.CloseThreshold,
         StopLossPct = src.StopLossPct,
         MaxHoldTimeHours = src.MaxHoldTimeHours,
+        MinHoldTimeHours = src.MinHoldTimeHours,
         VolumeFraction = src.VolumeFraction,
         MaxCapitalPerPosition = src.MaxCapitalPerPosition,
         BreakevenHoursMax = src.BreakevenHoursMax,

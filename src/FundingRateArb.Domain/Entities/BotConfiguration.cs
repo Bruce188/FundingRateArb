@@ -15,6 +15,10 @@ public class BotConfiguration
     public decimal StopLossPct { get; set; } = 0.10m;
 
     public int MaxHoldTimeHours { get; set; } = 48;
+
+    /// <summary>Minimum hours to hold before allowing SpreadCollapsed close. StopLoss always applies.</summary>
+    [Range(0, 48)]
+    public int MinHoldTimeHours { get; set; } = 2;
     public decimal VolumeFraction { get; set; } = 0.001m;
 
     [Range(0.01, 1.0)]

@@ -869,7 +869,7 @@ public class LighterConnectorTests
         // Configure account index for the verify call
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
 
-        // Return account with no matching position — all 3 polls will fail
+        // Return account with no matching position — all 10 polls will fail
         var emptyAccountJson = """
             {
                 "code": 200,
@@ -890,7 +890,17 @@ public class LighterConnectorTests
 
         result.Should().BeFalse();
 
-        // Verify that 3 poll attempt log entries were generated (Debug level)
+        // First and last poll attempts are logged at Information level
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Exactly(2));
+
+        // Middle poll attempts (2-9) are logged at Debug level
         _loggerMock.Verify(
             l => l.Log(
                 LogLevel.Debug,
@@ -898,7 +908,7 @@ public class LighterConnectorTests
                 It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Exactly(3));
+            Times.Exactly(8));
 
         // Verify final failure warning
         _loggerMock.Verify(

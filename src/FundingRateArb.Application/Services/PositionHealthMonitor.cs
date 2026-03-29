@@ -33,7 +33,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     public async Task<HealthCheckResult> CheckAndActAsync(CancellationToken ct = default)
     {
-        var allReaped = new List<(int PositionId, string UserId)>();
+        var allReaped = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>();
 
         // M4: Reap stale Opening positions (stuck > 5 minutes)
         var openingReaped = await ReapStalePositionsAsync(PositionStatus.Opening, TimeSpan.FromMinutes(5), ct);
@@ -219,12 +219,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         }
     }
 
-    private async Task<(IReadOnlyList<ArbitragePosition> NonReaped, List<(int PositionId, string UserId)> Reaped)> ReapStaleClosingPositionsAsync(
+    private async Task<(IReadOnlyList<ArbitragePosition> NonReaped, List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)> Reaped)> ReapStaleClosingPositionsAsync(
         IReadOnlyList<ArbitragePosition> closingPositions, TimeSpan maxAge, CancellationToken ct)
     {
         var cutoff = DateTime.UtcNow - maxAge;
         var nonReaped = new List<ArbitragePosition>();
-        var reapedPositions = new List<(int PositionId, string UserId)>();
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>();
 
         foreach (var pos in closingPositions)
         {
@@ -253,7 +253,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 Message = $"Position #{pos.Id} stuck in Closing for >{maxAge.TotalMinutes:F0} minutes. " +
                            $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
             });
-            reapedPositions.Add((pos.Id, pos.UserId));
+            reapedPositions.Add((pos.Id, pos.UserId, pos.LongExchangeId, pos.ShortExchangeId));
         }
 
         if (reapedPositions.Count > 0)
@@ -264,11 +264,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         return (nonReaped, reapedPositions);
     }
 
-    private async Task<List<(int PositionId, string UserId)>> ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)
+    private async Task<List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>> ReapStalePositionsAsync(PositionStatus status, TimeSpan maxAge, CancellationToken ct)
     {
         var positions = await _uow.Positions.GetByStatusAsync(status);
         var cutoff = DateTime.UtcNow - maxAge;
-        var reapedPositions = new List<(int PositionId, string UserId)>();
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>();
 
         foreach (var pos in positions)
         {
@@ -300,7 +300,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 Message = $"Position #{pos.Id} stuck in {status} for >{maxAge.TotalMinutes:F0} minutes. " +
                            $"Auto-transitioned to EmergencyClosed. Manual intervention required.",
             });
-            reapedPositions.Add((pos.Id, pos.UserId));
+            reapedPositions.Add((pos.Id, pos.UserId, pos.LongExchangeId, pos.ShortExchangeId));
         }
 
         if (reapedPositions.Count > 0)
@@ -341,7 +341,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             return CloseReason.MaxHoldTimeReached;
         }
 
-        if (spread < config.CloseThreshold)
+        if (spread < config.CloseThreshold && hoursOpen >= config.MinHoldTimeHours)
         {
             return CloseReason.SpreadCollapsed;
         }

@@ -75,15 +75,18 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     /// <inheritdoc />
     /// <remarks>
-    /// Polls GetAccountAsync up to 3 times with 2-second delays to verify the position
-    /// actually exists on-chain after fire-and-forget tx submission.
+    /// Waits 5 seconds for the zk-rollup transaction to settle, then polls GetAccountAsync
+    /// up to 10 times with 3-second delays to verify the position exists on-chain.
     /// </remarks>
     public async Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default)
     {
-        const int maxAttempts = 3;
-        const int delayMs = 2000;
+        const int maxAttempts = 10;
+        const int delayMs = 3000;
 
         var accountIndex = GetAccountIndex();
+
+        // Allow time for the zk-rollup transaction to settle before polling
+        await Task.Delay(5000, ct);
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -99,10 +102,13 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 var account = accountResponse?.Accounts?.FirstOrDefault();
 
                 var posCount = account?.Positions?.Count ?? 0;
+                // Log first and last poll attempts at Information level for production visibility
+                var pollLogLevel = (attempt == 0 || attempt == maxAttempts - 1)
+                    ? LogLevel.Information : LogLevel.Debug;
 
                 if (account?.Positions is null)
                 {
-                    _logger.LogDebug(
+                    _logger.Log(pollLogLevel,
                         "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
                         attempt + 1, maxAttempts, asset, side);
                     continue;
@@ -124,7 +130,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     // Long = positive size, Short = negative size
                     if (side == Side.Long && size > 0)
                     {
-                        _logger.LogDebug(
+                        _logger.Log(pollLogLevel,
                             "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
                             attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
@@ -132,14 +138,14 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
                     if (side == Side.Short && size < 0)
                     {
-                        _logger.LogDebug(
+                        _logger.Log(pollLogLevel,
                             "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
                             attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
                     }
                 }
 
-                _logger.LogDebug(
+                _logger.Log(pollLogLevel,
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
             }

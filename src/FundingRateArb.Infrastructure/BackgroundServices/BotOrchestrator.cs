@@ -222,6 +222,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Push removal events for reaped and closed positions
         await PushPositionRemovalsAsync(healthResult.ReapedPositions, closedPositionIds);
 
+        // Trigger circuit breaker for exchanges involved in reaped positions
+        foreach (var reaped in healthResult.ReapedPositions)
+        {
+            IncrementExchangeFailure(reaped.LongExchangeId, globalConfig);
+            IncrementExchangeFailure(reaped.ShortExchangeId, globalConfig);
+        }
+
         // Fetch ALL open positions after health monitor so closed positions are excluded
         var allOpenPositions = await uow.Positions.GetOpenAsync();
 
@@ -468,20 +475,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
             return;
         }
 
-        // Max positions gate
-        if (userOpenPositions.Count >= userConfig.MaxConcurrentPositions)
+        // Load Opening positions before the gate so they count toward the limit
+        var openingPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
+
+        // Max positions gate (includes Opening positions to prevent rapid-fire loop)
+        if ((userOpenPositions.Count + userOpeningPositions.Count) >= userConfig.MaxConcurrentPositions)
         {
             _logger.LogDebug(
-                "Max concurrent positions reached for user {UserId} ({Count}/{Max})",
-                userId, userOpenPositions.Count, userConfig.MaxConcurrentPositions);
+                "Max concurrent positions reached for user {UserId} ({Open}+{Opening}/{Max})",
+                userId, userOpenPositions.Count, userOpeningPositions.Count, userConfig.MaxConcurrentPositions);
             await PushStatusExplanationAsync(userId,
-                $"{userOpenPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
+                $"{userOpenPositions.Count + userOpeningPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
             return;
         }
 
         // Filter candidates: exclude active/opening positions and cooled-down opportunities
-        var openingPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
-        var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
         var allActiveKeys = userOpenPositions
             .Concat(userOpeningPositions)
             .Select(PositionKey)
@@ -649,7 +658,19 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 "Opening position for user {UserId}: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
                 userId, opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, size);
 
-            var (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, ct);
+            bool success;
+            string? error;
+            try
+            {
+                (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "OpenPositionAsync threw for {Asset} on {LongExchange}/{ShortExchange}",
+                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName);
+                success = false;
+                error = ex.Message;
+            }
 
             if (success)
             {
@@ -865,10 +886,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// Pushes ReceivePositionRemoval for reaped and closed positions to their owning user's group.
     /// </summary>
     private async Task PushPositionRemovalsAsync(
-        IReadOnlyList<(int PositionId, string UserId)> reapedPositions,
+        IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)> reapedPositions,
         List<(int PositionId, string UserId)> closedPositions)
     {
-        var tasks = reapedPositions.Concat(closedPositions).Select(async removal =>
+        var allRemovals = reapedPositions
+            .Select(r => (r.PositionId, r.UserId))
+            .Concat(closedPositions);
+        var tasks = allRemovals.Select(async removal =>
         {
             try
             {
