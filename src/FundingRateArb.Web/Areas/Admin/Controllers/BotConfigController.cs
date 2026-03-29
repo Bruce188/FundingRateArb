@@ -37,6 +37,7 @@ public class BotConfigController : Controller
             MaxCapitalPerPosition = config.MaxCapitalPerPosition,
             StopLossPct = config.StopLossPct,
             MaxHoldTimeHours = config.MaxHoldTimeHours,
+            MinHoldTimeHours = config.MinHoldTimeHours,
             VolumeFraction = config.VolumeFraction,
             BreakevenHoursMax = config.BreakevenHoursMax,
             AllocationStrategy = config.AllocationStrategy,
@@ -68,6 +69,13 @@ public class BotConfigController : Controller
             return View(model);
         }
 
+        if (model.MinHoldTimeHours > model.MaxHoldTimeHours)
+        {
+            ModelState.AddModelError(nameof(model.MinHoldTimeHours),
+                "Minimum hold time must not exceed maximum hold time.");
+            return View(model);
+        }
+
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
         config.IsEnabled = model.IsEnabled;
@@ -80,6 +88,7 @@ public class BotConfigController : Controller
         config.MaxCapitalPerPosition = model.MaxCapitalPerPosition!.Value;
         config.StopLossPct = model.StopLossPct!.Value;
         config.MaxHoldTimeHours = model.MaxHoldTimeHours!.Value;
+        config.MinHoldTimeHours = model.MinHoldTimeHours!.Value;
         config.VolumeFraction = model.VolumeFraction!.Value;
         config.BreakevenHoursMax = model.BreakevenHoursMax!.Value;
         config.AllocationStrategy = model.AllocationStrategy!.Value;

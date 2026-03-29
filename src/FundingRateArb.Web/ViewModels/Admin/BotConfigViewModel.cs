@@ -35,6 +35,9 @@ public class BotConfigViewModel
     [Required, Range(1, 168), Display(Name = "Max Hold Time (hours)")]
     public int? MaxHoldTimeHours { get; set; }
 
+    [Required, Range(0, 48), Display(Name = "Min Hold Time (hours)")]
+    public int? MinHoldTimeHours { get; set; }
+
     [Required, Range(0.00001, 0.1), Display(Name = "Volume Fraction (liquidity limit)")]
     public decimal? VolumeFraction { get; set; }
 

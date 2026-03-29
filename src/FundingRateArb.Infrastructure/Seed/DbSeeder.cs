@@ -266,6 +266,7 @@ public static class DbSeeder
             CloseThreshold = -0.00005m,
             StopLossPct = 0.10m,
             MaxHoldTimeHours = 48,
+            MinHoldTimeHours = 2,
             VolumeFraction = 0.001m,
             MaxCapitalPerPosition = 0.90m,
             BreakevenHoursMax = 8,

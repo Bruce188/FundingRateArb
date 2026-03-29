@@ -1374,4 +1374,107 @@ public class PositionHealthMonitorTests
             e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
             Times.Exactly(6));
     }
+
+    // ── MinHoldTimeHours ──────────────────────────────────────────────────
+
+    [Fact]
+    public void DetermineCloseReason_SpreadCollapsed_Suppressed_WhenWithinMinHoldPeriod()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Spread is below CloseThreshold but position is only 1 hour old (< MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 1m, spread: -0.001m);
+
+        result.Should().BeNull("SpreadCollapsed should be suppressed within MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_SpreadCollapsed_Fires_WhenPastMinHoldPeriod()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Spread is below CloseThreshold and position is 3 hours old (>= MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 3m, spread: -0.001m);
+
+        result.Should().Be(CloseReason.SpreadCollapsed);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_SpreadCollapsed_Fires_AtExactMinHoldBoundary()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+        };
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 2m, spread: -0.001m);
+
+        result.Should().Be(CloseReason.SpreadCollapsed);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_StopLoss_StillFires_WithinMinHoldPeriod()
+    {
+        var pos = MakeOpenPosition(marginUsdc: 100m);
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+        };
+
+        // StopLoss triggers: |unrealizedPnl| (-20) >= StopLossPct(0.15) * margin(100) = 15
+        // Even though position is only 0.5 hours old (< MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: -20m, hoursOpen: 0.5m, spread: -0.001m);
+
+        result.Should().Be(CloseReason.StopLoss, "StopLoss should always fire regardless of MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlTarget_StillFires_WithinMinHoldPeriod()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 10m;
+        pos.SizeUsdc = 100m;
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+        };
+
+        // PnlTargetReached: AccumulatedFunding(10) >= TargetPnlMultiplier(2.0) * entryFee
+        // Even though position is only 0.5 hours old (< MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 0.5m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached, "PnlTargetReached should fire regardless of MinHoldTimeHours");
+    }
 }
