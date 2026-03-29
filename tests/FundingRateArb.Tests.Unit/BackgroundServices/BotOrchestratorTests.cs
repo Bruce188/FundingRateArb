@@ -1875,19 +1875,29 @@ public class BotOrchestratorTests
 
         var opp1 = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m,
+            SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
         var opp2 = new ArbitrageOpportunityDto
         {
-            AssetId = 2, AssetSymbol = "BTC",
-            LongExchangeId = 1, ShortExchangeId = 3,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Aster",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 2,
+            AssetSymbol = "BTC",
+            LongExchangeId = 1,
+            ShortExchangeId = 3,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Aster",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
