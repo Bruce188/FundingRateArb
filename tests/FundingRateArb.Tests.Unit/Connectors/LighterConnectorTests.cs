@@ -772,6 +772,68 @@ public class LighterConnectorTests
             "leverage cache must be ConcurrentDictionary<int, int> keyed by marketId");
     }
 
+    // ── SendTransaction Sanitization Tests ──────────────────────
+
+    [Fact]
+    public async Task SendTransactionAsync_SanitizesMultilineErrorMessage()
+    {
+        // Arrange: Lighter API returns 200 HTTP but error code with multiline message
+        var errorJson = """{"code": 500, "message": "line1\r\nline2\nline3"}""";
+        var sut = CreateConnector(errorJson);
+
+        // Act & Assert: SendTransactionAsync is internal, call directly
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        ex.Which.Message.Should().NotContain("\r", "newline characters must be stripped from error messages");
+        ex.Which.Message.Should().NotContain("\n", "newline characters must be stripped from error messages");
+    }
+
+    [Fact]
+    public async Task SendTransactionAsync_TruncatesLongErrorMessage()
+    {
+        // Arrange: Lighter API returns error with message >200 chars
+        var longMessage = new string('X', 300);
+        var errorJson = $$$"""{"code": 500, "message": "{{{longMessage}}}"}""";
+        var sut = CreateConnector(errorJson);
+
+        // Act & Assert
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+
+        var ex = await act.Should().ThrowAsync<InvalidOperationException>();
+        // The sanitized message is embedded in the exception: "Lighter sendTx returned error code 500: <truncated>"
+        // Extract just the part after the colon to check truncation
+        var messagePart = ex.Which.Message.Split(": ", 2).Last();
+        messagePart.Length.Should().BeLessThanOrEqualTo(200,
+            "error messages longer than 200 chars must be truncated");
+    }
+
+    [Fact]
+    public async Task SendTransactionAsync_NonSuccessStatus_SanitizesMultilineBody()
+    {
+        // Arrange: HTTP-level failure (non-2xx) with multiline body from WAF/load balancer
+        var multilineBody = "line1\r\nline2\nline3";
+        var sut = CreateConnector(multilineBody, HttpStatusCode.BadRequest);
+
+        // Act & Assert: should throw HttpRequestException for non-2xx
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        // Verify the logged Body parameter contains no raw newlines
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) =>
+                    v.ToString()!.Contains("SendTransaction failed") &&
+                    !v.ToString()!.Contains('\r') &&
+                    !v.ToString()!.Contains('\n')),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once,
+            "HTTP non-2xx body must be sanitized: no \\r or \\n in logged output");
+    }
+
     // ── Diagnostic Logging Tests ─────────────────────────────────
 
     [Fact]

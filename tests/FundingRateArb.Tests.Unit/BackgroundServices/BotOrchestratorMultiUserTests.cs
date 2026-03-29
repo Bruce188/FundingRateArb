@@ -521,6 +521,102 @@ public class BotOrchestratorMultiUserTests
             "RecordCloseResult with null userId should not create any entries");
     }
 
+    // ── Adaptive fallback dedup across users ────────────────────────────────
+
+    [Fact]
+    public async Task AdaptiveFallback_MultiUser_SameCandidate_NoDuplicateSnapshots()
+    {
+        // Both users have no above-threshold opportunities, so both trigger adaptive fallback
+        // for the same AllNetPositive candidate. Snapshots should contain exactly one entry.
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { UserA, UserB });
+
+        var userConfigA = new UserConfiguration
+        {
+            UserId = UserA,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.01m, // High threshold — no opp will pass
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+        };
+        var userConfigB = new UserConfiguration
+        {
+            UserId = UserB,
+            IsEnabled = true,
+            MaxConcurrentPositions = 1,
+            OpenThreshold = 0.01m,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+        };
+
+        SetupUser(UserA, userConfigA);
+        SetupUser(UserB, userConfigB);
+
+        var adaptiveOpp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.0001m, // Below both users' thresholds
+            SpreadPerHour = 0.0001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        });
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>(), // No above-threshold opps
+                AllNetPositive = new List<ArbitrageOpportunityDto> { adaptiveOpp },
+            });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        // Capture persisted snapshots
+        var mockSnapshotRepo = new Mock<IOpportunitySnapshotRepository>();
+        List<OpportunitySnapshot>? capturedSnapshots = null;
+        mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<OpportunitySnapshot>, CancellationToken>((snaps, _) => capturedSnapshots = snaps.ToList())
+            .Returns(Task.CompletedTask);
+        mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(mockSnapshotRepo.Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Snapshots should contain exactly one entry for the adaptive candidate key (1_1_2)
+        capturedSnapshots.Should().NotBeNull("snapshots should have been persisted");
+        var matchingSnapshots = capturedSnapshots!
+            .Where(s => s.AssetId == 1 && s.LongExchangeId == 1 && s.ShortExchangeId == 2)
+            .ToList();
+        matchingSnapshots.Should().HaveCount(1,
+            "knownOpportunityKeys.Add should prevent duplicate entries when both users add the same adaptive candidate");
+    }
+
     // ── Circuit Breaker is global (not per-user) ────────────────────────────
 
     [Fact]
@@ -532,11 +628,16 @@ public class BotOrchestratorMultiUserTests
         // Setup UserB — the circuit breaker should block them too
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration

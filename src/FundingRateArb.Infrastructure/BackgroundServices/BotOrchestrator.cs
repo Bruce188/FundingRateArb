@@ -339,13 +339,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
             .Select(kvp => kvp.Key)
             .ToHashSet();
 
-        // Pre-compute opportunity key strings once to avoid repeated allocations.
-        // Uses reference equality for ArbitrageOpportunityDto keys — same object instances flow
-        // through the entire cycle. GetValueOrDefault fallbacks handle adaptive-path DTOs
-        // that may not be in this dictionary. Upstream (SignalEngine) guarantees unique DTO
-        // references per opportunity; duplicate entries would indicate an upstream contract violation.
-        var opportunityKeys = allOpportunities
-            .ToDictionary(o => o, o => $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}");
+        // Track known opportunity keys for adaptive candidate dedup (value-based, no reference equality)
+        var knownOpportunityKeys = new HashSet<string>(allOpportunities.Select(OpportunityKey));
+
+        // Create a local snapshot list for adaptive appends so we don't mutate the signal engine's DTO
+        var snapshotOpportunities = new List<ArbitrageOpportunityDto>(allOpportunities);
 
         foreach (var userId in enabledUserIds)
         {
@@ -353,7 +351,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             tracker.ClearPerUserSets();
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, opportunityKeys, tracker, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, knownOpportunityKeys, snapshotOpportunities, tracker, ct);
             }
             catch (Exception ex)
             {
@@ -362,7 +360,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 6: Persist opportunity snapshots and run 7-day purge
-        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, opportunityKeys, tracker, ct);
+        await PersistOpportunitySnapshotsAsync(uow, snapshotOpportunities, allOpenPositions, tracker, ct);
     }
 
     /// <summary>
@@ -379,7 +377,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
         IUserSettingsService userSettings,
         HashSet<int> dataOnlyExchangeIds,
         HashSet<int> circuitBrokenExchangeIds,
-        Dictionary<ArbitrageOpportunityDto, string> opportunityKeys,
+        HashSet<string> knownOpportunityKeys,
+        List<ArbitrageOpportunityDto> snapshotOpportunities,
         SkipReasonTracker tracker,
         CancellationToken ct)
     {
@@ -409,7 +408,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var userOpportunities = new List<ArbitrageOpportunityDto>();
         foreach (var o in allOpportunities)
         {
-            var key = opportunityKeys[o];
+            var key = OpportunityKey(o);
 
             if (!enabledExchangeSet.Contains(o.LongExchangeId) || !enabledExchangeSet.Contains(o.ShortExchangeId))
             {
@@ -485,7 +484,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
         var allActiveKeys = userOpenPositions
             .Concat(userOpeningPositions)
-            .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+            .Select(PositionKey)
             .ToHashSet();
 
         var cooldownSkips = new List<(string Asset, TimeSpan Remaining)>();
@@ -493,7 +492,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         var filteredCandidates = userOpportunities
             .Where(opp =>
             {
-                var key = opportunityKeys[opp];
+                var key = OpportunityKey(opp);
                 if (allActiveKeys.Contains(key))
                 {
                     return false;
@@ -519,7 +518,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Track opportunities that passed all filters but weren't selected by allocation strategy
         foreach (var opp in filteredCandidates.Skip(takeCount))
         {
-            tracker.NotSelectedKeys.Add(opportunityKeys[opp]);
+            tracker.NotSelectedKeys.Add(OpportunityKey(opp));
         }
 
         if (candidates.Count == 0)
@@ -534,7 +533,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     .Where(o => enabledAssetSet.Contains(o.AssetId))
                     .Where(opp =>
                     {
-                        var key = $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                        var key = OpportunityKey(opp);
                         if (allActiveKeys.Contains(key))
                         {
                             return false;
@@ -564,15 +563,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     // Use the normal execution path with the adaptive candidate
                     candidates = adaptiveCandidates;
 
-                    // B1: Ensure adaptive candidate is tracked in opportunityKeys and allOpportunities
+                    // B1: Ensure adaptive candidate is tracked in snapshotOpportunities (not the signal engine's DTO)
                     // so PersistOpportunitySnapshotsAsync can record WasOpened = true instead of "below_threshold"
                     foreach (var ac in adaptiveCandidates)
                     {
-                        var acKey = $"{ac.AssetId}_{ac.LongExchangeId}_{ac.ShortExchangeId}";
-                        opportunityKeys.TryAdd(ac, acKey);
-                        if (!allOpportunities.Contains(ac))
+                        if (knownOpportunityKeys.Add(OpportunityKey(ac)))
                         {
-                            allOpportunities.Add(ac);
+                            snapshotOpportunities.Add(ac);
                         }
                     }
                     // Fall through to sizing + execution below
@@ -630,7 +627,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             var size = sizes[idx];
             if (size <= 0)
             {
-                tracker.CapitalExhaustedKeys.Add(opportunityKeys.GetValueOrDefault(opp) ?? $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}");
+                tracker.CapitalExhaustedKeys.Add(OpportunityKey(opp));
                 continue;
             }
 
@@ -640,12 +637,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 for (int remaining = idx; remaining < candidates.Count; remaining++)
                 {
                     var remOpp = candidates[remaining];
-                    tracker.MaxPositionsKeys.Add(opportunityKeys.GetValueOrDefault(remOpp) ?? $"{remOpp.AssetId}_{remOpp.LongExchangeId}_{remOpp.ShortExchangeId}");
+                    tracker.MaxPositionsKeys.Add(OpportunityKey(remOpp));
                 }
                 break;
             }
 
-            var key = opportunityKeys.GetValueOrDefault(opp) ?? $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+            var key = OpportunityKey(opp);
             var cooldownKey = $"{userId}:{key}";
 
             _logger.LogInformation(
@@ -683,7 +680,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 for (int remaining = idx + 1; remaining < candidates.Count; remaining++)
                 {
                     var remOpp = candidates[remaining];
-                    tracker.CapitalExhaustedKeys.Add(opportunityKeys.GetValueOrDefault(remOpp) ?? $"{remOpp.AssetId}_{remOpp.LongExchangeId}_{remOpp.ShortExchangeId}");
+                    tracker.CapitalExhaustedKeys.Add(OpportunityKey(remOpp));
                 }
                 break;
             }
@@ -724,7 +721,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
         IUnitOfWork uow,
         List<ArbitrageOpportunityDto> opportunities,
         List<ArbitragePosition> allOpenPositions,
-        Dictionary<ArbitrageOpportunityDto, string> opportunityKeys,
         SkipReasonTracker tracker,
         CancellationToken ct)
     {
@@ -736,12 +732,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
 
             var activeKeys = allOpenPositions
-                .Select(p => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}")
+                .Select(PositionKey)
                 .ToHashSet();
 
             var snapshots = opportunities.Select(opp =>
             {
-                var key = opportunityKeys.GetValueOrDefault(opp) ?? $"{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
+                var key = OpportunityKey(opp);
                 var wasOpened = tracker.OpenedOppKeys.Contains(key);
 
                 string? skipReason = null;
@@ -1086,6 +1082,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// that was only triggered by User A. This is acceptable for the current snapshot model
     /// which records one reason per opportunity per cycle (not per-user). If per-user accuracy
     /// is needed, scope these sets inside the user loop.
+    /// </summary>
+    private static string OpportunityKey(ArbitrageOpportunityDto o)
+        => $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}";
+
+    private static string PositionKey(ArbitragePosition p)
+        => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}";
+
+    /// <summary>
+    /// Groups skip-reason tracking sets to reduce parameter count.
     /// </summary>
     internal sealed class SkipReasonTracker
     {

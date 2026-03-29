@@ -705,7 +705,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     /// <summary>
     /// Submit a signed transaction to the Lighter API via POST /api/v1/sendTx.
     /// </summary>
-    private async Task<LighterSendTxResponse> SendTransactionAsync(
+    internal async Task<LighterSendTxResponse> SendTransactionAsync(
         byte txType, string txInfo, CancellationToken ct)
     {
         // The Lighter API expects multipart/form-data with tx_type and tx_info fields
@@ -722,7 +722,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         if (!response.IsSuccessStatusCode)
         {
-            var truncatedBody = responseBody.Length > 500 ? responseBody[..500] : responseBody;
+            var truncatedBody = (responseBody.Length > 500 ? responseBody[..500] : responseBody)
+                .Replace("\r", "").Replace("\n", " ");
             _logger.LogWarning(
                 "SendTransaction failed: statusCode={StatusCode} body={Body}",
                 (int)response.StatusCode, truncatedBody);
@@ -738,11 +739,14 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         if (result.Code != 200)
         {
+            var sanitizedMessage = (result.Message?.Length > 200
+                ? result.Message[..200] : result.Message ?? "")
+                .Replace("\r", "").Replace("\n", " ");
             _logger.LogWarning(
                 "SendTransaction error code: code={Code} message={Message} txHash={TxHash}",
-                result.Code, result.Message, result.TxHash);
+                result.Code, sanitizedMessage, result.TxHash);
             throw new InvalidOperationException(
-                $"Lighter sendTx returned error code {result.Code}: {result.Message}");
+                $"Lighter sendTx returned error code {result.Code}: {sanitizedMessage}");
         }
 
         _logger.LogInformation(
