@@ -1416,6 +1416,24 @@ public class PositionHealthMonitorTests
     }
 
     [Fact]
+    public void DetermineCloseReason_SpreadCollapsed_Fires_AtExactMinHoldBoundary()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+        };
+
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 2m, spread: -0.001m);
+
+        result.Should().Be(CloseReason.SpreadCollapsed);
+    }
+
+    [Fact]
     public void DetermineCloseReason_StopLoss_StillFires_WithinMinHoldPeriod()
     {
         var pos = MakeOpenPosition(marginUsdc: 100m);

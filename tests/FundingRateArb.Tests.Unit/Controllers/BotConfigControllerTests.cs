@@ -162,4 +162,40 @@ public class BotConfigControllerTests
         var redirectResult = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirectResult.ActionName.Should().Be("Index");
     }
+
+    [Fact]
+    public async Task Index_Post_MinHoldExceedsMaxHold_ReturnsViewWithModelError()
+    {
+        var model = new BotConfigViewModel
+        {
+            OpenThreshold = 0.0003m,
+            AlertThreshold = 0.0001m,
+            CloseThreshold = 0.00005m,
+            TotalCapitalUsdc = 107m,
+            DefaultLeverage = 5,
+            MaxConcurrentPositions = 1,
+            MaxCapitalPerPosition = 0.8m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 24,
+            MinHoldTimeHours = 48, // exceeds MaxHoldTimeHours
+            VolumeFraction = 0.001m,
+            BreakevenHoursMax = 6,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50_000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+        };
+
+        var result = await _controller.Index(model);
+
+        result.Should().BeOfType<ViewResult>();
+        _controller.ModelState.IsValid.Should().BeFalse();
+        _controller.ModelState[nameof(BotConfigViewModel.MinHoldTimeHours)]!
+            .Errors.Should().ContainSingle()
+            .Which.ErrorMessage.Should().Contain("must not exceed");
+    }
 }

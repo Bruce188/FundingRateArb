@@ -17,6 +17,7 @@ public class ConfigValidatorTests
         FeeAmortizationHours = 12,
         RateStalenessMinutes = 15,
         MaxHoldTimeHours = 48,
+        MinHoldTimeHours = 2,
         DefaultLeverage = 5,
         MaxConcurrentPositions = 1,
         MaxCapitalPerPosition = 0.90m,
@@ -310,5 +311,30 @@ public class ConfigValidatorTests
         // 0.8 * 3 = 2.4 > 1.5 → error
         result.IsValid.Should().BeFalse();
         result.Errors.Should().Contain(e => e.Contains("over-allocation"));
+    }
+
+    [Fact]
+    public void Validate_MinHoldExceedsMaxHold_Invalid()
+    {
+        var config = ValidConfig();
+        config.MinHoldTimeHours = 24;
+        config.MaxHoldTimeHours = 12;
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("MinHoldTimeHours"));
+    }
+
+    [Fact]
+    public void Validate_MinHoldEqualsMaxHold_Valid()
+    {
+        var config = ValidConfig();
+        config.MinHoldTimeHours = 48;
+        config.MaxHoldTimeHours = 48;
+
+        var result = _sut.Validate(config);
+
+        result.Errors.Should().NotContain(e => e.Contains("MinHoldTimeHours"));
     }
 }
