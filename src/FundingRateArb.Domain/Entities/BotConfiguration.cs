@@ -16,7 +16,8 @@ public class BotConfiguration
 
     public int MaxHoldTimeHours { get; set; } = 48;
 
-    /// <summary>Minimum hours to hold before allowing SpreadCollapsed close. StopLoss always applies.</summary>
+    /// <summary>Minimum hours to hold before allowing SpreadCollapsed close. StopLoss always applies.
+    /// Capped at 48h regardless of MaxHoldTimeHours — validated by ConfigValidator.</summary>
     [Range(0, 48)]
     public int MinHoldTimeHours { get; set; } = 2;
 

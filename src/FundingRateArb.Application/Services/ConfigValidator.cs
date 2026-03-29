@@ -80,6 +80,11 @@ public class ConfigValidator : IConfigValidator
             errors.Add("MaxHoldTimeHours must be at least 1 hour.");
         }
 
+        if (config.MinHoldTimeHours > config.MaxHoldTimeHours)
+        {
+            errors.Add("MinHoldTimeHours must not exceed MaxHoldTimeHours.");
+        }
+
         if (config.MaxExposurePerAsset <= 0 || config.MaxExposurePerAsset > 1)
         {
             errors.Add("MaxExposurePerAsset must be between 0 (exclusive) and 1 (inclusive).");
