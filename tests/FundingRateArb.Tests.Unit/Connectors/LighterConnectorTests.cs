@@ -808,6 +808,32 @@ public class LighterConnectorTests
             "error messages longer than 200 chars must be truncated");
     }
 
+    [Fact]
+    public async Task SendTransactionAsync_NonSuccessStatus_SanitizesMultilineBody()
+    {
+        // Arrange: HTTP-level failure (non-2xx) with multiline body from WAF/load balancer
+        var multilineBody = "line1\r\nline2\nline3";
+        var sut = CreateConnector(multilineBody, HttpStatusCode.BadRequest);
+
+        // Act & Assert: should throw HttpRequestException for non-2xx
+        var act = () => sut.SendTransactionAsync(0x01, "dummy_tx_info", CancellationToken.None);
+        await act.Should().ThrowAsync<HttpRequestException>();
+
+        // Verify the logged Body parameter contains no raw newlines
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) =>
+                    v.ToString()!.Contains("SendTransaction failed") &&
+                    !v.ToString()!.Contains('\r') &&
+                    !v.ToString()!.Contains('\n')),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once,
+            "HTTP non-2xx body must be sanitized: no \\r or \\n in logged output");
+    }
+
     // ── Diagnostic Logging Tests ─────────────────────────────────
 
     [Fact]

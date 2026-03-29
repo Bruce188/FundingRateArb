@@ -342,13 +342,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Track known opportunity keys for adaptive candidate dedup (value-based, no reference equality)
         var knownOpportunityKeys = new HashSet<string>(allOpportunities.Select(OpportunityKey));
 
+        // Create a local snapshot list for adaptive appends so we don't mutate the signal engine's DTO
+        var snapshotOpportunities = new List<ArbitrageOpportunityDto>(allOpportunities);
+
         foreach (var userId in enabledUserIds)
         {
             // Clear per-user skip reason sets to prevent cross-user leakage
             tracker.ClearPerUserSets();
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, knownOpportunityKeys, tracker, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, knownOpportunityKeys, snapshotOpportunities, tracker, ct);
             }
             catch (Exception ex)
             {
@@ -357,7 +360,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 6: Persist opportunity snapshots and run 7-day purge
-        await PersistOpportunitySnapshotsAsync(uow, allOpportunities, allOpenPositions, tracker, ct);
+        await PersistOpportunitySnapshotsAsync(uow, snapshotOpportunities, allOpenPositions, tracker, ct);
     }
 
     /// <summary>
@@ -375,6 +378,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         HashSet<int> dataOnlyExchangeIds,
         HashSet<int> circuitBrokenExchangeIds,
         HashSet<string> knownOpportunityKeys,
+        List<ArbitrageOpportunityDto> snapshotOpportunities,
         SkipReasonTracker tracker,
         CancellationToken ct)
     {
@@ -559,13 +563,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     // Use the normal execution path with the adaptive candidate
                     candidates = adaptiveCandidates;
 
-                    // B1: Ensure adaptive candidate is tracked in allOpportunities
+                    // B1: Ensure adaptive candidate is tracked in snapshotOpportunities (not the signal engine's DTO)
                     // so PersistOpportunitySnapshotsAsync can record WasOpened = true instead of "below_threshold"
                     foreach (var ac in adaptiveCandidates)
                     {
                         if (knownOpportunityKeys.Add(OpportunityKey(ac)))
                         {
-                            allOpportunities.Add(ac);
+                            snapshotOpportunities.Add(ac);
                         }
                     }
                     // Fall through to sizing + execution below
