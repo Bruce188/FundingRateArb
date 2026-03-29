@@ -69,6 +69,13 @@ public class BotConfigController : Controller
             return View(model);
         }
 
+        if (model.MinHoldTimeHours > model.MaxHoldTimeHours)
+        {
+            ModelState.AddModelError(nameof(model.MinHoldTimeHours),
+                "Minimum hold time must not exceed maximum hold time.");
+            return View(model);
+        }
+
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
         config.IsEnabled = model.IsEnabled;

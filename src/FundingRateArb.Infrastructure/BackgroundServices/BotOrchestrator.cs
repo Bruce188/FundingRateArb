@@ -226,11 +226,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
         foreach (var reaped in healthResult.ReapedPositions)
         {
             IncrementExchangeFailure(reaped.LongExchangeId, globalConfig);
-            IncrementExchangeFailure(reaped.ShortExchangeId, globalConfig);
+            if (reaped.ShortExchangeId != reaped.LongExchangeId)
+            {
+                IncrementExchangeFailure(reaped.ShortExchangeId, globalConfig);
+            }
         }
 
         // Fetch ALL open positions after health monitor so closed positions are excluded
         var allOpenPositions = await uow.Positions.GetOpenAsync();
+
+        // Hoist Opening positions query once per cycle (shared across all users)
+        var allOpeningPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
 
         // Push per-user position updates with warning computation (always, regardless of bot state)
         await PushPositionUpdatesAsync(allOpenPositions, globalConfig);
@@ -358,7 +364,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             tracker.ClearPerUserSets();
             try
             {
-                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, knownOpportunityKeys, snapshotOpportunities, tracker, ct);
+                await ExecuteUserCycleAsync(userId, globalConfig, opportunityResult, allOpenPositions, allOpeningPositions, uow, signalEngine, executionEngine, userSettings, dataOnlyExchangeIds, circuitBrokenExchangeIds, knownOpportunityKeys, snapshotOpportunities, tracker, ct);
             }
             catch (Exception ex)
             {
@@ -378,6 +384,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         BotConfiguration globalConfig,
         OpportunityResultDto opportunityResult,
         List<ArbitragePosition> allOpenPositions,
+        IReadOnlyList<ArbitragePosition> allOpeningPositions,
         IUnitOfWork uow,
         ISignalEngine signalEngine,
         IExecutionEngine executionEngine,
@@ -475,9 +482,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             return;
         }
 
-        // Load Opening positions before the gate so they count toward the limit
-        var openingPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
-        var userOpeningPositions = openingPositions.Where(p => p.UserId == userId).ToList();
+        // Filter hoisted Opening positions for this user (no per-user DB query)
+        var userOpeningPositions = allOpeningPositions.Where(p => p.UserId == userId).ToList();
 
         // Max positions gate (includes Opening positions to prevent rapid-fire loop)
         if ((userOpenPositions.Count + userOpeningPositions.Count) >= userConfig.MaxConcurrentPositions)
@@ -669,7 +675,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 _logger.LogError(ex, "OpenPositionAsync threw for {Asset} on {LongExchange}/{ShortExchange}",
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName);
                 success = false;
-                error = ex.Message;
+                error = null; // Force generic failure path — avoids misrouting on "balance" in ex.Message
             }
 
             if (success)
@@ -712,9 +718,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
                 _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
 
-                // Increment circuit breaker for both exchanges involved
+                // Increment circuit breaker for exchanges involved (deduplicate if same exchange)
                 IncrementExchangeFailure(opp.LongExchangeId, globalConfig);
-                IncrementExchangeFailure(opp.ShortExchangeId, globalConfig);
+                if (opp.ShortExchangeId != opp.LongExchangeId)
+                {
+                    IncrementExchangeFailure(opp.ShortExchangeId, globalConfig);
+                }
 
                 _logger.LogWarning(
                     "Opportunity {Asset} {Long}/{Short} failed for user {UserId} ({Failures} consecutive). Cooldown until {Until}",

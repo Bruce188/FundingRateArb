@@ -1847,4 +1847,70 @@ public class BotOrchestratorTests
         _sut.ExchangeCircuitBreaker[1].Failures.Should().Be(1);
         _sut.ExchangeCircuitBreaker[2].Failures.Should().Be(1);
     }
+
+    // ── NB1: Exception with "balance" in message takes generic failure path ──
+
+    [Fact]
+    public async Task OpenPositionAsync_ThrowsWithBalanceMessage_TakesGenericFailurePath()
+    {
+        // Arrange — exception message incidentally contains "balance"
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+            });
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        var opp1 = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+        var opp2 = new ArbitrageOpportunityDto
+        {
+            AssetId = 2, AssetSymbol = "BTC",
+            LongExchangeId = 1, ShortExchangeId = 3,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Aster",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m, 100m]);
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        // First call throws with "balance" in message — should NOT route to capital-exhaustion
+        _mockExecEngine.SetupSequence(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Failed to fetch balance from Lighter API"))
+            .ReturnsAsync((true, (string?)null));
+
+        // Act
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Assert — second opportunity should still be attempted (exception didn't misroute to capital-exhaustion break)
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Exception with 'balance' in message must take generic failure path, not capital-exhaustion break");
+    }
 }
