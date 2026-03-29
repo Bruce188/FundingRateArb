@@ -97,8 +97,14 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             {
                 var accountResponse = await GetAccountAsync(accountIndex, ct);
                 var account = accountResponse?.Accounts?.FirstOrDefault();
+
+                var posCount = account?.Positions?.Count ?? 0;
+
                 if (account?.Positions is null)
                 {
+                    _logger.LogDebug(
+                        "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
+                        attempt + 1, maxAttempts, asset, side);
                     continue;
                 }
 
@@ -118,20 +124,24 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     // Long = positive size, Short = negative size
                     if (side == Side.Long && size > 0)
                     {
-                        _logger.LogInformation(
-                            "Position verified for {Asset} {Side} on attempt {Attempt}: size={Size}",
-                            asset, side, attempt + 1, size);
+                        _logger.LogDebug(
+                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
+                            attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
                     }
 
                     if (side == Side.Short && size < 0)
                     {
-                        _logger.LogInformation(
-                            "Position verified for {Asset} {Side} on attempt {Attempt}: size={Size}",
-                            asset, side, attempt + 1, size);
+                        _logger.LogDebug(
+                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
+                            attempt + 1, maxAttempts, asset, side, posCount, size);
                         return true;
                     }
                 }
+
+                _logger.LogDebug(
+                    "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
+                    attempt + 1, maxAttempts, asset, side, posCount);
             }
             catch (Exception ex)
             {
@@ -142,8 +152,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
 
         _logger.LogWarning(
-            "Position verification failed after {Max} attempts for {Asset} {Side}",
-            maxAttempts, asset, side);
+            "Position verification FAILED after {Max} polls: asset={Asset} side={Side} accountIndex={AccountIndex}",
+            maxAttempts, asset, side, accountIndex);
         return false;
     }
 
@@ -302,6 +312,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 ?? throw new KeyNotFoundException($"Asset '{asset}' not found on Lighter DEX");
 
             var markPrice = market.LastTradePrice;
+
+            _logger.LogDebug(
+                "Market detail: {Asset} marketId={MarketId} price={Price} sizeDecimals={SizeDecimals}",
+                asset, market.MarketId, markPrice, market.SizeDecimals);
+
             if (markPrice <= 0)
             {
                 throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
@@ -384,12 +399,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             var clientOrderIndex = (int)(Interlocked.Increment(ref _orderCounter) % int.MaxValue);
 
             _logger.LogDebug(
-                "Signing market order: market={MarketId} base={BaseAmount} price={Price} isAsk={IsAsk} nonce={Nonce}",
-                market.MarketId, baseAmount, priceInt, isAsk, nonce);
+                "Nonce for order: {Nonce} accountIndex={AccountIndex}",
+                nonce, _accountIndex);
 
             var (txType, txInfo, txHash) = _signer.SignMarketOrder(
                 market.MarketId, clientOrderIndex, baseAmount, (int)priceInt,
                 isAsk, reduceOnly: false, nonce);
+
+            _logger.LogDebug(
+                "Signed order: txHash={TxHash} baseAmount={BaseAmount} price={PriceInt} isAsk={IsAsk}",
+                txHash, baseAmount, priceInt, isAsk);
 
             // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);
@@ -617,6 +636,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
             _signer.Initialize(baseUrl, privateKey, apiKeyIndex, accountIndex);
             _signerInitialized = true;
+
+            _logger.LogDebug(
+                "Lighter signer initialized: accountIndex={AccountIndex} apiKeyIndex={ApiKeyIndex}",
+                _accountIndex, _apiKeyIndexStr);
         }
     }
 
@@ -693,10 +716,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         var response = await _httpClient.PostAsync("sendTx", form, ct);
         var responseBody = await response.Content.ReadAsStringAsync(ct);
 
+        _logger.LogDebug(
+            "SendTransaction response: statusCode={StatusCode}",
+            (int)response.StatusCode);
+
         if (!response.IsSuccessStatusCode)
         {
-            _logger.LogError("Lighter sendTx failed: {StatusCode} {Body}",
-                response.StatusCode, responseBody);
+            var truncatedBody = responseBody.Length > 500 ? responseBody[..500] : responseBody;
+            _logger.LogWarning(
+                "SendTransaction failed: statusCode={StatusCode} body={Body}",
+                (int)response.StatusCode, truncatedBody);
             throw new HttpRequestException(
                 $"Lighter order submission failed ({response.StatusCode})");
         }
@@ -709,11 +738,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         if (result.Code != 200)
         {
+            _logger.LogWarning(
+                "SendTransaction error code: code={Code} message={Message} txHash={TxHash}",
+                result.Code, result.Message, result.TxHash);
             throw new InvalidOperationException(
                 $"Lighter sendTx returned error code {result.Code}: {result.Message}");
         }
 
-        _logger.LogDebug("Lighter sendTx success: txHash={TxHash}", result.TxHash);
+        _logger.LogInformation(
+            "SendTransaction success: code={Code} txHash={TxHash}",
+            result.Code, result.TxHash);
         return result;
     }
 

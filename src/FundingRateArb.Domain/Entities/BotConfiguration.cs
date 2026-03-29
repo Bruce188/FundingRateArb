@@ -89,6 +89,14 @@ public class BotConfiguration
     [Range(1, 20)]
     public int MaxRebalancesPerCycle { get; set; } = 2;
 
+    /// <summary>Number of consecutive failures before a per-exchange circuit breaker opens.</summary>
+    [Range(1, 20)]
+    public int ExchangeCircuitBreakerThreshold { get; set; } = 3;
+
+    /// <summary>Minutes an exchange is excluded after the circuit breaker opens.</summary>
+    [Range(1, 120)]
+    public int ExchangeCircuitBreakerMinutes { get; set; } = 15;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

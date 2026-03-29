@@ -79,6 +79,21 @@
         }
     });
 
+    connection.on("ReceivePositionRemoval", function (positionId) {
+        var parsedId = parseInt(positionId, 10);
+        if (isNaN(parsedId)) return;
+        var positionRow = document.getElementById("position-" + parsedId);
+        if (positionRow) {
+            positionRow.remove();
+        }
+        // Also remove the mobile card variant
+        var positionCard = document.getElementById("position-card-" + parsedId);
+        if (positionCard) {
+            positionCard.remove();
+        }
+        // Open position count is updated authoritatively by ReceiveDashboardUpdate
+    });
+
     var isMobile = window.matchMedia('(max-width: 575.98px)');
 
     // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
