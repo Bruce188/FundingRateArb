@@ -1485,6 +1485,87 @@ public class BotOrchestratorTests
         _sut.ExchangeCircuitBreaker.Should().NotContainKey(99);
     }
 
+    [Fact]
+    public async Task AdaptiveFallback_OpenedPosition_SnapshotRecordsWasOpened()
+    {
+        SetupEnabledUser();
+
+        // The adaptive candidate is below threshold and only in AllNetPositive, NOT in Opportunities
+        var adaptiveOpp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.00005m, SpreadPerHour = 0.0001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = new List<ArbitrageOpportunityDto>(), // No above-threshold opportunities
+                AllNetPositive = new List<ArbitrageOpportunityDto> { adaptiveOpp },
+            });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        // Capture persisted snapshots
+        var mockSnapshotRepo = new Mock<IOpportunitySnapshotRepository>();
+        List<OpportunitySnapshot>? capturedSnapshots = null;
+        mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<OpportunitySnapshot>, CancellationToken>((snaps, _) => capturedSnapshots = snaps.ToList())
+            .Returns(Task.CompletedTask);
+        mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(mockSnapshotRepo.Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // The adaptive candidate should have been opened successfully
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(TestUserId, adaptiveOpp, 100m, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        // Snapshot for the adaptive candidate should record WasOpened = true, not "below_threshold"
+        capturedSnapshots.Should().NotBeNull();
+        var adaptiveSnapshot = capturedSnapshots!.FirstOrDefault(s =>
+            s.AssetId == 1 && s.LongExchangeId == 1 && s.ShortExchangeId == 2);
+        adaptiveSnapshot.Should().NotBeNull("the adaptive candidate should be included in snapshots");
+        adaptiveSnapshot!.WasOpened.Should().BeTrue("position was opened via adaptive fallback");
+        adaptiveSnapshot.SkipReason.Should().BeNull("opened positions should have null skip reason");
+    }
+
+    [Fact]
+    public async Task FailedOpCooldowns_ExpiredEntries_CleanedUpOnCycleStart()
+    {
+        // Pre-seed an entry expired longer than MaxCooldown (60 min) — should be swept
+        _sut.FailedOpCooldowns["test-user:1_1_2"] = (DateTime.UtcNow.AddMinutes(-65), 2);
+        // Seed a recently-expired entry (< MaxCooldown ago) — should survive to preserve failure count
+        _sut.FailedOpCooldowns["test-user:3_1_2"] = (DateTime.UtcNow.AddMinutes(-5), 1);
+        // Seed a non-expired entry — should survive
+        _sut.FailedOpCooldowns["test-user:2_1_3"] = (DateTime.UtcNow.AddMinutes(5), 1);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Stale entry (expired > MaxCooldown ago) should have been cleaned up
+        _sut.FailedOpCooldowns.Should().NotContainKey("test-user:1_1_2");
+        // Recently-expired entry should survive (failure count preserved for exponential backoff)
+        _sut.FailedOpCooldowns.Should().ContainKey("test-user:3_1_2");
+        // Non-expired entry should survive
+        _sut.FailedOpCooldowns.Should().ContainKey("test-user:2_1_3");
+    }
+
     // ── Skip Reason Accuracy Tests ───────────────────────────────────────────
 
     [Fact]

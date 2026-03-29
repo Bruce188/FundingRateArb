@@ -174,14 +174,28 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// </summary>
     internal async Task RunCycleAsync(CancellationToken ct)
     {
-        // Sweep expired circuit breaker entries to prevent unbounded dictionary growth
-        var expiredKeys = _exchangeCircuitBreaker
+        // Sweep expired circuit breaker entries. Sub-threshold entries (BrokenUntil == DateTime.MinValue)
+        // are not swept here — they are bounded by the finite set of exchange IDs and acceptable.
+        var expiredCbKeys = _exchangeCircuitBreaker
             .Where(kvp => kvp.Value.BrokenUntil < DateTime.UtcNow && kvp.Value.BrokenUntil != DateTime.MinValue)
             .Select(kvp => kvp.Key)
             .ToList();
-        foreach (var key in expiredKeys)
+        foreach (var key in expiredCbKeys)
         {
             _exchangeCircuitBreaker.TryRemove(key, out _);
+        }
+
+        // Sweep stale per-opportunity cooldown entries to prevent unbounded dictionary growth.
+        // Only remove entries that expired more than MaxCooldown ago, preserving failure counts
+        // for recently-expired entries so exponential backoff continues correctly on retry.
+        var cooldownSweepThreshold = DateTime.UtcNow - MaxCooldown;
+        var expiredCooldownKeys = _failedOpCooldowns
+            .Where(kvp => kvp.Value.CooldownUntil < cooldownSweepThreshold)
+            .Select(kvp => kvp.Key)
+            .ToList();
+        foreach (var key in expiredCooldownKeys)
+        {
+            _failedOpCooldowns.TryRemove(key, out _);
         }
 
         using var scope = _scopeFactory.CreateScope();
@@ -328,7 +342,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Pre-compute opportunity key strings once to avoid repeated allocations.
         // Uses reference equality for ArbitrageOpportunityDto keys — same object instances flow
         // through the entire cycle. GetValueOrDefault fallbacks handle adaptive-path DTOs
-        // that may not be in this dictionary.
+        // that may not be in this dictionary. Upstream (SignalEngine) guarantees unique DTO
+        // references per opportunity; duplicate entries would indicate an upstream contract violation.
         var opportunityKeys = allOpportunities
             .ToDictionary(o => o, o => $"{o.AssetId}_{o.LongExchangeId}_{o.ShortExchangeId}");
 
@@ -548,6 +563,18 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
                     // Use the normal execution path with the adaptive candidate
                     candidates = adaptiveCandidates;
+
+                    // B1: Ensure adaptive candidate is tracked in opportunityKeys and allOpportunities
+                    // so PersistOpportunitySnapshotsAsync can record WasOpened = true instead of "below_threshold"
+                    foreach (var ac in adaptiveCandidates)
+                    {
+                        var acKey = $"{ac.AssetId}_{ac.LongExchangeId}_{ac.ShortExchangeId}";
+                        opportunityKeys.TryAdd(ac, acKey);
+                        if (!allOpportunities.Contains(ac))
+                        {
+                            allOpportunities.Add(ac);
+                        }
+                    }
                     // Fall through to sizing + execution below
                 }
             }
