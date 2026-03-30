@@ -193,7 +193,9 @@ public class ExchangeTradeConnectivityTests
                     $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
 
                 if (!openResult.Success)
+                {
                     throw new Exception($"Open failed: {openResult.Error}");
+                }
 
                 await Task.Delay(TimeSpan.FromSeconds(2), ct);
 
@@ -201,7 +203,9 @@ public class ExchangeTradeConnectivityTests
                 _output.WriteLine($"[Hyperliquid] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
 
                 if (!closeResult.Success)
+                {
                     throw new Exception($"Close failed: {closeResult.Error}");
+                }
 
                 _output.WriteLine("[Hyperliquid] PASS");
                 results["Hyperliquid"] = "PASS";
@@ -238,21 +242,27 @@ public class ExchangeTradeConnectivityTests
                     $"TxHash={openResult.OrderId} (estimated fill: {openResult.IsEstimatedFill})");
 
                 if (!openResult.Success)
+                {
                     throw new Exception($"Open failed: {openResult.Error}");
+                }
 
                 if (connector is IPositionVerifiable verifiable)
                 {
                     var verified = await verifiable.VerifyPositionOpenedAsync(Asset, TradeSide, ct);
                     _output.WriteLine($"[Lighter] Verify: {(verified ? "Position confirmed" : "Position NOT confirmed")}");
                     if (!verified)
+                    {
                         throw new Exception("Position verification failed");
+                    }
                 }
 
                 var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
                 _output.WriteLine($"[Lighter] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} TxHash={closeResult.OrderId}");
 
                 if (!closeResult.Success)
+                {
                     throw new Exception($"Close failed: {closeResult.Error}");
+                }
 
                 _output.WriteLine("[Lighter] PASS");
                 results["Lighter"] = "PASS";
@@ -288,7 +298,9 @@ public class ExchangeTradeConnectivityTests
                     $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
 
                 if (!openResult.Success)
+                {
                     throw new Exception($"Open failed: {openResult.Error}");
+                }
 
                 await Task.Delay(TimeSpan.FromSeconds(2), ct);
 
@@ -296,7 +308,9 @@ public class ExchangeTradeConnectivityTests
                 _output.WriteLine($"[Aster] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
 
                 if (!closeResult.Success)
+                {
                     throw new Exception($"Close failed: {closeResult.Error}");
+                }
 
                 _output.WriteLine("[Aster] PASS");
                 results["Aster"] = "PASS";

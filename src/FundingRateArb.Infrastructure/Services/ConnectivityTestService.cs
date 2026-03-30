@@ -85,52 +85,60 @@ public class ConnectivityTestService : IConnectivityTestService
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
 
-            // Step 1 - Balance check
-            await Log("Step 1: Checking available balance...");
-            decimal balance;
             try
             {
-                balance = await connector.GetAvailableBalanceAsync(ct);
-                await Log($"Balance: ${balance:F2}");
+                // Step 1 - Balance check
+                await Log("Step 1: Checking available balance...");
+                decimal balance;
+                try
+                {
+                    balance = await connector.GetAvailableBalanceAsync(ct);
+                    await Log($"Balance: ${balance:F2}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Balance check failed for {Exchange}", exchangeName);
+                    await Log("Balance check failed");
+                    return new ConnectivityTestResult(false, exchangeName, "Balance check failed");
+                }
+
+                // Step 2 - Open position
+                await Log("Step 2: Opening $5 ETH Long 1x position...");
+                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, ct);
+                if (!openResult.Success)
+                {
+                    await Log($"Open failed: {openResult.Error}");
+                    return new ConnectivityTestResult(false, exchangeName, $"Open failed: {openResult.Error}", balance);
+                }
+                await Log($"Open SUCCESS - OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
+
+                // Step 3 - Wait for settlement
+                await Log("Step 3: Waiting for settlement (2s)...");
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                // Step 4 - Close position
+                await Log("Step 4: Closing position...");
+                var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
+                if (!closeResult.Success)
+                {
+                    await Log($"Close failed: {closeResult.Error}");
+                    return new ConnectivityTestResult(false, exchangeName, $"Close failed: {closeResult.Error}", balance);
+                }
+                await Log($"Close SUCCESS - OrderId={closeResult.OrderId}");
+
+                await Log("PASS - All steps completed successfully");
+                return new ConnectivityTestResult(true, exchangeName, null, balance);
             }
-            catch (Exception ex)
+            finally
             {
-                await Log($"Balance check failed: {ex.Message}");
-                return new ConnectivityTestResult(false, exchangeName, $"Balance check failed: {ex.Message}");
+                (connector as IDisposable)?.Dispose();
             }
-
-            // Step 2 - Open position
-            await Log("Step 2: Opening $5 ETH Long 1x position...");
-            var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, ct);
-            if (!openResult.Success)
-            {
-                await Log($"Open failed: {openResult.Error}");
-                return new ConnectivityTestResult(false, exchangeName, $"Open failed: {openResult.Error}", balance);
-            }
-            await Log($"Open SUCCESS - OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
-
-            // Step 3 - Wait for settlement
-            await Log("Step 3: Waiting for settlement (2s)...");
-            await Task.Delay(TimeSpan.FromSeconds(2), ct);
-
-            // Step 4 - Close position
-            await Log("Step 4: Closing position...");
-            var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
-            if (!closeResult.Success)
-            {
-                await Log($"Close failed: {closeResult.Error}");
-                return new ConnectivityTestResult(false, exchangeName, $"Close failed: {closeResult.Error}", balance);
-            }
-            await Log($"Close SUCCESS - OrderId={closeResult.OrderId}");
-
-            await Log("PASS - All steps completed successfully");
-            return new ConnectivityTestResult(true, exchangeName, null, balance);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Connectivity test failed for {Exchange}", exchangeName);
-            await Log($"Unexpected error: {ex.Message}");
-            return new ConnectivityTestResult(false, exchangeName, $"Unexpected error: {ex.Message}");
+            await Log("Unexpected error during connectivity test");
+            return new ConnectivityTestResult(false, exchangeName, "Unexpected error during connectivity test");
         }
     }
 }

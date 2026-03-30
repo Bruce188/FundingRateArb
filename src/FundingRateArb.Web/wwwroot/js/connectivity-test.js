@@ -6,20 +6,8 @@
     var btnTestAll = document.getElementById("btnTestAll");
     var btnClearLog = document.getElementById("btnClearLog");
     var testButtons = document.querySelectorAll(".btn-test");
-    var antiForgeryToken = document.querySelector('input[name="__RequestVerificationToken"]')?.value
-        || document.querySelector('meta[name="csrf-token"]')?.content;
-
-    // Get anti-forgery token from cookie if not found in form
     function getAntiForgeryToken() {
-        if (antiForgeryToken) return antiForgeryToken;
-        var cookies = document.cookie.split(";");
-        for (var i = 0; i < cookies.length; i++) {
-            var cookie = cookies[i].trim();
-            if (cookie.startsWith(".AspNetCore.Antiforgery.") || cookie.startsWith("XSRF-TOKEN")) {
-                return cookie.split("=")[1];
-            }
-        }
-        return "";
+        return document.querySelector('input[name="__RequestVerificationToken"]')?.value || "";
     }
 
     // Active exchange IDs for selected user

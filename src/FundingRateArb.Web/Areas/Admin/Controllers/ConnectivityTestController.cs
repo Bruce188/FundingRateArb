@@ -5,6 +5,7 @@ using FundingRateArb.Application.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace FundingRateArb.Web.Areas.Admin.Controllers;
 
@@ -31,7 +32,7 @@ public class ConnectivityTestController : Controller
 
     public async Task<IActionResult> Index()
     {
-        var users = _userManager.Users.OrderBy(u => u.UserName).ToList();
+        var users = await _userManager.Users.OrderBy(u => u.UserName).ToListAsync();
         var exchanges = (await _uow.Exchanges.GetActiveAsync())
             .Where(e => !e.IsDataOnly)
             .OrderBy(e => e.Name)
@@ -44,7 +45,6 @@ public class ConnectivityTestController : Controller
     }
 
     [HttpPost]
-    [ValidateAntiForgeryToken]
     public async Task<IActionResult> RunTest(string userId, int exchangeId)
     {
         var adminUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);

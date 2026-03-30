@@ -60,14 +60,14 @@ public class ConnectivityTestServiceTests
         IsActive = true
     };
 
-    private static UserExchangeCredential CreateTestCredential() => new()
+    private static UserExchangeCredential CreateTestCredential(bool isActive = true) => new()
     {
         Id = 1,
         UserId = TargetUserId,
         ExchangeId = TestExchangeId,
         EncryptedWalletAddress = "encrypted-wallet",
         EncryptedPrivateKey = "encrypted-key",
-        IsActive = true
+        IsActive = isActive
     };
 
     private void SetupExchangeAndCredential(Exchange exchange, UserExchangeCredential? credential = null)
@@ -171,7 +171,9 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
-        result.Error.Should().Contain("Connection refused");
+        result.Error.Should().Contain("Balance check failed");
+        // Sanitized: should NOT contain raw exception details
+        result.Error.Should().NotContain("Connection refused");
     }
 
     [Fact]
@@ -217,7 +219,7 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
-        result.Error.Should().ContainEquivalentOf("data-only", "should mention data-only");
+        result.Error.Should().Contain("Data-only");
     }
 
     [Fact]
@@ -230,6 +232,81 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
-        result.Error.Should().Contain("credentials", Exactly.Once(), "should mention missing credentials");
+        result.Error.Should().Contain("credentials", "should mention missing credentials");
+    }
+
+    [Fact]
+    public async Task ExchangeNotFound_ReturnsFailWithUnknownExchangeName()
+    {
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId))
+            .ReturnsAsync((Exchange?)null);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Unknown");
+        result.Error.Should().Contain("Exchange not found");
+    }
+
+    [Fact]
+    public async Task InactiveCredential_ReturnsFailWithMessage()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential(isActive: false);
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId)).ReturnsAsync(exchange);
+        _mockCredentialRepo
+            .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+            .ReturnsAsync(credential);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("credentials");
+    }
+
+    [Fact]
+    public async Task ConnectorFactoryReturnsNull_ReturnsFailWithInvalidCredentials()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        // Override connector factory to return null
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("invalid credentials");
+    }
+
+    [Fact]
+    public async Task UnexpectedExceptionDuringOpen_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Unexpected SDK error"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("Unexpected error");
+        // Sanitized: should NOT contain raw exception message
+        result.Error.Should().NotContain("Unexpected SDK error");
     }
 }
