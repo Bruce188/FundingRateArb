@@ -1,0 +1,74 @@
+@using Microsoft.AspNetCore.Identity
+@{
+    ViewData["Title"] = "Connectivity Test";
+    var users = (List<IdentityUser>)ViewBag.Users;
+    var exchanges = (List<FundingRateArb.Domain.Entities.Exchange>)ViewBag.Exchanges;
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3"><i class="bi bi-plug"></i> Exchange Connectivity Test</h1>
+</div>
+
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white">
+        <i class="bi bi-person"></i> Select User
+    </div>
+    <div class="card-body">
+        <div class="row align-items-end">
+            <div class="col-md-6">
+                <label for="userSelect" class="form-label">User</label>
+                <select id="userSelect" class="form-select">
+                    <option value="">-- Select a user --</option>
+                    @foreach (var user in users)
+                    {
+                        <option value="@user.Id">@user.UserName (@user.Email)</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-6 mt-2 mt-md-0">
+                <button id="btnTestAll" class="btn btn-primary" disabled>
+                    <i class="bi bi-play-fill"></i> Test All Exchanges
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4" id="exchangeCards">
+    @foreach (var exchange in exchanges)
+    {
+        <div class="col-md-4 col-lg-3 mb-3">
+            <div class="card shadow-sm h-100" data-exchange-id="@exchange.Id">
+                <div class="card-body text-center">
+                    <h5 class="card-title">@exchange.Name</h5>
+                    <span class="badge bg-secondary mb-3 exchange-status" id="status-@exchange.Id">Idle</span>
+                    <div>
+                        <button class="btn btn-outline-primary btn-test"
+                                data-exchange-id="@exchange.Id"
+                                data-exchange-name="@exchange.Name"
+                                disabled>
+                            <span class="spinner-border spinner-border-sm d-none" role="status"></span>
+                            <i class="bi bi-lightning-charge"></i> Test
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+</div>
+
+<div class="card shadow-sm">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-terminal"></i> Log Output</span>
+        <button id="btnClearLog" class="btn btn-sm btn-outline-light">
+            <i class="bi bi-trash"></i> Clear
+        </button>
+    </div>
+    <div class="card-body p-0">
+        <pre id="logPanel" class="mb-0 p-3" style="background-color: #1e1e1e; color: #d4d4d4; max-height: 400px; overflow-y: auto; font-size: 0.85rem; min-height: 100px; white-space: pre-wrap; word-break: break-word;"></pre>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/connectivity-test.js"></script>
+}

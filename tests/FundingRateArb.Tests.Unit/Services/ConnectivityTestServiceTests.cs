@@ -1,0 +1,235 @@
+using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.Hubs;
+using FundingRateArb.Infrastructure.Services;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
+using Moq;
+
+namespace FundingRateArb.Tests.Unit.Services;
+
+public class ConnectivityTestServiceTests
+{
+    private const string AdminUserId = "admin-user-1";
+    private const string TargetUserId = "target-user-1";
+    private const int TestExchangeId = 1;
+
+    private readonly Mock<IUserSettingsService> _mockUserSettings = new();
+    private readonly Mock<IExchangeConnectorFactory> _mockConnectorFactory = new();
+    private readonly Mock<IUnitOfWork> _mockUow = new();
+    private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
+    private readonly Mock<ILogger<ConnectivityTestService>> _mockLogger = new();
+    private readonly Mock<IExchangeRepository> _mockExchangeRepo = new();
+    private readonly Mock<IUserExchangeCredentialRepository> _mockCredentialRepo = new();
+    private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
+    private readonly Mock<IDashboardClient> _mockDashboardClient = new();
+    private readonly ConnectivityTestService _sut;
+
+    public ConnectivityTestServiceTests()
+    {
+        _mockUow.Setup(u => u.Exchanges).Returns(_mockExchangeRepo.Object);
+        _mockUow.Setup(u => u.UserCredentials).Returns(_mockCredentialRepo.Object);
+
+        _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
+        _mockHubClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockDashboardClient.Object);
+        _mockDashboardClient
+            .Setup(d => d.ReceiveConnectivityLog(It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(Task.CompletedTask);
+
+        _sut = new ConnectivityTestService(
+            _mockUserSettings.Object,
+            _mockConnectorFactory.Object,
+            _mockUow.Object,
+            _mockHubContext.Object,
+            _mockLogger.Object);
+    }
+
+    private static Exchange CreateTestExchange(bool isDataOnly = false) => new()
+    {
+        Id = TestExchangeId,
+        Name = "Hyperliquid",
+        ApiBaseUrl = "https://api.hyperliquid.xyz",
+        WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
+        IsDataOnly = isDataOnly,
+        IsActive = true
+    };
+
+    private static UserExchangeCredential CreateTestCredential() => new()
+    {
+        Id = 1,
+        UserId = TargetUserId,
+        ExchangeId = TestExchangeId,
+        EncryptedWalletAddress = "encrypted-wallet",
+        EncryptedPrivateKey = "encrypted-key",
+        IsActive = true
+    };
+
+    private void SetupExchangeAndCredential(Exchange exchange, UserExchangeCredential? credential = null)
+    {
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId)).ReturnsAsync(exchange);
+
+        if (credential is not null)
+        {
+            _mockCredentialRepo
+                .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+                .ReturnsAsync(credential);
+
+            _mockUserSettings
+                .Setup(u => u.DecryptCredential(credential))
+                .Returns((null, null, "wallet-addr", "private-key", null, null));
+        }
+        else
+        {
+            _mockCredentialRepo
+                .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+                .ReturnsAsync((UserExchangeCredential?)null);
+        }
+    }
+
+    private Mock<IExchangeConnector> CreateMockConnector(
+        decimal balance = 100m,
+        bool openSuccess = true,
+        bool closeSuccess = true,
+        string? openError = null,
+        string? closeError = null,
+        bool balanceThrows = false)
+    {
+        var mock = new Mock<IExchangeConnector>();
+
+        if (balanceThrows)
+        {
+            mock.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Exception("Connection refused"));
+        }
+        else
+        {
+            mock.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(balance);
+        }
+
+        mock.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = openSuccess,
+                OrderId = openSuccess ? "order-123" : null,
+                Error = openError,
+                FilledPrice = openSuccess ? 3000m : 0m,
+                FilledQuantity = openSuccess ? 0.00167m : 0m
+            });
+
+        mock.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = closeSuccess,
+                OrderId = closeSuccess ? "close-456" : null,
+                Error = closeError
+            });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mock.Object);
+
+        return mock;
+    }
+
+    [Fact]
+    public async Task SuccessfulRoundTrip_ReturnsPassAndLogsAllSteps()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().BeNull();
+        result.Balance.Should().Be(100m);
+
+        // Verify SignalR log messages were sent (at least balance, open, wait, close steps)
+        _mockDashboardClient.Verify(
+            d => d.ReceiveConnectivityLog("Hyperliquid", It.IsAny<string>()),
+            Times.AtLeast(4));
+    }
+
+    [Fact]
+    public async Task BalanceCheckFailure_ReturnsFailWithError()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector(balanceThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("Connection refused");
+    }
+
+    [Fact]
+    public async Task OpenFailure_ReturnsFailAndDoesNotAttemptClose()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        var mockConnector = CreateMockConnector(openSuccess: false, openError: "Insufficient margin");
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Insufficient margin");
+
+        // Verify ClosePositionAsync was never called
+        mockConnector.Verify(
+            c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CloseFailure_ReturnsFailWithError()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector(closeSuccess: false, closeError: "Position not found");
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Position not found");
+    }
+
+    [Fact]
+    public async Task DataOnlyExchange_ReturnsFailWithSkipMessage()
+    {
+        var exchange = CreateTestExchange(isDataOnly: true);
+        SetupExchangeAndCredential(exchange);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().ContainEquivalentOf("data-only", "should mention data-only");
+    }
+
+    [Fact]
+    public async Task NoCredentialsForExchange_ReturnsFailWithMessage()
+    {
+        var exchange = CreateTestExchange();
+        SetupExchangeAndCredential(exchange, credential: null);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("credentials", Exactly.Once(), "should mention missing credentials");
+    }
+}
