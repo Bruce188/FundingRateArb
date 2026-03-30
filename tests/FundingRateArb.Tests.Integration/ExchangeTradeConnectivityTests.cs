@@ -78,8 +78,8 @@ public class ExchangeTradeConnectivityTests
     [Trait("Category", "TradeConnectivity")]
     public async Task TradeRoundTrip_Lighter()
     {
-        Skip.If(string.IsNullOrEmpty(_lighterKey),
-            "Lighter credentials not configured (TRADE_TEST_LIGHTER_KEY)");
+        Skip.If(string.IsNullOrEmpty(_lighterKey) || string.IsNullOrEmpty(_lighterAccount),
+            "Lighter credentials not configured (TRADE_TEST_LIGHTER_KEY, TRADE_TEST_LIGHTER_ACCOUNT)");
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var ct = cts.Token;

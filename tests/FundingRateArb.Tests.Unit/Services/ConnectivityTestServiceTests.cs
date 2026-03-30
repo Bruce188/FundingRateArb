@@ -33,6 +33,9 @@ public class ConnectivityTestServiceTests
 
     public ConnectivityTestServiceTests()
     {
+        // Clear cooldowns between tests to prevent cross-test interference
+        ConnectivityTestService.ClearCooldowns();
+
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchangeRepo.Object);
         _mockUow.Setup(u => u.UserCredentials).Returns(_mockCredentialRepo.Object);
 
@@ -171,8 +174,8 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
+        // Sanitized: error message should not leak raw exception details
         result.Error.Should().Contain("Balance check failed");
-        // Sanitized: should NOT contain raw exception details
         result.Error.Should().NotContain("Connection refused");
     }
 
@@ -187,7 +190,9 @@ public class ConnectivityTestServiceTests
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
         result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Insufficient margin");
+        // Sanitized: should not contain raw SDK error
+        result.Error.Should().Contain("Open failed");
+        result.Error.Should().NotContain("Insufficient margin");
 
         // Verify ClosePositionAsync was never called
         mockConnector.Verify(
@@ -196,17 +201,40 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
-    public async Task CloseFailure_ReturnsFailWithError()
+    public async Task CloseFailure_RetriesOnce_ThenReturnsStrandedPositionError()
     {
         var exchange = CreateTestExchange();
         var credential = CreateTestCredential();
         SetupExchangeAndCredential(exchange, credential);
-        CreateMockConnector(closeSuccess: false, closeError: "Position not found");
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = true,
+                OrderId = "order-123",
+                FilledPrice = 3000m,
+                FilledQuantity = 0.00167m
+            });
+        // Both close attempts fail
+        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "Position not found" });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
         result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Position not found");
+        result.Error.Should().Contain("STRANDED POSITION");
+
+        // Verify close was called exactly twice (initial + retry)
+        mockConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
     }
 
     [Fact]
@@ -233,6 +261,11 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("credentials", "should mention missing credentials");
+
+        // Verify SignalR log was sent for early-exit path
+        _mockDashboardClient.Verify(
+            d => d.ReceiveConnectivityLog(It.IsAny<string>(), It.IsAny<string>()),
+            Times.AtLeastOnce);
     }
 
     [Fact]
@@ -240,6 +273,9 @@ public class ConnectivityTestServiceTests
     {
         _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId))
             .ReturnsAsync((Exchange?)null);
+        _mockCredentialRepo
+            .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+            .ReturnsAsync((UserExchangeCredential?)null);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
@@ -263,6 +299,11 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("credentials");
+
+        // Verify SignalR log was sent for early-exit path
+        _mockDashboardClient.Verify(
+            d => d.ReceiveConnectivityLog(It.IsAny<string>(), It.IsAny<string>()),
+            Times.AtLeastOnce);
     }
 
     [Fact]
@@ -308,5 +349,23 @@ public class ConnectivityTestServiceTests
         result.Error.Should().Contain("Unexpected error");
         // Sanitized: should NOT contain raw exception message
         result.Error.Should().NotContain("Unexpected SDK error");
+    }
+
+    [Fact]
+    public async Task RunTest_WithinCooldown_ReturnsFailWithCooldownMessage()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
+
+        // First call should succeed
+        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        firstResult.Success.Should().BeTrue();
+
+        // Second call within cooldown period should be rate-limited
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        secondResult.Success.Should().BeFalse();
+        secondResult.Error.Should().Contain("Rate limited");
     }
 }

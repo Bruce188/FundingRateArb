@@ -1,7 +1,6 @@
-@using Microsoft.AspNetCore.Identity
 @{
     ViewData["Title"] = "Connectivity Test";
-    var users = (List<IdentityUser>)ViewBag.Users;
+    var users = (IEnumerable<dynamic>)ViewBag.Users;
     var exchanges = (List<FundingRateArb.Domain.Entities.Exchange>)ViewBag.Exchanges;
 }
 

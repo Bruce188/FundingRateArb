@@ -14,14 +14,21 @@
     var userExchangeIds = [];
     var isRunning = false;
 
+    function isScrolledToBottom(el) {
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    }
+
     function appendLog(exchangeName, message, cssClass) {
         var now = new Date();
         var timestamp = now.toLocaleTimeString("en-GB", { hour12: false });
         var line = document.createElement("span");
         line.className = cssClass || "";
         line.textContent = "[" + timestamp + "] [" + exchangeName + "] " + message + "\n";
+        var wasAtBottom = isScrolledToBottom(logPanel);
         logPanel.appendChild(line);
-        logPanel.scrollTop = logPanel.scrollHeight;
+        if (wasAtBottom) {
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
     }
 
     function setButtonState(btn, state) {
@@ -155,29 +162,32 @@
         });
     });
 
-    // Test All button
+    // Test All button — wrapped in try/finally to guarantee isRunning reset
     btnTestAll.addEventListener("click", async function () {
         if (isRunning) return;
         isRunning = true;
         updateButtonAvailability();
 
-        appendLog("System", "Starting test for all exchanges...", "color: #64b5f6; font-weight: bold;");
+        try {
+            appendLog("System", "Starting test for all exchanges...", "color: #64b5f6; font-weight: bold;");
 
-        var enabledButtons = [];
-        testButtons.forEach(function (btn) {
-            var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
-            if (userExchangeIds.indexOf(exchangeId) >= 0) {
-                enabledButtons.push(btn);
+            var enabledButtons = [];
+            testButtons.forEach(function (btn) {
+                var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
+                if (userExchangeIds.indexOf(exchangeId) >= 0) {
+                    enabledButtons.push(btn);
+                }
+            });
+
+            for (var i = 0; i < enabledButtons.length; i++) {
+                await runTest(enabledButtons[i]);
             }
-        });
 
-        for (var i = 0; i < enabledButtons.length; i++) {
-            await runTest(enabledButtons[i]);
+            appendLog("System", "All tests complete.", "color: #64b5f6; font-weight: bold;");
+        } finally {
+            isRunning = false;
+            updateButtonAvailability();
         }
-
-        appendLog("System", "All tests complete.", "color: #64b5f6; font-weight: bold;");
-        isRunning = false;
-        updateButtonAvailability();
     });
 
     // Clear log

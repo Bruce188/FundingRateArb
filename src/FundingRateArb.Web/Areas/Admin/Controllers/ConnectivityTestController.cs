@@ -32,7 +32,11 @@ public class ConnectivityTestController : Controller
 
     public async Task<IActionResult> Index()
     {
-        var users = await _userManager.Users.OrderBy(u => u.UserName).ToListAsync();
+        var users = await _userManager.Users
+            .OrderBy(u => u.UserName)
+            .Select(u => new { u.Id, u.UserName, u.Email })
+            .ToListAsync();
+
         var exchanges = (await _uow.Exchanges.GetActiveAsync())
             .Where(e => !e.IsDataOnly)
             .OrderBy(e => e.Name)
@@ -45,12 +49,20 @@ public class ConnectivityTestController : Controller
     }
 
     [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> RunTest(string userId, int exchangeId)
     {
         var adminUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(adminUserId))
         {
             return Unauthorized();
+        }
+
+        // Validate that the target user actually exists
+        var targetUser = await _userManager.FindByIdAsync(userId);
+        if (targetUser is null)
+        {
+            return BadRequest("User not found");
         }
 
         var result = await _connectivityTestService.RunTestAsync(
