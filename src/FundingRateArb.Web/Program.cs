@@ -3,6 +3,7 @@ using AspNet.Security.OAuth.GitHub;
 using Azure.Identity;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Common.Interfaces;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
@@ -212,6 +213,7 @@ try
     builder.Services.AddScoped<IRatePredictionService, RatePredictionService>();
     builder.Services.AddScoped<IPortfolioRebalancer, PortfolioRebalancer>();
     builder.Services.AddSingleton<IEmailService, EmailService>();
+    builder.Services.AddScoped<IConnectivityTestService, ConnectivityTestService>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
