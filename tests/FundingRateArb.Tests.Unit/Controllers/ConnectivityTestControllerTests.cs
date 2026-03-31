@@ -189,6 +189,21 @@ public class ConnectivityTestControllerTests
         badRequest.Value.Should().Be("userId is required");
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-100)]
+    public async Task RunTest_ZeroOrNegativeExchangeId_ReturnsBadRequest(int exchangeId)
+    {
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.RunTest("user-1", exchangeId);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var badRequest = (BadRequestObjectResult)result;
+        badRequest.Value.Should().Be("Invalid exchangeId");
+    }
+
     [Fact]
     public async Task Index_FiltersOutDataOnlyExchanges()
     {

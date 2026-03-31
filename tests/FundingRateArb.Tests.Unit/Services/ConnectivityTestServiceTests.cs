@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
@@ -154,7 +155,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeTrue();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().BeNull();
-        result.Balance.Should().Be(100m);
+        result.Balance.Should().BeNull("success path should not expose balance in JSON response");
 
         // Verify SignalR log messages were sent (at least balance, open, wait, close steps)
         _mockDashboardClient.Verify(
@@ -198,6 +199,7 @@ public class ConnectivityTestServiceTests
         // Sanitized: should not contain raw SDK error
         result.Error.Should().Contain("Open failed");
         result.Error.Should().NotContain("Insufficient margin");
+        result.Balance.Should().Be(100m);
 
         // Verify ClosePositionAsync was never called
         mockConnector.Verify(
@@ -235,6 +237,7 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("STRANDED POSITION");
+        result.Balance.Should().Be(100m);
 
         // Verify close was called exactly twice (initial + retry)
         mockConnector.Verify(
@@ -485,21 +488,24 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
+        // Cancel the token inside PlaceMarketOrderAsync callback so cancellation
+        // occurs after open succeeds but before the settlement Task.Delay completes
         mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrderResultDto
+            .Returns<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) =>
             {
-                Success = true,
-                OrderId = "order-123",
-                FilledPrice = 3000m,
-                FilledQuantity = 0.00167m
+                cts.Cancel();
+                return Task.FromResult(new OrderResultDto
+                {
+                    Success = true,
+                    OrderId = "order-123",
+                    FilledPrice = 3000m,
+                    FilledQuantity = 0.00167m
+                });
             });
 
         _mockConnectorFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
-
-        // Cancel the token before calling — this will cause Task.Delay to throw immediately
-        cts.Cancel();
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
 
@@ -508,6 +514,34 @@ public class ConnectivityTestServiceTests
         // ClosePositionAsync should never be called since cancellation occurs during settlement wait
         mockConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task DecryptCredentialThrows_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId)).ReturnsAsync(exchange);
+        _mockCredentialRepo
+            .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+            .ReturnsAsync(credential);
+
+        // Mock DecryptCredential to throw CryptographicException (e.g., corrupted encryption key)
+        _mockUserSettings
+            .Setup(u => u.DecryptCredential(credential))
+            .Throws(new CryptographicException("Bad data"));
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("Unexpected error");
+
+        // CreateForUserAsync should never be called since decryption failed
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 }

@@ -58,6 +58,11 @@ public class ConnectivityTestController : Controller
             return BadRequest("userId is required");
         }
 
+        if (exchangeId <= 0)
+        {
+            return BadRequest("Invalid exchangeId");
+        }
+
         var adminUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(adminUserId))
         {

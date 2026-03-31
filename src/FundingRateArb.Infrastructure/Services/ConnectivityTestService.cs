@@ -17,7 +17,7 @@ public class ConnectivityTestService : IConnectivityTestService
     private static readonly ConcurrentDictionary<string, DateTime> _cooldowns = new();
     internal static readonly TimeSpan CooldownPeriod = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PurgeInterval = TimeSpan.FromMinutes(5);
-    private static DateTime _lastPurge = DateTime.MinValue;
+    private static long _lastPurgeTicks;
 
     /// <summary>
     /// Clears the cooldown cache. Used by unit tests to prevent cross-test interference.
@@ -49,9 +49,10 @@ public class ConnectivityTestService : IConnectivityTestService
     {
         // Periodic purge: remove all expired cooldown entries to prevent unbounded growth
         var now = DateTime.UtcNow;
-        if (now - _lastPurge > PurgeInterval)
+        var nowTicks = now.Ticks;
+        if (nowTicks - Interlocked.Read(ref _lastPurgeTicks) > PurgeInterval.Ticks)
         {
-            _lastPurge = now;
+            Interlocked.Exchange(ref _lastPurgeTicks, nowTicks);
             foreach (var kvp in _cooldowns)
             {
                 if (now - kvp.Value >= CooldownPeriod)
@@ -130,7 +131,10 @@ public class ConnectivityTestService : IConnectivityTestService
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
 
-            // Record cooldown timestamp atomically — only one concurrent caller proceeds
+            // Cooldown is recorded after connector creation so that a failed factory call
+            // (e.g., null connector due to bad credentials) does not consume the cooldown slot.
+            // This intentional TOCTOU gap means duplicate DB lookups are possible under
+            // concurrency, but the trade-off avoids penalizing users for transient failures.
             if (!_cooldowns.TryAdd(cooldownKey, now))
             {
                 // Another concurrent request claimed the slot; re-check expiry
@@ -151,7 +155,7 @@ public class ConnectivityTestService : IConnectivityTestService
             try
             {
                 balance = await connector.GetAvailableBalanceAsync(ct);
-                _logger.LogInformation("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+                _logger.LogDebug("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
                 await Log("Balance check OK");
             }
             catch (Exception ex)
@@ -202,7 +206,7 @@ public class ConnectivityTestService : IConnectivityTestService
             await Log("Close SUCCESS");
 
             await Log("PASS - All steps completed successfully");
-            return new ConnectivityTestResult(true, exchangeName, null, balance);
+            return new ConnectivityTestResult(true, exchangeName, null, null);
         }
         catch (Exception ex)
         {

@@ -105,7 +105,10 @@
         }
 
         fetch("/Admin/ConnectivityTest/GetUserExchanges?userId=" + encodeURIComponent(userId))
-            .then(function (res) { return res.json(); })
+            .then(function (res) {
+                if (!res.ok) throw new Error("Server returned " + res.status);
+                return res.json();
+            })
             .then(function (exchangeIds) {
                 userExchangeIds = new Set(exchangeIds);
                 updateButtonAvailability();
@@ -137,7 +140,10 @@
             },
             body: formData
         })
-        .then(function (res) { return res.json(); })
+        .then(function (res) {
+            if (!res.ok) throw new Error("Server returned " + res.status);
+            return res.json();
+        })
         .then(function (result) {
             if (result.success) {
                 setButtonState(btn, "pass");
@@ -196,7 +202,7 @@
 
     // Clear log
     btnClearLog.addEventListener("click", function () {
-        logPanel.innerHTML = "";
+        logPanel.replaceChildren();
     });
 
     // SignalR handler for real-time log messages
