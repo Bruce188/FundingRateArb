@@ -16,6 +16,8 @@ public class ConnectivityTestService : IConnectivityTestService
     // Static: cooldown state must survive scope boundaries (service is Scoped)
     private static readonly ConcurrentDictionary<string, DateTime> _cooldowns = new();
     internal static readonly TimeSpan CooldownPeriod = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan PurgeInterval = TimeSpan.FromMinutes(5);
+    private static DateTime _lastPurge = DateTime.MinValue;
 
     /// <summary>
     /// Clears the cooldown cache. Used by unit tests to prevent cross-test interference.
@@ -45,8 +47,19 @@ public class ConnectivityTestService : IConnectivityTestService
     public async Task<ConnectivityTestResult> RunTestAsync(
         string adminUserId, string targetUserId, int exchangeId, CancellationToken ct = default)
     {
-        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS
+        // Periodic purge: remove all expired cooldown entries to prevent unbounded growth
         var now = DateTime.UtcNow;
+        if (now - _lastPurge > PurgeInterval)
+        {
+            _lastPurge = now;
+            foreach (var kvp in _cooldowns)
+            {
+                if (now - kvp.Value >= CooldownPeriod)
+                    _cooldowns.TryRemove(kvp.Key, out _);
+            }
+        }
+
+        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS
         var cooldownKey = $"{targetUserId}:{exchangeId}";
         if (_cooldowns.TryGetValue(cooldownKey, out var lastRun))
         {
@@ -138,7 +151,8 @@ public class ConnectivityTestService : IConnectivityTestService
             try
             {
                 balance = await connector.GetAvailableBalanceAsync(ct);
-                await Log($"Balance: ${balance:F2}");
+                _logger.LogInformation("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+                await Log("Balance check OK");
             }
             catch (Exception ex)
             {

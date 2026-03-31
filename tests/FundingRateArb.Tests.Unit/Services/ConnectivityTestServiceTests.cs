@@ -160,6 +160,10 @@ public class ConnectivityTestServiceTests
         _mockDashboardClient.Verify(
             d => d.ReceiveConnectivityLog("Hyperliquid", It.IsAny<string>()),
             Times.AtLeast(4));
+
+        // Verify logs target the admin group, not the target user group
+        _mockHubClients.Verify(c => c.Group($"user-{AdminUserId}"), Times.AtLeastOnce);
+        _mockHubClients.Verify(c => c.Group($"user-{TargetUserId}"), Times.Never);
     }
 
     [Fact]
@@ -177,6 +181,7 @@ public class ConnectivityTestServiceTests
         // Sanitized: error message should not leak raw exception details
         result.Error.Should().Contain("Balance check failed");
         result.Error.Should().NotContain("Connection refused");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -466,5 +471,43 @@ public class ConnectivityTestServiceTests
                 It.Is<string>(msg => msg.Contains("OrderId") || msg.Contains("Price") || msg.Contains("Qty") || msg.Contains("Quantity"))),
             Times.Never,
             "SignalR log messages should not expose order details");
+    }
+
+    [Fact]
+    public async Task RunTest_CancellationDuringSettlementWait_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var cts = new CancellationTokenSource();
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = true,
+                OrderId = "order-123",
+                FilledPrice = 3000m,
+                FilledQuantity = 0.00167m
+            });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Cancel the token before calling — this will cause Task.Delay to throw immediately
+        cts.Cancel();
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
+
+        result.Success.Should().BeFalse();
+
+        // ClosePositionAsync should never be called since cancellation occurs during settlement wait
+        mockConnector.Verify(
+            c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

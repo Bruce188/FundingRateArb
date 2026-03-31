@@ -175,6 +175,20 @@ public class ConnectivityTestControllerTests
         badRequest.Value.Should().Be("User not found");
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task RunTest_NullOrEmptyUserId_ReturnsBadRequest(string? userId)
+    {
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.RunTest(userId!, 1);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var badRequest = (BadRequestObjectResult)result;
+        badRequest.Value.Should().Be("userId is required");
+    }
+
     [Fact]
     public async Task Index_FiltersOutDataOnlyExchanges()
     {

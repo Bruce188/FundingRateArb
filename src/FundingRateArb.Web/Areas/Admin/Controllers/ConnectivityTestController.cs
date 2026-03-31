@@ -35,6 +35,7 @@ public class ConnectivityTestController : Controller
         var users = await _userManager.Users
             .OrderBy(u => u.UserName)
             .Select(u => new { u.Id, u.UserName, u.Email })
+            .Take(500)
             .ToListAsync();
 
         var exchanges = (await _uow.Exchanges.GetActiveAsync())
@@ -52,6 +53,11 @@ public class ConnectivityTestController : Controller
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RunTest(string userId, int exchangeId)
     {
+        if (string.IsNullOrEmpty(userId))
+        {
+            return BadRequest("userId is required");
+        }
+
         var adminUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrEmpty(adminUserId))
         {
