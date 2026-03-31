@@ -163,7 +163,7 @@ public class ExchangeTradeConnectivityTests
     public async Task TradeRoundTrip_AllExchanges()
     {
         var hasHl = !string.IsNullOrEmpty(_hlWallet) && !string.IsNullOrEmpty(_hlKey);
-        var hasLighter = !string.IsNullOrEmpty(_lighterKey);
+        var hasLighter = !string.IsNullOrEmpty(_lighterKey) && !string.IsNullOrEmpty(_lighterAccount);
         var hasAster = !string.IsNullOrEmpty(_asterKey) && !string.IsNullOrEmpty(_asterSecret);
 
         Skip.If(!hasHl && !hasLighter && !hasAster,

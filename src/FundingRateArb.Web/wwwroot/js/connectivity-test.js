@@ -11,7 +11,7 @@
     }
 
     // Active exchange IDs for selected user
-    var userExchangeIds = [];
+    var userExchangeIds = new Set();
     var isRunning = false;
 
     function isScrolledToBottom(el) {
@@ -80,11 +80,11 @@
     function updateButtonAvailability() {
         testButtons.forEach(function (btn) {
             var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
-            var hasCredentials = userExchangeIds.indexOf(exchangeId) >= 0;
+            var hasCredentials = userExchangeIds.has(exchangeId);
             var userSelected = userSelect.value !== "";
             btn.disabled = !userSelected || !hasCredentials || isRunning;
         });
-        btnTestAll.disabled = !userSelect.value || isRunning || userExchangeIds.length === 0;
+        btnTestAll.disabled = !userSelect.value || isRunning || userExchangeIds.size === 0;
     }
 
     // Fetch user's exchanges when user selection changes
@@ -93,7 +93,7 @@
 
         // Reset all statuses
         testButtons.forEach(function (btn) { setButtonState(btn, "idle"); });
-        userExchangeIds = [];
+        userExchangeIds = new Set();
 
         if (!userId) {
             updateButtonAvailability();
@@ -103,7 +103,7 @@
         fetch("/Admin/ConnectivityTest/GetUserExchanges?userId=" + encodeURIComponent(userId))
             .then(function (res) { return res.json(); })
             .then(function (exchangeIds) {
-                userExchangeIds = exchangeIds;
+                userExchangeIds = new Set(exchangeIds);
                 updateButtonAvailability();
             })
             .catch(function (err) {
@@ -174,7 +174,7 @@
             var enabledButtons = [];
             testButtons.forEach(function (btn) {
                 var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
-                if (userExchangeIds.indexOf(exchangeId) >= 0) {
+                if (userExchangeIds.has(exchangeId)) {
                     enabledButtons.push(btn);
                 }
             });

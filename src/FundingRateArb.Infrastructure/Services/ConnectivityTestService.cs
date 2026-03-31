@@ -13,6 +13,7 @@ namespace FundingRateArb.Infrastructure.Services;
 
 public class ConnectivityTestService : IConnectivityTestService
 {
+    // Static: cooldown state must survive scope boundaries (service is Scoped)
     private static readonly ConcurrentDictionary<string, DateTime> _cooldowns = new();
     internal static readonly TimeSpan CooldownPeriod = TimeSpan.FromSeconds(60);
 
@@ -44,14 +45,20 @@ public class ConnectivityTestService : IConnectivityTestService
     public async Task<ConnectivityTestResult> RunTestAsync(
         string adminUserId, string targetUserId, int exchangeId, CancellationToken ct = default)
     {
-        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown
+        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS
+        var now = DateTime.UtcNow;
         var cooldownKey = $"{targetUserId}:{exchangeId}";
-        if (_cooldowns.TryGetValue(cooldownKey, out var lastRun)
-            && DateTime.UtcNow - lastRun < CooldownPeriod)
+        if (_cooldowns.TryGetValue(cooldownKey, out var lastRun))
         {
-            var remaining = CooldownPeriod - (DateTime.UtcNow - lastRun);
-            return new ConnectivityTestResult(false, "Unknown",
-                $"Rate limited — wait {remaining.Seconds}s before retesting this exchange");
+            if (now - lastRun < CooldownPeriod)
+            {
+                var remaining = CooldownPeriod - (now - lastRun);
+                return new ConnectivityTestResult(false, "Unknown",
+                    $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+            }
+
+            // Lazy eviction: remove expired entry
+            _cooldowns.TryRemove(cooldownKey, out _);
         }
 
         // Parallelize independent DB lookups
@@ -110,8 +117,20 @@ public class ConnectivityTestService : IConnectivityTestService
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
 
-            // Record cooldown timestamp now that we're about to execute a real trade
-            _cooldowns[cooldownKey] = DateTime.UtcNow;
+            // Record cooldown timestamp atomically — only one concurrent caller proceeds
+            if (!_cooldowns.TryAdd(cooldownKey, now))
+            {
+                // Another concurrent request claimed the slot; re-check expiry
+                if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
+                {
+                    var remaining = CooldownPeriod - (now - existingTs);
+                    return new ConnectivityTestResult(false, exchangeName,
+                        $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+                }
+
+                // Expired entry from concurrent path — overwrite
+                _cooldowns[cooldownKey] = now;
+            }
 
             // Step 1 - Balance check
             await Log("Step 1: Checking available balance...");
@@ -137,7 +156,9 @@ public class ConnectivityTestService : IConnectivityTestService
                 await Log("Open failed — see server log for details");
                 return new ConnectivityTestResult(false, exchangeName, "Open failed — see server log for details", balance);
             }
-            await Log($"Open SUCCESS - OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
+            _logger.LogInformation("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
+                exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
+            await Log("Open SUCCESS");
 
             // Step 3 - Wait for settlement
             await Log("Step 3: Waiting for settlement (2s)...");
@@ -162,7 +183,9 @@ public class ConnectivityTestService : IConnectivityTestService
                         "STRANDED POSITION — close failed after retry. Manual intervention required!", balance);
                 }
             }
-            await Log($"Close SUCCESS - OrderId={closeResult.OrderId}");
+            _logger.LogInformation("Close succeeded for {Exchange}: OrderId={OrderId}",
+                exchangeName, closeResult.OrderId);
+            await Log("Close SUCCESS");
 
             await Log("PASS - All steps completed successfully");
             return new ConnectivityTestResult(true, exchangeName, null, balance);

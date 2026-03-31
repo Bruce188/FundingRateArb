@@ -79,6 +79,13 @@ public class ConnectivityTestController : Controller
             return Json(Array.Empty<int>());
         }
 
+        // Validate that the target user actually exists
+        var targetUser = await _userManager.FindByIdAsync(userId);
+        if (targetUser is null)
+        {
+            return BadRequest("User not found");
+        }
+
         var credentials = await _userSettings.GetActiveCredentialsAsync(userId);
         var exchangeIds = credentials.Select(c => c.ExchangeId).ToList();
 

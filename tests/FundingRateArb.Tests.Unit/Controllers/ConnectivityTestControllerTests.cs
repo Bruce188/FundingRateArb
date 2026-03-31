@@ -136,6 +136,11 @@ public class ConnectivityTestControllerTests
     [Fact]
     public async Task GetUserExchanges_ValidUserId_ReturnsExchangeIds()
     {
+        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
         var credentials = new List<UserExchangeCredential>
         {
             new() { ExchangeId = 1, UserId = "user-1", IsActive = true },
@@ -152,6 +157,22 @@ public class ConnectivityTestControllerTests
         var jsonResult = result.Should().BeOfType<JsonResult>().Subject;
         var exchangeIds = jsonResult.Value.Should().BeAssignableTo<List<int>>().Subject;
         exchangeIds.Should().BeEquivalentTo(new[] { 1, 3 });
+    }
+
+    [Fact]
+    public async Task GetUserExchanges_InvalidUserId_ReturnsBadRequest()
+    {
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("nonexistent-user"))
+            .ReturnsAsync((IdentityUser?)null);
+
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.GetUserExchanges("nonexistent-user");
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        var badRequest = (BadRequestObjectResult)result;
+        badRequest.Value.Should().Be("User not found");
     }
 
     [Fact]

@@ -368,4 +368,103 @@ public class ConnectivityTestServiceTests
         secondResult.Success.Should().BeFalse();
         secondResult.Error.Should().Contain("Rate limited");
     }
+
+    [Fact]
+    public async Task RunTest_CooldownKeyScopedToTargetUser_NotAdmin()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
+
+        // First admin runs test for target:exchange — should succeed
+        var firstResult = await _sut.RunTestAsync("admin-1", TargetUserId, TestExchangeId);
+        firstResult.Success.Should().BeTrue();
+
+        // Second admin runs test for same target:exchange — should be rate-limited
+        // because cooldown key is scoped to targetUserId:exchangeId, not adminUserId
+        var secondResult = await _sut.RunTestAsync("admin-2", TargetUserId, TestExchangeId);
+        secondResult.Success.Should().BeFalse();
+        secondResult.Error.Should().Contain("Rate limited");
+    }
+
+    [Fact]
+    public async Task ConnectorFactoryReturnsNull_DoesNotConsumeCooldown()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        // First call: factory returns null (connector creation fails)
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        firstResult.Success.Should().BeFalse();
+        firstResult.Error.Should().Contain("invalid credentials");
+
+        // Second call: factory returns valid connector — should proceed (not rate-limited)
+        CreateMockConnector();
+
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        secondResult.Success.Should().BeTrue("factory failure should not have consumed the cooldown slot");
+    }
+
+    [Fact]
+    public async Task CloseFailure_RetrySucceeds_ReturnsPass()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = true,
+                OrderId = "order-123",
+                FilledPrice = 3000m,
+                FilledQuantity = 0.00167m
+            });
+        // First close fails, second succeeds
+        mockConnector.SetupSequence(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "Temporary error" })
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "close-789" });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+
+        // Verify close was called exactly twice (initial + retry)
+        mockConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task RunTest_SuccessfulOpen_DoesNotExposeOrderDetails()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+
+        // Verify the SignalR log for the open step does not contain order details
+        _mockDashboardClient.Verify(
+            d => d.ReceiveConnectivityLog("Hyperliquid",
+                It.Is<string>(msg => msg.Contains("OrderId") || msg.Contains("Price") || msg.Contains("Qty") || msg.Contains("Quantity"))),
+            Times.Never,
+            "SignalR log messages should not expose order details");
+    }
 }
