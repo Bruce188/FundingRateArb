@@ -1,69 +1,55 @@
 using System.Text.Json;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace FundingRateArb.Tests.Integration;
 
-public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestFactory>
+public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestFactory>, IDisposable
 {
+    private readonly HealthTestFactory _factory;
     private readonly HttpClient _client;
 
     public HealthEndpointTests(HealthTestFactory factory)
     {
-        _client = factory.CreateClient();
-    }
-
-    [Fact]
-    public async Task GetHealth_ReturnsJsonWithExpectedStructure()
-    {
-        var response = await _client.GetAsync("/health");
-
-        // Health endpoint returns 200 (Healthy/Degraded) or 503 (Unhealthy)
-        // In test mode streams are disconnected, so 503 is expected
-        response.StatusCode.Should().BeOneOf(
-            System.Net.HttpStatusCode.OK,
-            System.Net.HttpStatusCode.ServiceUnavailable);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
-
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        root.TryGetProperty("status", out var statusProp).Should().BeTrue();
-        statusProp.GetString().Should().NotBeNullOrEmpty();
-
-        root.TryGetProperty("totalDuration", out _).Should().BeTrue();
-
-        root.TryGetProperty("entries", out var entriesProp).Should().BeTrue();
-        entriesProp.ValueKind.Should().Be(JsonValueKind.Array);
-
-        // Each entry should have name, status, and duration
-        foreach (var entry in entriesProp.EnumerateArray())
+        _factory = factory;
+        _client = factory.CreateClient(new WebApplicationFactoryClientOptions
         {
-            entry.TryGetProperty("name", out _).Should().BeTrue();
-            entry.TryGetProperty("status", out _).Should().BeTrue();
-            entry.TryGetProperty("duration", out _).Should().BeTrue();
-        }
+            AllowAutoRedirect = false
+        });
     }
 
     [Fact]
-    public async Task GetHealth_EntriesContainExpectedChecks()
+    public async Task GetHealthz_ReturnsOk_WithoutAuth()
+    {
+        var response = await _client.GetAsync("/healthz");
+
+        // healthz returns aggregate status: 200 if Healthy/Degraded, 503 if Unhealthy
+        // With stub stream connected, expect 200
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public async Task GetHealth_RequiresAuthorization()
     {
         var response = await _client.GetAsync("/health");
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
 
-        var entries = doc.RootElement.GetProperty("entries");
-        var names = entries.EnumerateArray()
-            .Select(e => e.GetProperty("name").GetString())
-            .ToList();
+        // Unauthenticated request should be redirected to login (302)
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.Redirect);
+    }
 
-        names.Should().Contain("websocket-streams");
+    public void Dispose()
+    {
+        _client.Dispose();
     }
 
     public class HealthTestFactory : WebApplicationFactory<Program>
@@ -96,7 +82,67 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
 
                 services.AddDbContext<AppDbContext>(options =>
                     options.UseInMemoryDatabase("HealthTest"));
+
+                // Remove real IMarketDataStream registrations and replace with stub
+                var streamDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IMarketDataStream))
+                    .ToList();
+                foreach (var d in streamDescriptors)
+                {
+                    services.Remove(d);
+                }
+
+                services.AddSingleton<IMarketDataStream>(new StubMarketDataStream("TestExchange", true));
+
+                // Remove background hosted services that depend on exchange connectors
+                var hostedServiceTypes = new[]
+                {
+                    "MarketDataStreamManager",
+                    "FundingRateFetcher",
+                    "BotOrchestrator",
+                    "DailySummaryService"
+                };
+
+                var hostedDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IHostedService)
+                             && d.ImplementationType != null
+                             && hostedServiceTypes.Contains(d.ImplementationType.Name))
+                    .ToList();
+                foreach (var d in hostedDescriptors)
+                {
+                    services.Remove(d);
+                }
+
+                // Remove IBotControl which depends on BotOrchestrator
+                var botControlDescriptors = services
+                    .Where(d => d.ServiceType.Name == "IBotControl")
+                    .ToList();
+                foreach (var d in botControlDescriptors)
+                {
+                    services.Remove(d);
+                }
             });
         }
+    }
+
+    private sealed class StubMarketDataStream : IMarketDataStream
+    {
+        public StubMarketDataStream(string exchangeName, bool isConnected)
+        {
+            ExchangeName = exchangeName;
+            IsConnected = isConnected;
+        }
+
+        public string ExchangeName { get; }
+        public bool IsConnected { get; }
+
+#pragma warning disable CS0067 // Events required by interface but unused in stub
+        public event Action<FundingRateDto>? OnRateUpdate;
+        public event Action<string, string>? OnDisconnected;
+#pragma warning restore CS0067
+
+        public Task StartAsync(IEnumerable<string> symbols, CancellationToken ct) => Task.CompletedTask;
+        public Task StopAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

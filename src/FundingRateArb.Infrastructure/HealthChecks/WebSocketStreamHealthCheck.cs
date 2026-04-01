@@ -20,8 +20,19 @@ public class WebSocketStreamHealthCheck : IHealthCheck
             return Task.FromResult(HealthCheckResult.Healthy("No WebSocket streams configured"));
         }
 
-        var connected = streamList.Where(s => s.IsConnected).Select(s => s.ExchangeName).ToList();
-        var disconnected = streamList.Where(s => !s.IsConnected).Select(s => s.ExchangeName).ToList();
+        var connected = new List<string>();
+        var disconnected = new List<string>();
+        foreach (var stream in streamList)
+        {
+            if (stream.IsConnected)
+            {
+                connected.Add(stream.ExchangeName);
+            }
+            else
+            {
+                disconnected.Add(stream.ExchangeName);
+            }
+        }
 
         if (disconnected.Count == 0)
         {

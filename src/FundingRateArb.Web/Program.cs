@@ -457,11 +457,13 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
+    app.MapHealthChecks("/healthz")
+        .RequireRateLimiting("general");
+
     app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {
         ResponseWriter = async (context, report) =>
         {
-            context.Response.ContentType = "application/json";
             var result = new
             {
                 status = report.Status.ToString(),
@@ -476,7 +478,9 @@ try
             };
             await context.Response.WriteAsJsonAsync(result);
         }
-    });
+    })
+        .RequireAuthorization()
+        .RequireRateLimiting("general");
 
     app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}")
         .RequireRateLimiting("general");

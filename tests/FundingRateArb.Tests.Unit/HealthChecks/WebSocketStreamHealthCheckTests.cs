@@ -43,6 +43,7 @@ public class WebSocketStreamHealthCheckTests
         var result = await sut.CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
+        result.Description.Should().Contain("Exchange1").And.Contain("Exchange2");
     }
 
     [Fact]
