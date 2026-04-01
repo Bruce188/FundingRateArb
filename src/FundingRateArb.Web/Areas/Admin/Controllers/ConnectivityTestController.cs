@@ -2,6 +2,7 @@ using System.Security.Claims;
 using FundingRateArb.Application.Common.Interfaces;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -16,13 +17,13 @@ public class ConnectivityTestController : Controller
     private readonly IConnectivityTestService _connectivityTestService;
     private readonly IUserSettingsService _userSettings;
     private readonly IUnitOfWork _uow;
-    private readonly UserManager<IdentityUser> _userManager;
+    private readonly UserManager<ApplicationUser> _userManager;
 
     public ConnectivityTestController(
         IConnectivityTestService connectivityTestService,
         IUserSettingsService userSettings,
         IUnitOfWork uow,
-        UserManager<IdentityUser> userManager)
+        UserManager<ApplicationUser> userManager)
     {
         _connectivityTestService = connectivityTestService;
         _userSettings = userSettings;
@@ -32,18 +33,15 @@ public class ConnectivityTestController : Controller
 
     public async Task<IActionResult> Index()
     {
-        var usersTask = _userManager.Users
+        // Sequential DB lookups — EF Core DbContext is not thread-safe
+        var users = await _userManager.Users
             .OrderBy(u => u.UserName)
             .Select(u => new { u.Id, u.UserName, u.Email })
             .Take(500)
             .ToListAsync();
 
-        var exchangesTask = _uow.Exchanges.GetActiveAsync();
-
-        await Task.WhenAll(usersTask, exchangesTask);
-
-        var users = await usersTask;
-        var exchanges = (await exchangesTask)
+        var allExchanges = await _uow.Exchanges.GetActiveAsync();
+        var exchanges = allExchanges
             .Where(e => !e.IsDataOnly)
             .OrderBy(e => e.Name)
             .ToList();

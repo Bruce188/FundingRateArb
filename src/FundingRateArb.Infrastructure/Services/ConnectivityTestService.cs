@@ -69,7 +69,9 @@ public class ConnectivityTestService : IConnectivityTestService
             }
         }
 
-        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS
+        // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS.
+        // ExchangeName is "Unknown" here because the early check fires before the DB lookup
+        // to avoid a wasted database round-trip on rate-limited requests.
         var cooldownKey = $"{targetUserId}|{exchangeId}";
         if (_cooldowns.TryGetValue(cooldownKey, out var lastRun))
         {
@@ -231,7 +233,10 @@ public class ConnectivityTestService : IConnectivityTestService
             }
             finally
             {
-                (connector as IDisposable)?.Dispose();
+                if (connector is IAsyncDisposable ad)
+                    await ad.DisposeAsync();
+                else
+                    (connector as IDisposable)?.Dispose();
             }
         }
         catch (Exception ex)

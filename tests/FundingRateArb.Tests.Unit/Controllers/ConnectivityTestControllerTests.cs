@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Controllers;
@@ -21,12 +23,12 @@ public class ConnectivityTestControllerTests
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IExchangeRepository> _mockExchangeRepo = new();
-    private readonly Mock<UserManager<IdentityUser>> _mockUserManager;
+    private readonly Mock<UserManager<ApplicationUser>> _mockUserManager;
 
     public ConnectivityTestControllerTests()
     {
-        var store = new Mock<IUserStore<IdentityUser>>();
-        _mockUserManager = new Mock<UserManager<IdentityUser>>(
+        var store = new Mock<IUserStore<ApplicationUser>>();
+        _mockUserManager = new Mock<UserManager<ApplicationUser>>(
             store.Object, null!, null!, null!, null!, null!, null!, null!, null!);
 
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchangeRepo.Object);
@@ -75,7 +77,7 @@ public class ConnectivityTestControllerTests
     {
         _mockUserManager
             .Setup(m => m.FindByIdAsync("nonexistent-user"))
-            .ReturnsAsync((IdentityUser?)null);
+            .ReturnsAsync((ApplicationUser?)null);
 
         var controller = CreateController(CreateAdminUser());
 
@@ -89,7 +91,7 @@ public class ConnectivityTestControllerTests
     [Fact]
     public async Task RunTest_ValidAdmin_DelegatesToService()
     {
-        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
         _mockUserManager
             .Setup(m => m.FindByIdAsync("user-1"))
             .ReturnsAsync(targetUser);
@@ -138,7 +140,7 @@ public class ConnectivityTestControllerTests
     [Fact]
     public async Task GetUserExchanges_ValidUserId_ReturnsExchangeIds()
     {
-        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
         _mockUserManager
             .Setup(m => m.FindByIdAsync("user-1"))
             .ReturnsAsync(targetUser);
@@ -166,7 +168,7 @@ public class ConnectivityTestControllerTests
     {
         _mockUserManager
             .Setup(m => m.FindByIdAsync("nonexistent-user"))
-            .ReturnsAsync((IdentityUser?)null);
+            .ReturnsAsync((ApplicationUser?)null);
 
         var controller = CreateController(CreateAdminUser());
 
@@ -219,7 +221,7 @@ public class ConnectivityTestControllerTests
             .Setup(r => r.GetActiveAsync())
             .ReturnsAsync(allExchanges);
 
-        var users = new List<IdentityUser>
+        var users = new List<ApplicationUser>
         {
             new() { Id = "user-1", UserName = "alice", Email = "alice@test.com" },
             new() { Id = "user-2", UserName = "bob", Email = "bob@test.com" }
@@ -244,7 +246,7 @@ public class ConnectivityTestControllerTests
     [Fact]
     public async Task RunTest_ValidAdmin_ForwardsCancellationToken()
     {
-        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
         _mockUserManager
             .Setup(m => m.FindByIdAsync("user-1"))
             .ReturnsAsync(targetUser);
@@ -291,7 +293,7 @@ public class ConnectivityTestControllerTests
     [Fact]
     public async Task GetUserExchanges_ValidUserNoCredentials_ReturnsEmptyArray()
     {
-        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
         _mockUserManager
             .Setup(m => m.FindByIdAsync("user-1"))
             .ReturnsAsync(targetUser);
