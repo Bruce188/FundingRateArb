@@ -485,7 +485,7 @@ try
             await context.Response.WriteAsJsonAsync(result);
         }
     })
-        .RequireAuthorization()
+        .RequireAuthorization(policy => policy.RequireRole("Admin"))
         .RequireRateLimiting("general");
 
     app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}")

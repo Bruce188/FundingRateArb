@@ -5,24 +5,23 @@ namespace FundingRateArb.Infrastructure.HealthChecks;
 
 public class WebSocketStreamHealthCheck : IHealthCheck
 {
-    private readonly IEnumerable<IMarketDataStream> _streams;
+    private readonly IReadOnlyList<IMarketDataStream> _streams;
 
     public WebSocketStreamHealthCheck(IEnumerable<IMarketDataStream> streams)
     {
-        _streams = streams;
+        _streams = streams.ToList().AsReadOnly();
     }
 
     public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
     {
-        var streamList = _streams.ToList();
-        if (streamList.Count == 0)
+        if (_streams.Count == 0)
         {
             return Task.FromResult(HealthCheckResult.Healthy("No WebSocket streams configured"));
         }
 
         var connected = new List<string>();
         var disconnected = new List<string>();
-        foreach (var stream in streamList)
+        foreach (var stream in _streams)
         {
             if (stream.IsConnected)
             {
@@ -47,7 +46,8 @@ public class WebSocketStreamHealthCheck : IHealthCheck
                 $"All {disconnected.Count} {streamWord} disconnected: {string.Join(", ", disconnected)}"));
         }
 
+        var degradedWord = disconnected.Count == 1 ? "stream" : "streams";
         return Task.FromResult(HealthCheckResult.Degraded(
-            $"{disconnected.Count} stream(s) disconnected: {string.Join(", ", disconnected)}"));
+            $"{disconnected.Count} {degradedWord} disconnected: {string.Join(", ", disconnected)}"));
     }
 }

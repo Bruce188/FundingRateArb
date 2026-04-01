@@ -18,6 +18,7 @@ public class WebSocketStreamHealthCheckTests
         var result = await sut.CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().Be("All 2 streams connected");
     }
 
     [Fact]
@@ -30,7 +31,7 @@ public class WebSocketStreamHealthCheckTests
         var result = await sut.CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Degraded);
-        result.Description.Should().Contain("Exchange2");
+        result.Description.Should().Be("1 stream disconnected: Exchange2");
     }
 
     [Fact]
@@ -43,7 +44,7 @@ public class WebSocketStreamHealthCheckTests
         var result = await sut.CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Unhealthy);
-        result.Description.Should().Contain("Exchange1").And.Contain("Exchange2");
+        result.Description.Should().Be("All 2 streams disconnected: Exchange1, Exchange2");
     }
 
     [Fact]
@@ -54,6 +55,7 @@ public class WebSocketStreamHealthCheckTests
         var result = await sut.CheckHealthAsync(new HealthCheckContext());
 
         result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().Be("No WebSocket streams configured");
     }
 
     [Fact]
