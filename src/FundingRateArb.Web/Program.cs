@@ -57,9 +57,15 @@ try
     builder.Services.AddHttpContextAccessor();
 
     // --- Serilog (replaces default ILogger) ---
-    var isDevelopment = builder.Environment.IsDevelopment();
+    // NOTE: isDevelopment must be read inside the AddSerilog lambda, not captured before Build().
+    // WebApplicationFactory.ConfigureWebHost (which calls UseEnvironment) runs during Build(),
+    // so builder.Environment.EnvironmentName is mutated after line 60 would have captured it.
+    // Reading from the IHostEnvironment service inside the lambda sees the final resolved value.
     builder.Services.AddSerilog((sp, lc) =>
     {
+        var env = sp.GetRequiredService<IHostEnvironment>();
+        var isDevEnv = env.IsDevelopment();
+
         lc.ReadFrom.Configuration(builder.Configuration)
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
@@ -79,7 +85,7 @@ try
 
             ;
 
-        if (isDevelopment)
+        if (isDevEnv)
         {
             lc.WriteTo.File(
                 path: "logs/fundingratearb-.log",
@@ -91,7 +97,7 @@ try
         }
 
         // SQL Server audit sink — only when a real SQL Server is available (not LocalDB on Linux)
-        if (!isDevelopment)
+        if (!isDevEnv)
         {
             lc.WriteTo.MSSqlServer(
                 connectionString: builder.Configuration.GetConnectionString("DefaultConnection"),
@@ -161,7 +167,7 @@ try
     // --- Cookie security ---
     builder.Services.ConfigureApplicationCookie(options =>
     {
-        options.Cookie.SecurePolicy = isDevelopment
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
             ? Microsoft.AspNetCore.Http.CookieSecurePolicy.SameAsRequest
             : Microsoft.AspNetCore.Http.CookieSecurePolicy.Always;
         options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Strict;
@@ -174,7 +180,7 @@ try
     var dataProtection = builder.Services.AddDataProtection()
         .SetApplicationName("FundingRateArb");
 
-    if (isDevelopment)
+    if (builder.Environment.IsDevelopment())
     {
         var dpKeysDir = new DirectoryInfo(Path.Combine(builder.Environment.ContentRootPath, "dp-keys"));
         if (!dpKeysDir.Exists)
@@ -509,9 +515,10 @@ try
 
     app.Run();
 }
-catch (Exception ex)
+catch (Exception ex) when (ex is not HostAbortedException)
 {
     Log.Fatal(ex, "Application terminated unexpectedly");
+    throw;
 }
 finally
 {
