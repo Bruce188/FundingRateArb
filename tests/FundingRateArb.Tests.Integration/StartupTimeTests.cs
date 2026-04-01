@@ -1,0 +1,135 @@
+using System.Diagnostics;
+using System.Security.Claims;
+using System.Text.Encodings.Web;
+using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
+using FundingRateArb.Infrastructure.Data;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace FundingRateArb.Tests.Integration;
+
+public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactory>, IDisposable
+{
+    private readonly StartupTestFactory _factory;
+    private readonly HttpClient _client;
+
+    public StartupTimeTests(StartupTestFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+    }
+
+    [Fact]
+    public async Task AppStartsAndRespondsWithinTimeout()
+    {
+        var sw = Stopwatch.StartNew();
+        var response = await _client.GetAsync("/healthz");
+        sw.Stop();
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10),
+            "app should start and respond to healthz within 10 seconds");
+    }
+
+    public void Dispose()
+    {
+        _client.Dispose();
+    }
+
+    public class StartupTestFactory : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Development");
+
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["ConnectionStrings:DefaultConnection"] = "not-used"
+                });
+            });
+
+            builder.ConfigureServices(services =>
+            {
+                // Remove all DbContext registrations that use SQL Server
+                var efDescriptors = services
+                    .Where(d => d.ServiceType == typeof(DbContextOptions<AppDbContext>)
+                             || d.ServiceType == typeof(AppDbContext)
+                             || (d.ServiceType.IsGenericType &&
+                                 d.ServiceType.GetGenericTypeDefinition() == typeof(DbContextOptions<>)))
+                    .ToList();
+                foreach (var d in efDescriptors)
+                {
+                    services.Remove(d);
+                }
+
+                services.AddDbContext<AppDbContext>(options =>
+                    options.UseInMemoryDatabase("StartupTimeTest"));
+
+                // Remove real IMarketDataStream registrations and replace with stub
+                var streamDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IMarketDataStream))
+                    .ToList();
+                foreach (var d in streamDescriptors)
+                {
+                    services.Remove(d);
+                }
+
+                services.AddSingleton<IMarketDataStream>(new StubMarketDataStream("TestExchange", true));
+
+                // Remove all background hosted services to isolate startup time
+                var hostedDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IHostedService))
+                    .ToList();
+                foreach (var d in hostedDescriptors)
+                {
+                    services.Remove(d);
+                }
+
+                // Remove IBotControl which depends on BotOrchestrator
+                var botControlDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IBotControl))
+                    .ToList();
+                foreach (var d in botControlDescriptors)
+                {
+                    services.Remove(d);
+                }
+            });
+        }
+    }
+
+    private sealed class StubMarketDataStream : IMarketDataStream
+    {
+        public StubMarketDataStream(string exchangeName, bool isConnected)
+        {
+            ExchangeName = exchangeName;
+            IsConnected = isConnected;
+        }
+
+        public string ExchangeName { get; }
+        public bool IsConnected { get; }
+
+#pragma warning disable CS0067 // Events required by interface but unused in stub
+        public event Action<FundingRateDto>? OnRateUpdate;
+        public event Action<string, string>? OnDisconnected;
+#pragma warning restore CS0067
+
+        public Task StartAsync(IEnumerable<string> symbols, CancellationToken ct) => Task.CompletedTask;
+        public Task StopAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

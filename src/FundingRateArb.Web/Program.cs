@@ -414,8 +414,9 @@ try
     }
 
     // --- Apply Pending Migrations ---
-    using (var scope = app.Services.CreateScope())
+    if (app.Environment.IsDevelopment())
     {
+        using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         if (db.Database.IsRelational())
         {
@@ -426,6 +427,10 @@ try
             await db.Database.EnsureCreatedAsync();
         }
         await DbSeeder.SeedAsync(scope.ServiceProvider);
+    }
+    else
+    {
+        Log.Information("Skipping automatic migrations in {Environment} environment", app.Environment.EnvironmentName);
     }
 
     // --- Middleware Pipeline ---
