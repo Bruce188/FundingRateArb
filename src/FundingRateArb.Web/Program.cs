@@ -388,9 +388,9 @@ try
     builder.Services.AddSingleton<IFundingRateReadinessSignal, FundingRateReadinessSignal>();
     builder.Services.AddHostedService<MarketDataStreamManager>();
     builder.Services.AddHostedService<FundingRateFetcher>();
-    builder.Services.AddHostedService<BotOrchestrator>();
-    builder.Services.AddSingleton<IBotControl>(sp =>
-        sp.GetServices<IHostedService>().OfType<BotOrchestrator>().Single());
+    builder.Services.AddSingleton<BotOrchestrator>();
+    builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<BotOrchestrator>());
+    builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
 
     // --- MVC ---
