@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using FundingRateArb.Application.Common.Exchanges;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
@@ -5,7 +6,7 @@ namespace FundingRateArb.Infrastructure.HealthChecks;
 
 public class WebSocketStreamHealthCheck : IHealthCheck
 {
-    private readonly IReadOnlyList<IMarketDataStream> _streams;
+    private readonly ReadOnlyCollection<IMarketDataStream> _streams;
 
     public WebSocketStreamHealthCheck(IEnumerable<IMarketDataStream> streams)
     {
