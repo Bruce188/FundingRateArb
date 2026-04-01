@@ -70,9 +70,12 @@ jobs:
           fi
           PERCENTAGE=$(awk "BEGIN {printf \"%.1f\", $LINE_RATE * 100}")
           echo "Line coverage: ${PERCENTAGE}%"
-          # THRESHOLD is a ratio (0.15 = 15%)
+          # THRESHOLD is a ratio (0.14 = 14%)
           THRESHOLD=0.14
-          if awk "BEGIN {exit !($LINE_RATE < $THRESHOLD)}"; then
+          # Use integer comparison (x10000) to avoid floating-point boundary issues
+          COVERAGE_INT=$(awk "BEGIN {printf \"%d\", $LINE_RATE * 10000}")
+          THRESHOLD_INT=$(awk "BEGIN {printf \"%d\", $THRESHOLD * 10000}")
+          if [ "$COVERAGE_INT" -lt "$THRESHOLD_INT" ]; then
             THRESHOLD_PCT=$(awk "BEGIN {printf \"%.0f\", $THRESHOLD * 100}")
             echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD_PCT}% threshold"
             exit 1
