@@ -84,7 +84,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
         }
         finally
         {
-            (connector as IDisposable)?.Dispose();
+            if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+            else (connector as IDisposable)?.Dispose();
         }
     }
 
@@ -138,7 +139,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
         }
         finally
         {
-            (connector as IDisposable)?.Dispose();
+            if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+            else (connector as IDisposable)?.Dispose();
         }
     }
 
@@ -182,7 +184,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
         }
         finally
         {
-            (connector as IDisposable)?.Dispose();
+            if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+            else (connector as IDisposable)?.Dispose();
         }
     }
 
@@ -242,7 +245,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
                 }
                 finally
                 {
-                    (connector as IDisposable)?.Dispose();
+                    if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+                    else (connector as IDisposable)?.Dispose();
                 }
             }
             catch (Exception ex)
@@ -306,7 +310,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
                 }
                 finally
                 {
-                    (connector as IDisposable)?.Dispose();
+                    if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+                    else (connector as IDisposable)?.Dispose();
                 }
             }
             catch (Exception ex)
@@ -361,7 +366,8 @@ public class ExchangeTradeConnectivityTests : IDisposable
                 }
                 finally
                 {
-                    (connector as IDisposable)?.Dispose();
+                    if (connector is IAsyncDisposable ad) await ad.DisposeAsync();
+                    else (connector as IDisposable)?.Dispose();
                 }
             }
             catch (Exception ex)
