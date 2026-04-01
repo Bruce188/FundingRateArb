@@ -10,6 +10,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Data;
+using FundingRateArb.Infrastructure.HealthChecks;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
@@ -392,7 +393,8 @@ try
         options.Filters.Add(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute()));
 
     builder.Services.AddHealthChecks()
-        .AddDbContextCheck<AppDbContext>();
+        .AddDbContextCheck<AppDbContext>()
+        .AddCheck<WebSocketStreamHealthCheck>("websocket-streams");
 
     var app = builder.Build();
 
@@ -410,7 +412,14 @@ try
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        await db.Database.MigrateAsync();
+        if (db.Database.IsRelational())
+        {
+            await db.Database.MigrateAsync();
+        }
+        else
+        {
+            await db.Database.EnsureCreatedAsync();
+        }
         await DbSeeder.SeedAsync(scope.ServiceProvider);
     }
 
@@ -448,7 +457,26 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
-    app.MapHealthChecks("/health");
+    app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+    {
+        ResponseWriter = async (context, report) =>
+        {
+            context.Response.ContentType = "application/json";
+            var result = new
+            {
+                status = report.Status.ToString(),
+                totalDuration = report.TotalDuration.TotalMilliseconds,
+                entries = report.Entries.Select(e => new
+                {
+                    name = e.Key,
+                    status = e.Value.Status.ToString(),
+                    description = e.Value.Description,
+                    duration = e.Value.Duration.TotalMilliseconds
+                })
+            };
+            await context.Response.WriteAsJsonAsync(result);
+        }
+    });
 
     app.MapControllerRoute("areas", "{area:exists}/{controller=Home}/{action=Index}/{id?}")
         .RequireRateLimiting("general");
