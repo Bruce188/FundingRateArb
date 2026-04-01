@@ -14,6 +14,7 @@ public class CorrelationIdEnricher : ILogEventEnricher
 {
     private const string PropertyName = "CorrelationId";
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly string _fallbackCorrelationId = Guid.NewGuid().ToString();
 
     public CorrelationIdEnricher(IHttpContextAccessor httpContextAccessor)
     {
@@ -24,7 +25,7 @@ public class CorrelationIdEnricher : ILogEventEnricher
     {
         var correlationId = Activity.Current?.Id
             ?? _httpContextAccessor.HttpContext?.TraceIdentifier
-            ?? Guid.NewGuid().ToString();
+            ?? _fallbackCorrelationId;
 
         var property = propertyFactory.CreateProperty(PropertyName, correlationId);
         logEvent.AddPropertyIfAbsent(property);

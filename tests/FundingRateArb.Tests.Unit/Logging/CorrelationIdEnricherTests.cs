@@ -24,23 +24,34 @@ public class CorrelationIdEnricherTests
     [Fact]
     public void Enrich_WithHttpContext_UsesTraceIdentifier()
     {
-        // Arrange
-        var httpContext = new DefaultHttpContext();
-        httpContext.TraceIdentifier = "test-trace-123";
+        // Arrange — clear any ambient Activity so the HttpContext path is exercised
+        var previousActivity = Activity.Current;
+        Activity.Current?.Stop();
+        Activity.Current = null;
 
-        var accessor = new Mock<IHttpContextAccessor>();
-        accessor.Setup(a => a.HttpContext).Returns(httpContext);
+        try
+        {
+            var httpContext = new DefaultHttpContext();
+            httpContext.TraceIdentifier = "test-trace-123";
 
-        var enricher = new CorrelationIdEnricher(accessor.Object);
-        var logEvent = CreateLogEvent();
-        var propertyFactory = new LogEventPropertyFactory();
+            var accessor = new Mock<IHttpContextAccessor>();
+            accessor.Setup(a => a.HttpContext).Returns(httpContext);
 
-        // Act
-        enricher.Enrich(logEvent, propertyFactory);
+            var enricher = new CorrelationIdEnricher(accessor.Object);
+            var logEvent = CreateLogEvent();
+            var propertyFactory = new LogEventPropertyFactory();
 
-        // Assert
-        logEvent.Properties.Should().ContainKey("CorrelationId");
-        logEvent.Properties["CorrelationId"].ToString().Should().Be("\"test-trace-123\"");
+            // Act
+            enricher.Enrich(logEvent, propertyFactory);
+
+            // Assert
+            logEvent.Properties.Should().ContainKey("CorrelationId");
+            logEvent.Properties["CorrelationId"].ToString().Should().Be("\"test-trace-123\"");
+        }
+        finally
+        {
+            Activity.Current = previousActivity;
+        }
     }
 
     [Fact]
