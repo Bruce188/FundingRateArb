@@ -796,9 +796,9 @@ public class ConnectivityTestServiceTests
         var freshExchange = CreateTestExchange();
         _mockExchangeRepo.Setup(r => r.GetByIdAsync(97)).ReturnsAsync(freshExchange);
 
-        // More direct verification: access the _cooldowns dictionary via reflection
+        // More direct verification: access the Cooldowns dictionary via reflection
         var cooldownsField = typeof(ConnectivityTestService)
-            .GetField("_cooldowns", BindingFlags.NonPublic | BindingFlags.Static)!;
+            .GetField("Cooldowns", BindingFlags.NonPublic | BindingFlags.Static)!;
         var cooldowns = (ConcurrentDictionary<string, DateTime>)cooldownsField.GetValue(null)!;
 
         // After RunTestAsync + purge: expired entries should be gone, fresh entry should remain

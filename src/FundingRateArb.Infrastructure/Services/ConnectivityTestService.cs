@@ -14,7 +14,7 @@ namespace FundingRateArb.Infrastructure.Services;
 public class ConnectivityTestService : IConnectivityTestService
 {
     // Static: cooldown state must survive scope boundaries (service is Scoped)
-    private static readonly ConcurrentDictionary<string, DateTime> _cooldowns = new();
+    private static readonly ConcurrentDictionary<string, DateTime> Cooldowns = new();
     internal static readonly TimeSpan CooldownPeriod = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan PurgeInterval = TimeSpan.FromMinutes(5);
     private static long _lastPurgeTicks;
@@ -22,13 +22,13 @@ public class ConnectivityTestService : IConnectivityTestService
     /// <summary>
     /// Clears the cooldown cache. Used by unit tests to prevent cross-test interference.
     /// </summary>
-    internal static void ClearCooldowns() => _cooldowns.Clear();
+    internal static void ClearCooldowns() => Cooldowns.Clear();
 
     /// <summary>
     /// Seeds a cooldown entry. Used by unit tests to exercise concurrent cooldown paths.
     /// </summary>
     internal static void SeedCooldown(string targetUserId, int exchangeId, DateTime timestamp)
-        => _cooldowns[$"{targetUserId}|{exchangeId}"] = timestamp;
+        => Cooldowns[$"{targetUserId}|{exchangeId}"] = timestamp;
 
     private readonly IUserSettingsService _userSettings;
     private readonly IExchangeConnectorFactory _connectorFactory;
@@ -62,10 +62,12 @@ public class ConnectivityTestService : IConnectivityTestService
         if (nowTicks - previousTicks > PurgeInterval.Ticks
             && Interlocked.CompareExchange(ref _lastPurgeTicks, nowTicks, previousTicks) == previousTicks)
         {
-            foreach (var kvp in _cooldowns)
+            foreach (var kvp in Cooldowns)
             {
                 if (now - kvp.Value >= CooldownPeriod)
-                    _cooldowns.TryRemove(kvp.Key, out _);
+                {
+                    Cooldowns.TryRemove(kvp.Key, out _);
+                }
             }
         }
 
@@ -73,7 +75,7 @@ public class ConnectivityTestService : IConnectivityTestService
         // ExchangeName is "Unknown" here because the early check fires before the DB lookup
         // to avoid a wasted database round-trip on rate-limited requests.
         var cooldownKey = $"{targetUserId}|{exchangeId}";
-        if (_cooldowns.TryGetValue(cooldownKey, out var lastRun))
+        if (Cooldowns.TryGetValue(cooldownKey, out var lastRun))
         {
             if (now - lastRun < CooldownPeriod)
             {
@@ -83,7 +85,7 @@ public class ConnectivityTestService : IConnectivityTestService
             }
 
             // Lazy eviction: remove expired entry
-            _cooldowns.TryRemove(cooldownKey, out _);
+            Cooldowns.TryRemove(cooldownKey, out _);
         }
 
         // Sequential DB lookups — EF Core DbContext is not thread-safe
@@ -124,10 +126,10 @@ public class ConnectivityTestService : IConnectivityTestService
 
             // Cooldown gate before connector creation to prevent concurrent duplicate trades.
             // If the factory returns null, we remove the key so the slot isn't consumed.
-            if (!_cooldowns.TryAdd(cooldownKey, now))
+            if (!Cooldowns.TryAdd(cooldownKey, now))
             {
                 // Another concurrent request claimed the slot; re-check expiry
-                if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
+                if (Cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
                 {
                     var remaining = CooldownPeriod - (now - existingTs);
                     return new ConnectivityTestResult(false, exchangeName,
@@ -135,7 +137,7 @@ public class ConnectivityTestService : IConnectivityTestService
                 }
 
                 // Expired entry from concurrent path — overwrite
-                _cooldowns[cooldownKey] = now;
+                Cooldowns[cooldownKey] = now;
             }
 
             await Log("Creating exchange connector...");
@@ -151,7 +153,7 @@ public class ConnectivityTestService : IConnectivityTestService
             if (connector is null)
             {
                 // Remove cooldown entry so a failed factory call doesn't consume the slot
-                _cooldowns.TryRemove(cooldownKey, out _);
+                Cooldowns.TryRemove(cooldownKey, out _);
                 await Log("Failed to create connector - invalid credentials");
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
@@ -234,9 +236,13 @@ public class ConnectivityTestService : IConnectivityTestService
             finally
             {
                 if (connector is IAsyncDisposable ad)
+                {
                     await ad.DisposeAsync();
+                }
                 else
+                {
                     (connector as IDisposable)?.Dispose();
+                }
             }
         }
         catch (Exception ex)
