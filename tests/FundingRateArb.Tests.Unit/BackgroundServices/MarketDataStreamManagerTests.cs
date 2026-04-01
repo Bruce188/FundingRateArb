@@ -112,4 +112,86 @@ public class MarketDataStreamManagerTests
         var act = () => sut.StartAsync(cts.Token);
         await act.Should().NotThrowAsync();
     }
+
+    [Fact]
+    public async Task StopAsync_DisposesAllStreams()
+    {
+        var stream1 = new Mock<IMarketDataStream>();
+        stream1.Setup(s => s.ExchangeName).Returns("Stream1");
+        stream1.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        stream1.Setup(s => s.StopAsync()).Returns(Task.CompletedTask);
+        stream1.Setup(s => s.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var stream2 = new Mock<IMarketDataStream>();
+        stream2.Setup(s => s.ExchangeName).Returns("Stream2");
+        stream2.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        stream2.Setup(s => s.StopAsync()).Returns(Task.CompletedTask);
+        stream2.Setup(s => s.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var sut = CreateSut(stream1.Object, stream2.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        // Give ExecuteAsync time to start streams before stopping
+        await Task.Delay(100);
+        await sut.StopAsync(CancellationToken.None);
+
+        stream1.Verify(s => s.StopAsync(), Times.Once);
+        stream1.Verify(s => s.DisposeAsync(), Times.Once);
+        stream2.Verify(s => s.StopAsync(), Times.Once);
+        stream2.Verify(s => s.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task StopAsync_ContinuesDisposal_WhenOneStreamFails()
+    {
+        var failingStream = new Mock<IMarketDataStream>();
+        failingStream.Setup(s => s.ExchangeName).Returns("Failing");
+        failingStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        failingStream.Setup(s => s.StopAsync())
+            .ThrowsAsync(new InvalidOperationException("Stop failed"));
+        failingStream.Setup(s => s.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var healthyStream = new Mock<IMarketDataStream>();
+        healthyStream.Setup(s => s.ExchangeName).Returns("Healthy");
+        healthyStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        healthyStream.Setup(s => s.StopAsync()).Returns(Task.CompletedTask);
+        healthyStream.Setup(s => s.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var sut = CreateSut(failingStream.Object, healthyStream.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        await Task.Delay(100);
+        await sut.StopAsync(CancellationToken.None);
+
+        // Even though the first stream failed to stop, the second should still be disposed
+        healthyStream.Verify(s => s.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task StopAsync_CompletesGracefully_WhenNoStreamsStarted()
+    {
+        var stream = new Mock<IMarketDataStream>();
+        stream.Setup(s => s.ExchangeName).Returns("Test");
+        stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        stream.Setup(s => s.StopAsync()).Returns(Task.CompletedTask);
+        stream.Setup(s => s.DisposeAsync()).Returns(ValueTask.CompletedTask);
+
+        var sut = CreateSut(stream.Object);
+        using var cts = new CancellationTokenSource();
+
+        // Cancel immediately so ExecuteAsync exits without starting streams
+        cts.Cancel();
+        await sut.StartAsync(cts.Token);
+
+        // StopAsync should not throw even if streams never started
+        var act = () => sut.StopAsync(CancellationToken.None);
+        await act.Should().NotThrowAsync();
+    }
 }

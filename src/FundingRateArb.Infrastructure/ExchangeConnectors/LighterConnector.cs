@@ -902,6 +902,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     public void Dispose()
     {
+        _signer?.Dispose();
         _cacheLock.Dispose();
         GC.SuppressFinalize(this);
     }

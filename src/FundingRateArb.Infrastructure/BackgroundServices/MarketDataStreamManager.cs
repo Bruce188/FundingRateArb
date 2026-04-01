@@ -94,6 +94,41 @@ public class MarketDataStreamManager : BackgroundService
         }
     }
 
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Stopping WebSocket streams...");
+
+        // Stop all streams — wrap each in try/catch so one failure doesn't block others
+        await Task.WhenAll(_streams.Select(async stream =>
+        {
+            try
+            {
+                await stream.StopAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to stop WebSocket stream: {Exchange}", stream.ExchangeName);
+            }
+        }));
+
+        // Dispose all streams — again wrap each individually
+        foreach (var stream in _streams)
+        {
+            try
+            {
+                await stream.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispose WebSocket stream: {Exchange}", stream.ExchangeName);
+            }
+        }
+
+        _logger.LogInformation("WebSocket streams stopped");
+
+        await base.StopAsync(cancellationToken);
+    }
+
     private void OnRateReceived(FundingRateDto rate)
     {
         _ = PushRateToSignalRAsync(rate);

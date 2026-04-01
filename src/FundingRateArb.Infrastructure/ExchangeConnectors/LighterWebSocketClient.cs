@@ -11,6 +11,8 @@ public class LighterWebSocketClient : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private readonly ILogger<LighterWebSocketClient> _logger;
     private readonly List<string> _subscribedChannels = new();
+    private Task? _receiveTask;
+    private Task? _keepaliveTask;
     private int _reconnectAttempts;
 
     internal const string MainnetUrl = "wss://mainnet.zklighter.elliot.ai/stream";
@@ -45,8 +47,8 @@ public class LighterWebSocketClient : IAsyncDisposable
         _logger.LogInformation("Lighter WebSocket connected to {Url}", MainnetUrl);
 
         var token = _cts.Token;
-        _ = Task.Run(() => ReceiveLoopAsync(token), token);
-        _ = Task.Run(() => KeepaliveLoopAsync(token), token);
+        _receiveTask = Task.Run(() => ReceiveLoopAsync(token), token);
+        _keepaliveTask = Task.Run(() => KeepaliveLoopAsync(token), token);
     }
 
     public async Task SubscribeAsync(string channel, string? authToken = null, CancellationToken ct = default)
@@ -220,8 +222,8 @@ public class LighterWebSocketClient : IAsyncDisposable
 
                 // Restart loops
                 var token = _cts?.Token ?? ct;
-                _ = Task.Run(() => ReceiveLoopAsync(token), token);
-                _ = Task.Run(() => KeepaliveLoopAsync(token), token);
+                _receiveTask = Task.Run(() => ReceiveLoopAsync(token), token);
+                _keepaliveTask = Task.Run(() => KeepaliveLoopAsync(token), token);
                 return;
             }
             catch (Exception ex)
@@ -251,6 +253,14 @@ public class LighterWebSocketClient : IAsyncDisposable
     {
         try { _cts?.Cancel(); }
         catch (ObjectDisposedException) { /* CTS already disposed during reconnect */ }
+
+        // Await background tasks before disposing the socket they use
+        var tasks = new[] { _receiveTask, _keepaliveTask }.Where(t => t is not null).ToArray();
+        if (tasks.Length > 0)
+        {
+            try { await Task.WhenAll(tasks!).WaitAsync(TimeSpan.FromSeconds(5)); }
+            catch { /* Timeout or already cancelled — proceed with disposal */ }
+        }
 
         if (_ws?.State == WebSocketState.Open)
         {
