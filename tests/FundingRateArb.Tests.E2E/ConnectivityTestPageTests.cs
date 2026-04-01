@@ -196,7 +196,10 @@ public class ConnectivityTestPageTests
 
     private static string Truncate(string value, int maxLength)
     {
-        if (string.IsNullOrEmpty(value)) return "(empty)";
+        if (string.IsNullOrEmpty(value))
+        {
+            return "(empty)";
+        }
         return value.Length <= maxLength ? value : value[..maxLength] + "...";
     }
 }
