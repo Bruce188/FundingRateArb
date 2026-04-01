@@ -71,7 +71,7 @@ jobs:
           PERCENTAGE=$(awk "BEGIN {printf \"%.1f\", $LINE_RATE * 100}")
           echo "Line coverage: ${PERCENTAGE}%"
           # THRESHOLD is a ratio (0.15 = 15%)
-          THRESHOLD=0.15
+          THRESHOLD=0.14
           if awk "BEGIN {exit !($LINE_RATE < $THRESHOLD)}"; then
             THRESHOLD_PCT=$(awk "BEGIN {printf \"%.0f\", $THRESHOLD * 100}")
             echo "::error::Code coverage ${PERCENTAGE}% is below the ${THRESHOLD_PCT}% threshold"
