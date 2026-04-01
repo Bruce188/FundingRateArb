@@ -53,9 +53,12 @@ try
             new DefaultAzureCredential());
     }
 
+    // --- HttpContextAccessor (needed by CorrelationIdEnricher and other services) ---
+    builder.Services.AddHttpContextAccessor();
+
     // --- Serilog (replaces default ILogger) ---
     var isDevelopment = builder.Environment.IsDevelopment();
-    builder.Services.AddSerilog((_, lc) =>
+    builder.Services.AddSerilog((sp, lc) =>
     {
         lc.ReadFrom.Configuration(builder.Configuration)
             .MinimumLevel.Information()
@@ -66,10 +69,12 @@ try
             .Enrich.WithThreadId()
             .Enrich.WithProperty("Application", "FundingRateArb")
             .Enrich.With<FundingRateArb.Infrastructure.Logging.SensitiveDataMaskingEnricher>()
+            .Enrich.With(new FundingRateArb.Infrastructure.Logging.CorrelationIdEnricher(
+                sp.GetRequiredService<Microsoft.AspNetCore.Http.IHttpContextAccessor>()))
 
             // Console sink
             .WriteTo.Console(outputTemplate:
-                "[{Timestamp:HH:mm:ss} {Level:u3}] {SourceContext}{NewLine}" +
+                "[{Timestamp:HH:mm:ss} {Level:u3}] [{CorrelationId}] {SourceContext}{NewLine}" +
                 "  {Message:lj}{NewLine}{Exception}")
 
             ;
