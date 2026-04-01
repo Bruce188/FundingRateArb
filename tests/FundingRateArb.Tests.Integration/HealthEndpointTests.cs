@@ -18,6 +18,7 @@ using Microsoft.Extensions.Options;
 
 namespace FundingRateArb.Tests.Integration;
 
+[Collection("IntegrationTests")]
 public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestFactory>, IDisposable
 {
     private readonly HealthTestFactory _factory;
@@ -120,7 +121,7 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
                 }
 
                 services.AddDbContext<AppDbContext>(options =>
-                    options.UseInMemoryDatabase("HealthTest"));
+                    options.UseInMemoryDatabase($"HealthTest_{Guid.NewGuid()}"));
 
                 // Remove real IMarketDataStream registrations and replace with stub
                 var streamDescriptors = services

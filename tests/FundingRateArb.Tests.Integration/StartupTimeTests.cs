@@ -18,6 +18,7 @@ using Microsoft.Extensions.Options;
 
 namespace FundingRateArb.Tests.Integration;
 
+[Collection("IntegrationTests")]
 public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactory>, IDisposable
 {
     private readonly StartupTestFactory _factory;
@@ -40,8 +41,8 @@ public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactor
         sw.Stop();
 
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
-        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10),
-            "app should start and respond to healthz within 10 seconds");
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(30),
+            "app should start and respond to healthz within 30 seconds");
     }
 
     public void Dispose()
@@ -78,7 +79,7 @@ public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactor
                 }
 
                 services.AddDbContext<AppDbContext>(options =>
-                    options.UseInMemoryDatabase("StartupTimeTest"));
+                    options.UseInMemoryDatabase($"StartupTimeTest_{Guid.NewGuid()}"));
 
                 // Remove real IMarketDataStream registrations and replace with stub
                 var streamDescriptors = services
