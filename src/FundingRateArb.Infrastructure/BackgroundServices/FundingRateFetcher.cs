@@ -242,6 +242,7 @@ public class FundingRateFetcher : BackgroundService
         catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
         {
             _logger.LogWarning(ex, "Aggregates already exist for hour {Hour:u}, skipping insertion", previousHourStart);
+            return;
         }
 
         // Purge aggregates older than 30 days (idempotent, always safe)
