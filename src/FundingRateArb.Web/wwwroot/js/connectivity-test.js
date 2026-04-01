@@ -6,34 +6,37 @@
     var btnTestAll = document.getElementById("btnTestAll");
     var btnClearLog = document.getElementById("btnClearLog");
     var testButtons = document.querySelectorAll(".btn-test");
-    var antiForgeryToken = document.querySelector('input[name="__RequestVerificationToken"]')?.value
-        || document.querySelector('meta[name="csrf-token"]')?.content;
-
-    // Get anti-forgery token from cookie if not found in form
     function getAntiForgeryToken() {
-        if (antiForgeryToken) return antiForgeryToken;
-        var cookies = document.cookie.split(";");
-        for (var i = 0; i < cookies.length; i++) {
-            var cookie = cookies[i].trim();
-            if (cookie.startsWith(".AspNetCore.Antiforgery.") || cookie.startsWith("XSRF-TOKEN")) {
-                return cookie.split("=")[1];
-            }
-        }
-        return "";
+        return document.querySelector('input[name="__RequestVerificationToken"]')?.value || "";
     }
 
     // Active exchange IDs for selected user
-    var userExchangeIds = [];
+    var userExchangeIds = new Set();
     var isRunning = false;
+
+    function isScrolledToBottom(el) {
+        return el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+    }
 
     function appendLog(exchangeName, message, cssClass) {
         var now = new Date();
         var timestamp = now.toLocaleTimeString("en-GB", { hour12: false });
         var line = document.createElement("span");
-        line.className = cssClass || "";
+        line.setAttribute("style", cssClass || "");
         line.textContent = "[" + timestamp + "] [" + exchangeName + "] " + message + "\n";
+        var wasAtBottom = isScrolledToBottom(logPanel);
         logPanel.appendChild(line);
-        logPanel.scrollTop = logPanel.scrollHeight;
+        // Cap log entries to prevent unbounded DOM growth (batch removal to avoid layout thrash)
+        var excess = logPanel.childElementCount - 500;
+        if (excess > 0) {
+            var range = document.createRange();
+            range.setStartBefore(logPanel.firstChild);
+            range.setEndAfter(logPanel.childNodes[excess - 1]);
+            range.deleteContents();
+        }
+        if (wasAtBottom) {
+            logPanel.scrollTop = logPanel.scrollHeight;
+        }
     }
 
     function setButtonState(btn, state) {
@@ -85,11 +88,11 @@
     function updateButtonAvailability() {
         testButtons.forEach(function (btn) {
             var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
-            var hasCredentials = userExchangeIds.indexOf(exchangeId) >= 0;
+            var hasCredentials = userExchangeIds.has(exchangeId);
             var userSelected = userSelect.value !== "";
             btn.disabled = !userSelected || !hasCredentials || isRunning;
         });
-        btnTestAll.disabled = !userSelect.value || isRunning || userExchangeIds.length === 0;
+        btnTestAll.disabled = !userSelect.value || isRunning || userExchangeIds.size === 0;
     }
 
     // Fetch user's exchanges when user selection changes
@@ -98,7 +101,7 @@
 
         // Reset all statuses
         testButtons.forEach(function (btn) { setButtonState(btn, "idle"); });
-        userExchangeIds = [];
+        userExchangeIds = new Set();
 
         if (!userId) {
             updateButtonAvailability();
@@ -106,9 +109,12 @@
         }
 
         fetch("/Admin/ConnectivityTest/GetUserExchanges?userId=" + encodeURIComponent(userId))
-            .then(function (res) { return res.json(); })
+            .then(function (res) {
+                if (!res.ok) throw new Error("Server returned " + res.status);
+                return res.json();
+            })
             .then(function (exchangeIds) {
-                userExchangeIds = exchangeIds;
+                userExchangeIds = new Set(exchangeIds);
                 updateButtonAvailability();
             })
             .catch(function (err) {
@@ -130,15 +136,16 @@
         var formData = new FormData();
         formData.append("userId", userId);
         formData.append("exchangeId", exchangeId);
+        formData.append("__RequestVerificationToken", getAntiForgeryToken());
 
         return fetch("/Admin/ConnectivityTest/RunTest", {
             method: "POST",
-            headers: {
-                "RequestVerificationToken": getAntiForgeryToken()
-            },
             body: formData
         })
-        .then(function (res) { return res.json(); })
+        .then(function (res) {
+            if (!res.ok) throw new Error("Server returned " + res.status);
+            return res.json();
+        })
         .then(function (result) {
             if (result.success) {
                 setButtonState(btn, "pass");
@@ -167,34 +174,37 @@
         });
     });
 
-    // Test All button
+    // Test All button — wrapped in try/finally to guarantee isRunning reset
     btnTestAll.addEventListener("click", async function () {
         if (isRunning) return;
         isRunning = true;
         updateButtonAvailability();
 
-        appendLog("System", "Starting test for all exchanges...", "color: #64b5f6; font-weight: bold;");
+        try {
+            appendLog("System", "Starting test for all exchanges...", "color: #64b5f6; font-weight: bold;");
 
-        var enabledButtons = [];
-        testButtons.forEach(function (btn) {
-            var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
-            if (userExchangeIds.indexOf(exchangeId) >= 0) {
-                enabledButtons.push(btn);
+            var enabledButtons = [];
+            testButtons.forEach(function (btn) {
+                var exchangeId = parseInt(btn.getAttribute("data-exchange-id"), 10);
+                if (userExchangeIds.has(exchangeId)) {
+                    enabledButtons.push(btn);
+                }
+            });
+
+            for (var i = 0; i < enabledButtons.length; i++) {
+                await runTest(enabledButtons[i]);
             }
-        });
 
-        for (var i = 0; i < enabledButtons.length; i++) {
-            await runTest(enabledButtons[i]);
+            appendLog("System", "All tests complete.", "color: #64b5f6; font-weight: bold;");
+        } finally {
+            isRunning = false;
+            updateButtonAvailability();
         }
-
-        appendLog("System", "All tests complete.", "color: #64b5f6; font-weight: bold;");
-        isRunning = false;
-        updateButtonAvailability();
     });
 
     // Clear log
     btnClearLog.addEventListener("click", function () {
-        logPanel.innerHTML = "";
+        logPanel.replaceChildren();
     });
 
     // SignalR handler for real-time log messages

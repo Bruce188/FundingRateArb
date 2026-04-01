@@ -1,8 +1,8 @@
-@using Microsoft.AspNetCore.Identity
 @{
     ViewData["Title"] = "Connectivity Test";
-    var users = (List<IdentityUser>)ViewBag.Users;
+    var users = (IEnumerable<dynamic>)ViewBag.Users;
     var exchanges = (List<FundingRateArb.Domain.Entities.Exchange>)ViewBag.Exchanges;
+    var usersTruncated = (bool)(ViewBag.UsersTruncated ?? false);
 }
 
 <div class="d-flex justify-content-between align-items-center mb-3">
@@ -24,6 +24,12 @@
                         <option value="@user.Id">@user.UserName (@user.Email)</option>
                     }
                 </select>
+                @if (usersTruncated)
+                {
+                    <div class="form-text text-warning">
+                        <i class="bi bi-exclamation-triangle"></i> Showing first 500 users. Not all users are listed.
+                    </div>
+                }
             </div>
             <div class="col-md-6 mt-2 mt-md-0">
                 <button id="btnTestAll" class="btn btn-primary" disabled>
@@ -68,6 +74,8 @@
         <pre id="logPanel" class="mb-0 p-3" style="background-color: #1e1e1e; color: #d4d4d4; max-height: 400px; overflow-y: auto; font-size: 0.85rem; min-height: 100px; white-space: pre-wrap; word-break: break-word;"></pre>
     </div>
 </div>
+
+@Html.AntiForgeryToken()
 
 @section Scripts {
     <script src="~/js/connectivity-test.js"></script>
