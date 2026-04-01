@@ -191,9 +191,9 @@ public class FundingRateFetcher : BackgroundService
     /// At minute >= 5 of each hour, aggregates the previous hour's raw funding rate snapshots
     /// into hourly aggregates for 30-day extended retention. Also purges aggregates older than 30 days.
     /// </summary>
-    internal async Task TryAggregateHourlyAsync(IUnitOfWork uow, CancellationToken ct)
+    internal async Task TryAggregateHourlyAsync(IUnitOfWork uow, CancellationToken ct, DateTime? nowOverride = null)
     {
-        var now = DateTime.UtcNow;
+        var now = nowOverride ?? DateTime.UtcNow;
         if (now.Minute < 5)
         {
             return; // Wait until minute 5 to ensure all :00 snapshots are persisted
@@ -242,6 +242,7 @@ public class FundingRateFetcher : BackgroundService
         catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
         {
             _logger.LogWarning(ex, "Aggregates already exist for hour {Hour:u}, skipping insertion", previousHourStart);
+            _lastAggregatedHourUtc = previousHourStart;
             return;
         }
 

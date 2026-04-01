@@ -114,6 +114,9 @@ public class FundingRateFetcherTests
     [Fact]
     public async Task TryAggregateHourly_OnDuplicateKeyException_ReturnsEarlySkipsPurge()
     {
+        // Use a fixed time with Minute >= 5 to bypass the minute guard deterministically
+        var fixedNow = new DateTime(2026, 1, 15, 10, 10, 0, DateTimeKind.Utc);
+
         // Arrange: provide snapshots so aggregation is attempted
         var snapshot = new FundingRateSnapshot
         {
@@ -122,7 +125,7 @@ public class FundingRateFetcherTests
             RatePerHour = 0.001m,
             MarkPrice = 3000m,
             Volume24hUsd = 1_000_000m,
-            RecordedAt = DateTime.UtcNow.AddHours(-1),
+            RecordedAt = fixedNow.AddHours(-1),
         };
         _mockFundingRates
             .Setup(f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
@@ -134,18 +137,55 @@ public class FundingRateFetcherTests
             .ThrowsAsync(new Microsoft.EntityFrameworkCore.DbUpdateException(
                 "Duplicate key", new Exception("inner")));
 
-        // Act — call TryAggregateHourlyAsync directly (internal method)
-        // Note: if DateTime.UtcNow.Minute < 5, the method returns early before reaching the save path.
-        // This test is only meaningful when Minute >= 5, which is the case 55/60 of the time.
-        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None);
+        // Act — pass nowOverride to bypass the wall-clock minute guard
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
 
         // Assert: purge should NOT have been called — early return prevents it
-        if (DateTime.UtcNow.Minute >= 5)
+        _mockFundingRates.Verify(
+            f => f.PurgeAggregatesOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task TryAggregateHourly_OnDuplicateKeyException_PreventsRetryOnNextCycle()
+    {
+        // Use a fixed time with Minute >= 5 to bypass the minute guard deterministically
+        var fixedNow = new DateTime(2026, 1, 15, 10, 10, 0, DateTimeKind.Utc);
+
+        // Arrange: provide snapshots so aggregation is attempted
+        var snapshot = new FundingRateSnapshot
         {
-            _mockFundingRates.Verify(
-                f => f.PurgeAggregatesOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
-                Times.Never);
-        }
+            ExchangeId = 1,
+            AssetId = 1,
+            RatePerHour = 0.001m,
+            MarkPrice = 3000m,
+            Volume24hUsd = 1_000_000m,
+            RecordedAt = fixedNow.AddHours(-1),
+        };
+        _mockFundingRates
+            .Setup(f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { snapshot });
+
+        // SaveAsync throws DbUpdateException (duplicate key)
+        _mockUow
+            .Setup(u => u.SaveAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Microsoft.EntityFrameworkCore.DbUpdateException(
+                "Duplicate key", new Exception("inner")));
+
+        // Act — first call hits duplicate key and should mark hour as aggregated
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
+
+        // Reset SaveAsync to not throw (simulate next cycle)
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        // Second call with same hour — should skip because _lastAggregatedHourUtc was set
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
+
+        // Assert: GetSnapshotsInRangeAsync should only be called once (first attempt),
+        // because the second call exits early at the _lastAggregatedHourUtc guard
+        _mockFundingRates.Verify(
+            f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     // ── FetchAll_CallsAllThreeConnectors ───────────────────────────────────────
