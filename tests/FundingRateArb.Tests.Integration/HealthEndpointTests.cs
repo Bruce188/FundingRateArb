@@ -35,7 +35,7 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
         // With stub stream connected, expect 200
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().NotBeNullOrEmpty();
+        body.Should().Be("Healthy");
     }
 
     [Fact]
@@ -94,20 +94,8 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
 
                 services.AddSingleton<IMarketDataStream>(new StubMarketDataStream("TestExchange", true));
 
-                // Remove background hosted services that depend on exchange connectors
-                var hostedServiceTypes = new[]
-                {
-                    "MarketDataStreamManager",
-                    "FundingRateFetcher",
-                    "BotOrchestrator",
-                    "DailySummaryService"
-                };
-
-                var hostedDescriptors = services
-                    .Where(d => d.ServiceType == typeof(IHostedService)
-                             && d.ImplementationType != null
-                             && hostedServiceTypes.Contains(d.ImplementationType.Name))
-                    .ToList();
+                // Remove all background hosted services to avoid exchange/DB dependencies in tests
+                var hostedDescriptors = services.Where(d => d.ServiceType == typeof(IHostedService)).ToList();
                 foreach (var d in hostedDescriptors)
                 {
                     services.Remove(d);

@@ -457,8 +457,14 @@ try
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
-    app.MapHealthChecks("/healthz")
-        .RequireRateLimiting("general");
+    app.MapHealthChecks("/healthz", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+    {
+        ResponseWriter = async (context, report) =>
+        {
+            context.Response.ContentType = "text/plain";
+            await context.Response.WriteAsync(report.Status.ToString());
+        }
+    });
 
     app.MapHealthChecks("/health", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
     {

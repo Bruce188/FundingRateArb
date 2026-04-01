@@ -56,6 +56,30 @@ public class WebSocketStreamHealthCheckTests
         result.Status.Should().Be(HealthStatus.Healthy);
     }
 
+    [Fact]
+    public async Task CheckHealthAsync_SingleStreamConnected_ReturnsHealthy()
+    {
+        var stream = CreateMockStream("Exchange1", isConnected: true);
+        var sut = new WebSocketStreamHealthCheck(new[] { stream.Object });
+
+        var result = await sut.CheckHealthAsync(new HealthCheckContext());
+
+        result.Status.Should().Be(HealthStatus.Healthy);
+        result.Description.Should().Contain("1 stream connected");
+    }
+
+    [Fact]
+    public async Task CheckHealthAsync_SingleStreamDisconnected_ReturnsUnhealthy()
+    {
+        var stream = CreateMockStream("Exchange1", isConnected: false);
+        var sut = new WebSocketStreamHealthCheck(new[] { stream.Object });
+
+        var result = await sut.CheckHealthAsync(new HealthCheckContext());
+
+        result.Status.Should().Be(HealthStatus.Unhealthy);
+        result.Description.Should().Contain("1 stream disconnected");
+    }
+
     private static Mock<IMarketDataStream> CreateMockStream(string name, bool isConnected)
     {
         var mock = new Mock<IMarketDataStream>();

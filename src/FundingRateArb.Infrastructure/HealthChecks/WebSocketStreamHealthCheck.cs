@@ -36,13 +36,15 @@ public class WebSocketStreamHealthCheck : IHealthCheck
 
         if (disconnected.Count == 0)
         {
-            return Task.FromResult(HealthCheckResult.Healthy($"All {connected.Count} streams connected"));
+            var streamWord = connected.Count == 1 ? "stream" : "streams";
+            return Task.FromResult(HealthCheckResult.Healthy($"All {connected.Count} {streamWord} connected"));
         }
 
         if (connected.Count == 0)
         {
+            var streamWord = disconnected.Count == 1 ? "stream" : "streams";
             return Task.FromResult(HealthCheckResult.Unhealthy(
-                $"All {disconnected.Count} streams disconnected: {string.Join(", ", disconnected)}"));
+                $"All {disconnected.Count} {streamWord} disconnected: {string.Join(", ", disconnected)}"));
         }
 
         return Task.FromResult(HealthCheckResult.Degraded(
