@@ -26,9 +26,13 @@
         line.textContent = "[" + timestamp + "] [" + exchangeName + "] " + message + "\n";
         var wasAtBottom = isScrolledToBottom(logPanel);
         logPanel.appendChild(line);
-        // Cap log entries to prevent unbounded DOM growth
-        while (logPanel.childElementCount > 500) {
-            logPanel.removeChild(logPanel.firstChild);
+        // Cap log entries to prevent unbounded DOM growth (batch removal to avoid layout thrash)
+        var excess = logPanel.childElementCount - 500;
+        if (excess > 0) {
+            var range = document.createRange();
+            range.setStartBefore(logPanel.firstChild);
+            range.setEndAfter(logPanel.childNodes[excess - 1]);
+            range.deleteContents();
         }
         if (wasAtBottom) {
             logPanel.scrollTop = logPanel.scrollHeight;

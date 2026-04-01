@@ -58,9 +58,10 @@ public class ConnectivityTestService : IConnectivityTestService
         // Periodic purge: remove all expired cooldown entries to prevent unbounded growth
         var now = DateTime.UtcNow;
         var nowTicks = now.Ticks;
-        if (nowTicks - Interlocked.Read(ref _lastPurgeTicks) > PurgeInterval.Ticks)
+        var previousTicks = Interlocked.Read(ref _lastPurgeTicks);
+        if (nowTicks - previousTicks > PurgeInterval.Ticks
+            && Interlocked.CompareExchange(ref _lastPurgeTicks, nowTicks, previousTicks) == previousTicks)
         {
-            Interlocked.Exchange(ref _lastPurgeTicks, nowTicks);
             foreach (var kvp in _cooldowns)
             {
                 if (now - kvp.Value >= CooldownPeriod)
@@ -165,7 +166,7 @@ public class ConnectivityTestService : IConnectivityTestService
                 try
                 {
                     balance = await connector.GetAvailableBalanceAsync(ct);
-                    _logger.LogDebug("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+                    _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
                     await Log("Balance check OK");
                 }
                 catch (Exception ex)
@@ -184,12 +185,13 @@ public class ConnectivityTestService : IConnectivityTestService
                     await Log("Open failed — see server log for details");
                     return new ConnectivityTestResult(false, exchangeName, "Open failed — see server log for details");
                 }
-                _logger.LogInformation("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
+                _logger.LogDebug("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
                     exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
                 await Log("Open SUCCESS");
 
-                // After a successful open, use CancellationToken.None for settlement and close
-                // to prevent request cancellation (e.g., browser navigation) from stranding an open position.
+                // Settlement uses the caller's token for early cancellation (caught below),
+                // while close always uses CancellationToken.None to prevent request cancellation
+                // (e.g., browser navigation) from stranding an open position.
 
                 // Step 3 - Wait for settlement
                 await Log("Step 3: Waiting for settlement (2s)...");

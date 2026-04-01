@@ -683,6 +683,54 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
+    public async Task RunTest_DisposesConnector_AfterCompletion()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var mockDisposableConnector = new Mock<IExchangeConnector>();
+        var mockDisposable = mockDisposableConnector.As<IDisposable>();
+        mockDisposableConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockDisposableConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
+        mockDisposableConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockDisposableConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+        mockDisposable.Verify(d => d.Dispose(), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTest_DisposesConnector_AfterFailure()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var mockDisposableConnector = new Mock<IExchangeConnector>();
+        var mockDisposable = mockDisposableConnector.As<IDisposable>();
+        mockDisposableConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Connection refused"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockDisposableConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        mockDisposable.Verify(d => d.Dispose(), Times.Once);
+    }
+
+    [Fact]
     public async Task RunTest_CancellationDuringCloseRetry_StillRetriesWithNoneToken()
     {
         // After B1 fix: close uses CancellationToken.None, so request cancellation
@@ -721,9 +769,9 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("STRANDED POSITION");
         result.Balance.Should().BeNull();
-        // Both close attempts proceed despite request cancellation
+        // Both close attempts proceed despite request cancellation, using CancellationToken.None
         mockConnector.Verify(
-            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            c => c.ClosePositionAsync("ETH", Side.Long, It.Is<CancellationToken>(t => t == CancellationToken.None)),
             Times.Exactly(2));
     }
 }

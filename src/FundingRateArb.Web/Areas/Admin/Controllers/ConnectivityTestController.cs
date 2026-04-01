@@ -32,18 +32,24 @@ public class ConnectivityTestController : Controller
 
     public async Task<IActionResult> Index()
     {
-        var users = await _userManager.Users
+        var usersTask = _userManager.Users
             .OrderBy(u => u.UserName)
             .Select(u => new { u.Id, u.UserName, u.Email })
             .Take(500)
             .ToListAsync();
 
-        var exchanges = (await _uow.Exchanges.GetActiveAsync())
+        var exchangesTask = _uow.Exchanges.GetActiveAsync();
+
+        await Task.WhenAll(usersTask, exchangesTask);
+
+        var users = await usersTask;
+        var exchanges = (await exchangesTask)
             .Where(e => !e.IsDataOnly)
             .OrderBy(e => e.Name)
             .ToList();
 
         ViewBag.Users = users;
+        ViewBag.UsersTruncated = users.Count >= 500;
         ViewBag.Exchanges = exchanges;
 
         return View();
@@ -69,7 +75,9 @@ public class ConnectivityTestController : Controller
             return Unauthorized();
         }
 
-        // Validate that the target user actually exists
+        // Defense-in-depth: validate user exists at the controller level to return a clear
+        // 400 before invoking the service. The service also handles missing data gracefully,
+        // so this is an intentional extra round trip for better error responses.
         var targetUser = await _userManager.FindByIdAsync(userId);
         if (targetUser is null)
         {
@@ -90,7 +98,8 @@ public class ConnectivityTestController : Controller
             return Json(Array.Empty<int>());
         }
 
-        // Validate that the target user actually exists
+        // Defense-in-depth: validate user exists before querying credentials.
+        // The service handles missing data gracefully, but this gives a clear 400.
         var targetUser = await _userManager.FindByIdAsync(userId);
         if (targetUser is null)
         {
