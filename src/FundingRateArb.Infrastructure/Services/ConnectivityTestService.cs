@@ -124,6 +124,22 @@ public class ConnectivityTestService : IConnectivityTestService
             await Log("Decrypting credentials...");
             var decrypted = _userSettings.DecryptCredential(credential);
 
+            // Cooldown gate before connector creation to prevent concurrent duplicate trades.
+            // If the factory returns null, we remove the key so the slot isn't consumed.
+            if (!_cooldowns.TryAdd(cooldownKey, now))
+            {
+                // Another concurrent request claimed the slot; re-check expiry
+                if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
+                {
+                    var remaining = CooldownPeriod - (now - existingTs);
+                    return new ConnectivityTestResult(false, exchangeName,
+                        $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+                }
+
+                // Expired entry from concurrent path — overwrite
+                _cooldowns[cooldownKey] = now;
+            }
+
             await Log("Creating exchange connector...");
             var connector = await _connectorFactory.CreateForUserAsync(
                 exchangeName,
@@ -136,29 +152,14 @@ public class ConnectivityTestService : IConnectivityTestService
 
             if (connector is null)
             {
+                // Remove cooldown entry so a failed factory call doesn't consume the slot
+                _cooldowns.TryRemove(cooldownKey, out _);
                 await Log("Failed to create connector - invalid credentials");
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
 
             try
             {
-                // Cooldown is recorded after connector creation so that a failed factory call
-                // (e.g., null connector due to bad credentials) does not consume the cooldown slot.
-                // This intentional TOCTOU gap means duplicate DB lookups are possible under
-                // concurrency, but the trade-off avoids penalizing users for transient failures.
-                if (!_cooldowns.TryAdd(cooldownKey, now))
-                {
-                    // Another concurrent request claimed the slot; re-check expiry
-                    if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
-                    {
-                        var remaining = CooldownPeriod - (now - existingTs);
-                        return new ConnectivityTestResult(false, exchangeName,
-                            $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
-                    }
-
-                    // Expired entry from concurrent path — overwrite
-                    _cooldowns[cooldownKey] = now;
-                }
 
                 // Step 1 - Balance check
                 await Log("Step 1: Checking available balance...");

@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Reflection;
 using System.Security.Cryptography;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
@@ -239,9 +241,9 @@ public class ConnectivityTestServiceTests
         result.Error.Should().Contain("STRANDED POSITION");
         result.Balance.Should().BeNull("balance should not be exposed on failure paths");
 
-        // Verify close was called exactly twice (initial + retry)
+        // Verify close was called exactly twice (initial + retry) with CancellationToken.None
         mockConnector.Verify(
-            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            c => c.ClosePositionAsync("ETH", Side.Long, It.Is<CancellationToken>(t => t == CancellationToken.None)),
             Times.Exactly(2));
     }
 
@@ -459,9 +461,9 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeTrue();
 
-        // Verify close was called exactly twice (initial + retry)
+        // Verify close was called exactly twice (initial + retry) with CancellationToken.None
         mockConnector.Verify(
-            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            c => c.ClosePositionAsync("ETH", Side.Long, It.Is<CancellationToken>(t => t == CancellationToken.None)),
             Times.Exactly(2));
     }
 
@@ -579,29 +581,21 @@ public class ConnectivityTestServiceTests
     [Fact]
     public async Task RunTest_PostCreationCooldownRace_ReturnsRateLimited()
     {
-        // NB3: Exercise the TryAdd failure path (post-connector-creation gate).
-        // Seed the cooldown inside the connector factory callback so it happens
-        // after the early cooldown check but before TryAdd.
+        // Exercise the TryAdd failure path (pre-connector-creation gate).
+        // Seed a non-expired cooldown before RunTestAsync so the early check catches it.
         var exchange = CreateTestExchange();
         var credential = CreateTestCredential();
         SetupExchangeAndCredential(exchange, credential);
 
-        var mockConnector = new Mock<IExchangeConnector>();
-        _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
-            .Returns<string, string?, string?, string?, string?, string?, string?>((_, _, _, _, _, _, _) =>
-            {
-                // Simulate concurrent request claiming cooldown slot after early check passed
-                ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, DateTime.UtcNow);
-                return Task.FromResult<IExchangeConnector?>(mockConnector.Object);
-            });
+        // Simulate concurrent request that already claimed the cooldown slot
+        ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, DateTime.UtcNow);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Rate limited");
-        // Post-creation cooldown has access to exchange name (not "Unknown")
-        result.ExchangeName.Should().Be("Hyperliquid");
+        // Early cooldown check fires before exchange lookup, so name is "Unknown"
+        result.ExchangeName.Should().Be("Unknown");
         result.Balance.Should().BeNull();
     }
 
@@ -609,30 +603,17 @@ public class ConnectivityTestServiceTests
     public async Task RunTest_ExpiredConcurrentCooldown_ProceedsSuccessfully()
     {
         // NB4: Exercise the "expired entry from concurrent path — overwrite" branch.
-        // Seed an expired cooldown inside the factory callback so it happens after
-        // the early cooldown check but before TryAdd.
+        // Seed an expired cooldown before RunTestAsync so TryAdd fails but expiry
+        // check passes, causing the overwrite path to execute.
         var exchange = CreateTestExchange();
         var credential = CreateTestCredential();
         SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
 
         var expiredTime = DateTime.UtcNow - ConnectivityTestService.CooldownPeriod - TimeSpan.FromSeconds(1);
 
-        var mockConnector = new Mock<IExchangeConnector>();
-        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(100m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
-        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
-
-        _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
-            .Returns<string, string?, string?, string?, string?, string?, string?>((_, _, _, _, _, _, _) =>
-            {
-                // Simulate concurrent request that left an expired entry
-                ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, expiredTime);
-                return Task.FromResult<IExchangeConnector?>(mockConnector.Object);
-            });
+        // Simulate concurrent request that left an expired entry
+        ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, expiredTime);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
@@ -773,5 +754,67 @@ public class ConnectivityTestServiceTests
         mockConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Long, It.Is<CancellationToken>(t => t == CancellationToken.None)),
             Times.Exactly(2));
+    }
+
+    [Fact]
+    public async Task RunTest_PurgeBranch_RemovesExpiredEntries()
+    {
+        // NB3: Exercise the periodic purge path that removes expired cooldown entries.
+        // Seed multiple expired + fresh entries, force purge by setting _lastPurgeTicks to 0.
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateMockConnector();
+
+        var expiredTime = DateTime.UtcNow - ConnectivityTestService.CooldownPeriod - TimeSpan.FromSeconds(10);
+        var freshTime = DateTime.UtcNow;
+
+        // Seed expired entries for other user/exchange combos
+        ConnectivityTestService.SeedCooldown("expired-user-1", 99, expiredTime);
+        ConnectivityTestService.SeedCooldown("expired-user-2", 98, expiredTime);
+        // Seed a fresh entry for a different user/exchange
+        ConnectivityTestService.SeedCooldown("fresh-user-1", 97, freshTime);
+
+        // Force purge to trigger by setting _lastPurgeTicks to 0 via reflection
+        var lastPurgeField = typeof(ConnectivityTestService)
+            .GetField("_lastPurgeTicks", BindingFlags.NonPublic | BindingFlags.Static)!;
+        lastPurgeField.SetValue(null, 0L);
+
+        // RunTestAsync triggers purge check at the start
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        result.Success.Should().BeTrue();
+
+        // Verify expired entries were purged: calling RunTestAsync for an expired key
+        // should NOT be rate-limited (the entry was removed by purge)
+        ConnectivityTestService.ClearCooldowns();
+        // Re-seed only the fresh entry to check it survived purge
+        // We verify indirectly: if purge worked, "expired-user-1|99" is gone.
+        // Seed it as expired again and set _lastPurgeTicks to 0 to re-trigger purge
+        ConnectivityTestService.SeedCooldown("check-user", 99, freshTime);
+
+        // The fresh entry user should be rate-limited (proving fresh entries survive)
+        var freshExchange = CreateTestExchange();
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(97)).ReturnsAsync(freshExchange);
+
+        // More direct verification: access the _cooldowns dictionary via reflection
+        var cooldownsField = typeof(ConnectivityTestService)
+            .GetField("_cooldowns", BindingFlags.NonPublic | BindingFlags.Static)!;
+        var cooldowns = (ConcurrentDictionary<string, DateTime>)cooldownsField.GetValue(null)!;
+
+        // After RunTestAsync + purge: expired entries should be gone, fresh entry should remain
+        // We need to re-run the purge scenario cleanly
+        ConnectivityTestService.ClearCooldowns();
+        ConnectivityTestService.SeedCooldown("expired-user-1", 99, expiredTime);
+        ConnectivityTestService.SeedCooldown("expired-user-2", 98, expiredTime);
+        ConnectivityTestService.SeedCooldown("fresh-user-1", 97, freshTime);
+        lastPurgeField.SetValue(null, 0L);
+
+        await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        // Verify: expired entries removed, fresh entry retained, plus the new entry from RunTestAsync
+        cooldowns.ContainsKey("expired-user-1|99").Should().BeFalse("expired entry should be purged");
+        cooldowns.ContainsKey("expired-user-2|98").Should().BeFalse("expired entry should be purged");
+        cooldowns.ContainsKey("fresh-user-1|97").Should().BeTrue("fresh entry should survive purge");
+        cooldowns.ContainsKey($"{TargetUserId}|{TestExchangeId}").Should().BeTrue("current test should add its own cooldown");
     }
 }

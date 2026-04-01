@@ -22,7 +22,7 @@
         var now = new Date();
         var timestamp = now.toLocaleTimeString("en-GB", { hour12: false });
         var line = document.createElement("span");
-        line.className = cssClass || "";
+        line.setAttribute("style", cssClass || "");
         line.textContent = "[" + timestamp + "] [" + exchangeName + "] " + message + "\n";
         var wasAtBottom = isScrolledToBottom(logPanel);
         logPanel.appendChild(line);
