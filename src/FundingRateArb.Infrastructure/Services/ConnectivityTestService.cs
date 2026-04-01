@@ -84,13 +84,9 @@ public class ConnectivityTestService : IConnectivityTestService
             _cooldowns.TryRemove(cooldownKey, out _);
         }
 
-        // Parallelize independent DB lookups
-        var exchangeTask = _uow.Exchanges.GetByIdAsync(exchangeId);
-        var credentialTask = _uow.UserCredentials.GetByUserAndExchangeAsync(targetUserId, exchangeId);
-        await Task.WhenAll(exchangeTask, credentialTask);
-
-        var exchange = await exchangeTask;
-        var credential = await credentialTask;
+        // Sequential DB lookups — EF Core DbContext is not thread-safe
+        var exchange = await _uow.Exchanges.GetByIdAsync(exchangeId);
+        var credential = await _uow.UserCredentials.GetByUserAndExchangeAsync(targetUserId, exchangeId);
 
         if (exchange is null)
         {
