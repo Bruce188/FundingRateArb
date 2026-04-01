@@ -24,6 +24,12 @@ public class ConnectivityTestService : IConnectivityTestService
     /// </summary>
     internal static void ClearCooldowns() => _cooldowns.Clear();
 
+    /// <summary>
+    /// Seeds a cooldown entry. Used by unit tests to exercise concurrent cooldown paths.
+    /// </summary>
+    internal static void SeedCooldown(string targetUserId, int exchangeId, DateTime timestamp)
+        => _cooldowns[$"{targetUserId}|{exchangeId}"] = timestamp;
+
     private readonly IUserSettingsService _userSettings;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IUnitOfWork _uow;
@@ -47,6 +53,8 @@ public class ConnectivityTestService : IConnectivityTestService
     public async Task<ConnectivityTestResult> RunTestAsync(
         string adminUserId, string targetUserId, int exchangeId, CancellationToken ct = default)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(adminUserId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetUserId);
         // Periodic purge: remove all expired cooldown entries to prevent unbounded growth
         var now = DateTime.UtcNow;
         var nowTicks = now.Ticks;
@@ -61,7 +69,7 @@ public class ConnectivityTestService : IConnectivityTestService
         }
 
         // Rate-limit: enforce per-(targetUserId, exchangeId) cooldown using atomic CAS
-        var cooldownKey = $"{targetUserId}:{exchangeId}";
+        var cooldownKey = $"{targetUserId}|{exchangeId}";
         if (_cooldowns.TryGetValue(cooldownKey, out var lastRun))
         {
             if (now - lastRun < CooldownPeriod)
@@ -131,82 +139,89 @@ public class ConnectivityTestService : IConnectivityTestService
                 return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
             }
 
-            // Cooldown is recorded after connector creation so that a failed factory call
-            // (e.g., null connector due to bad credentials) does not consume the cooldown slot.
-            // This intentional TOCTOU gap means duplicate DB lookups are possible under
-            // concurrency, but the trade-off avoids penalizing users for transient failures.
-            if (!_cooldowns.TryAdd(cooldownKey, now))
-            {
-                // Another concurrent request claimed the slot; re-check expiry
-                if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
-                {
-                    var remaining = CooldownPeriod - (now - existingTs);
-                    return new ConnectivityTestResult(false, exchangeName,
-                        $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
-                }
-
-                // Expired entry from concurrent path — overwrite
-                _cooldowns[cooldownKey] = now;
-            }
-
-            // Step 1 - Balance check
-            await Log("Step 1: Checking available balance...");
-            decimal balance;
             try
             {
-                balance = await connector.GetAvailableBalanceAsync(ct);
-                _logger.LogDebug("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
-                await Log("Balance check OK");
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Balance check failed for {Exchange}", exchangeName);
-                await Log("Balance check failed — see server log for details");
-                return new ConnectivityTestResult(false, exchangeName, "Balance check failed — see server log for details");
-            }
+                // Cooldown is recorded after connector creation so that a failed factory call
+                // (e.g., null connector due to bad credentials) does not consume the cooldown slot.
+                // This intentional TOCTOU gap means duplicate DB lookups are possible under
+                // concurrency, but the trade-off avoids penalizing users for transient failures.
+                if (!_cooldowns.TryAdd(cooldownKey, now))
+                {
+                    // Another concurrent request claimed the slot; re-check expiry
+                    if (_cooldowns.TryGetValue(cooldownKey, out var existingTs) && now - existingTs < CooldownPeriod)
+                    {
+                        var remaining = CooldownPeriod - (now - existingTs);
+                        return new ConnectivityTestResult(false, exchangeName,
+                            $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+                    }
 
-            // Step 2 - Open position
-            await Log("Step 2: Opening $5 ETH Long 1x position...");
-            var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, ct);
-            if (!openResult.Success)
-            {
-                _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
-                await Log("Open failed — see server log for details");
-                return new ConnectivityTestResult(false, exchangeName, "Open failed — see server log for details", balance);
-            }
-            _logger.LogInformation("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
-                exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
-            await Log("Open SUCCESS");
+                    // Expired entry from concurrent path — overwrite
+                    _cooldowns[cooldownKey] = now;
+                }
 
-            // Step 3 - Wait for settlement
-            await Log("Step 3: Waiting for settlement (2s)...");
-            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                // Step 1 - Balance check
+                await Log("Step 1: Checking available balance...");
+                decimal balance;
+                try
+                {
+                    balance = await connector.GetAvailableBalanceAsync(ct);
+                    _logger.LogDebug("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+                    await Log("Balance check OK");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Balance check failed for {Exchange}", exchangeName);
+                    await Log("Balance check failed — see server log for details");
+                    return new ConnectivityTestResult(false, exchangeName, "Balance check failed — see server log for details");
+                }
 
-            // Step 4 - Close position (with retry on failure)
-            await Log("Step 4: Closing position...");
-            var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
-            if (!closeResult.Success)
-            {
-                _logger.LogWarning("Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
-                await Log("Close failed — retrying in 3 seconds...");
-                await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                // Step 2 - Open position
+                await Log("Step 2: Opening $5 ETH Long 1x position...");
+                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, ct);
+                if (!openResult.Success)
+                {
+                    _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
+                    await Log("Open failed — see server log for details");
+                    return new ConnectivityTestResult(false, exchangeName, "Open failed — see server log for details");
+                }
+                _logger.LogInformation("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
+                    exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
+                await Log("Open SUCCESS");
 
-                closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
+                // Step 3 - Wait for settlement
+                await Log("Step 3: Waiting for settlement (2s)...");
+                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                // Step 4 - Close position (with retry on failure)
+                await Log("Step 4: Closing position...");
+                var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
                 if (!closeResult.Success)
                 {
-                    _logger.LogError("Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",
-                        exchangeName, closeResult.Error);
-                    await Log("STRANDED POSITION — close retry failed. Manual intervention required!");
-                    return new ConnectivityTestResult(false, exchangeName,
-                        "STRANDED POSITION — close failed after retry. Manual intervention required!", balance);
-                }
-            }
-            _logger.LogInformation("Close succeeded for {Exchange}: OrderId={OrderId}",
-                exchangeName, closeResult.OrderId);
-            await Log("Close SUCCESS");
+                    _logger.LogWarning("Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
+                    await Log("Close failed — retrying in 3 seconds...");
+                    await Task.Delay(TimeSpan.FromSeconds(3), ct);
 
-            await Log("PASS - All steps completed successfully");
-            return new ConnectivityTestResult(true, exchangeName, null, null);
+                    closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
+                    if (!closeResult.Success)
+                    {
+                        _logger.LogError("Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",
+                            exchangeName, closeResult.Error);
+                        await Log("STRANDED POSITION — close retry failed. Manual intervention required!");
+                        return new ConnectivityTestResult(false, exchangeName,
+                            "STRANDED POSITION — close failed after retry. Manual intervention required!");
+                    }
+                }
+                _logger.LogInformation("Close succeeded for {Exchange}: OrderId={OrderId}",
+                    exchangeName, closeResult.OrderId);
+                await Log("Close SUCCESS");
+
+                await Log("PASS - All steps completed successfully");
+                return new ConnectivityTestResult(true, exchangeName, null, null);
+            }
+            finally
+            {
+                (connector as IDisposable)?.Dispose();
+            }
         }
         catch (Exception ex)
         {

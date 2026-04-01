@@ -132,12 +132,10 @@
         var formData = new FormData();
         formData.append("userId", userId);
         formData.append("exchangeId", exchangeId);
+        formData.append("__RequestVerificationToken", getAntiForgeryToken());
 
         return fetch("/Admin/ConnectivityTest/RunTest", {
             method: "POST",
-            headers: {
-                "RequestVerificationToken": getAntiForgeryToken()
-            },
             body: formData
         })
         .then(function (res) {

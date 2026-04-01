@@ -199,7 +199,7 @@ public class ConnectivityTestServiceTests
         // Sanitized: should not contain raw SDK error
         result.Error.Should().Contain("Open failed");
         result.Error.Should().NotContain("Insufficient margin");
-        result.Balance.Should().Be(100m);
+        result.Balance.Should().BeNull("balance should not be exposed on failure paths");
 
         // Verify ClosePositionAsync was never called
         mockConnector.Verify(
@@ -237,7 +237,7 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("STRANDED POSITION");
-        result.Balance.Should().Be(100m);
+        result.Balance.Should().BeNull("balance should not be exposed on failure paths");
 
         // Verify close was called exactly twice (initial + retry)
         mockConnector.Verify(
@@ -375,6 +375,8 @@ public class ConnectivityTestServiceTests
         var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
         secondResult.Success.Should().BeFalse();
         secondResult.Error.Should().Contain("Rate limited");
+        // NB5: Early cooldown uses "Unknown" since exchange lookup is skipped
+        secondResult.ExchangeName.Should().Be("Unknown");
     }
 
     [Fact]
@@ -543,5 +545,146 @@ public class ConnectivityTestServiceTests
             f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task RunTest_PostCreationCooldownRace_ReturnsRateLimited()
+    {
+        // NB3: Exercise the TryAdd failure path (post-connector-creation gate).
+        // Seed the cooldown inside the connector factory callback so it happens
+        // after the early cooldown check but before TryAdd.
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Returns<string, string?, string?, string?, string?, string?, string?>((_, _, _, _, _, _, _) =>
+            {
+                // Simulate concurrent request claiming cooldown slot after early check passed
+                ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, DateTime.UtcNow);
+                return Task.FromResult<IExchangeConnector?>(mockConnector.Object);
+            });
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Rate limited");
+        // Post-creation cooldown has access to exchange name (not "Unknown")
+        result.ExchangeName.Should().Be("Hyperliquid");
+    }
+
+    [Fact]
+    public async Task RunTest_ExpiredConcurrentCooldown_ProceedsSuccessfully()
+    {
+        // NB4: Exercise the "expired entry from concurrent path — overwrite" branch.
+        // Seed an expired cooldown inside the factory callback so it happens after
+        // the early cooldown check but before TryAdd.
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var expiredTime = DateTime.UtcNow - ConnectivityTestService.CooldownPeriod - TimeSpan.FromSeconds(1);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
+        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Returns<string, string?, string?, string?, string?, string?, string?>((_, _, _, _, _, _, _) =>
+            {
+                // Simulate concurrent request that left an expired entry
+                ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, expiredTime);
+                return Task.FromResult<IExchangeConnector?>(mockConnector.Object);
+            });
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue("expired concurrent cooldown entry should be overwritten");
+    }
+
+    [Fact]
+    public async Task RunTest_ForwardsAllCredentialFields()
+    {
+        // NB8: Verify correct forwarding when all six credential tuple fields are populated
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(TestExchangeId)).ReturnsAsync(exchange);
+        _mockCredentialRepo
+            .Setup(r => r.GetByUserAndExchangeAsync(TargetUserId, TestExchangeId))
+            .ReturnsAsync(credential);
+
+        _mockUserSettings
+            .Setup(u => u.DecryptCredential(credential))
+            .Returns(("api-key", "api-secret", null, null, "sub-account", "key-idx"));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(50m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
+        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx"))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+
+        // Verify CreateForUserAsync received exact credential values
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx"),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTest_CancellationDuringCloseRetry_ReturnsError()
+    {
+        // NB9: Open succeeds, first close fails, cancellation during retry delay
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        var cts = new CancellationTokenSource();
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto
+            {
+                Success = true,
+                OrderId = "order-123",
+                FilledPrice = 3000m,
+                FilledQuantity = 0.00167m
+            });
+        // First close fails, then cancel token during the retry delay
+        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .Returns<string, Side, CancellationToken>((_, _, _) =>
+            {
+                cts.Cancel(); // Cancel so the 3s retry delay throws TaskCanceledException
+                return Task.FromResult(new OrderResultDto { Success = false, Error = "Timeout" });
+            });
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
+
+        result.Success.Should().BeFalse();
+        // Close was called once (the initial attempt); the retry delay was cancelled
+        mockConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

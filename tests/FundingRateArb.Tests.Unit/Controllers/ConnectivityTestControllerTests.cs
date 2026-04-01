@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Claims;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Interfaces;
@@ -233,5 +234,65 @@ public class ConnectivityTestControllerTests
         exchanges.Should().HaveCount(2);
         exchanges.Should().OnlyContain(e => !e.IsDataOnly);
         exchanges.Select(e => e.Name).Should().BeEquivalentTo("Hyperliquid", "Lighter");
+
+        // N5: Verify ViewBag.Users is populated
+        var viewBagUsers = (IEnumerable<dynamic>)controller.ViewBag.Users;
+        ((IEnumerable<dynamic>)viewBagUsers).Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task RunTest_ValidAdmin_ForwardsCancellationToken()
+    {
+        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
+        var expectedResult = new ConnectivityTestResult(true, "Hyperliquid");
+        _mockConnectivityService
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
+
+        using var cts = new CancellationTokenSource();
+        var controller = CreateController(CreateAdminUser());
+        controller.ControllerContext.HttpContext.RequestAborted = cts.Token;
+
+        var result = await controller.RunTest("user-1", 1);
+
+        _mockConnectivityService.Verify(
+            s => s.RunTestAsync("admin-123", "user-1", 1, It.Is<CancellationToken>(t => t == cts.Token)),
+            Times.Once);
+    }
+
+    [Fact]
+    public void RunTest_HasAntiForgeryAttribute()
+    {
+        var method = typeof(ConnectivityTestController)
+            .GetMethod(nameof(ConnectivityTestController.RunTest));
+
+        method.Should().NotBeNull();
+        method!.GetCustomAttributes<ValidateAntiForgeryTokenAttribute>()
+            .Should().ContainSingle("RunTest must be protected by ValidateAntiForgeryToken");
+    }
+
+    [Fact]
+    public async Task GetUserExchanges_ValidUserNoCredentials_ReturnsEmptyArray()
+    {
+        var targetUser = new IdentityUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user-1"))
+            .ReturnsAsync(new List<UserExchangeCredential>());
+
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.GetUserExchanges("user-1");
+
+        var jsonResult = result.Should().BeOfType<JsonResult>().Subject;
+        var exchangeIds = jsonResult.Value.Should().BeAssignableTo<List<int>>().Subject;
+        exchangeIds.Should().BeEmpty();
     }
 }
