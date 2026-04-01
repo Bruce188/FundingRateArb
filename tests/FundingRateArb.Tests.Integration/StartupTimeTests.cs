@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using FluentAssertions;
@@ -19,12 +19,12 @@ using Microsoft.Extensions.Options;
 namespace FundingRateArb.Tests.Integration;
 
 [Collection("IntegrationTests")]
-public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestFactory>, IDisposable
+public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactory>, IDisposable
 {
-    private readonly HealthTestFactory _factory;
+    private readonly StartupTestFactory _factory;
     private readonly HttpClient _client;
 
-    public HealthEndpointTests(HealthTestFactory factory)
+    public StartupTimeTests(StartupTestFactory factory)
     {
         _factory = factory;
         _client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -34,57 +34,15 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
     }
 
     [Fact]
-    public async Task GetHealthz_ReturnsOk_WithoutAuth()
+    public async Task AppStartsAndRespondsWithinTimeout()
     {
+        var sw = Stopwatch.StartNew();
         var response = await _client.GetAsync("/healthz");
-
-        // healthz returns aggregate status: 200 if Healthy/Degraded, 503 if Unhealthy
-        // With stub stream connected, expect 200
-        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
-        var body = await response.Content.ReadAsStringAsync();
-        body.Should().Be("Healthy");
-    }
-
-    [Fact]
-    public async Task GetHealth_RequiresAuthorization()
-    {
-        var response = await _client.GetAsync("/health");
-
-        // Unauthenticated request should be redirected to login (302)
-        response.StatusCode.Should().Be(System.Net.HttpStatusCode.Redirect);
-    }
-
-    [Fact]
-    public async Task GetHealth_Authenticated_ReturnsJsonWithExpectedStructure()
-    {
-        var client = _factory.WithWebHostBuilder(builder =>
-        {
-            builder.ConfigureServices(services =>
-            {
-                services.AddAuthentication("Test")
-                    .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("Test", _ => { });
-            });
-        }).CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false
-        });
-
-        client.DefaultRequestHeaders.Add("X-Test-Auth", "true");
-        var response = await client.GetAsync("/health");
+        sw.Stop();
 
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
-        response.Content.Headers.ContentType!.MediaType.Should().Be("application/json");
-
-        var json = await response.Content.ReadFromJsonAsync<HealthResponse>();
-        json.Should().NotBeNull();
-        json!.Status.Should().NotBeNullOrEmpty();
-        json.TotalDuration.Should().BeGreaterOrEqualTo(0);
-        json.Entries.Should().NotBeNull();
-        json.Entries.Should().ContainSingle(e => e.Name == "websocket-streams");
-        var wsEntry = json.Entries.First(e => e.Name == "websocket-streams");
-        wsEntry.Status.Should().NotBeNullOrEmpty();
-        wsEntry.Description.Should().NotBeNullOrEmpty();
-        wsEntry.Duration.Should().BeGreaterOrEqualTo(0);
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(30),
+            "app should start and respond to healthz within 30 seconds");
     }
 
     public void Dispose()
@@ -92,7 +50,7 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
         _client.Dispose();
     }
 
-    public class HealthTestFactory : WebApplicationFactory<Program>
+    public class StartupTestFactory : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -121,7 +79,7 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
                 }
 
                 services.AddDbContext<AppDbContext>(options =>
-                    options.UseInMemoryDatabase($"HealthTest_{Guid.NewGuid()}"));
+                    options.UseInMemoryDatabase($"StartupTimeTest_{Guid.NewGuid()}"));
 
                 // Remove real IMarketDataStream registrations and replace with stub
                 var streamDescriptors = services
@@ -134,8 +92,10 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
 
                 services.AddSingleton<IMarketDataStream>(new StubMarketDataStream("TestExchange", true));
 
-                // Remove all background hosted services to avoid exchange/DB dependencies in tests
-                var hostedDescriptors = services.Where(d => d.ServiceType == typeof(IHostedService)).ToList();
+                // Remove all background hosted services to isolate startup time
+                var hostedDescriptors = services
+                    .Where(d => d.ServiceType == typeof(IHostedService))
+                    .ToList();
                 foreach (var d in hostedDescriptors)
                 {
                     services.Remove(d);
@@ -150,33 +110,6 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
                     services.Remove(d);
                 }
             });
-        }
-    }
-
-    private sealed class TestAuthHandler : AuthenticationHandler<AuthenticationSchemeOptions>
-    {
-        public TestAuthHandler(
-            IOptionsMonitor<AuthenticationSchemeOptions> options,
-            ILoggerFactory logger,
-            UrlEncoder encoder)
-            : base(options, logger, encoder) { }
-
-        protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-        {
-            if (!Request.Headers.ContainsKey("X-Test-Auth"))
-            {
-                return Task.FromResult(AuthenticateResult.NoResult());
-            }
-
-            var claims = new[]
-            {
-                new Claim(ClaimTypes.Name, "testadmin"),
-                new Claim(ClaimTypes.Role, "Admin")
-            };
-            var identity = new ClaimsIdentity(claims, "Test");
-            var principal = new ClaimsPrincipal(identity);
-            var ticket = new AuthenticationTicket(principal, "Test");
-            return Task.FromResult(AuthenticateResult.Success(ticket));
         }
     }
 
@@ -200,15 +133,4 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
         public Task StopAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-
-    private sealed record HealthResponse(
-        string Status,
-        double TotalDuration,
-        HealthEntry[] Entries);
-
-    private sealed record HealthEntry(
-        string Name,
-        string Status,
-        string Description,
-        double Duration);
 }
