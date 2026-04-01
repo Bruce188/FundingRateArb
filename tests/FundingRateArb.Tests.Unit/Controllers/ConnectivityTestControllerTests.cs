@@ -7,6 +7,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Tests.Unit.Helpers;
 using FundingRateArb.Web.Areas.Admin.Controllers;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -273,6 +274,18 @@ public class ConnectivityTestControllerTests
         method.Should().NotBeNull();
         method!.GetCustomAttributes<ValidateAntiForgeryTokenAttribute>()
             .Should().ContainSingle("RunTest must be protected by ValidateAntiForgeryToken");
+    }
+
+    [Fact]
+    public void ConnectivityTestController_HasAuthorizeAdminAttribute()
+    {
+        var authorizeAttr = typeof(ConnectivityTestController)
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: false)
+            .OfType<AuthorizeAttribute>()
+            .FirstOrDefault();
+
+        authorizeAttr.Should().NotBeNull("ConnectivityTestController must have [Authorize] attribute");
+        authorizeAttr!.Roles.Should().Be("Admin", "ConnectivityTestController must restrict access to Admin role");
     }
 
     [Fact]

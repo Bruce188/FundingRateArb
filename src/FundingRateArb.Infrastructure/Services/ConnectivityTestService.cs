@@ -188,20 +188,32 @@ public class ConnectivityTestService : IConnectivityTestService
                     exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
                 await Log("Open SUCCESS");
 
+                // After a successful open, use CancellationToken.None for settlement and close
+                // to prevent request cancellation (e.g., browser navigation) from stranding an open position.
+
                 // Step 3 - Wait for settlement
                 await Log("Step 3: Waiting for settlement (2s)...");
-                await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    _logger.LogWarning("Settlement wait cancelled for {Exchange} — proceeding to close", exchangeName);
+                    await Log("Settlement wait cancelled — proceeding to close position...");
+                }
 
                 // Step 4 - Close position (with retry on failure)
+                // Uses CancellationToken.None to ensure close is always attempted after open
                 await Log("Step 4: Closing position...");
-                var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
+                var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
                 if (!closeResult.Success)
                 {
                     _logger.LogWarning("Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
                     await Log("Close failed — retrying in 3 seconds...");
-                    await Task.Delay(TimeSpan.FromSeconds(3), ct);
+                    await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
 
-                    closeResult = await connector.ClosePositionAsync("ETH", Side.Long, ct);
+                    closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
                     if (!closeResult.Success)
                     {
                         _logger.LogError("Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",

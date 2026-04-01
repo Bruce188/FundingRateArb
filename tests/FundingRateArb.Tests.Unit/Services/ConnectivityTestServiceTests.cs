@@ -256,6 +256,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("Data-only");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -269,6 +270,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("credentials", "should mention missing credentials");
+        result.Balance.Should().BeNull();
 
         // Verify SignalR log was sent for early-exit path
         _mockDashboardClient.Verify(
@@ -290,6 +292,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Unknown");
         result.Error.Should().Contain("Exchange not found");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -307,6 +310,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("credentials");
+        result.Balance.Should().BeNull();
 
         // Verify SignalR log was sent for early-exit path
         _mockDashboardClient.Verify(
@@ -331,6 +335,7 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("invalid credentials");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -357,6 +362,7 @@ public class ConnectivityTestServiceTests
         result.Error.Should().Contain("Unexpected error");
         // Sanitized: should NOT contain raw exception message
         result.Error.Should().NotContain("Unexpected SDK error");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -377,6 +383,7 @@ public class ConnectivityTestServiceTests
         secondResult.Error.Should().Contain("Rate limited");
         // NB5: Early cooldown uses "Unknown" since exchange lookup is skipped
         secondResult.ExchangeName.Should().Be("Unknown");
+        secondResult.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -479,7 +486,7 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
-    public async Task RunTest_CancellationDuringSettlementWait_ReturnsFail()
+    public async Task RunTest_CancellationDuringSettlementWait_StillAttemptsClose()
     {
         var exchange = CreateTestExchange();
         var credential = CreateTestCredential();
@@ -504,6 +511,9 @@ public class ConnectivityTestServiceTests
                     FilledQuantity = 0.00167m
                 });
             });
+        // Close succeeds after cancellation-triggered attempt
+        mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "close-456" });
 
         _mockConnectorFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
@@ -511,12 +521,12 @@ public class ConnectivityTestServiceTests
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
 
-        result.Success.Should().BeFalse();
+        result.Success.Should().BeTrue("close should succeed even after cancellation during settlement");
 
-        // ClosePositionAsync should never be called since cancellation occurs during settlement wait
+        // After B1 fix: close IS attempted even when cancellation occurs during settlement wait
         mockConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
-            Times.Never);
+            Times.AtLeastOnce);
     }
 
     [Fact]
@@ -539,12 +549,31 @@ public class ConnectivityTestServiceTests
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
         result.Error.Should().Contain("Unexpected error");
+        result.Balance.Should().BeNull();
 
         // CreateForUserAsync should never be called since decryption failed
         _mockConnectorFactory.Verify(
             f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
                 It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task RunTestAsync_WhitespaceAdminUserId_Throws()
+    {
+        var act = async () => await _sut.RunTestAsync("   ", TargetUserId, TestExchangeId);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithParameterName("adminUserId");
+    }
+
+    [Fact]
+    public async Task RunTestAsync_WhitespaceTargetUserId_Throws()
+    {
+        var act = async () => await _sut.RunTestAsync(AdminUserId, "   ", TestExchangeId);
+
+        await act.Should().ThrowAsync<ArgumentException>()
+            .WithParameterName("targetUserId");
     }
 
     [Fact]
@@ -573,6 +602,7 @@ public class ConnectivityTestServiceTests
         result.Error.Should().Contain("Rate limited");
         // Post-creation cooldown has access to exchange name (not "Unknown")
         result.ExchangeName.Should().Be("Hyperliquid");
+        result.Balance.Should().BeNull();
     }
 
     [Fact]
@@ -607,6 +637,12 @@ public class ConnectivityTestServiceTests
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
         result.Success.Should().BeTrue("expired concurrent cooldown entry should be overwritten");
+
+        // NB9: Confirm the overwrite populated the cooldown by making a second immediate call
+        // (no ClearCooldowns) — it should be rate-limited
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        secondResult.Success.Should().BeFalse();
+        secondResult.Error.Should().Contain("Rate limited");
     }
 
     [Fact]
@@ -647,9 +683,10 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
-    public async Task RunTest_CancellationDuringCloseRetry_ReturnsError()
+    public async Task RunTest_CancellationDuringCloseRetry_StillRetriesWithNoneToken()
     {
-        // NB9: Open succeeds, first close fails, cancellation during retry delay
+        // After B1 fix: close uses CancellationToken.None, so request cancellation
+        // does not prevent close retry. Both close attempts proceed.
         var exchange = CreateTestExchange();
         var credential = CreateTestCredential();
         SetupExchangeAndCredential(exchange, credential);
@@ -667,11 +704,11 @@ public class ConnectivityTestServiceTests
                 FilledPrice = 3000m,
                 FilledQuantity = 0.00167m
             });
-        // First close fails, then cancel token during the retry delay
+        // Both close attempts fail (request cancellation no longer prevents retry)
         mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .Returns<string, Side, CancellationToken>((_, _, _) =>
             {
-                cts.Cancel(); // Cancel so the 3s retry delay throws TaskCanceledException
+                cts.Cancel(); // Cancel request token — should not affect close retry
                 return Task.FromResult(new OrderResultDto { Success = false, Error = "Timeout" });
             });
 
@@ -682,9 +719,11 @@ public class ConnectivityTestServiceTests
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
 
         result.Success.Should().BeFalse();
-        // Close was called once (the initial attempt); the retry delay was cancelled
+        result.Error.Should().Contain("STRANDED POSITION");
+        result.Balance.Should().BeNull();
+        // Both close attempts proceed despite request cancellation
         mockConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
-            Times.Once);
+            Times.Exactly(2));
     }
 }

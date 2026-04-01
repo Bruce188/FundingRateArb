@@ -185,30 +185,37 @@ public class ExchangeTradeConnectivityTests
                 var connector = await _factory.CreateForUserAsync("hyperliquid", null, null, _hlWallet, _hlKey);
                 Assert.NotNull(connector);
 
-                var balance = await connector.GetAvailableBalanceAsync(ct);
-                _output.WriteLine($"[Hyperliquid] Balance: ${balance:F2}");
-
-                var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
-                _output.WriteLine($"[Hyperliquid] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
-                    $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
-
-                if (!openResult.Success)
+                try
                 {
-                    throw new Exception($"Open failed: {openResult.Error}");
+                    var balance = await connector.GetAvailableBalanceAsync(ct);
+                    _output.WriteLine($"[Hyperliquid] Balance: ${balance:F2}");
+
+                    var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
+                    _output.WriteLine($"[Hyperliquid] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
+                        $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
+
+                    if (!openResult.Success)
+                    {
+                        throw new Exception($"Open failed: {openResult.Error}");
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                    var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
+                    _output.WriteLine($"[Hyperliquid] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
+
+                    if (!closeResult.Success)
+                    {
+                        throw new Exception($"Close failed: {closeResult.Error}");
+                    }
+
+                    _output.WriteLine("[Hyperliquid] PASS");
+                    results["Hyperliquid"] = "PASS";
                 }
-
-                await Task.Delay(TimeSpan.FromSeconds(2), ct);
-
-                var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
-                _output.WriteLine($"[Hyperliquid] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
-
-                if (!closeResult.Success)
+                finally
                 {
-                    throw new Exception($"Close failed: {closeResult.Error}");
+                    (connector as IDisposable)?.Dispose();
                 }
-
-                _output.WriteLine("[Hyperliquid] PASS");
-                results["Hyperliquid"] = "PASS";
             }
             catch (Exception ex)
             {
@@ -234,38 +241,45 @@ public class ExchangeTradeConnectivityTests
                     "lighter", null, null, _lighterAccount, _lighterKey, null, _lighterApiKeyIndex);
                 Assert.NotNull(connector);
 
-                var balance = await connector.GetAvailableBalanceAsync(ct);
-                _output.WriteLine($"[Lighter] Balance: ${balance:F2}");
-
-                var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
-                _output.WriteLine($"[Lighter] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
-                    $"TxHash={openResult.OrderId} (estimated fill: {openResult.IsEstimatedFill})");
-
-                if (!openResult.Success)
+                try
                 {
-                    throw new Exception($"Open failed: {openResult.Error}");
-                }
+                    var balance = await connector.GetAvailableBalanceAsync(ct);
+                    _output.WriteLine($"[Lighter] Balance: ${balance:F2}");
 
-                if (connector is IPositionVerifiable verifiable)
-                {
-                    var verified = await verifiable.VerifyPositionOpenedAsync(Asset, TradeSide, ct);
-                    _output.WriteLine($"[Lighter] Verify: {(verified ? "Position confirmed" : "Position NOT confirmed")}");
-                    if (!verified)
+                    var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
+                    _output.WriteLine($"[Lighter] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
+                        $"TxHash={openResult.OrderId} (estimated fill: {openResult.IsEstimatedFill})");
+
+                    if (!openResult.Success)
                     {
-                        throw new Exception("Position verification failed");
+                        throw new Exception($"Open failed: {openResult.Error}");
                     }
+
+                    if (connector is IPositionVerifiable verifiable)
+                    {
+                        var verified = await verifiable.VerifyPositionOpenedAsync(Asset, TradeSide, ct);
+                        _output.WriteLine($"[Lighter] Verify: {(verified ? "Position confirmed" : "Position NOT confirmed")}");
+                        if (!verified)
+                        {
+                            throw new Exception("Position verification failed");
+                        }
+                    }
+
+                    var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
+                    _output.WriteLine($"[Lighter] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} TxHash={closeResult.OrderId}");
+
+                    if (!closeResult.Success)
+                    {
+                        throw new Exception($"Close failed: {closeResult.Error}");
+                    }
+
+                    _output.WriteLine("[Lighter] PASS");
+                    results["Lighter"] = "PASS";
                 }
-
-                var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
-                _output.WriteLine($"[Lighter] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} TxHash={closeResult.OrderId}");
-
-                if (!closeResult.Success)
+                finally
                 {
-                    throw new Exception($"Close failed: {closeResult.Error}");
+                    (connector as IDisposable)?.Dispose();
                 }
-
-                _output.WriteLine("[Lighter] PASS");
-                results["Lighter"] = "PASS";
             }
             catch (Exception ex)
             {
@@ -290,30 +304,37 @@ public class ExchangeTradeConnectivityTests
                 var connector = await _factory.CreateForUserAsync("aster", _asterKey, _asterSecret, null, null);
                 Assert.NotNull(connector);
 
-                var balance = await connector.GetAvailableBalanceAsync(ct);
-                _output.WriteLine($"[Aster] Balance: ${balance:F2}");
-
-                var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
-                _output.WriteLine($"[Aster] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
-                    $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
-
-                if (!openResult.Success)
+                try
                 {
-                    throw new Exception($"Open failed: {openResult.Error}");
+                    var balance = await connector.GetAvailableBalanceAsync(ct);
+                    _output.WriteLine($"[Aster] Balance: ${balance:F2}");
+
+                    var openResult = await connector.PlaceMarketOrderAsync(Asset, TradeSide, SizeUsdc, Leverage, ct);
+                    _output.WriteLine($"[Aster] Open: {(openResult.Success ? "SUCCESS" : "FAILED")} " +
+                        $"OrderId={openResult.OrderId} Price={openResult.FilledPrice} Qty={openResult.FilledQuantity}");
+
+                    if (!openResult.Success)
+                    {
+                        throw new Exception($"Open failed: {openResult.Error}");
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+
+                    var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
+                    _output.WriteLine($"[Aster] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
+
+                    if (!closeResult.Success)
+                    {
+                        throw new Exception($"Close failed: {closeResult.Error}");
+                    }
+
+                    _output.WriteLine("[Aster] PASS");
+                    results["Aster"] = "PASS";
                 }
-
-                await Task.Delay(TimeSpan.FromSeconds(2), ct);
-
-                var closeResult = await connector.ClosePositionAsync(Asset, TradeSide, ct);
-                _output.WriteLine($"[Aster] Close: {(closeResult.Success ? "SUCCESS" : "FAILED")} OrderId={closeResult.OrderId}");
-
-                if (!closeResult.Success)
+                finally
                 {
-                    throw new Exception($"Close failed: {closeResult.Error}");
+                    (connector as IDisposable)?.Dispose();
                 }
-
-                _output.WriteLine("[Aster] PASS");
-                results["Aster"] = "PASS";
             }
             catch (Exception ex)
             {
