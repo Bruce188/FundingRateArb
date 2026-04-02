@@ -11,7 +11,7 @@ public class Alert
     public AlertType Type { get; set; }
     public AlertSeverity Severity { get; set; }
 
-    [Required, MaxLength(1000)]
+    [Required, MaxLength(2000)]
     public string Message { get; set; } = null!;
 
     public bool IsRead { get; set; }
