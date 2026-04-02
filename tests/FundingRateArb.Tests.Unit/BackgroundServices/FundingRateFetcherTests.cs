@@ -71,6 +71,9 @@ public class FundingRateFetcherTests
             .ReturnsAsync(new List<FundingRateSnapshot>());
         _mockFundingRates.Setup(f => f.PurgeAggregatesOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
+        _mockFundingRates
+            .Setup(f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // Wire connectors
         _mockHyperliquid.Setup(c => c.ExchangeName).Returns("Hyperliquid");
@@ -185,6 +188,38 @@ public class FundingRateFetcherTests
         // because the second call exits early at the _lastAggregatedHourUtc guard
         _mockFundingRates.Verify(
             f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    // ── TryAggregateHourly_WhenAggregatesAlreadyExist_SkipsInsert ────────────────
+
+    [Fact]
+    public async Task TryAggregateHourly_WhenAggregatesAlreadyExist_SkipsInsert()
+    {
+        var fixedNow = new DateTime(2026, 1, 15, 10, 10, 0, DateTimeKind.Utc);
+
+        // Aggregates already exist for this hour
+        _mockFundingRates
+            .Setup(f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
+
+        // Should NOT fetch snapshots (existence check runs first)
+        _mockFundingRates.Verify(
+            f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        // Should NOT attempt to add aggregates
+        _mockFundingRates.Verify(
+            f => f.AddAggregateRange(It.IsAny<IEnumerable<FundingRateHourlyAggregate>>()),
+            Times.Never);
+        // Should NOT call SaveAsync
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+
+        // NB1: Second call — should skip at _lastAggregatedHourUtc guard (no DB queries)
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
+        _mockFundingRates.Verify(
+            f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 

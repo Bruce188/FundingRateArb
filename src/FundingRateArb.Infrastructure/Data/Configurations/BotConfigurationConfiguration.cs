@@ -20,6 +20,8 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.MinPositionSizeUsdc).HasColumnType("decimal(18,2)");
         builder.Property(b => b.MinVolume24hUsdc).HasColumnType("decimal(18,2)");
         builder.Property(b => b.DailyDrawdownPausePct).HasColumnType("decimal(18,4)");
+        builder.Property(b => b.MaxExposurePerAsset).HasColumnType("decimal(18,4)");
+        builder.Property(b => b.MaxExposurePerExchange).HasColumnType("decimal(18,4)");
         builder.Property(b => b.TargetPnlMultiplier).HasColumnType("decimal(18,4)").HasDefaultValue(2.0m);
         builder.Property(b => b.AdaptiveHoldEnabled).HasDefaultValue(true);
         builder.Property(b => b.RebalanceEnabled).HasDefaultValue(false);
