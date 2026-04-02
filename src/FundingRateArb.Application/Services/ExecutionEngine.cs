@@ -703,8 +703,14 @@ public class ExecutionEngine : IExecutionEngine
             var shortClose = shortCloseTask.Result;
 
             // Track successful legs — persist even on partial failure for retry
-            if (longClose.Success && needLongClose) position.LongLegClosed = true;
-            if (shortClose.Success && needShortClose) position.ShortLegClosed = true;
+            if (longClose.Success && needLongClose)
+            {
+                position.LongLegClosed = true;
+            }
+            if (shortClose.Success && needShortClose)
+            {
+                position.ShortLegClosed = true;
+            }
 
             if (!longClose.Success || !shortClose.Success)
             {

@@ -401,12 +401,18 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private async Task EnsureSymbolInfoCachedAsync(string symbol, CancellationToken ct)
     {
         // NB5: Double-checked locking to prevent duplicate exchange-info fetches on cold start
-        if (_symbolInfoLoaded) return;
+        if (_symbolInfoLoaded)
+        {
+            return;
+        }
 
         await _symbolInfoLock.WaitAsync(ct);
         try
         {
-            if (_symbolInfoLoaded) return;
+            if (_symbolInfoLoaded)
+            {
+                return;
+            }
 
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
@@ -428,7 +434,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
                     {
                         // N4: Use integer exponentiation to avoid double-to-decimal cast error
                         decimal divisor = 1m;
-                        for (int i = 0; i < s.PricePrecision; i++) divisor *= 10m;
+                        for (int i = 0; i < s.PricePrecision; i++)
+                        {
+                            divisor *= 10m;
+                        }
                         _tickSizeCache[s.Name] = 1m / divisor;
                     }
                 }
