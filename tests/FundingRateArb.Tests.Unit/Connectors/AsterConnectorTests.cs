@@ -1203,4 +1203,85 @@ public class AsterConnectorTests
             Times.Never,
             "no warning should be logged when SetLeverage succeeds");
     }
+
+    // ── NB7: Min notional validation ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_BelowMinNotional_ReturnsFalse()
+    {
+        // sizeUsdc=3.5, leverage=1, mark=3500 → quantity=3.5/3500=0.001 (at 3 decimal default), notional=0.001*3500=$3.50 < $5
+        var client = BuildClientWithOrderResult(SuccessOrder(new AsterOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 3.5m, 1);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("below Aster minimum");
+    }
+
+    // ── NB8: Slippage protection uses Limit+IOC ──────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_UsesLimitIocWithSlippage()
+    {
+        Aster.Net.Enums.OrderType? capturedOrderType = null;
+        Aster.Net.Enums.TimeInForce? capturedTif = null;
+        decimal? capturedPrice = null;
+
+        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+                {
+                    capturedOrderType = (Aster.Net.Enums.OrderType)invocation.Arguments[2];
+                    capturedPrice = (decimal?)invocation.Arguments[4]; // price is the 5th parameter
+                    capturedTif = (Aster.Net.Enums.TimeInForce?)invocation.Arguments[6];
+                }))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 1, AveragePrice = 3500m, QuantityFilled = 0.1m }));
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger());
+
+        await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
+
+        capturedOrderType.Should().Be(Aster.Net.Enums.OrderType.Limit, "should use Limit order for slippage protection");
+        capturedTif.Should().Be(Aster.Net.Enums.TimeInForce.ImmediateOrCancel, "should use IOC time-in-force");
+        // For Buy side: limitPrice = markPrice * 1.005 = 3500 * 1.005 = 3517.50
+        capturedPrice.Should().Be(Math.Round(3500m * 1.005m, 2, MidpointRounding.AwayFromZero));
+    }
 }

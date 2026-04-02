@@ -74,11 +74,23 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             rateMap.TryGetValue((pos.LongExchangeId, pos.AssetId), out var longRate);
             rateMap.TryGetValue((pos.ShortExchangeId, pos.AssetId), out var shortRate);
 
-            var spread = (shortRate?.RatePerHour ?? 0m) - (longRate?.RatePerHour ?? 0m);
+            if (longRate is not null && shortRate is not null)
+            {
+                var computedSpread = shortRate.RatePerHour - longRate.RatePerHour;
+                pos.CurrentSpreadPerHour = computedSpread;
+            }
+            else
+            {
+                if (_logger.IsEnabled(LogLevel.Warning))
+                {
+                    _logger.LogWarning(
+                        "Missing funding rate for position #{Id}: longRate={LongAvailable}, shortRate={ShortAvailable} — keeping previous spread",
+                        pos.Id, longRate is not null, shortRate is not null);
+                }
+            }
 
-            // Always update current spread (tracked entity — change recorded by EF)
-            pos.CurrentSpreadPerHour = spread;
-            _uow.Positions.Update(pos);
+            // Use whatever spread is current (updated above or previous value)
+            var spread = pos.CurrentSpreadPerHour;
 
             if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
             {
@@ -162,7 +174,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 _logger.LogWarning(ex, "Failed to check health for position #{Id} ({Failures} consecutive): {Message}",
                     pos.Id, failures, ex.Message);
 
-                if (failures >= 5)
+                if (failures >= config.PriceFeedFailureCloseThreshold)
                 {
                     _uow.Alerts.Add(new Alert
                     {
@@ -172,8 +184,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                         Severity = AlertSeverity.Critical,
                         Message = $"Price feed failed {failures} consecutive times for " +
                                   $"{pos.Asset?.Symbol ?? "unknown"}. " +
-                                  "Stop-loss protection is INACTIVE. Consider manual close.",
+                                  "Force-closing position — stop-loss protection inactive.",
                     });
+                    toClose.Add((pos, CloseReason.PriceFeedLost));
                 }
             }
         }
@@ -317,7 +330,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         ArbitragePosition pos, BotConfiguration config,
         decimal unrealizedPnl, decimal hoursOpen, decimal spread)
     {
-        // Priority: StopLoss > PnlTargetReached > MaxHoldTime > SpreadCollapsed
+        // Priority: StopLoss > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
         {
             return CloseReason.StopLoss;
@@ -334,8 +347,21 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     : 0m;
             if (entryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * entryFee)
             {
-                return CloseReason.PnlTargetReached;
+                // Total PnL must be positive (unrealized + accumulated - entry fees)
+                var totalPnl = unrealizedPnl + pos.AccumulatedFunding - entryFee;
+                // Minimum hold time before PnlTargetReached can fire
+                var minutesOpen = hoursOpen * 60m;
+                if (totalPnl > 0 && minutesOpen >= config.MinHoldBeforePnlTargetMinutes)
+                {
+                    return CloseReason.PnlTargetReached;
+                }
             }
+        }
+
+        // Emergency spread: bypass MinHoldTimeHours for catastrophic spread reversal
+        if (spread < config.EmergencyCloseSpreadThreshold)
+        {
+            return CloseReason.SpreadCollapsed;
         }
 
         if (hoursOpen >= config.MaxHoldTimeHours)

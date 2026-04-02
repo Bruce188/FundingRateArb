@@ -754,6 +754,27 @@ public class LighterConnectorTests
         result.Error.Should().NotBeNullOrEmpty("zero/negative price must produce an error");
     }
 
+    // ── NB3: Min notional validation ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_BelowMinNotional_ReturnsFalse()
+    {
+        // sizeUsdc=1, leverage=1, markPrice=3500.50 → notional=$1 < $5 fallback minimum
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns("0xabc123");
+        _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+        });
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 1m, 1);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty("below-minimum-notional order must produce an error");
+    }
+
     // ── M8: Leverage cache tests ─────────────────────────────────────────────
 
     [Fact]

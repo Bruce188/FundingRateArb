@@ -135,10 +135,10 @@ public class DashboardController : Controller
         }).ToList();
 
         var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
-        var bestSpread = positionSummaries.Count > 0
-            ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
-            : opportunities.Count > 0
-                ? opportunities.Max(o => o.SpreadPerHour)
+        var bestSpread = opportunities.Count > 0
+            ? opportunities.Max(o => o.SpreadPerHour)
+            : positionSummaries.Count > 0
+                ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
                 : result.Diagnostics?.BestRawSpread ?? 0m;
 
         // Compute PnL progress for positions when adaptive hold is enabled

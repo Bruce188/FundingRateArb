@@ -48,7 +48,7 @@ public class BotConfiguration
     public int FeeAmortizationHours { get; set; } = 12;
 
     [Range(1, (double)decimal.MaxValue)]
-    public decimal MinPositionSizeUsdc { get; set; } = 5m;
+    public decimal MinPositionSizeUsdc { get; set; } = 10m;
 
     [Range(0, (double)decimal.MaxValue)]
     public decimal MinVolume24hUsdc { get; set; } = 50_000m;
@@ -102,6 +102,26 @@ public class BotConfiguration
     /// <summary>Minutes an exchange is excluded after the circuit breaker opens.</summary>
     [Range(1, 120)]
     public int ExchangeCircuitBreakerMinutes { get; set; } = 15;
+
+    /// <summary>Minimum minutes before PnlTargetReached can fire. Prevents premature close before funding accrues.</summary>
+    [Range(0, 1440)]
+    public int MinHoldBeforePnlTargetMinutes { get; set; } = 60;
+
+    /// <summary>Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours. Deeply negative = emergency.</summary>
+    [Range(-1.0, 0)]
+    public decimal EmergencyCloseSpreadThreshold { get; set; } = -0.001m;
+
+    /// <summary>Consecutive price feed failures before force-closing position. Prevents unprotected positions.</summary>
+    [Range(5, 100)]
+    public int PriceFeedFailureCloseThreshold { get; set; } = 10;
+
+    /// <summary>Basis points subtracted from net yield to account for slippage/market impact.</summary>
+    [Range(0, 50)]
+    public int SlippageBufferBps { get; set; } = 5;
+
+    /// <summary>Fraction of distance-to-liquidation at which to warn/close. 0.5 = close when 50% of the way.</summary>
+    [Range(0.1, 0.9)]
+    public decimal LiquidationWarningPct { get; set; } = 0.50m;
 
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;

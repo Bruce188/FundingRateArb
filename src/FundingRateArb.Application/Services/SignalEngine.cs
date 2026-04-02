@@ -107,6 +107,10 @@ public class SignalEngine : ISignalEngine
                     var feePerHour = (longFee + shortFee) / amortHours;
                     var net = diff - feePerHour;
 
+                    // Subtract slippage buffer (one-time cost amortized over hold period like fees)
+                    var slippagePerHour = config.SlippageBufferBps / 10_000m / amortHours;
+                    net -= slippagePerHour;
+
                     // Compute minutes to next settlement from either leg (use minimum)
                     int? minutesToSettlement = null;
                     var now = DateTime.UtcNow;

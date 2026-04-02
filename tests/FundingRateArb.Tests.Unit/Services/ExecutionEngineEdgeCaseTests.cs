@@ -251,12 +251,16 @@ public class ExecutionEngineEdgeCaseTests
     }
 
     [Fact]
-    public async Task OpenPosition_PreFlightMarginCheck_UsesSizeUsdc_NotDividedByLeverage()
+    public async Task OpenPosition_PreFlightMarginCheck_UsesLeverageAdjustedMargin()
     {
-        // balance=90, sizeUsdc=100, leverage=5. Old formula: required=100/5=20, pass. New: required=100, fail.
+        // balance=90, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is < 90 → passes.
+        // balance=15, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is > 15 → fails.
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(90m);
+            .ReturnsAsync(15m);
+        _mockShortConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 

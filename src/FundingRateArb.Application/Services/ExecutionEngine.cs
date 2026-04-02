@@ -58,39 +58,6 @@ public class ExecutionEngine : IExecutionEngine
 
         try
         {
-            // Pre-flight margin check: verify both exchanges have sufficient balance
-            // before opening any legs. Prevents the costly open→fail→emergency-close cycle
-            // where one leg succeeds, the other fails on margin, and emergency close burns fees.
-            var requiredMargin = sizeUsdc;
-            try
-            {
-                var longBalanceTask = longConnector.GetAvailableBalanceAsync(ct);
-                var shortBalanceTask = shortConnector.GetAvailableBalanceAsync(ct);
-                await Task.WhenAll(longBalanceTask, shortBalanceTask);
-
-                if (longBalanceTask.Result < requiredMargin)
-                {
-                    _logger.LogWarning(
-                        "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
-                        opp.LongExchangeName, longBalanceTask.Result, requiredMargin, opp.AssetSymbol);
-                    return (false, $"Insufficient margin on {opp.LongExchangeName}: available={longBalanceTask.Result:F4}, required={requiredMargin:F4}");
-                }
-
-                if (shortBalanceTask.Result < requiredMargin)
-                {
-                    _logger.LogWarning(
-                        "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
-                        opp.ShortExchangeName, shortBalanceTask.Result, requiredMargin, opp.AssetSymbol);
-                    return (false, $"Insufficient margin on {opp.ShortExchangeName}: available={shortBalanceTask.Result:F4}, required={requiredMargin:F4}");
-                }
-            }
-            catch (Exception ex)
-            {
-                // NB3: Log full exception internally but return generic message to user
-                _logger.LogWarning(ex, "Pre-flight balance check failed for {Asset}, skipping trade", opp.AssetSymbol);
-                return (false, "Pre-flight balance check failed — exchange connection error");
-            }
-
             if (_logger.IsEnabled(LogLevel.Information))
             {
                 _logger.LogInformation(
@@ -145,6 +112,39 @@ public class ExecutionEngine : IExecutionEngine
                 _logger.LogWarning(ex, "Pre-flight leverage check failed for {Asset}, using configured leverage", opp.AssetSymbol);
             }
 
+            // Pre-flight margin check: verify both exchanges have sufficient balance
+            // before opening any legs. Uses leverage-adjusted margin (notional / leverage)
+            // instead of full notional to correctly represent the margin needed.
+            var requiredMargin = sizeUsdc / effectiveLeverage;
+            try
+            {
+                var longBalanceTask = longConnector.GetAvailableBalanceAsync(ct);
+                var shortBalanceTask = shortConnector.GetAvailableBalanceAsync(ct);
+                await Task.WhenAll(longBalanceTask, shortBalanceTask);
+
+                if (longBalanceTask.Result < requiredMargin)
+                {
+                    _logger.LogWarning(
+                        "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
+                        opp.LongExchangeName, longBalanceTask.Result, requiredMargin, opp.AssetSymbol);
+                    return (false, $"Insufficient margin on {opp.LongExchangeName}: available={longBalanceTask.Result:F4}, required={requiredMargin:F4}");
+                }
+
+                if (shortBalanceTask.Result < requiredMargin)
+                {
+                    _logger.LogWarning(
+                        "Pre-flight check failed: {Exchange} balance {Balance:F4} < required margin {Required:F4} for {Asset}",
+                        opp.ShortExchangeName, shortBalanceTask.Result, requiredMargin, opp.AssetSymbol);
+                    return (false, $"Insufficient margin on {opp.ShortExchangeName}: available={shortBalanceTask.Result:F4}, required={requiredMargin:F4}");
+                }
+            }
+            catch (Exception ex)
+            {
+                // NB3: Log full exception internally but return generic message to user
+                _logger.LogWarning(ex, "Pre-flight balance check failed for {Asset}, skipping trade", opp.AssetSymbol);
+                return (false, "Pre-flight balance check failed — exchange connection error");
+            }
+
             // C-EE2: Persist a sentinel record BEFORE firing legs so that a crash after one leg
             // succeeds leaves a recoverable audit trail.
             var position = new ArbitragePosition
@@ -187,11 +187,13 @@ public class ExecutionEngine : IExecutionEngine
                     ? (longConnector, Side.Long, opp.LongExchangeName, shortConnector, Side.Short, opp.ShortExchangeName)
                     : (shortConnector, Side.Short, opp.ShortExchangeName, longConnector, Side.Long, opp.LongExchangeName);
 
-                // Open first leg
+                // Open first leg (with 45-second timeout)
                 OrderResultDto firstResult;
                 try
                 {
-                    firstResult = await firstConnector.PlaceMarketOrderAsync(opp.AssetSymbol, firstSide, sizeUsdc, effectiveLeverage, ct);
+                    using var firstOrderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    firstOrderCts.CancelAfter(TimeSpan.FromSeconds(45));
+                    firstResult = await firstConnector.PlaceMarketOrderAsync(opp.AssetSymbol, firstSide, sizeUsdc, effectiveLeverage, firstOrderCts.Token);
                 }
                 catch (Exception ex)
                 {
@@ -252,11 +254,13 @@ public class ExecutionEngine : IExecutionEngine
                     }
                 }
 
-                // First leg confirmed — now open second leg
+                // First leg confirmed — now open second leg (with 45-second timeout)
                 OrderResultDto secondResult;
                 try
                 {
-                    secondResult = await secondConnector.PlaceMarketOrderAsync(opp.AssetSymbol, secondSide, sizeUsdc, effectiveLeverage, ct);
+                    using var secondOrderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    secondOrderCts.CancelAfter(TimeSpan.FromSeconds(45));
+                    secondResult = await secondConnector.PlaceMarketOrderAsync(opp.AssetSymbol, secondSide, sizeUsdc, effectiveLeverage, secondOrderCts.Token);
                 }
                 catch (Exception ex)
                 {
@@ -304,9 +308,11 @@ public class ExecutionEngine : IExecutionEngine
             }
             else
             {
-                // Concurrent path: both connectors are reliable, use Task.WhenAll for speed
-                var longTask = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long, sizeUsdc, effectiveLeverage, ct);
-                var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, ct);
+                // Concurrent path: both connectors are reliable, use Task.WhenAll for speed (with 45-second timeout)
+                using var concurrentCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                concurrentCts.CancelAfter(TimeSpan.FromSeconds(45));
+                var longTask = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long, sizeUsdc, effectiveLeverage, concurrentCts.Token);
+                var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, concurrentCts.Token);
 
                 try
                 {
@@ -831,7 +837,9 @@ public class ExecutionEngine : IExecutionEngine
     }
 
     private static readonly string[] RetryableClosePatterns =
-        ["no open", "not found", "position not", "does not exist", "no position"];
+        ["no open", "not found", "position not", "does not exist", "no position",
+         "timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
+         "connection refused", "connection reset", "network unreachable", "transient"];
 
     private static bool IsRetryableCloseError(string? error)
     {
@@ -845,15 +853,15 @@ public class ExecutionEngine : IExecutionEngine
     private async Task TryEmergencyCloseWithRetryAsync(
         IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)
     {
-        const int maxAttempts = 3;
-        int[] backoffMs = [2000, 4000, 8000];
+        const int maxAttempts = 5;
+        int[] backoffMs = [2000, 4000, 8000, 16000, 30000];
         var legName = side == Side.Long ? "long" : "short";
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
             try
             {
-                var closeResult = await connector.ClosePositionAsync(asset, side, ct);
+                var closeResult = await connector.ClosePositionAsync(asset, side, CancellationToken.None);
                 if (closeResult.Success)
                 {
                     return;
@@ -863,9 +871,9 @@ public class ExecutionEngine : IExecutionEngine
                     && IsRetryableCloseError(closeResult.Error))
                 {
                     _logger.LogWarning(
-                        "Emergency close attempt {Attempt}/{Max} failed (position not settled yet), retrying in {Delay}ms: {Asset}",
-                        attempt + 1, maxAttempts, backoffMs[attempt], asset);
-                    await Task.Delay(backoffMs[attempt], ct);
+                        "Emergency close attempt {Attempt}/{Max} failed (retryable error), retrying in {Delay}ms: {Asset} Error={Error}",
+                        attempt + 1, maxAttempts, backoffMs[attempt], asset, closeResult.Error);
+                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
                     continue;
                 }
 
@@ -885,6 +893,15 @@ public class ExecutionEngine : IExecutionEngine
             }
             catch (Exception ex)
             {
+                if (attempt < maxAttempts - 1)
+                {
+                    _logger.LogWarning(ex,
+                        "Emergency close attempt {Attempt}/{Max} threw for {Leg} leg: {Asset}, retrying in {Delay}ms",
+                        attempt + 1, maxAttempts, legName, asset, backoffMs[attempt]);
+                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
+                    continue;
+                }
+
                 if (_logger.IsEnabled(LogLevel.Critical))
                 {
                     _logger.LogCritical(ex, "EMERGENCY CLOSE THREW for {Leg} leg: {Asset}", legName, asset);

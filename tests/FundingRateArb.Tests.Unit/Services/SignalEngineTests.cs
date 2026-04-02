@@ -57,7 +57,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -82,7 +82,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -105,7 +105,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -134,7 +134,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -166,7 +166,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -200,7 +200,7 @@ public class SignalEngineTests
 
         // Threshold low enough that all pairs should qualify
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -229,7 +229,7 @@ public class SignalEngineTests
     {
         // Arrange
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(new List<FundingRateSnapshot>());
 
@@ -261,7 +261,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -290,7 +290,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -320,7 +320,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -347,7 +347,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -366,7 +366,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -386,7 +386,7 @@ public class SignalEngineTests
             .ToList();
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0000001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0000001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -408,7 +408,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 48 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FeeAmortizationHours = 48 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -434,7 +434,7 @@ public class SignalEngineTests
 
         // FeeAmortizationHours=24, MaxHoldTimeHours=72 — fee should use 24, not 72
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FeeAmortizationHours = 24, MaxHoldTimeHours = 72 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FeeAmortizationHours = 24, MaxHoldTimeHours = 72 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -461,7 +461,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -482,7 +482,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -504,7 +504,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -524,7 +524,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -539,7 +539,7 @@ public class SignalEngineTests
     public async Task GetOpportunitiesWithDiagnostics_NoRates_ReturnsZeroTotalLoaded()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(new List<FundingRateSnapshot>());
 
@@ -560,7 +560,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, RateStalenessMinutes = 15 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -582,7 +582,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -605,7 +605,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -628,7 +628,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -677,7 +677,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -700,7 +700,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0003m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -721,7 +721,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.001m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -744,7 +744,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -780,7 +780,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -817,7 +817,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.00020m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.00020m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -844,7 +844,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 10, FeeAmortizationHours = 24 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -876,7 +876,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.01m, MinVolume24hUsdc = 50_000m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.01m, MinVolume24hUsdc = 50_000m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -899,7 +899,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -938,7 +938,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -968,7 +968,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -1000,7 +1000,7 @@ public class SignalEngineTests
         };
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -1025,7 +1025,7 @@ public class SignalEngineTests
         var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(new List<FundingRateSnapshot>
             {
@@ -1052,7 +1052,7 @@ public class SignalEngineTests
         var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(new List<FundingRateSnapshot>
             {
@@ -1079,7 +1079,7 @@ public class SignalEngineTests
         var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, mockPredictionService.Object);
 
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { OpenThreshold = 0.0001m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(new List<FundingRateSnapshot>
             {
@@ -1100,7 +1100,7 @@ public class SignalEngineTests
     public async Task GetOpportunities_DefaultFeeAmortizationHours12_ProducesExpectedNetYield()
     {
         // Arrange — use new BotConfiguration() with all defaults (FeeAmortizationHours = 12)
-        var config = new BotConfiguration { OpenThreshold = 0.0001m };
+        var config = new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m };
 
         // Hyperliquid (fallback fee 0.00090) + Lighter (fallback fee 0.00000)
         // feePerHour = (0.00090 + 0.00000) / 12 = 0.000075  (vs /24 = 0.0000375 with old default)
@@ -1126,5 +1126,56 @@ public class SignalEngineTests
         result.Should().HaveCount(1);
         result[0].SpreadPerHour.Should().Be(expectedSpread);
         result[0].NetYieldPerHour.Should().Be(expectedNet);
+    }
+
+    // ── B2: SlippageBufferBps with non-zero value ───────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_SlippageBuffer_ReducesNetYield()
+    {
+        // Arrange
+        // Same rates as first test but with SlippageBufferBps=10 (0.001 per hour subtracted)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        // FeeAmortizationHours=1 so fees and slippage are both per-hour (not amortized)
+        // feePerHour=(0.00090+0)/1=0.00090, spread=0.0009, net=0.0009-0.00090=0.0
+        // slippagePerHour=10/10000/1=0.001, net=0.0-0.001=-0.001 (below threshold 0.0003)
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m, FeeAmortizationHours = 1 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: with slippage buffer, net yield falls below threshold → filtered out
+        result.Should().BeEmpty("slippage buffer should reduce net yield below threshold");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_SlippageBuffer_PassesWithHigherSpread()
+    {
+        // Arrange: very high spread that remains above threshold even with buffer
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m), // spread = 0.0029
+        };
+
+        // With buffer=10, amortHours=12: slippage=0.0000833/hr, net≈0.002742 still > 0.0003
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: with high spread, opportunity passes even with slippage buffer
+        result.Should().HaveCount(1);
     }
 }
