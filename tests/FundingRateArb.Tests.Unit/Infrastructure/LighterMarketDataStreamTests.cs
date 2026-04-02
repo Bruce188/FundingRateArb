@@ -43,7 +43,7 @@ public class LighterMarketDataStreamTests
 
         var cached = cache.GetLatest("Lighter", "BTC");
         cached!.RatePerHour.Should().Be(0.0003m / 8m);
-        cached.RawRate.Should().NotBe(cached.RatePerHour);
+        cached.RawRate.Should().Be(0.0003m);
     }
 
     private static LighterMarketDataStream CreateStream(

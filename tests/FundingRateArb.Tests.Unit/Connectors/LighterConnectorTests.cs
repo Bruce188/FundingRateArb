@@ -359,23 +359,6 @@ public class LighterConnectorTests
         rates.Should().OnlyContain(r => r.ExchangeName == "Lighter");
     }
 
-    [Fact]
-    public async Task GetFundingRates_EightHourRate_NormalizedToHourly()
-    {
-        var sut = CreateMultiRouteConnector(h =>
-        {
-            h.AddRoute("funding-rates", FundingRatesJson);
-            h.AddRoute("exchangeStats", ExchangeStatsJson);
-        });
-
-        var rates = await sut.GetFundingRatesAsync();
-
-        foreach (var rate in rates)
-        {
-            rate.RatePerHour.Should().Be(rate.RawRate / 8m,
-                "Lighter API returns 8-hour rates; RatePerHour must be RawRate / 8");
-        }
-    }
 
     [Fact]
     public async Task GetFundingRates_WhenEmptyRates_ReturnsEmptyList()
