@@ -79,6 +79,10 @@ public class ExecutionEngineTests
             .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockShortConnector.Object);
 
+        // Set up ExchangeName for leverage cache keying
+        _mockLongConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+        _mockShortConnector.Setup(c => c.ExchangeName).Returns("Lighter");
+
         // Default: both exchanges have ample balance for pre-flight margin check
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))

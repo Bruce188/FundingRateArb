@@ -97,7 +97,14 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             var notional = quantity * markPrice;
             if (notional < 10m)
             {
-                return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Hyperliquid minimum $10.00" };
+                // Round up by one tick to clear minimum notional
+                var tick = 1m / (decimal)Math.Pow(10, szDecimals);
+                quantity += tick;
+                notional = quantity * markPrice;
+                if (notional < 10m)
+                {
+                    return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Hyperliquid minimum $10.00" };
+                }
             }
 
             // B5: Slippage protection

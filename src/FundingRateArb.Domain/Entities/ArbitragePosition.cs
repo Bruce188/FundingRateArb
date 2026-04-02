@@ -27,6 +27,9 @@ public class ArbitragePosition
     public PositionStatus Status { get; set; } = PositionStatus.Opening;
     public CloseReason? CloseReason { get; set; }
 
+    public bool LongLegClosed { get; set; }
+    public bool ShortLegClosed { get; set; }
+
     [MaxLength(200)]
     public string? LongOrderId { get; set; }
 

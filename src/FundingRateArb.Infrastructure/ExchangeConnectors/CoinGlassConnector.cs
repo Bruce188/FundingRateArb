@@ -24,6 +24,8 @@ public class CoinGlassConnector : IExchangeConnector
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
     private readonly string? _apiKey;
+    private int _consecutiveFailures;
+    private DateTime _backoffUntil = DateTime.MinValue;
 
     /// <summary>
     /// Exchanges that already have dedicated connectors. Rates from these
@@ -51,6 +53,13 @@ public class CoinGlassConnector : IExchangeConnector
 
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
+        if (DateTime.UtcNow < _backoffUntil)
+        {
+            _logger.LogDebug("CoinGlass API in backoff until {BackoffUntil} ({Failures} consecutive failures)",
+                _backoffUntil, _consecutiveFailures);
+            return [];
+        }
+
         using var request = new HttpRequestMessage(HttpMethod.Get, "api/futures/funding-rates-all");
         if (!string.IsNullOrEmpty(_apiKey))
         {
@@ -65,6 +74,7 @@ public class CoinGlassConnector : IExchangeConnector
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "CoinGlass API request failed");
+            RecordFailure();
             return [];
         }
 
@@ -73,6 +83,7 @@ public class CoinGlassConnector : IExchangeConnector
             if (!response.IsSuccessStatusCode)
             {
                 _logger.LogWarning("CoinGlass API returned {StatusCode}", response.StatusCode);
+                RecordFailure();
                 return [];
             }
 
@@ -84,12 +95,14 @@ public class CoinGlassConnector : IExchangeConnector
             catch (JsonException ex)
             {
                 _logger.LogWarning(ex, "Failed to parse CoinGlass response");
+                RecordFailure();
                 return [];
             }
 
             if (data?.Data is null || data.Code != "0")
             {
                 _logger.LogDebug("CoinGlass returned no data or error code {Code}", data?.Code);
+                RecordFailure();
                 return [];
             }
 
@@ -151,9 +164,22 @@ public class CoinGlassConnector : IExchangeConnector
 
             _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates", rates.Count);
 
+            // Reset backoff on success
+            _consecutiveFailures = 0;
+            _backoffUntil = DateTime.MinValue;
+
             return rates;
 
         } // end using response
+    }
+
+    private void RecordFailure()
+    {
+        _consecutiveFailures++;
+        var backoffSeconds = Math.Min(60 * (int)Math.Pow(2, _consecutiveFailures - 1), 900);
+        _backoffUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
+        _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
+            _consecutiveFailures, backoffSeconds);
     }
 
     public Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)

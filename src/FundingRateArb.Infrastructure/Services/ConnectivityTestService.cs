@@ -162,7 +162,7 @@ public class ConnectivityTestService : IConnectivityTestService
             {
 
                 // Step 1 - Balance check
-                const decimal testSizeUsdc = 12m;
+                const decimal testSizeUsdc = 15m;
                 await Log("Step 1: Checking available balance...");
                 decimal balance;
                 try

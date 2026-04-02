@@ -22,6 +22,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly ILogger<AsterConnector> _logger;
     private readonly MarkPriceCacheHelper _markPriceCache = new();
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
+    private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
 
     public AsterConnector(
         IAsterRestClient restClient,
@@ -120,10 +121,11 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Aster minimum $5.00" };
         }
 
-        // Compute limit price with 0.5% slippage protection
+        // Compute limit price with 0.5% slippage protection, rounded to tick size
+        var tickSize = await GetTickSizeAsync(symbol, ct);
         var limitPrice = side == Side.Long
-            ? Math.Round(markPrice * 1.005m, 2, MidpointRounding.AwayFromZero)
-            : Math.Round(markPrice * 0.995m, 2, MidpointRounding.AwayFromZero);
+            ? RoundToTickSize(markPrice * 1.005m, tickSize)
+            : RoundToTickSize(markPrice * 0.995m, tickSize);
 
         // B2: Abort order if SetLeverageAsync fails
         var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
@@ -379,6 +381,29 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return cached;
         }
 
+        await EnsureSymbolInfoCachedAsync(symbol, ct);
+        return _quantityPrecisionCache.GetValueOrDefault(symbol, 3);
+    }
+
+    private async Task<decimal> GetTickSizeAsync(string symbol, CancellationToken ct)
+    {
+        if (_tickSizeCache.TryGetValue(symbol, out var cached))
+        {
+            return cached;
+        }
+
+        await EnsureSymbolInfoCachedAsync(symbol, ct);
+        return _tickSizeCache.GetValueOrDefault(symbol, 0.01m);
+    }
+
+    private async Task EnsureSymbolInfoCachedAsync(string symbol, CancellationToken ct)
+    {
+        // Already cached — skip fetch
+        if (_quantityPrecisionCache.ContainsKey(symbol) && _tickSizeCache.ContainsKey(symbol))
+        {
+            return;
+        }
+
         try
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
@@ -390,14 +415,33 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 foreach (var s in result.Data.Symbols)
                 {
                     _quantityPrecisionCache[s.Name] = s.QuantityPrecision;
+
+                    // Extract tick size from PriceFilter if available, otherwise compute from PricePrecision
+                    var priceFilter = s.PriceFilter;
+                    if (priceFilter?.TickSize is > 0)
+                    {
+                        _tickSizeCache[s.Name] = priceFilter.TickSize;
+                    }
+                    else
+                    {
+                        _tickSizeCache[s.Name] = 1m / (decimal)Math.Pow(10, s.PricePrecision);
+                    }
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Failed to fetch exchange info for precision lookup: {Error}", ex.Message);
+            _logger.LogWarning("Failed to fetch exchange info for symbol info lookup: {Error}", ex.Message);
+        }
+    }
+
+    private static decimal RoundToTickSize(decimal price, decimal tickSize)
+    {
+        if (tickSize <= 0)
+        {
+            return Math.Round(price, 2);
         }
 
-        return _quantityPrecisionCache.GetValueOrDefault(symbol, 3);
+        return Math.Round(price / tickSize) * tickSize;
     }
 }

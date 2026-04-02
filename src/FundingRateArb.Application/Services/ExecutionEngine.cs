@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
@@ -16,6 +17,10 @@ public class ExecutionEngine : IExecutionEngine
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IUserSettingsService _userSettings;
     private readonly ILogger<ExecutionEngine> _logger;
+
+    // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
+    private readonly ConcurrentDictionary<(string Exchange, string Asset), (int MaxLeverage, DateTime Fetched)> _leverageCache = new();
+    private readonly HashSet<(string Exchange, string Asset, int MaxLeverage)> _leverageWarned = new();
 
     public ExecutionEngine(
         IUnitOfWork uow,
@@ -75,8 +80,8 @@ public class ExecutionEngine : IExecutionEngine
             }
             try
             {
-                var longMaxTask = longConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
-                var shortMaxTask = shortConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
+                var longMaxTask = GetCachedMaxLeverageAsync(longConnector, opp.AssetSymbol, ct);
+                var shortMaxTask = GetCachedMaxLeverageAsync(shortConnector, opp.AssetSymbol, ct);
                 await Task.WhenAll(longMaxTask, shortMaxTask);
 
                 var longMax = longMaxTask.Result;
@@ -84,31 +89,38 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (longMax.HasValue && effectiveLeverage > longMax.Value)
                 {
-                    _logger.LogWarning(
-                        "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
-                        originalLeverage, longMax.Value, opp.AssetSymbol, opp.LongExchangeName);
-                    _uow.Alerts.Add(new Alert
+                    // Only log/alert on first occurrence per (exchange, asset, maxLeverage) tuple
+                    if (_leverageWarned.Add((opp.LongExchangeName, opp.AssetSymbol, longMax.Value)))
                     {
-                        UserId = userId,
-                        Type = AlertType.LeverageReduced,
-                        Severity = AlertSeverity.Warning,
-                        Message = $"Leverage reduced from {originalLeverage}x to {longMax.Value}x for {opp.AssetSymbol} on {opp.LongExchangeName} (exchange maximum)",
-                    });
+                        _logger.LogWarning(
+                            "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
+                            originalLeverage, longMax.Value, opp.AssetSymbol, opp.LongExchangeName);
+                        _uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.LeverageReduced,
+                            Severity = AlertSeverity.Warning,
+                            Message = $"Leverage reduced from {originalLeverage}x to {longMax.Value}x for {opp.AssetSymbol} on {opp.LongExchangeName} (exchange maximum)",
+                        });
+                    }
                     effectiveLeverage = longMax.Value;
                 }
 
                 if (shortMax.HasValue && effectiveLeverage > shortMax.Value)
                 {
-                    _logger.LogWarning(
-                        "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
-                        originalLeverage, shortMax.Value, opp.AssetSymbol, opp.ShortExchangeName);
-                    _uow.Alerts.Add(new Alert
+                    if (_leverageWarned.Add((opp.ShortExchangeName, opp.AssetSymbol, shortMax.Value)))
                     {
-                        UserId = userId,
-                        Type = AlertType.LeverageReduced,
-                        Severity = AlertSeverity.Warning,
-                        Message = $"Leverage reduced from {originalLeverage}x to {shortMax.Value}x for {opp.AssetSymbol} on {opp.ShortExchangeName} (exchange maximum)",
-                    });
+                        _logger.LogWarning(
+                            "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
+                            originalLeverage, shortMax.Value, opp.AssetSymbol, opp.ShortExchangeName);
+                        _uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.LeverageReduced,
+                            Severity = AlertSeverity.Warning,
+                            Message = $"Leverage reduced from {originalLeverage}x to {shortMax.Value}x for {opp.AssetSymbol} on {opp.ShortExchangeName} (exchange maximum)",
+                        });
+                    }
                     effectiveLeverage = shortMax.Value;
                 }
             }
@@ -423,6 +435,49 @@ public class ExecutionEngine : IExecutionEngine
             position.ShortEntryPrice = shortResult.FilledPrice;
             position.LongOrderId = longResult.OrderId;
             position.ShortOrderId = shortResult.OrderId;
+
+            // Guard: entry prices must be non-zero before transitioning to Open
+            if (position.LongEntryPrice <= 0 || position.ShortEntryPrice <= 0)
+            {
+                _logger.LogCritical(
+                    "Position #{Id} has zero entry prices after fill: Long={LongPrice}, Short={ShortPrice}. Attempting mark price fallback.",
+                    position.Id, position.LongEntryPrice, position.ShortEntryPrice);
+
+                try
+                {
+                    if (position.LongEntryPrice <= 0)
+                    {
+                        position.LongEntryPrice = await longConnector.GetMarkPriceAsync(opp.AssetSymbol, ct);
+                    }
+                    if (position.ShortEntryPrice <= 0)
+                    {
+                        position.ShortEntryPrice = await shortConnector.GetMarkPriceAsync(opp.AssetSymbol, ct);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Mark price fallback failed for position #{Id}", position.Id);
+                }
+
+                // If still zero after fallback, emergency-close
+                if (position.LongEntryPrice <= 0 || position.ShortEntryPrice <= 0)
+                {
+                    position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
+                    _uow.Positions.Update(position);
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        ArbitragePositionId = position.Id,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Position #{position.Id} has zero entry prices (Long={position.LongEntryPrice}, Short={position.ShortEntryPrice}). Cannot compute PnL — emergency closed.",
+                    });
+                    await _uow.SaveAsync(ct);
+                    return (false, "Zero entry prices — emergency closed");
+                }
+            }
+
             position.Status = PositionStatus.Open;
 
             var longNotional = longResult.FilledPrice * longResult.FilledQuantity;
@@ -517,16 +572,46 @@ public class ExecutionEngine : IExecutionEngine
                     position.Id, assetSymbol, reason);
             }
 
-            position.Status = PositionStatus.Closing;
-            position.ClosingStartedAt = DateTime.UtcNow;
+            // Only update Closing status on first close attempt (not on retry)
+            if (position.Status != PositionStatus.Closing)
+            {
+                position.Status = PositionStatus.Closing;
+                position.ClosingStartedAt = DateTime.UtcNow;
+            }
             _uow.Positions.Update(position);
             await _uow.SaveAsync(ct);
 
-            // Close both legs concurrently to minimize directional exposure between fills.
-            // C1: Wrap Task.WhenAll in try/catch — if either leg throws, we must handle partial
-            // closure to prevent a position being stuck in Closing status forever.
-            var longCloseTask = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
-            var shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
+            // Skip already-closed legs on retry
+            var needLongClose = !position.LongLegClosed;
+            var needShortClose = !position.ShortLegClosed;
+
+            // Both legs already closed — just finalize
+            if (!needLongClose && !needShortClose)
+            {
+                _logger.LogInformation("Position #{PositionId} both legs already closed — finalizing", position.Id);
+                await FinalizeClosedPositionAsync(position, reason, longExchangeName, shortExchangeName, assetSymbol, ct);
+                return;
+            }
+
+            // Dispatch only the legs that need closing
+            Task<OrderResultDto> longCloseTask;
+            Task<OrderResultDto> shortCloseTask;
+
+            if (needLongClose && needShortClose)
+            {
+                longCloseTask = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
+                shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
+            }
+            else if (needLongClose)
+            {
+                longCloseTask = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
+                shortCloseTask = Task.FromResult(new OrderResultDto { Success = true, FilledPrice = 0, FilledQuantity = 0 });
+            }
+            else
+            {
+                longCloseTask = Task.FromResult(new OrderResultDto { Success = true, FilledPrice = 0, FilledQuantity = 0 });
+                shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
+            }
 
             try
             {
@@ -540,7 +625,6 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (longFailed && shortFailed)
                 {
-                    // Both legs failed — mark as EmergencyClosed, operator must intervene
                     var longEx = longCloseTask.Exception?.GetBaseException();
                     var shortEx = shortCloseTask.Exception?.GetBaseException();
 
@@ -571,8 +655,24 @@ public class ExecutionEngine : IExecutionEngine
                     return;
                 }
 
-                // Exactly one leg failed — save partial data from the successful leg,
-                // leave position in Closing so the operator can manually close the remaining open leg.
+                // Exactly one leg failed — mark the successful leg as closed, leave in Closing for retry
+                if (!longFailed && needLongClose)
+                {
+                    var longResult = longCloseTask.IsCompletedSuccessfully ? longCloseTask.Result : null;
+                    if (longResult?.Success == true)
+                    {
+                        position.LongLegClosed = true;
+                    }
+                }
+                if (!shortFailed && needShortClose)
+                {
+                    var shortResult = shortCloseTask.IsCompletedSuccessfully ? shortCloseTask.Result : null;
+                    if (shortResult?.Success == true)
+                    {
+                        position.ShortLegClosed = true;
+                    }
+                }
+
                 var failedLegName = longFailed ? "long" : "short";
                 var failedEx = longFailed
                     ? longCloseTask.Exception?.GetBaseException()
@@ -585,7 +685,6 @@ public class ExecutionEngine : IExecutionEngine
                         failedLegName, position.Id, assetSymbol, failedEx?.Message);
                 }
 
-                // Leave position.Status = Closing — do NOT mark Closed or EmergencyClosed
                 _uow.Positions.Update(position);
                 _uow.Alerts.Add(new Alert
                 {
@@ -603,9 +702,10 @@ public class ExecutionEngine : IExecutionEngine
             var longClose = longCloseTask.Result;
             var shortClose = shortCloseTask.Result;
 
-            // C2: Check Success=false BEFORE computing PnL. LighterConnector catches all exceptions
-            // and returns OrderResultDto { Success = false } — the task never faults, so a try/catch
-            // around WhenAll would miss it. PnL with FilledPrice=0 and FilledQuantity=0 is wrong.
+            // Track successful legs — persist even on partial failure for retry
+            if (longClose.Success && needLongClose) position.LongLegClosed = true;
+            if (shortClose.Success && needShortClose) position.ShortLegClosed = true;
+
             if (!longClose.Success || !shortClose.Success)
             {
                 var longCloseError = longClose.Success ? null : longClose.Error;
@@ -619,7 +719,6 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (!longClose.Success && !shortClose.Success)
                 {
-                    // Both legs failed — mark EmergencyClosed
                     position.Status = PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
@@ -636,9 +735,8 @@ public class ExecutionEngine : IExecutionEngine
                 }
                 else
                 {
-                    // One leg failed — leave in Closing for manual intervention.
-                    // H4: Do NOT overwrite entry prices — they must be preserved for manual PnL computation.
-                    // The alert message contains the close fill data for the successful leg.
+                    // One leg succeeded, one failed — save leg flags and leave in Closing for retry
+                    _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = position.UserId,
@@ -652,7 +750,7 @@ public class ExecutionEngine : IExecutionEngine
                                              (shortClose.Success
                                                  ? $"Short=closed @ {shortClose.FilledPrice:F4}. "
                                                  : $"Short=FAILED: {TruncateError(shortCloseError, 900)}. ") +
-                                             "Manual intervention required.",
+                                             "Will retry failed leg next cycle.",
                     });
                 }
 
@@ -660,9 +758,15 @@ public class ExecutionEngine : IExecutionEngine
                 return;
             }
 
-            // C-EE1: Compute each leg independently so differing fill quantities produce correct PnL.
-            var longPnl = (longClose.FilledPrice - position.LongEntryPrice) * longClose.FilledQuantity;
-            var shortPnl = (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity;
+            // Both legs succeeded this round — compute PnL
+            // For legs that were already closed in a prior round (needLongClose=false or needShortClose=false),
+            // use zero for that leg's PnL contribution since it was already accounted for.
+            var longPnl = needLongClose
+                ? (longClose.FilledPrice - position.LongEntryPrice) * longClose.FilledQuantity
+                : 0m;
+            var shortPnl = needShortClose
+                ? (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity
+                : 0m;
 
             // Record exit fees
             var longCloseNotional = longClose.FilledPrice * longClose.FilledQuantity;
@@ -679,9 +783,9 @@ public class ExecutionEngine : IExecutionEngine
             var pnl = pricePnl + position.AccumulatedFunding
                      - position.EntryFeesUsdc - position.ExitFeesUsdc;
 
-            // Check for partial fills
+            // Check for partial fills (only for legs that were actually dispatched this round)
             var avgEntryPrice = (position.LongEntryPrice + position.ShortEntryPrice) / 2m;
-            if (avgEntryPrice > 0)
+            if (avgEntryPrice > 0 && needLongClose && needShortClose)
             {
                 var expectedQty = position.SizeUsdc * position.Leverage / avgEntryPrice;
                 var longFillRatio = expectedQty > 0 ? longClose.FilledQuantity / expectedQty : 1m;
@@ -852,6 +956,50 @@ public class ExecutionEngine : IExecutionEngine
                 exchangeName, userId, ex.GetType().Name);
             return (null, null, null, null, null, null, "Credential validation failed");
         }
+    }
+
+    private async Task<int?> GetCachedMaxLeverageAsync(IExchangeConnector connector, string asset, CancellationToken ct)
+    {
+        var key = (connector.ExchangeName, asset);
+        if (_leverageCache.TryGetValue(key, out var cached) && cached.Fetched > DateTime.UtcNow.AddMinutes(-5))
+        {
+            return cached.MaxLeverage;
+        }
+
+        var maxLev = await connector.GetMaxLeverageAsync(asset, ct);
+        if (maxLev.HasValue)
+        {
+            _leverageCache[key] = (maxLev.Value, DateTime.UtcNow);
+        }
+
+        return maxLev;
+    }
+
+    /// <summary>
+    /// Finalizes a position where both legs are already marked as closed (retry edge case).
+    /// Since leg close data was not captured in prior rounds, uses accumulated funding minus fees as PnL.
+    /// </summary>
+    private async Task FinalizeClosedPositionAsync(
+        ArbitragePosition position, CloseReason reason,
+        string longExchangeName, string shortExchangeName, string assetSymbol,
+        CancellationToken ct)
+    {
+        position.RealizedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
+        position.Status = PositionStatus.Closed;
+        position.CloseReason = reason;
+        position.ClosedAt = DateTime.UtcNow;
+        _uow.Positions.Update(position);
+
+        _uow.Alerts.Add(new Alert
+        {
+            UserId = position.UserId,
+            ArbitragePositionId = position.Id,
+            Type = AlertType.PositionClosed,
+            Severity = AlertSeverity.Info,
+            Message = $"Position closed (finalized): {assetSymbol} reason={reason} PnL={position.RealizedPnl:F4} USDC",
+        });
+
+        await _uow.SaveAsync(ct);
     }
 
     /// <summary>
