@@ -243,6 +243,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             }
 
             pos.Status = PositionStatus.EmergencyClosed;
+            pos.ClosedAt = DateTime.UtcNow;
             _uow.Positions.Update(pos);
             _uow.Alerts.Add(new Alert
             {
@@ -290,6 +291,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             }
 
             pos.Status = PositionStatus.EmergencyClosed;
+            pos.ClosedAt = DateTime.UtcNow;
             _uow.Positions.Update(pos);
             _uow.Alerts.Add(new Alert
             {

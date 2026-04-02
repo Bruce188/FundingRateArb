@@ -181,9 +181,8 @@ public class ConnectivityTestServiceTests
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
-        // Sanitized: error message should not leak raw exception details
-        result.Error.Should().Contain("Balance check failed");
-        result.Error.Should().NotContain("Connection refused");
+        // Error message now surfaces actual exchange error for diagnosis
+        result.Error.Should().Contain("Balance check failed:");
         result.Balance.Should().BeNull();
     }
 
@@ -198,9 +197,9 @@ public class ConnectivityTestServiceTests
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
 
         result.Success.Should().BeFalse();
-        // Sanitized: should not contain raw SDK error
-        result.Error.Should().Contain("Open failed");
-        result.Error.Should().NotContain("Insufficient margin");
+        // Error message now surfaces actual exchange error for diagnosis
+        result.Error.Should().Contain("Open failed:");
+        result.Error.Should().Contain("Insufficient margin");
         result.Balance.Should().BeNull("balance should not be exposed on failure paths");
 
         // Verify ClosePositionAsync was never called

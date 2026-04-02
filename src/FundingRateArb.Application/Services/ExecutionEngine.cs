@@ -197,6 +197,7 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     _logger.LogError(ex, "First leg threw for {Asset} on {Exchange}", opp.AssetSymbol, firstExchangeName);
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -213,6 +214,7 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     // First leg failed cleanly — no fees lost, just abort
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -236,6 +238,7 @@ public class ExecutionEngine : IExecutionEngine
                         // B3: Attempt emergency close — tx may have succeeded on-chain but verification timed out
                         await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                         position.Status = PositionStatus.EmergencyClosed;
+                        position.ClosedAt = DateTime.UtcNow;
                         _uow.Positions.Update(position);
                         _uow.Alerts.Add(new Alert
                         {
@@ -261,6 +264,7 @@ public class ExecutionEngine : IExecutionEngine
                         opp.AssetSymbol, secondExchangeName);
                     await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -281,6 +285,7 @@ public class ExecutionEngine : IExecutionEngine
                         opp.AssetSymbol, secondExchangeName, secondResult.Error);
                     await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -329,6 +334,7 @@ public class ExecutionEngine : IExecutionEngine
                     }
 
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";
                     _uow.Alerts.Add(new Alert
@@ -359,6 +365,7 @@ public class ExecutionEngine : IExecutionEngine
                     }
 
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var error = !longResult.Success ? longResult.Error : shortResult.Error;
                     _uow.Alerts.Add(new Alert
@@ -509,6 +516,7 @@ public class ExecutionEngine : IExecutionEngine
                     }
 
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -574,6 +582,7 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     // Both legs failed — mark EmergencyClosed
                     position.Status = PositionStatus.EmergencyClosed;
+                    position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {

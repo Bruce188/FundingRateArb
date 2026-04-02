@@ -1477,4 +1477,37 @@ public class PositionHealthMonitorTests
 
         result.Should().Be(CloseReason.PnlTargetReached, "PnlTargetReached should fire regardless of MinHoldTimeHours");
     }
+
+    // ── Task 3.1: Reap sets ClosedAt on EmergencyClosed positions ──────────────
+
+    [Fact]
+    public async Task ReapStaleOpening_SetsClosedAt()
+    {
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+
+        var stalePos = new ArbitragePosition
+        {
+            Id = 99,
+            UserId = "test-user",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-10),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
+            .ReturnsAsync([stalePos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing))
+            .ReturnsAsync([]);
+
+        var beforeReap = DateTime.UtcNow;
+        await _sut.CheckAndActAsync();
+
+        stalePos.Status.Should().Be(PositionStatus.EmergencyClosed);
+        stalePos.ClosedAt.Should().NotBeNull("Reaped positions should have ClosedAt set");
+        stalePos.ClosedAt!.Value.Should().BeOnOrAfter(beforeReap);
+        stalePos.ClosedAt!.Value.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+    }
 }

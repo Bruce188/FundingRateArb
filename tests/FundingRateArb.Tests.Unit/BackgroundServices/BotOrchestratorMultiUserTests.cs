@@ -77,6 +77,8 @@ public class BotOrchestratorMultiUserTests
             .ReturnsAsync(HealthCheckResult.Empty);
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed))
+            .ReturnsAsync(new List<ArbitragePosition>());
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync(new List<Alert>());
         _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))

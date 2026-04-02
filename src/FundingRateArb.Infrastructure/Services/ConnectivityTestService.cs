@@ -173,8 +173,9 @@ public class ConnectivityTestService : IConnectivityTestService
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Balance check failed for {Exchange}", exchangeName);
-                    await Log("Balance check failed — see server log for details");
-                    return new ConnectivityTestResult(false, exchangeName, "Balance check failed — see server log for details");
+                    var msg = $"Balance check failed: {Truncate(ex.Message)}";
+                    await Log(msg);
+                    return new ConnectivityTestResult(false, exchangeName, msg);
                 }
 
                 // Step 2 - Open position
@@ -183,8 +184,9 @@ public class ConnectivityTestService : IConnectivityTestService
                 if (!openResult.Success)
                 {
                     _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
-                    await Log("Open failed — see server log for details");
-                    return new ConnectivityTestResult(false, exchangeName, "Open failed — see server log for details");
+                    var openMsg = $"Open failed: {Truncate(openResult.Error)}";
+                    await Log(openMsg);
+                    return new ConnectivityTestResult(false, exchangeName, openMsg);
                 }
                 _logger.LogDebug("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
                     exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
@@ -195,10 +197,10 @@ public class ConnectivityTestService : IConnectivityTestService
                 // (e.g., browser navigation) from stranding an open position.
 
                 // Step 3 - Wait for settlement
-                await Log("Step 3: Waiting for settlement (2s)...");
+                await Log("Step 3: Waiting for settlement (5s)...");
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(2), ct);
+                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 }
                 catch (OperationCanceledException)
                 {
@@ -213,7 +215,7 @@ public class ConnectivityTestService : IConnectivityTestService
                 if (!closeResult.Success)
                 {
                     _logger.LogWarning("Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
-                    await Log("Close failed — retrying in 3 seconds...");
+                    await Log($"Close attempt 1 failed: {Truncate(closeResult.Error)} — retrying in 3 seconds...");
                     await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
 
                     closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
@@ -221,9 +223,9 @@ public class ConnectivityTestService : IConnectivityTestService
                     {
                         _logger.LogError("Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",
                             exchangeName, closeResult.Error);
-                        await Log("STRANDED POSITION — close retry failed. Manual intervention required!");
-                        return new ConnectivityTestResult(false, exchangeName,
-                            "STRANDED POSITION — close failed after retry. Manual intervention required!");
+                        var strandedMsg = $"STRANDED POSITION — close failed: {Truncate(closeResult.Error)}. Manual intervention required!";
+                        await Log(strandedMsg);
+                        return new ConnectivityTestResult(false, exchangeName, strandedMsg);
                     }
                 }
                 _logger.LogInformation("Close succeeded for {Exchange}: OrderId={OrderId}",
@@ -252,4 +254,7 @@ public class ConnectivityTestService : IConnectivityTestService
             return new ConnectivityTestResult(false, exchangeName, "Unexpected error during connectivity test");
         }
     }
+
+    private static string Truncate(string? s, int max = 500) =>
+        s is null ? "(no details)" : s.Length > max ? s[..max] + "..." : s;
 }

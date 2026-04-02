@@ -35,6 +35,7 @@ public class PositionAnalyticsSummaryDto
     public decimal PnlDifference { get; set; }
     public decimal HoursHeld { get; set; }
     public bool IsClosed { get; set; }
+    public string StatusLabel { get; set; } = string.Empty;
     public DateTime OpenedAt { get; set; }
 
     /// <summary>Accuracy as percentage: (Actual / Projected) * 100. Null if projected is zero.</summary>
