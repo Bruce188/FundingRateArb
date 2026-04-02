@@ -39,6 +39,10 @@ public class LighterMarketDataStream : IMarketDataStream
     public event Action<FundingRateDto>? OnRateUpdate;
     public event Action<string, string>? OnDisconnected;
 
+    /// <summary>Seed market-index-to-symbol mappings for unit testing.</summary>
+    internal void SetMarketMapping(int marketIndex, string symbol)
+        => _marketIndexToSymbol[marketIndex] = symbol;
+
     public async Task StartAsync(IEnumerable<string> symbols, CancellationToken ct)
     {
         // Load market index → symbol mappings via REST
@@ -119,7 +123,7 @@ public class LighterMarketDataStream : IMarketDataStream
         }
     }
 
-    private void TryParseMarketStat(JsonElement el)
+    internal void TryParseMarketStat(JsonElement el)
     {
         // Extract market_index to look up symbol
         if (!el.TryGetProperty("market_index", out var marketIndexProp))
@@ -136,7 +140,7 @@ public class LighterMarketDataStream : IMarketDataStream
             return;
         }
 
-        // Extract funding rate (already per-hour, no conversion)
+        // Extract funding rate (8-hour rate from API, divide by 8 for hourly)
         var fundingRate = GetDecimalProperty(el, "funding_rate_current")
                        ?? GetDecimalProperty(el, "funding_rate")
                        ?? 0m;
@@ -158,7 +162,7 @@ public class LighterMarketDataStream : IMarketDataStream
             ExchangeName = ExchangeName,
             Symbol = symbol,
             RawRate = fundingRate,
-            RatePerHour = fundingRate,
+            RatePerHour = fundingRate / 8m,
             MarkPrice = markPrice,
             IndexPrice = indexPrice,
             Volume24hUsd = volume,
