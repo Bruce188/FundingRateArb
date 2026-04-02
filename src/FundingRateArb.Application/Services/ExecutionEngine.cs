@@ -861,7 +861,7 @@ public class ExecutionEngine : IExecutionEngine
         {
             try
             {
-                var closeResult = await connector.ClosePositionAsync(asset, side, ct);
+                var closeResult = await connector.ClosePositionAsync(asset, side, CancellationToken.None);
                 if (closeResult.Success)
                 {
                     return;

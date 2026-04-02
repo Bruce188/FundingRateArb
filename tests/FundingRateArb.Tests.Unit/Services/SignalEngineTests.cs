@@ -1141,10 +1141,11 @@ public class SignalEngineTests
             MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
         };
 
-        // With buffer=0: spread=0.0009, feePerHour=(0.00090+0)/24=0.0000375, net=0.0008625
-        // With buffer=10: slippage=10/10000=0.001, net=0.0008625-0.001=-0.0001375 (below threshold)
+        // FeeAmortizationHours=1 so fees and slippage are both per-hour (not amortized)
+        // feePerHour=(0.00090+0)/1=0.00090, spread=0.0009, net=0.0009-0.00090=0.0
+        // slippagePerHour=10/10000/1=0.001, net=0.0-0.001=-0.001 (below threshold 0.0003)
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m });
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m, FeeAmortizationHours = 1 });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync(rates);
 
@@ -1165,7 +1166,7 @@ public class SignalEngineTests
             MakeRate(2, "Lighter",     1, "ETH", 0.0030m), // spread = 0.0029
         };
 
-        // With buffer=10: slippage=0.001, net=0.0029-fees-0.001 still > 0.0003
+        // With buffer=10, amortHours=12: slippage=0.0000833/hr, net≈0.002742 still > 0.0003
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m });
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())

@@ -330,7 +330,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         ArbitragePosition pos, BotConfiguration config,
         decimal unrealizedPnl, decimal hoursOpen, decimal spread)
     {
-        // Priority: StopLoss > PnlTargetReached > MaxHoldTime > SpreadCollapsed
+        // Priority: StopLoss > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
         {
             return CloseReason.StopLoss;
@@ -358,15 +358,15 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             }
         }
 
-        if (hoursOpen >= config.MaxHoldTimeHours)
-        {
-            return CloseReason.MaxHoldTimeReached;
-        }
-
         // Emergency spread: bypass MinHoldTimeHours for catastrophic spread reversal
         if (spread < config.EmergencyCloseSpreadThreshold)
         {
             return CloseReason.SpreadCollapsed;
+        }
+
+        if (hoursOpen >= config.MaxHoldTimeHours)
+        {
+            return CloseReason.MaxHoldTimeReached;
         }
 
         if (spread < config.CloseThreshold && hoursOpen >= config.MinHoldTimeHours)

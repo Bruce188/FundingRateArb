@@ -100,12 +100,12 @@
 
         var tdSpread = document.createElement("td");
         tdSpread.className = "position-spread " + spreadClass;
-        tdSpread.textContent = (spread * 100).toFixed(4) + "%";
+        tdSpread.textContent = (spread * 100).toFixed(6) + "%";
         tr.appendChild(tdSpread);
 
         var tdPnl = document.createElement("td");
         tdPnl.className = "position-pnl " + pnlClass;
-        tdPnl.textContent = "$" + pnl.toFixed(4);
+        tdPnl.textContent = "$" + pnl.toFixed(2);
         tr.appendChild(tdPnl);
 
         var tdTime = document.createElement("td");
@@ -152,7 +152,7 @@
         var detailDiv = document.createElement("div");
         detailDiv.className = "small";
         var spread = position.currentSpreadPerHour ?? 0;
-        detailDiv.textContent = "Size: $" + (position.sizeUsdc ?? 0).toFixed(2) + " | Spread: " + (spread * 100).toFixed(4) + "%/hr";
+        detailDiv.textContent = "Size: $" + (position.sizeUsdc ?? 0).toFixed(2) + " | Spread: " + (spread * 100).toFixed(6) + "%/hr";
         body.appendChild(detailDiv);
 
         card.appendChild(body);

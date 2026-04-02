@@ -1655,6 +1655,47 @@ public class PositionHealthMonitorTests
         pos.CurrentSpreadPerHour.Should().Be(0.0005m);
     }
 
+    // ── N3: PriceFeedFailure boundary — no close at threshold-1, close at threshold ──
+
+    [Fact]
+    public async Task CheckAndAct_PriceFeedFailure_NoCloseBeforeThreshold_ClosesAtThreshold()
+    {
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        var testConfig = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            AdaptiveHoldEnabled = true,
+            PriceFeedFailureCloseThreshold = 5,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(testConfig);
+
+        // Make GetMarkPriceAsync throw every time
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        // Run 4 cycles (threshold - 1) — should NOT close
+        HealthCheckResult resultBefore = null!;
+        for (int i = 0; i < 4; i++)
+        {
+            resultBefore = await _sut.CheckAndActAsync();
+        }
+
+        resultBefore.ToClose.Should().BeEmpty("position should not close before reaching threshold");
+
+        // Run 5th cycle (at threshold) — SHOULD close
+        var resultAt = await _sut.CheckAndActAsync();
+        resultAt.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.PriceFeedLost,
+            "position should force-close exactly at the threshold");
+    }
+
     // ── NB1: totalPnl uses computed entryFee, not pos.EntryFeesUsdc ───────────
 
     [Fact]

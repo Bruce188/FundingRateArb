@@ -2247,4 +2247,81 @@ public class ExecutionEngineTests
         capturedAlert!.Message.Length.Should().BeLessOrEqualTo(2000,
             "dual-error alert message must not exceed the nvarchar(2000) column limit");
     }
+
+    // ── N2: Emergency close exception retry succeeds on second attempt ──────────
+
+    [Fact]
+    public async Task EmergencyClose_ExceptionThenSuccess_ExactlyTwoInvocations_NoCriticalAlert()
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close: first attempt throws exception, second attempt succeeds
+        var callCount = 0;
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    throw new HttpRequestException("Connection reset");
+                }
+
+                return new OrderResultDto { Success = true, OrderId = "close-1", FilledPrice = 3000m, FilledQuantity = 0.1m };
+            });
+
+        // Act
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: exactly 2 invocations (throw + success)
+        callCount.Should().Be(2, "should retry after exception and succeed on second attempt");
+
+        // No critical EMERGENCY CLOSE FAILED alert since second attempt succeeded
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Never,
+            "should not create critical alert when retry succeeds");
+    }
+
+    // ── NB4: Order timeout — 45-second CTS on PlaceMarketOrderAsync ────────────
+
+    [Fact]
+    public async Task OpenPosition_OrderTimeout_FailsWithoutHanging()
+    {
+        // Use sequential path: mark short connector as estimated-fill
+        _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+
+        // First leg (long, since short is estimated → long opens first via sequential logic:
+        // firstIsLong = false || !true = false → short goes first)
+        // Actually: firstIsLong = longConnector.IsEstimatedFillExchange || !shortConnector.IsEstimatedFillExchange
+        //         = false || !true = false → firstIsLong = false → short connector goes first
+        // So short goes first. Make it never complete — cancelled by the 45s linked CTS.
+        var tcs = new TaskCompletionSource<OrderResultDto>();
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .Returns((string _, Side _, decimal _, int _, CancellationToken ct) =>
+            {
+                ct.Register(() => tcs.TrySetCanceled(ct));
+                return tcs.Task;
+            });
+
+        // Act: the 45s linked CTS fires, the catch(Exception) block handles it, returns (false, message)
+        var task = _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: operation completes within 50s (the 45s CTS internally terminates it)
+        var watchdog = Task.Delay(TimeSpan.FromSeconds(50));
+        var completed = await Task.WhenAny(task, watchdog);
+        completed.Should().BeSameAs(task, "operation should complete via internal timeout, not hang indefinitely");
+
+        // Await the result — sequential path catches the exception and returns (false, message)
+        var result = await task;
+        result.Success.Should().BeFalse("should fail when order times out");
+    }
 }
