@@ -9,7 +9,7 @@ public class AlertConfiguration : IEntityTypeConfiguration<Alert>
     public void Configure(EntityTypeBuilder<Alert> builder)
     {
         builder.HasKey(a => a.Id);
-        builder.Property(a => a.Message).IsRequired().HasMaxLength(1000);
+        builder.Property(a => a.Message).IsRequired().HasMaxLength(2000);
 
         builder.HasOne(a => a.User)
             .WithMany(u => u.Alerts)

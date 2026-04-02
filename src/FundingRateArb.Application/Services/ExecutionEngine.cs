@@ -29,6 +29,9 @@ public class ExecutionEngine : IExecutionEngine
         _logger = logger;
     }
 
+    internal static string TruncateError(string? error, int maxLength = 1900)
+        => error is null ? "" : error.Length > maxLength ? error[..maxLength] + "…" : error;
+
     public async Task<(bool Success, string? Error)> OpenPositionAsync(
         string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
     {
@@ -195,14 +198,12 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(ex, "First leg threw for {Asset} on {Exchange}", opp.AssetSymbol, firstExchangeName);
                     position.Status = PositionStatus.EmergencyClosed;
                     _uow.Positions.Update(position);
-                    // NB3: Truncate exception message to 200 chars in alerts
-                    var truncatedMsg = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) threw: {truncatedMsg}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) threw: {TruncateError(ex.Message)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, ex.Message);
@@ -218,7 +219,7 @@ public class ExecutionEngine : IExecutionEngine
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) failed: {firstResult.Error}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) failed: {TruncateError(firstResult.Error)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, firstResult.Error);
@@ -261,14 +262,12 @@ public class ExecutionEngine : IExecutionEngine
                     await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
                     _uow.Positions.Update(position);
-                    // NB3: Truncate exception message to 200 chars in alerts
-                    var truncatedMsg = ex.Message.Length > 200 ? ex.Message[..200] : ex.Message;
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) threw: {truncatedMsg}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) threw: {TruncateError(ex.Message)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, ex.Message);
@@ -288,7 +287,7 @@ public class ExecutionEngine : IExecutionEngine
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) failed: {secondResult.Error}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) failed: {TruncateError(secondResult.Error)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, secondResult.Error);
@@ -332,14 +331,12 @@ public class ExecutionEngine : IExecutionEngine
                     position.Status = PositionStatus.EmergencyClosed;
                     _uow.Positions.Update(position);
                     var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";
-                    // NB3: Truncate exception message to 200 chars in alerts
-                    var truncatedMsg = errorMsg.Length > 200 ? errorMsg[..200] : errorMsg;
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — concurrent leg threw: {truncatedMsg}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — concurrent leg threw: {TruncateError(errorMsg)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, errorMsg);
@@ -369,7 +366,7 @@ public class ExecutionEngine : IExecutionEngine
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — leg failed: {error}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — leg failed: {TruncateError(error)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, error);
@@ -458,7 +455,7 @@ public class ExecutionEngine : IExecutionEngine
                 ArbitragePositionId = position.Id,
                 Type = AlertType.LegFailed,
                 Severity = AlertSeverity.Critical,
-                Message = $"Cannot close position for {assetSymbol}: {credError}. Manual intervention required.",
+                Message = $"Cannot close position for {assetSymbol}: {TruncateError(credError)}. Manual intervention required.",
             });
             await _uow.SaveAsync(ct);
             return;
@@ -520,7 +517,7 @@ public class ExecutionEngine : IExecutionEngine
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
                         Message = $"Close failed on BOTH legs for {assetSymbol}. " +
-                                             $"Long error: {longEx?.Message}. Short error: {shortEx?.Message}. " +
+                                             $"Long error: {TruncateError(longEx?.Message, 900)}. Short error: {TruncateError(shortEx?.Message, 900)}. " +
                                              "Manual intervention required.",
                     });
                     await _uow.SaveAsync(ct);
@@ -550,7 +547,7 @@ public class ExecutionEngine : IExecutionEngine
                     Type = AlertType.LegFailed,
                     Severity = AlertSeverity.Critical,
                     Message = $"Close partially failed: {failedLegName} leg failed for {assetSymbol}. " +
-                                          $"Error: {failedEx?.Message}. Manual intervention required.",
+                                          $"Error: {TruncateError(failedEx?.Message)}. Manual intervention required.",
                 });
                 await _uow.SaveAsync(ct);
                 return;
@@ -585,7 +582,7 @@ public class ExecutionEngine : IExecutionEngine
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
                         Message = $"CLOSE FAILED both legs: {assetSymbol} " +
-                                             $"Long={longCloseError ?? "error"} Short={shortCloseError ?? "error"}. " +
+                                             $"Long={TruncateError(longCloseError, 900)} Short={TruncateError(shortCloseError, 900)}. " +
                                              "Manual intervention required.",
                     });
                 }
@@ -603,10 +600,10 @@ public class ExecutionEngine : IExecutionEngine
                         Message = $"PARTIAL CLOSE FAILURE: {assetSymbol} " +
                                              (longClose.Success
                                                  ? $"Long=closed @ {longClose.FilledPrice:F4} "
-                                                 : $"Long=FAILED: {longCloseError} ") +
+                                                 : $"Long=FAILED: {TruncateError(longCloseError, 900)} ") +
                                              (shortClose.Success
                                                  ? $"Short=closed @ {shortClose.FilledPrice:F4}. "
-                                                 : $"Short=FAILED: {shortCloseError}. ") +
+                                                 : $"Short=FAILED: {TruncateError(shortCloseError, 900)}. ") +
                                              "Manual intervention required.",
                     });
                 }
@@ -873,7 +870,7 @@ public class ExecutionEngine : IExecutionEngine
                     UserId = userId,
                     Type = AlertType.LegFailed,
                     Severity = AlertSeverity.Critical,
-                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset}: {closeResult.Error}. Manual intervention required.",
+                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset}: {TruncateError(closeResult.Error)}. Manual intervention required.",
                 });
                 return;
             }
@@ -888,7 +885,7 @@ public class ExecutionEngine : IExecutionEngine
                     UserId = userId,
                     Type = AlertType.LegFailed,
                     Severity = AlertSeverity.Critical,
-                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset} threw: {ex.Message}. Manual intervention required.",
+                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset} threw: {TruncateError(ex.Message)}. Manual intervention required.",
                 });
                 return;
             }
