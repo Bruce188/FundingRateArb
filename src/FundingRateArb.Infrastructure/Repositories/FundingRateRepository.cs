@@ -84,7 +84,7 @@ public class FundingRateRepository : IFundingRateRepository
     public Task<bool> HourlyAggregatesExistAsync(DateTime from, DateTime to, CancellationToken ct = default)
     {
         return _context.FundingRateHourlyAggregates
-            .AnyAsync(a => a.HourUtc >= from && a.HourUtc <= to, ct);
+            .AnyAsync(a => a.HourUtc >= from && a.HourUtc < to, ct);
     }
 
     public void AddAggregateRange(IEnumerable<FundingRateHourlyAggregate> aggregates) =>
