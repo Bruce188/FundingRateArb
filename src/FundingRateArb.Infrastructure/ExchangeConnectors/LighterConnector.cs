@@ -31,10 +31,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     // Instance field (not static) so two instances cannot produce duplicate clientOrderIndex values.
     private long _orderCounter = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    // Cache market metadata (orderBookDetails) for 5 minutes
+    // Cache market metadata (orderBookDetails) for 45 seconds
     private Dictionary<string, LighterOrderBookDetail>? _marketCache;
     private DateTime _marketCacheExpiry = DateTime.MinValue;
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(45);
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
     // Cache leverage per market to skip redundant TryUpdateLeverageAsync calls
     private readonly ConcurrentDictionary<int, int> _leverageCache = new();

@@ -696,4 +696,61 @@ public class DashboardControllerTests
         _mockPositionRepo.Verify(r => r.GetOpenByUserAsync("test-user-id"), Times.Once);
         _mockPositionRepo.Verify(r => r.GetOpenAsync(), Times.Never);
     }
+
+    // ── N7: Best spread prefers opportunity spread over position spread ──────
+
+    [Fact]
+    public async Task Index_OpportunitiesAndPositions_BestSpreadFromOpportunities()
+    {
+        // Arrange: opportunities have spread 0.0005, positions have spread 0.001
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "ExA",
+            ShortExchangeName = "ExB",
+            SpreadPerHour = 0.0005m,
+            NetYieldPerHour = 0.0003m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 3000m,
+            ShortMarkPrice = 3000m,
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = "test-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.001m,
+            EntrySpreadPerHour = 0.001m,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "ExA" },
+            ShortExchange = new Exchange { Id = 2, Name = "ExB" },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetOpenByUserAsync("test-user-id"))
+            .ReturnsAsync([pos]);
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert: BestSpread should come from opportunities (0.0005), not positions (0.001)
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.BestSpread.Should().Be(0.0005m,
+            "when opportunities exist, BestSpread should use opportunity spread, not position spread");
+    }
 }

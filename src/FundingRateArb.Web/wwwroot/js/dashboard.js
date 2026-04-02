@@ -160,7 +160,11 @@
     }
 
     connection.on("ReceivePositionUpdate", function (position) {
-        var positionRow = document.getElementById("position-" + position.id);
+        // N1: Validate position.id is numeric before using in DOM IDs
+        var safeId = parseInt(position.id, 10);
+        if (isNaN(safeId)) return;
+
+        var positionRow = document.getElementById("position-" + safeId);
         if (positionRow) {
             var pnlEl = positionRow.querySelector(".position-pnl");
             if (pnlEl) {
@@ -181,11 +185,18 @@
                 applyWarningIcons(firstTd, position.warningTypes);
             }
         } else {
+            // NB6: Ignore updates for closed positions
+            if (position.status === "Closed" || position.status === "EmergencyClosed") return;
+
+            // NB6: Dedup guard — re-check after creation race
+            if (document.getElementById("position-" + safeId)) return;
+
             // New position — create DOM elements
-            // Desktop table row
-            var table = document.querySelector(".table-responsive table tbody");
-            if (table) {
-                table.appendChild(createPositionRow(position));
+            // B1: Use positions-table ID to target the correct table
+            var posTable = document.getElementById("positions-table");
+            var tbody = posTable ? posTable.querySelector("tbody") : null;
+            if (tbody) {
+                tbody.appendChild(createPositionRow(position));
             }
             // Mobile card
             var cardsContainer = document.getElementById("positions-cards");

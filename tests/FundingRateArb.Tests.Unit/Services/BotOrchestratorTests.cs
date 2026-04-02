@@ -799,4 +799,122 @@ public class BotOrchestratorTests
             It.Is<DateTime>(d => d < DateTime.UtcNow.AddDays(-6) && d > DateTime.UtcNow.AddDays(-8)),
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    // ── NB11: Loss-cooldown after negative-PnL close ─────────────────────────
+
+    [Fact]
+    public async Task RunCycle_NegativeRealizedPnl_AppliesCooldown()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Health monitor returns a position to close
+        var posToClose = new ArbitragePosition
+        {
+            Id = 42,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            Status = PositionStatus.Open,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+        };
+
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                [(posToClose, CloseReason.SpreadCollapsed)],
+                []));
+
+        // Execution engine mutates the position on close
+        _mockExecutionEngine.Setup(e => e.ClosePositionAsync(TestUserId, posToClose, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                posToClose.Status = PositionStatus.Closed;
+                posToClose.RealizedPnl = -1.5m; // negative PnL
+            })
+            .Returns(Task.CompletedTask);
+
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        // No opportunities so the cycle ends after health check
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Verify cooldown was applied
+        var cooldownKey = $"{TestUserId}:1:1:2";
+        _sut.FailedOpCooldowns.ContainsKey(cooldownKey).Should().BeTrue(
+            "negative PnL close should apply cooldown to the opportunity key");
+    }
+
+    // ── N6: Adaptive threshold selects highest yield ─────────────────────────
+
+    [Fact]
+    public async Task AdaptiveThreshold_SelectsHighestYield()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // User has 0 open positions (adaptive threshold kicks in)
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        // Signal engine returns no above-threshold opportunities but has AllNetPositive
+        var lowYieldOpp = MakeOpp(1, "ETH", 1, 2);
+        lowYieldOpp.NetYieldPerHour = 0.00005m;
+        var highYieldOpp = MakeOpp(2, "BTC", 1, 2);
+        highYieldOpp.NetYieldPerHour = 0.0002m;
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                Opportunities = [], // Nothing above threshold
+                AllNetPositive = [lowYieldOpp, highYieldOpp],
+            });
+
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        ArbitrageOpportunityDto? capturedOpp = null;
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .Callback<string, ArbitrageOpportunityDto, decimal, CancellationToken>((_, opp, _, _) => capturedOpp = opp)
+            .ReturnsAsync((true, (string?)null));
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        capturedOpp.Should().NotBeNull("adaptive threshold should select an opportunity");
+        capturedOpp!.AssetSymbol.Should().Be("BTC", "should select the higher yield opportunity");
+    }
 }

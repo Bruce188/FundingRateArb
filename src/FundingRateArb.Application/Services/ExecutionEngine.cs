@@ -838,7 +838,8 @@ public class ExecutionEngine : IExecutionEngine
 
     private static readonly string[] RetryableClosePatterns =
         ["no open", "not found", "position not", "does not exist", "no position",
-         "timeout", "rate limit", "429", "503", "502", "server error", "connection", "network"];
+         "timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
+         "connection refused", "connection reset", "network unreachable"];
 
     private static bool IsRetryableCloseError(string? error)
     {
@@ -872,7 +873,7 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogWarning(
                         "Emergency close attempt {Attempt}/{Max} failed (retryable error), retrying in {Delay}ms: {Asset} Error={Error}",
                         attempt + 1, maxAttempts, backoffMs[attempt], asset, closeResult.Error);
-                    await Task.Delay(backoffMs[attempt], ct);
+                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
                     continue;
                 }
 
@@ -897,7 +898,7 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogWarning(ex,
                         "Emergency close attempt {Attempt}/{Max} threw for {Leg} leg: {Asset}, retrying in {Delay}ms",
                         attempt + 1, maxAttempts, legName, asset, backoffMs[attempt]);
-                    await Task.Delay(backoffMs[attempt], ct);
+                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
                     continue;
                 }
 

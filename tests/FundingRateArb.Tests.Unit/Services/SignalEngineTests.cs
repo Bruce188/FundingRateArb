@@ -1127,4 +1127,54 @@ public class SignalEngineTests
         result[0].SpreadPerHour.Should().Be(expectedSpread);
         result[0].NetYieldPerHour.Should().Be(expectedNet);
     }
+
+    // ── B2: SlippageBufferBps with non-zero value ───────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_SlippageBuffer_ReducesNetYield()
+    {
+        // Arrange
+        // Same rates as first test but with SlippageBufferBps=10 (0.001 per hour subtracted)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        // With buffer=0: spread=0.0009, feePerHour=(0.00090+0)/24=0.0000375, net=0.0008625
+        // With buffer=10: slippage=10/10000=0.001, net=0.0008625-0.001=-0.0001375 (below threshold)
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: with slippage buffer, net yield falls below threshold → filtered out
+        result.Should().BeEmpty("slippage buffer should reduce net yield below threshold");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_SlippageBuffer_PassesWithHigherSpread()
+    {
+        // Arrange: very high spread that remains above threshold even with buffer
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m), // spread = 0.0029
+        };
+
+        // With buffer=10: slippage=0.001, net=0.0029-fees-0.001 still > 0.0003
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 10, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: with high spread, opportunity passes even with slippage buffer
+        result.Should().HaveCount(1);
+    }
 }

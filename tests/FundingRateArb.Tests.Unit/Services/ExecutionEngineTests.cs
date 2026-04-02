@@ -2019,6 +2019,10 @@ public class ExecutionEngineTests
     [InlineData("No open position for this market")]
     [InlineData("no position available")]
     [InlineData("NOT FOUND")]
+    [InlineData("Request timeout")]
+    [InlineData("rate limit exceeded")]
+    [InlineData("HTTP 503")]
+    [InlineData("connection reset by peer")]
     public async Task EmergencyClose_RetriesOnRetryableError(string errorMessage)
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long

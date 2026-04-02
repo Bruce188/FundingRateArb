@@ -865,4 +865,19 @@ public class HyperliquidConnectorTests
         capturedQuantity.Should().Be(0.166666m,
             "falls back to 6 decimals when symbol not found in szDecimals cache");
     }
+
+    // ── NB10: Min notional validation ────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_BelowMinNotional_ReturnsFalse()
+    {
+        // sizeUsdc=1, leverage=1, markPrice=3000 → quantity = 1/3000 ≈ 0.000333, notional ≈ $1.0 < $10
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
+        SetupExchangeInfoSuccess(tickers);
+
+        var result = await _sut.PlaceMarketOrderAsync("ETH", Side.Long, 1m, 1);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("below Hyperliquid minimum $10.00");
+    }
 }

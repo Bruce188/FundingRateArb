@@ -155,10 +155,13 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         var markPrice = await GetMarkPriceAsync(asset, ct);
 
         // Try to get actual position size from account info
-        var quantity = await GetPositionQuantityAsync(asset, ct);
+        var (quantity, apiConfirmed) = await GetPositionQuantityAsync(asset, ct);
         if (quantity <= 0)
         {
-            return new OrderResultDto { Success = false, Error = "Position quantity is zero — cannot close nonexistent position" };
+            var error = apiConfirmed
+                ? "Position quantity is zero — API confirms no open position"
+                : "Position quantity is zero — API call failed or returned transient result";
+            return new OrderResultDto { Success = false, Error = error };
         }
 
         // To close: place opposite side with reduceOnly=true
@@ -318,7 +321,12 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     /// Fetches the actual open position quantity for the given asset from account info.
     /// Returns 0 if no position is found or the call fails.
     /// </summary>
-    private async Task<decimal> GetPositionQuantityAsync(string asset, CancellationToken ct)
+    /// <summary>
+    /// Returns (quantity, apiConfirmed). apiConfirmed=true means the API successfully
+    /// returned data (position genuinely doesn't exist). apiConfirmed=false means the
+    /// API call failed or returned an unexpected result (transient — allow retry).
+    /// </summary>
+    private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)
     {
         try
         {
@@ -329,19 +337,21 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
             if (!result.Success || result.Data.Positions is null)
             {
-                return 0m;
+                // API call failed or returned null — transient, allow retry
+                return (0m, false);
             }
 
             var position = result.Data.Positions
                 .FirstOrDefault(p => p.Position?.Symbol == asset);
 
             var qty = position?.Position?.PositionQuantity ?? 0m;
-            return qty > 0 ? Math.Abs(qty) : 0m;
+            // API succeeded — if qty is 0, the position genuinely doesn't exist
+            return qty > 0 ? (Math.Abs(qty), true) : (0m, true);
         }
         catch
         {
-            // If we cannot fetch positions, return 0 to trigger the fallback
-            return 0m;
+            // Exception during API call — transient, allow retry
+            return (0m, false);
         }
     }
 }

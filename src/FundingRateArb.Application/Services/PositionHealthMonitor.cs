@@ -78,7 +78,6 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             {
                 var computedSpread = shortRate.RatePerHour - longRate.RatePerHour;
                 pos.CurrentSpreadPerHour = computedSpread;
-                _uow.Positions.Update(pos);
             }
             else
             {
@@ -349,7 +348,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             if (entryFee > 0 && pos.AccumulatedFunding >= config.TargetPnlMultiplier * entryFee)
             {
                 // Total PnL must be positive (unrealized + accumulated - entry fees)
-                var totalPnl = unrealizedPnl + pos.AccumulatedFunding - pos.EntryFeesUsdc;
+                var totalPnl = unrealizedPnl + pos.AccumulatedFunding - entryFee;
                 // Minimum hold time before PnlTargetReached can fire
                 var minutesOpen = hoursOpen * 60m;
                 if (totalPnl > 0 && minutesOpen >= config.MinHoldBeforePnlTargetMinutes)
