@@ -136,7 +136,7 @@ public class LighterMarketDataStream : IMarketDataStream
             return;
         }
 
-        // Extract funding rate (already per-hour, no conversion)
+        // Extract funding rate (8-hour rate from API, divide by 8 for hourly)
         var fundingRate = GetDecimalProperty(el, "funding_rate_current")
                        ?? GetDecimalProperty(el, "funding_rate")
                        ?? 0m;
@@ -158,7 +158,7 @@ public class LighterMarketDataStream : IMarketDataStream
             ExchangeName = ExchangeName,
             Symbol = symbol,
             RawRate = fundingRate,
-            RatePerHour = fundingRate,
+            RatePerHour = fundingRate / 8m,
             MarkPrice = markPrice,
             IndexPrice = indexPrice,
             Volume24hUsd = volume,

@@ -307,7 +307,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 ExchangeName = ExchangeName,
                 Symbol = r.Symbol,
                 RawRate = r.Rate,
-                RatePerHour = r.Rate,
+                RatePerHour = r.Rate / 8m,
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
                 MarkPrice = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
             }).ToList();

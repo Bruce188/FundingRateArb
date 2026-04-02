@@ -25,16 +25,16 @@ public class LighterMarketDataStreamTests
     }
 
     [Fact]
-    public void FundingRate_UsedAsIs_NoConversion()
+    public void FundingRate_EightHourRate_NormalizedToHourly()
     {
-        // Lighter funding rate is already per-hour, same as RawRate
+        // Lighter funding rate is 8-hour; RatePerHour = RawRate / 8
         var cache = new MarketDataCache();
         var dto = new FundingRateDto
         {
             ExchangeName = "Lighter",
             Symbol = "BTC",
             RawRate = 0.0003m,
-            RatePerHour = 0.0003m, // No division
+            RatePerHour = 0.0003m / 8m,
             MarkPrice = 50000m,
             IndexPrice = 50000m,
             Volume24hUsd = 500000m,
@@ -42,8 +42,8 @@ public class LighterMarketDataStreamTests
         cache.Update(dto);
 
         var cached = cache.GetLatest("Lighter", "BTC");
-        cached!.RatePerHour.Should().Be(0.0003m);
-        cached.RawRate.Should().Be(cached.RatePerHour);
+        cached!.RatePerHour.Should().Be(0.0003m / 8m);
+        cached.RawRate.Should().NotBe(cached.RatePerHour);
     }
 
     private static LighterMarketDataStream CreateStream(

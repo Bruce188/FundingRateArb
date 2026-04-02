@@ -336,7 +336,7 @@ public class LighterConnectorTests
         var eth = rates.First(r => r.Symbol == "ETH");
         eth.ExchangeName.Should().Be("Lighter");
         eth.RawRate.Should().Be(0.0001m);
-        eth.RatePerHour.Should().Be(0.0001m);
+        eth.RatePerHour.Should().Be(0.0001m / 8m);
         eth.Volume24hUsd.Should().Be(15000000.00m);
 
         var btc = rates.First(r => r.Symbol == "BTC");
@@ -359,7 +359,7 @@ public class LighterConnectorTests
     }
 
     [Fact]
-    public async Task GetFundingRates_RateIsAlreadyHourly_NoConversion()
+    public async Task GetFundingRates_EightHourRate_NormalizedToHourly()
     {
         var sut = CreateMultiRouteConnector(h =>
         {
@@ -371,8 +371,8 @@ public class LighterConnectorTests
 
         foreach (var rate in rates)
         {
-            rate.RatePerHour.Should().Be(rate.RawRate,
-                "Lighter funding rates are already per-hour and should not be converted");
+            rate.RatePerHour.Should().Be(rate.RawRate / 8m,
+                "Lighter API returns 8-hour rates; RatePerHour must be RawRate / 8");
         }
     }
 
