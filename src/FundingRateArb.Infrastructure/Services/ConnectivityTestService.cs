@@ -179,8 +179,8 @@ public class ConnectivityTestService : IConnectivityTestService
                 }
 
                 // Step 2 - Open position
-                await Log("Step 2: Opening $5 ETH Long 1x position...");
-                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 5m, 1, ct);
+                await Log("Step 2: Opening $10 ETH Long 1x position...");
+                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, ct);
                 if (!openResult.Success)
                 {
                     _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
