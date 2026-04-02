@@ -13,6 +13,7 @@ public interface IFundingRateRepository
     // Hourly aggregate methods (30-day retention)
     Task<List<FundingRateHourlyAggregate>> GetHourlyAggregatesAsync(
         int? assetId, int? exchangeId, DateTime from, DateTime to, CancellationToken ct = default);
+    Task<bool> HourlyAggregatesExistAsync(DateTime from, DateTime to, CancellationToken ct = default);
     void AddAggregateRange(IEnumerable<FundingRateHourlyAggregate> aggregates);
     Task<int> PurgeAggregatesOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 

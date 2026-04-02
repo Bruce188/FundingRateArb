@@ -131,10 +131,10 @@ public class FundingRateFetcherTests
             .Setup(f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<FundingRateSnapshot> { snapshot });
 
-        // Pre-existence check returns empty (no existing aggregates)
+        // Pre-existence check returns false (no existing aggregates)
         _mockFundingRates
-            .Setup(f => f.GetHourlyAggregatesAsync(null, null, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<FundingRateHourlyAggregate>());
+            .Setup(f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // SaveAsync throws DbUpdateException (duplicate key) on first call
         _mockUow
@@ -171,10 +171,10 @@ public class FundingRateFetcherTests
             .Setup(f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<FundingRateSnapshot> { snapshot });
 
-        // Pre-existence check returns empty (no existing aggregates)
+        // Pre-existence check returns false (no existing aggregates)
         _mockFundingRates
-            .Setup(f => f.GetHourlyAggregatesAsync(null, null, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<FundingRateHourlyAggregate>());
+            .Setup(f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         // SaveAsync throws DbUpdateException (duplicate key)
         _mockUow
@@ -216,11 +216,8 @@ public class FundingRateFetcherTests
 
         // Aggregates already exist for this hour
         _mockFundingRates
-            .Setup(f => f.GetHourlyAggregatesAsync(null, null, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<FundingRateHourlyAggregate>
-            {
-                new() { ExchangeId = 1, AssetId = 1, HourUtc = previousHourStart, AvgRatePerHour = 0.001m, SampleCount = 1 }
-            });
+            .Setup(f => f.HourlyAggregatesExistAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
 
@@ -230,6 +227,12 @@ public class FundingRateFetcherTests
             Times.Never);
         // Should NOT call SaveAsync
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+
+        // NB1: Second call — should skip at _lastAggregatedHourUtc guard (no DB queries)
+        await _sut.TryAggregateHourlyAsync(_mockUow.Object, CancellationToken.None, nowOverride: fixedNow);
+        _mockFundingRates.Verify(
+            f => f.GetSnapshotsInRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     // ── FetchAll_CallsAllThreeConnectors ───────────────────────────────────────

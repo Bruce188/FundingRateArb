@@ -218,8 +218,8 @@ public class FundingRateFetcher : BackgroundService
         }
 
         // Check if aggregates already exist for this hour (prevents duplicate key on container restart)
-        var existingAggregates = await uow.FundingRates.GetHourlyAggregatesAsync(null, null, previousHourStart, currentHourStart, ct);
-        if (existingAggregates.Count > 0)
+        var aggregatesExist = await uow.FundingRates.HourlyAggregatesExistAsync(previousHourStart, currentHourStart, ct);
+        if (aggregatesExist)
         {
             _logger.LogDebug("Aggregates already exist for hour {Hour:u}, skipping insertion", previousHourStart);
             _lastAggregatedHourUtc = previousHourStart;
