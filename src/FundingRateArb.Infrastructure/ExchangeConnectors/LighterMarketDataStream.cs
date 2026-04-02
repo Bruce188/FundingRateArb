@@ -39,6 +39,10 @@ public class LighterMarketDataStream : IMarketDataStream
     public event Action<FundingRateDto>? OnRateUpdate;
     public event Action<string, string>? OnDisconnected;
 
+    /// <summary>Seed market-index-to-symbol mappings for unit testing.</summary>
+    internal void SetMarketMapping(int marketIndex, string symbol)
+        => _marketIndexToSymbol[marketIndex] = symbol;
+
     public async Task StartAsync(IEnumerable<string> symbols, CancellationToken ct)
     {
         // Load market index → symbol mappings via REST
@@ -119,7 +123,7 @@ public class LighterMarketDataStream : IMarketDataStream
         }
     }
 
-    private void TryParseMarketStat(JsonElement el)
+    internal void TryParseMarketStat(JsonElement el)
     {
         // Extract market_index to look up symbol
         if (!el.TryGetProperty("market_index", out var marketIndexProp))

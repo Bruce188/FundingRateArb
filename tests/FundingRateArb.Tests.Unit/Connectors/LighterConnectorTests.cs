@@ -336,12 +336,12 @@ public class LighterConnectorTests
         var eth = rates.First(r => r.Symbol == "ETH");
         eth.ExchangeName.Should().Be("Lighter");
         eth.RawRate.Should().Be(0.0001m);
-        eth.RatePerHour.Should().Be(0.0001m / 8m);
+        eth.RatePerHour.Should().Be(0.0000125m);
         eth.Volume24hUsd.Should().Be(15000000.00m);
 
         var btc = rates.First(r => r.Symbol == "BTC");
         btc.RawRate.Should().Be(-0.00025m);
-        btc.RatePerHour.Should().Be(-0.00025m / 8m);
+        btc.RatePerHour.Should().Be(-0.00003125m);
         btc.Volume24hUsd.Should().Be(50000000.00m);
     }
 
@@ -359,6 +359,36 @@ public class LighterConnectorTests
         rates.Should().OnlyContain(r => r.ExchangeName == "Lighter");
     }
 
+    [Fact]
+    public async Task GetFundingRates_ZeroRate_NormalizesToZero()
+    {
+        var json = """
+            {
+                "code": 200,
+                "funding_rates": [
+                    {
+                        "market_id": 0,
+                        "exchange": "lighter",
+                        "symbol": "ETH",
+                        "rate": 0
+                    }
+                ]
+            }
+            """;
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", json);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
+        });
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(1);
+        var eth = rates.First();
+        eth.RawRate.Should().Be(0m);
+        eth.RatePerHour.Should().Be(0m);
+    }
 
     [Fact]
     public async Task GetFundingRates_WhenEmptyRates_ReturnsEmptyList()
