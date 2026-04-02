@@ -737,7 +737,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         using var sizerScope = _scopeFactory.CreateScope();
         var positionSizer = sizerScope.ServiceProvider.GetRequiredService<IPositionSizer>();
         var balanceAggregator = sizerScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
-        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy, userId, ct);
+        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy, userId, userConfig, ct);
 
         // Push balance snapshot to user's dashboard
         try
@@ -784,7 +784,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             string? error;
             try
             {
-                (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, ct);
+                (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, userConfig, ct);
             }
             catch (Exception ex)
             {

@@ -33,10 +33,10 @@ public class ExecutionEngine : IExecutionEngine
         => error is null ? "" : error.Length > maxLength ? error[..maxLength] + "…" : error;
 
     public async Task<(bool Success, string? Error)> OpenPositionAsync(
-        string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
+        string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc, UserConfiguration? userConfig = null, CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
-        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
+        userConfig ??= await _userSettings.GetOrCreateConfigAsync(userId);
 
         // B6: Absolute order size cap
         if (sizeUsdc > MaxSingleOrderUsdc)
@@ -239,7 +239,11 @@ public class ExecutionEngine : IExecutionEngine
                         _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — aborting second leg",
                             opp.AssetSymbol, firstExchangeName);
                         // B3: Attempt emergency close — tx may have succeeded on-chain but verification timed out
-                        await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                        var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                        if (!neverExisted)
+                        {
+                            SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        }
                         position.Status = PositionStatus.EmergencyClosed;
                         position.ClosedAt = DateTime.UtcNow;
                         _uow.Positions.Update(position);

@@ -1,5 +1,6 @@
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Application.Services;
@@ -23,6 +24,7 @@ public class PositionSizer : IPositionSizer
         IReadOnlyList<ArbitrageOpportunityDto> opportunities,
         AllocationStrategy strategy,
         string userId,
+        UserConfiguration? userConfig = null,
         CancellationToken ct = default)
     {
         if (opportunities.Count == 0)
@@ -31,7 +33,7 @@ public class PositionSizer : IPositionSizer
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
-        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
+        userConfig ??= await _userSettings.GetOrCreateConfigAsync(userId);
         var effectiveLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
         var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
         var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
