@@ -839,7 +839,7 @@ public class ExecutionEngine : IExecutionEngine
     private static readonly string[] RetryableClosePatterns =
         ["no open", "not found", "position not", "does not exist", "no position",
          "timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
-         "connection refused", "connection reset", "network unreachable"];
+         "connection refused", "connection reset", "network unreachable", "transient"];
 
     private static bool IsRetryableCloseError(string? error)
     {
