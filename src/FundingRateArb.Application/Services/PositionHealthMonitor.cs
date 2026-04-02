@@ -16,6 +16,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly IExecutionEngine _executionEngine;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
+    private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -94,12 +95,30 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
             {
+                var checkCount = _zeroPriceCheckCounts.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
                 if (_logger.IsEnabled(LogLevel.Critical))
                 {
-                    _logger.LogCritical("Position #{Id} has zero entry prices — stop-loss check disabled, skipping", pos.Id);
+                    _logger.LogCritical(
+                        "Position #{Id} has zero entry prices — check {Count}/3, stop-loss disabled",
+                        pos.Id, checkCount);
+                }
+
+                if (checkCount >= 3)
+                {
+                    if (_logger.IsEnabled(LogLevel.Critical))
+                    {
+                        _logger.LogCritical(
+                            "Position #{Id} zero entry prices persisted for {Count} checks — force-closing",
+                            pos.Id, checkCount);
+                    }
+                    toClose.Add((pos, CloseReason.StopLoss));
+                    // NB6: Reset to 0 instead of removing — if close fails, next cycle restarts at 1
+                    _zeroPriceCheckCounts[pos.Id] = 0;
                 }
                 continue;
             }
+            // Clean up tracking for positions that now have valid prices
+            _zeroPriceCheckCounts.TryRemove(pos.Id, out _);
 
             try
             {

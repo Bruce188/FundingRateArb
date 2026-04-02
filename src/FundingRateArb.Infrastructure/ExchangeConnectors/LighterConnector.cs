@@ -75,22 +75,49 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     /// <inheritdoc />
     /// <remarks>
-    /// Waits 5 seconds for the zk-rollup transaction to settle, then polls GetAccountAsync
-    /// up to 10 times with 3-second delays to verify the position exists on-chain.
+    /// Waits 8 seconds for the zk-rollup transaction to settle, then polls GetAccountAsync
+    /// up to 15 times with 3-second delays to verify the position exists on-chain.
+    /// Detects the target position by comparing current sizes against a baseline snapshot
+    /// taken before polling, rather than relying on total position count.
     /// </remarks>
     public async Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default)
     {
-        const int maxAttempts = 10;
+        const int maxAttempts = 15;
         const int delayMs = 3000;
-        const int earlyExitAfterUnchanged = 3;
 
         var accountIndex = GetAccountIndex();
 
-        // Allow time for the zk-rollup transaction to settle before polling
-        await Task.Delay(5000, ct);
+        // N2: Record baseline position sizes before polling starts (tuple key for safety)
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>();
+        try
+        {
+            var baselineResponse = await GetAccountAsync(accountIndex, ct);
+            var baselineAccount = baselineResponse?.Accounts?.FirstOrDefault();
+            if (baselineAccount?.Positions is not null)
+            {
+                foreach (var p in baselineAccount.Positions)
+                {
+                    if (decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out var sz) && sz != 0)
+                    {
+                        var sideKey = sz > 0 ? "Long" : "Short";
+                        baseline[(p.Symbol.ToUpperInvariant(), sideKey)] = Math.Abs(sz);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture baseline positions for {Asset} verification — proceeding without baseline", asset);
+        }
 
-        int unchangedCount = 0;
-        int? previousNonZeroCount = null;
+        // Allow time for the zk-rollup transaction to settle before polling
+        await Task.Delay(8000, ct);
+
+        // B2: Baseline-aware early-exit — if the target asset+side is absent for 5
+        // consecutive polls with no size delta observed, treat as a non-fill.
+        int noChangeStreak = 0;
+        const int noChangeEarlyExit = 5;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -121,28 +148,18 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                         "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
                         attempt + 1, maxAttempts, asset, side);
 
-                    // Track unchanged count for early exit
-                    if (previousNonZeroCount == 0)
-                    {
-                        unchangedCount++;
-                    }
-                    else
-                    {
-                        unchangedCount = 1;
-                    }
-                    previousNonZeroCount = 0;
-
-                    if (unchangedCount >= earlyExitAfterUnchanged)
+                    noChangeStreak++;
+                    if (noChangeStreak >= noChangeEarlyExit)
                     {
                         _logger.LogInformation(
-                            "Position verification abandoned after {Attempt} polls — position count unchanged at {Count}, order likely canceled by matching engine",
-                            attempt + 1, posCount);
+                            "Verify: no size change for {N} consecutive polls after baseline — treating as non-fill for {Asset} {Side}",
+                            noChangeStreak, asset, side);
                         return false;
                     }
-
                     continue;
                 }
 
+                bool foundTarget = false;
                 foreach (var p in nonZeroPositions)
                 {
                     if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
@@ -157,43 +174,47 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     }
 
                     // Long = positive size, Short = negative size
-                    if (side == Side.Long && size > 0)
+                    var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
+                    if (!isSideMatch)
+                    {
+                        continue;
+                    }
+
+                    var currentAbsSize = Math.Abs(size);
+                    var sideStr = size > 0 ? "Long" : "Short";
+                    var baselineKey = (asset.ToUpperInvariant(), sideStr);
+
+                    // Detect new position or size increase compared to baseline
+                    if (!baseline.TryGetValue(baselineKey, out var baselineSize) || currentAbsSize > baselineSize)
                     {
                         _logger.Log(pollLogLevel,
-                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
-                            attempt + 1, maxAttempts, asset, side, posCount, size);
+                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size} baselineSize={Baseline}",
+                            attempt + 1, maxAttempts, asset, side, posCount, size,
+                            baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
                         return true;
                     }
 
-                    if (side == Side.Short && size < 0)
-                    {
-                        _logger.Log(pollLogLevel,
-                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size}",
-                            attempt + 1, maxAttempts, asset, side, posCount, size);
-                        return true;
-                    }
+                    foundTarget = true; // position exists but size unchanged from baseline
                 }
 
                 _logger.Log(pollLogLevel,
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
 
-                // Track unchanged count for early exit
-                if (previousNonZeroCount.HasValue && previousNonZeroCount.Value == posCount)
+                if (!foundTarget)
                 {
-                    unchangedCount++;
+                    noChangeStreak++;
                 }
                 else
                 {
-                    unchangedCount = 1;
+                    noChangeStreak = 0; // target visible at baseline size — order may still be settling
                 }
-                previousNonZeroCount = posCount;
 
-                if (unchangedCount >= earlyExitAfterUnchanged)
+                if (noChangeStreak >= noChangeEarlyExit)
                 {
                     _logger.LogInformation(
-                        "Position verification abandoned after {Attempt} polls — position count unchanged at {Count}, order likely canceled by matching engine",
-                        attempt + 1, posCount);
+                        "Verify: no size change for {N} consecutive polls after baseline — treating as non-fill for {Asset} {Side}",
+                        noChangeStreak, asset, side);
                     return false;
                 }
             }

@@ -582,4 +582,183 @@ public class CoinGlassConnectorTests
         capturedRequest.Should().NotBeNull();
         capturedRequest!.Headers.Contains("CG-API-KEY").Should().BeFalse();
     }
+
+    // ── Backoff circuit breaker tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task GetFundingRatesAsync_FirstFailure_BacksOff60Seconds()
+    {
+        var errorResponse = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var (connector, handler) = CreateConnectorWithHandler(errorResponse);
+
+        // First call — fails, sets backoff
+        var result1 = await connector.GetFundingRatesAsync();
+        result1.Should().BeEmpty();
+
+        // Second call — should be blocked by backoff (returns [] without API call)
+        var result2 = await connector.GetFundingRatesAsync();
+        result2.Should().BeEmpty();
+
+        // Verify only 1 HTTP call was made (second was blocked by backoff)
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.IsAny<HttpRequestMessage>(),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_SuccessAfterFailure_ResetsBackoff()
+    {
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount == 1)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                }
+                // Second call succeeds with valid data
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""
+                    {
+                        "code": "0",
+                        "data": [
+                            {
+                                "symbol": "BTCUSDT",
+                                "fundingRateByExchange": {
+                                    "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                                }
+                            }
+                        ]
+                    }
+                    """, System.Text.Encoding.UTF8, "application/json")
+                };
+            });
+
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
+            })
+            .Build();
+        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+
+        // First call fails — sets backoff
+        await connector.GetFundingRatesAsync();
+
+        // Manually call a third time after the backoff would expire
+        // Since we can't easily time-travel, we test the reset on success by
+        // using reflection to clear the backoff, simulating time passage
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        backoffField.Should().NotBeNull("_backoffUntil field must exist for backoff testing");
+        backoffField!.SetValue(connector, DateTime.MinValue);
+
+        // Second call succeeds — should reset failure counter
+        var result2 = await connector.GetFundingRatesAsync();
+        result2.Should().NotBeEmpty();
+
+        // Set backoff to past again to simulate time passage
+        backoffField!.SetValue(connector, DateTime.MinValue);
+
+        // Third call should succeed (backoff was reset by successful call)
+        var result3 = await connector.GetFundingRatesAsync();
+        result3.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_DuringBackoff_ReturnsEmptyWithoutApiCall()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
+            })
+            .Build();
+        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+
+        // First call — triggers backoff
+        await connector.GetFundingRatesAsync();
+
+        // Second call — should be in backoff, no API call
+        var result = await connector.GetFundingRatesAsync();
+        result.Should().BeEmpty();
+
+        // Only 1 API call should have been made
+        handler.Protected().Verify(
+            "SendAsync",
+            Times.Once(),
+            ItExpr.IsAny<HttpRequestMessage>(),
+            ItExpr.IsAny<CancellationToken>());
+    }
+
+    // ── Review-v113: NB9 — Backoff duration boundary tests ──────────
+
+    [Fact]
+    public async Task GetFundingRatesAsync_FirstFailure_BackoffIsApproximately60Seconds()
+    {
+        var errorResponse = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var (connector, _) = CreateConnectorWithHandler(errorResponse);
+
+        var before = DateTime.UtcNow;
+        await connector.GetFundingRatesAsync();
+        var after = DateTime.UtcNow;
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        backoffField.Should().NotBeNull();
+        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+
+        // First failure: backoff = 60 * 2^0 = 60 seconds
+        var backoffDuration = backoffUntil - before;
+        backoffDuration.TotalSeconds.Should().BeInRange(58, 65, "first failure should backoff ~60 seconds");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_ManyFailures_BackoffCappedAt900Seconds()
+    {
+        var errorResponse = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var (connector, _) = CreateConnectorWithHandler(errorResponse);
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        backoffField.Should().NotBeNull();
+
+        // Simulate 10 consecutive failures by resetting backoff between each call
+        for (int i = 0; i < 10; i++)
+        {
+            backoffField!.SetValue(connector, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+        }
+
+        var before = DateTime.UtcNow;
+        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+        var backoffDuration = backoffUntil - before;
+
+        // Cap is 900 seconds (15 minutes)
+        backoffDuration.TotalSeconds.Should().BeLessOrEqualTo(905, "backoff should be capped at 900 seconds");
+        backoffDuration.TotalSeconds.Should().BeGreaterOrEqualTo(895, "after many failures backoff should approach cap");
+    }
 }
