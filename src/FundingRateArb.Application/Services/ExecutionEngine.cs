@@ -69,7 +69,10 @@ public class ExecutionEngine : IExecutionEngine
             // Pre-flight leverage validation: use user leverage (falling back to bot config), then clamp to exchange max
             var originalLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
             var effectiveLeverage = originalLeverage;
-            if (effectiveLeverage < 1) effectiveLeverage = 1;
+            if (effectiveLeverage < 1)
+            {
+                effectiveLeverage = 1;
+            }
             try
             {
                 var longMaxTask = longConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);

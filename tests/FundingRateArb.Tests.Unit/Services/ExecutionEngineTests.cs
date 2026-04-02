@@ -2002,11 +2002,16 @@ public class ExecutionEngineTests
         // Use an opportunity where Hyperliquid (has fees) is estimated-fill, to verify fee recording
         var opp = new ArbitrageOpportunityDto
         {
-            AssetSymbol = "ETH", AssetId = 1,
-            LongExchangeName = "Aster", LongExchangeId = 3,
-            ShortExchangeName = "Hyperliquid", ShortExchangeId = 1,
-            SpreadPerHour = 0.0005m, NetYieldPerHour = 0.0004m,
-            LongMarkPrice = 3000m, ShortMarkPrice = 3001m,
+            AssetSymbol = "ETH",
+            AssetId = 1,
+            LongExchangeName = "Aster",
+            LongExchangeId = 3,
+            ShortExchangeName = "Hyperliquid",
+            ShortExchangeId = 1,
+            SpreadPerHour = 0.0005m,
+            NetYieldPerHour = 0.0004m,
+            LongMarkPrice = 3000m,
+            ShortMarkPrice = 3001m,
         };
 
         // Short connector (Hyperliquid) = estimated fill + verifiable, verification fails
