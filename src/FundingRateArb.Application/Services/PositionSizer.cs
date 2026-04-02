@@ -9,12 +9,14 @@ public class PositionSizer : IPositionSizer
     private readonly IUnitOfWork _uow;
     private readonly IYieldCalculator _yieldCalculator;
     private readonly IBalanceAggregator _balanceAggregator;
+    private readonly IUserSettingsService _userSettings;
 
-    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator, IBalanceAggregator balanceAggregator)
+    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator, IBalanceAggregator balanceAggregator, IUserSettingsService userSettings)
     {
         _uow = uow;
         _yieldCalculator = yieldCalculator;
         _balanceAggregator = balanceAggregator;
+        _userSettings = userSettings;
     }
 
     public async Task<decimal[]> CalculateBatchSizesAsync(
@@ -29,6 +31,8 @@ public class PositionSizer : IPositionSizer
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
+        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
+        var effectiveLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
         var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
         var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
 
@@ -170,10 +174,10 @@ public class PositionSizer : IPositionSizer
         {
             var minVol = Math.Min(opportunities[i].LongVolume24h, opportunities[i].ShortVolume24h);
             var liquidityLimit = minVol * config.VolumeFraction;
-            var notional = sizes[i] * config.DefaultLeverage;
+            var notional = sizes[i] * effectiveLeverage;
             if (notional > liquidityLimit)
             {
-                sizes[i] = liquidityLimit / config.DefaultLeverage;
+                sizes[i] = liquidityLimit / effectiveLeverage;
             }
         }
 

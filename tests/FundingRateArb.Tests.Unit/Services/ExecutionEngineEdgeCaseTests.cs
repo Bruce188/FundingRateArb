@@ -67,6 +67,9 @@ public class ExecutionEngineEdgeCaseTests
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
             .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
 
         _mockFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -251,10 +254,9 @@ public class ExecutionEngineEdgeCaseTests
     }
 
     [Fact]
-    public async Task OpenPosition_PreFlightMarginCheck_UsesLeverageAdjustedMargin()
+    public async Task OpenPosition_PreFlightMarginCheck_UsesRawSizeUsdc()
     {
-        // balance=90, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is < 90 → passes.
-        // balance=15, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is > 15 → fails.
+        // balance=15, sizeUsdc=100. Required margin = sizeUsdc = 100 > 15 → fails.
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(15m);
@@ -292,7 +294,7 @@ public class ExecutionEngineEdgeCaseTests
                 closeCallCount++;
                 if (closeCallCount <= 2)
                 {
-                    return new OrderResultDto { Success = false, Error = "No open position found" };
+                    return new OrderResultDto { Success = false, Error = "Request timeout" };
                 }
 
                 return SuccessOrder("close-1");
@@ -301,7 +303,7 @@ public class ExecutionEngineEdgeCaseTests
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
         closeCallCount.Should().Be(3);
-        // No EMERGENCY CLOSE FAILED alert (only the overall LegFailed alert for the position)
+        // No EMERGENCY CLOSE FAILED alert (succeeded on retry)
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Message!.Contains("EMERGENCY CLOSE FAILED"))),

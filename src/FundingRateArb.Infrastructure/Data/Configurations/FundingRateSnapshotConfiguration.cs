@@ -26,6 +26,8 @@ public class FundingRateSnapshotConfiguration : IEntityTypeConfiguration<Funding
             .HasForeignKey(f => f.AssetId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasIndex(f => new { f.ExchangeId, f.AssetId, f.RecordedAt });
+        builder.HasIndex(f => new { f.ExchangeId, f.AssetId, f.RecordedAt })
+            .HasDatabaseName("IX_FundingRateSnapshots_Exchange_Asset_RecordedAt")
+            .IsDescending(false, false, true);
     }
 }

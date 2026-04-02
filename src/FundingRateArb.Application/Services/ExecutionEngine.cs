@@ -36,6 +36,7 @@ public class ExecutionEngine : IExecutionEngine
         string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc, CancellationToken ct = default)
     {
         var config = await _uow.BotConfig.GetActiveAsync();
+        var userConfig = await _userSettings.GetOrCreateConfigAsync(userId);
 
         // B6: Absolute order size cap
         if (sizeUsdc > MaxSingleOrderUsdc)
@@ -65,9 +66,9 @@ public class ExecutionEngine : IExecutionEngine
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
             }
 
-            // Pre-flight leverage validation: clamp to exchange maximum if configured leverage exceeds it
-            var originalLeverage = config.DefaultLeverage;
-            var effectiveLeverage = config.DefaultLeverage;
+            // Pre-flight leverage validation: use user leverage (falling back to bot config), then clamp to exchange max
+            var originalLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
+            var effectiveLeverage = originalLeverage;
             try
             {
                 var longMaxTask = longConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
@@ -113,9 +114,9 @@ public class ExecutionEngine : IExecutionEngine
             }
 
             // Pre-flight margin check: verify both exchanges have sufficient balance
-            // before opening any legs. Uses leverage-adjusted margin (notional / leverage)
-            // instead of full notional to correctly represent the margin needed.
-            var requiredMargin = sizeUsdc / effectiveLeverage;
+            // before opening any legs. sizeUsdc IS the margin amount per side — connectors
+            // multiply by leverage internally to get notional.
+            var requiredMargin = sizeUsdc;
             try
             {
                 var longBalanceTask = longConnector.GetAvailableBalanceAsync(ct);
@@ -269,6 +270,7 @@ public class ExecutionEngine : IExecutionEngine
                     await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
+                    SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -290,6 +292,7 @@ public class ExecutionEngine : IExecutionEngine
                     await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
+                    SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -332,10 +335,12 @@ public class ExecutionEngine : IExecutionEngine
                     // If only one leg threw, try to emergency close the successful one
                     if (!longTask.IsFaulted && longTask.IsCompletedSuccessfully && longTask.Result.Success)
                     {
+                        SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
                         await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                     }
                     if (!shortTask.IsFaulted && shortTask.IsCompletedSuccessfully && shortTask.Result.Success)
                     {
+                        SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
                         await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                     }
 
@@ -363,10 +368,12 @@ public class ExecutionEngine : IExecutionEngine
                     // If one succeeded and the other failed, emergency close the successful one
                     if (longResult.Success && !shortResult.Success)
                     {
+                        SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                         await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                     }
                     else if (!longResult.Success && shortResult.Success)
                     {
+                        SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                         await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                     }
 
@@ -836,10 +843,37 @@ public class ExecutionEngine : IExecutionEngine
         }
     }
 
+    /// <summary>
+    /// Sets EntryFeesUsdc and RealizedPnl on an emergency-closed position based on the
+    /// fees incurred from the one leg that did open and was subsequently closed.
+    /// </summary>
+    private static void SetEmergencyCloseFees(
+        ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
+    {
+        var legNotional = successfulLeg.FilledPrice * successfulLeg.FilledQuantity;
+        var feeRate = ExchangeFeeConstants.GetTakerFeeRate(exchangeName);
+        var entryFee = legNotional * feeRate;
+        var exitFee = legNotional * feeRate; // emergency close at roughly the same price
+        position.EntryFeesUsdc = entryFee;
+        position.ExitFeesUsdc = exitFee;
+        position.RealizedPnl = -(entryFee + exitFee); // net loss from fees
+    }
+
+    private static readonly string[] NoPositionPatterns =
+        ["no open position", "position not found", "does not exist", "no position"];
+
     private static readonly string[] RetryableClosePatterns =
-        ["no open", "not found", "position not", "does not exist", "no position",
-         "timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
+        ["timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
          "connection refused", "connection reset", "network unreachable", "transient"];
+
+    private static bool IsNoPositionError(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+        {
+            return false;
+        }
+        return NoPositionPatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
+    }
 
     private static bool IsRetryableCloseError(string? error)
     {
@@ -850,7 +884,11 @@ public class ExecutionEngine : IExecutionEngine
         return RetryableClosePatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task TryEmergencyCloseWithRetryAsync(
+    /// <summary>
+    /// Attempts to emergency-close a position with retries. Returns true if the position
+    /// was confirmed to never have existed (no circuit breaker penalty needed).
+    /// </summary>
+    private async Task<bool> TryEmergencyCloseWithRetryAsync(
         IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)
     {
         const int maxAttempts = 5;
@@ -864,7 +902,19 @@ public class ExecutionEngine : IExecutionEngine
                 var closeResult = await connector.ClosePositionAsync(asset, side, CancellationToken.None);
                 if (closeResult.Success)
                 {
-                    return;
+                    return false;
+                }
+
+                // Position never existed — stop immediately, no retries needed
+                if (IsNoPositionError(closeResult.Error))
+                {
+                    if (_logger.IsEnabled(LogLevel.Information))
+                    {
+                        _logger.LogInformation(
+                            "Emergency close skipped — position never opened for {Asset} on {Leg} leg",
+                            asset, legName);
+                    }
+                    return true;
                 }
 
                 if (attempt < maxAttempts - 1
@@ -889,7 +939,7 @@ public class ExecutionEngine : IExecutionEngine
                     Severity = AlertSeverity.Critical,
                     Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset}: {TruncateError(closeResult.Error)}. Manual intervention required.",
                 });
-                return;
+                return false;
             }
             catch (Exception ex)
             {
@@ -913,8 +963,10 @@ public class ExecutionEngine : IExecutionEngine
                     Severity = AlertSeverity.Critical,
                     Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset} threw: {TruncateError(ex.Message)}. Manual intervention required.",
                 });
-                return;
+                return false;
             }
         }
+
+        return false;
     }
 }

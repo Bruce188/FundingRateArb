@@ -885,12 +885,12 @@ public class LighterConnectorTests
     }
 
     [Fact]
-    public async Task VerifyPositionOpenedAsync_LogsEachPollAttempt()
+    public async Task VerifyPositionOpenedAsync_EarlyExitAfterUnchangedCount()
     {
         // Configure account index for the verify call
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
 
-        // Return account with no matching position — all 10 polls will fail
+        // Return account with no matching position — triggers early exit after 3 unchanged polls
         var emptyAccountJson = """
             {
                 "code": 200,
@@ -911,35 +911,56 @@ public class LighterConnectorTests
 
         result.Should().BeFalse();
 
-        // First and last poll attempts are logged at Information level
+        // Should log the early exit message after 3 unchanged polls
         _loggerMock.Verify(
             l => l.Log(
                 LogLevel.Information,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
-                It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Exactly(2));
-
-        // Middle poll attempts (2-9) are logged at Debug level
-        _loggerMock.Verify(
-            l => l.Log(
-                LogLevel.Debug,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("found=false")),
-                It.IsAny<Exception>(),
-                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
-            Times.Exactly(8));
-
-        // Verify final failure warning
-        _loggerMock.Verify(
-            l => l.Log(
-                LogLevel.Warning,
-                It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Position verification FAILED")),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Position verification abandoned") && v.ToString()!.Contains("order likely canceled")),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);
+    }
+
+    [Fact]
+    public async Task VerifyPositionOpenedAsync_ZeroSizePositionsFiltered()
+    {
+        // Configure account index for the verify call
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Return account with a zero-size position (closed but still listed)
+        var zeroSizeAccountJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "ETH", "position": "0", "margin": "0", "entry_price": "3000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        var sut = CreateConnector(zeroSizeAccountJson);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        // Zero-size position should be filtered out — treated as empty
+        result.Should().BeFalse();
+
+        // Should log positionCount=0 (zero-size filtered out)
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Verify poll") && v.ToString()!.Contains("positionCount=0")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce);
     }
 }
 

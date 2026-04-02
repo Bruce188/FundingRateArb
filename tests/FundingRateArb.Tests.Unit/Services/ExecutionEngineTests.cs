@@ -67,6 +67,10 @@ public class ExecutionEngineTests
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
             .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+        // Default: user leverage matches bot config so existing tests pass unchanged
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
 
         _mockFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -273,6 +277,32 @@ public class ExecutionEngineTests
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task OpenPosition_EmergencyClosedAtOpen_SetsFeesAndNegativePnl()
+    {
+        // Long leg succeeds with fill (price=3000, qty=0.1), short fails → emergency close
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.1m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short failed"));
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        savedPos.Should().NotBeNull();
+        savedPos!.EntryFeesUsdc.Should().BeGreaterThan(0, "should record entry fees from the one leg that opened");
+        savedPos.ExitFeesUsdc.Should().BeGreaterThan(0, "should record exit fees from the emergency close");
+        savedPos.RealizedPnl.Should().BeNegative("emergency close incurs fees with no funding collected");
+    }
+
     /// <summary>
     /// C1: If the first leg throws an exception (sequential path), the position is marked
     /// EmergencyClosed and the second leg is never opened.
@@ -371,12 +401,11 @@ public class ExecutionEngineTests
     }
 
     /// <summary>
-    /// When the second leg fails and emergency close of the first leg also returns Success=false
-    /// (e.g. "No open position found" on Lighter before on-chain settlement),
-    /// a critical alert must be created for the emergency close failure.
+    /// When emergency close returns "No open position found", it exits silently —
+    /// no critical alert needed because the position never existed on the exchange.
     /// </summary>
     [Fact]
-    public async Task OpenPosition_EmergencyCloseReturnsFailure_CreatesCriticalAlert()
+    public async Task OpenPosition_EmergencyCloseNoPositionFound_NoCriticalAlert()
     {
         // Long leg succeeds (first leg), short leg fails → emergency close fires on long
         _mockLongConnector
@@ -386,7 +415,7 @@ public class ExecutionEngineTests
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short margin insufficient"));
 
-        // Emergency close returns failure (position not settled yet / not found)
+        // Emergency close returns "no open position" — position never existed
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("No open position found"));
@@ -395,7 +424,38 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeFalse();
 
-        // Must create a LegFailed alert for the emergency close failure
+        // No critical "EMERGENCY CLOSE FAILED" alert — position never existed
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical &&
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Never);
+    }
+
+    /// <summary>
+    /// When emergency close returns a non-position error (e.g. "Insufficient margin"),
+    /// a critical alert must be created.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_EmergencyCloseReturnsFailure_CreatesCriticalAlert()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short margin insufficient"));
+
+        // Emergency close returns non-position error
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Insufficient margin for close order"));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Type == AlertType.LegFailed &&
@@ -432,13 +492,33 @@ public class ExecutionEngineTests
     [Fact]
     public async Task OpenPosition_InsufficientMarginOnLongExchange_AbortsWithoutOpeningLegs()
     {
-        // requiredMargin = sizeUsdc / leverage = 100 / 5 = 20. Balance=15 < 20 → fail
+        // requiredMargin = sizeUsdc = 100. Balance=15 < 100 → fail
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(15m);
         _mockShortConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Insufficient margin on Hyperliquid");
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BalanceBetweenLeveragedMarginAndFullMargin_BlocksTrade()
+    {
+        // sizeUsdc=100, leverage=5. Old (buggy): requiredMargin=100/5=20, would pass.
+        // Fixed: requiredMargin=100, balance=50 < 100 → blocked.
+        _mockLongConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(50m);
+        _mockShortConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
@@ -461,6 +541,53 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Pre-flight balance check failed");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── User leverage ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_UsesUserLeverageInsteadOfBotConfig()
+    {
+        // User has leverage=1, bot config has leverage=5
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 1 });
+
+        // With leverage=1, PlaceMarketOrderAsync should receive leverage=1
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        // Verify the orders were placed with leverage=1, not leverage=5
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 1, It.IsAny<CancellationToken>()), Times.Once);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 1, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_FallsBackToBotConfigLeverage_WhenUserLeverageIsZero()
+    {
+        // User has leverage=0 (not set), bot config has leverage=5
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 0 });
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── ClosePositionAsync ─────────────────────────────────────────────────────
@@ -924,7 +1051,7 @@ public class ExecutionEngineTests
     // ── D9: Emergency close retry tests ─────────────────────────────────────────
 
     [Fact]
-    public async Task EmergencyClose_RetryOnNoOpenPosition_ThenFails()
+    public async Task EmergencyClose_NoOpenPosition_ExitsImmediately()
     {
         // Long succeeds, short fails → triggers emergency close on long leg
         _mockLongConnector
@@ -934,25 +1061,25 @@ public class ExecutionEngineTests
             .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("API error"));
 
-        // Emergency close retries all return "No open position found"
+        // Emergency close returns "No open position found" — position never existed
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "No open position found" });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
-        // Should have tried 5 times (retry on "No open position")
+        // Should exit after 1 attempt — no retries for "no position" errors
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
-            Times.Exactly(5));
+            Times.Once);
 
-        // Alert created for emergency close failure
+        // No critical alert — position never existed
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Type == AlertType.LegFailed &&
                 al.Severity == AlertSeverity.Critical &&
                 al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
-            Times.Once);
+            Times.Never);
     }
 
     [Fact]
@@ -2014,11 +2141,6 @@ public class ExecutionEngineTests
     // ── Emergency close retry pattern matching ─────────────────────────────
 
     [Theory]
-    [InlineData("Position not found")]
-    [InlineData("Order does not exist")]
-    [InlineData("No open position for this market")]
-    [InlineData("no position available")]
-    [InlineData("NOT FOUND")]
     [InlineData("Request timeout")]
     [InlineData("rate limit exceeded")]
     [InlineData("HTTP 503")]
@@ -2108,6 +2230,37 @@ public class ExecutionEngineTests
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
             Times.Once,
             "should NOT retry when close error is null");
+    }
+
+    [Theory]
+    [InlineData("No open position found for 'STABLE' on Lighter DEX")]
+    [InlineData("Position not found")]
+    [InlineData("Order does not exist")]
+    [InlineData("no position available")]
+    public async Task EmergencyClose_NoPositionFound_ExitsAfterOneAttempt(string errorMessage)
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close returns "no position" error
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = errorMessage });
+
+        // Act
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: only 1 attempt — no retries for "no position" errors
+        result.Success.Should().BeFalse();
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once,
+            "should exit immediately on 'no position found' without retrying");
     }
 
     [Fact]

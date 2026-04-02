@@ -1189,6 +1189,76 @@ public class BotOrchestratorTests
     }
 
     [Fact]
+    public void ExtractFailingExchange_ErrorContainsLongExchangeOnly_ReturnsLongId()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            LongExchangeName = "Lighter",
+            LongExchangeId = 2,
+            ShortExchangeName = "Aster",
+            ShortExchangeId = 3,
+        };
+        var result = BotOrchestrator.ExtractFailingExchange("Position verification failed on Lighter", opp);
+        result.Should().Be(2);
+    }
+
+    [Fact]
+    public void ExtractFailingExchange_ErrorContainsShortExchangeOnly_ReturnsShortId()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            LongExchangeName = "Hyperliquid",
+            LongExchangeId = 1,
+            ShortExchangeName = "Lighter",
+            ShortExchangeId = 2,
+        };
+        var result = BotOrchestrator.ExtractFailingExchange("Emergency close: ETH — second leg (Lighter) failed", opp);
+        result.Should().Be(2);
+    }
+
+    [Fact]
+    public void ExtractFailingExchange_ErrorContainsNeitherExchange_ReturnsNull()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            LongExchangeName = "Hyperliquid",
+            LongExchangeId = 1,
+            ShortExchangeName = "Lighter",
+            ShortExchangeId = 2,
+        };
+        var result = BotOrchestrator.ExtractFailingExchange("Unknown error occurred", opp);
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractFailingExchange_ErrorContainsBothExchanges_ReturnsNull()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            LongExchangeName = "Hyperliquid",
+            LongExchangeId = 1,
+            ShortExchangeName = "Lighter",
+            ShortExchangeId = 2,
+        };
+        var result = BotOrchestrator.ExtractFailingExchange("Both Hyperliquid and Lighter failed", opp);
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void ExtractFailingExchange_NullError_ReturnsNull()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            LongExchangeName = "Hyperliquid",
+            LongExchangeId = 1,
+            ShortExchangeName = "Lighter",
+            ShortExchangeId = 2,
+        };
+        var result = BotOrchestrator.ExtractFailingExchange(null, opp);
+        result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CircuitBreakerState_IncludedInOpportunityResult()
     {
         OpportunityResultDto? capturedResult = null;

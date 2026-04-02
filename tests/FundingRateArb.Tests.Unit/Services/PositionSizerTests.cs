@@ -13,6 +13,7 @@ public class PositionSizerTests
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IBalanceAggregator> _mockBalanceAggregator = new();
+    private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly PositionSizer _sut;
 
     private readonly Mock<IPositionRepository> _mockPositions = new();
@@ -35,8 +36,11 @@ public class PositionSizerTests
                     new() { ExchangeId = 3, ExchangeName = "Exchange3", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
                 }
             });
+        // Default: user leverage matches bot config (5x)
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object);
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object);
     }
 
     private static ArbitrageOpportunityDto DefaultOpp(
@@ -230,6 +234,35 @@ public class PositionSizerTests
 
         // liquidityLimit = 400 * 0.001 = 0.4, margin = 0.4 / 5 = 0.08
         sizes[0].Should().Be(0.08m);
+    }
+
+    [Fact]
+    public async Task CalculateBatchSizesAsync_LiquidityCapUsesUserLeverage()
+    {
+        // Bot config leverage = 5, user leverage = 2
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m, leverage: 5, volumeFraction: 0.001m);
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 2 });
+
+        // Volume = 400 -> liquidityLimit = 400 * 0.001 = 0.4
+        // With user leverage = 2: notional = margin * 2, capped to 0.4 / 2 = 0.2
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.001m,
+                LongVolume24h = 400m, ShortVolume24h = 400m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // liquidityLimit = 0.4, user leverage = 2 → margin = 0.4 / 2 = 0.2
+        sizes[0].Should().Be(0.2m);
     }
 
     // -----------------------------------------------------------------------

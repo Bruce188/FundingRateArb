@@ -34,8 +34,11 @@ public class PositionSizerEdgeCaseTests
                     new() { ExchangeId = 3, ExchangeName = "Exchange3", AvailableUsdc = 5_000m, FetchedAt = DateTime.UtcNow },
                 }
             });
+        var mockUserSettings = new Mock<IUserSettingsService>();
+        mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), mockBalanceAggregator.Object);
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), mockBalanceAggregator.Object, mockUserSettings.Object);
     }
 
     private static BotConfiguration MakeConfig(
