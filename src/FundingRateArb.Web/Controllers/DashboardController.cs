@@ -3,6 +3,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -113,6 +114,9 @@ public class DashboardController : Controller
                 .ToList();
         }
 
+        var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
+        var needsAttentionCount = await _uow.Positions.CountByStatusAsync(PositionStatus.EmergencyClosed);
+
         var positionSummaries = openPositions.Select(p => new PositionSummaryDto
         {
             Id = p.Id,
@@ -164,6 +168,8 @@ public class DashboardController : Controller
             IsAuthenticated = true,
             BotEnabled = botConfig?.IsEnabled ?? false,
             OpenPositionCount = openPositions.Count,
+            OpeningPositionCount = openingCount,
+            NeedsAttentionCount = needsAttentionCount,
             TotalPnl = totalPnl,
             BestSpread = bestSpread,
             TotalUnreadAlerts = unreadAlerts.Count,

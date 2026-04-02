@@ -104,9 +104,9 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
 
-        // Default mock for EmergencyClosed status query (used in dashboard KPI)
-        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed))
-            .ReturnsAsync(new List<ArbitragePosition>());
+        // Default mock for EmergencyClosed count query (used in dashboard KPI)
+        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+            .ReturnsAsync(0);
 
         // M12: Default mock for GetRecentUnreadAsync (returns empty list)
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
@@ -2031,5 +2031,27 @@ public class BotOrchestratorTests
             e => e.OpenPositionAsync(It.IsAny<string>(), opp2, It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
             Times.Never,
             "Circuit-broken exchanges from margin error should block subsequent opens");
+    }
+
+    // ── Dashboard EmergencyClosed count uses CountByStatusAsync ────────────────
+
+    [Fact]
+    public async Task RunCycle_UsesCountByStatusForEmergencyClosedDashboardKpi()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+            .ReturnsAsync(3);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Verify CountByStatusAsync is used (not GetByStatusAsync) for EmergencyClosed count
+        _mockPositions.Verify(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed), Times.Once);
+        _mockPositions.Verify(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed), Times.Never);
+        // Verify the count is passed to the dashboard update
+        _mockGroupClient.Verify(c => c.ReceiveDashboardUpdate(
+            It.Is<DashboardDto>(d => d.NeedsAttentionCount == 3)), Times.Once);
     }
 }

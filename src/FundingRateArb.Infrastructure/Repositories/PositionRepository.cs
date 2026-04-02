@@ -136,6 +136,10 @@ public class PositionRepository : IPositionRepository
             .Where(p => p.Status == status)
             .ToListAsync();
 
+    public Task<int> CountByStatusAsync(PositionStatus status) =>
+        _context.ArbitragePositions
+            .CountAsync(p => p.Status == status);
+
     public Task<List<ArbitragePosition>> GetByStatusesAsync(params PositionStatus[] statuses) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)
