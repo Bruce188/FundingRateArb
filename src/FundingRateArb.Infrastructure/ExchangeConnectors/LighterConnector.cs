@@ -82,11 +82,15 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     {
         const int maxAttempts = 10;
         const int delayMs = 3000;
+        const int earlyExitAfterUnchanged = 3;
 
         var accountIndex = GetAccountIndex();
 
         // Allow time for the zk-rollup transaction to settle before polling
         await Task.Delay(5000, ct);
+
+        int unchangedCount = 0;
+        int? previousNonZeroCount = null;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -101,20 +105,45 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 var accountResponse = await GetAccountAsync(accountIndex, ct);
                 var account = accountResponse?.Accounts?.FirstOrDefault();
 
-                var posCount = account?.Positions?.Count ?? 0;
+                // Filter zero-size positions (closed but still listed)
+                var nonZeroPositions = account?.Positions?.Where(p =>
+                    decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var sz) && sz != 0).ToList();
+                var posCount = nonZeroPositions?.Count ?? 0;
+
                 // Log first and last poll attempts at Information level for production visibility
                 var pollLogLevel = (attempt == 0 || attempt == maxAttempts - 1)
                     ? LogLevel.Information : LogLevel.Debug;
 
-                if (account?.Positions is null)
+                if (nonZeroPositions is null || nonZeroPositions.Count == 0)
                 {
                     _logger.Log(pollLogLevel,
                         "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
                         attempt + 1, maxAttempts, asset, side);
+
+                    // Track unchanged count for early exit
+                    if (previousNonZeroCount == 0)
+                    {
+                        unchangedCount++;
+                    }
+                    else
+                    {
+                        unchangedCount = 1;
+                    }
+                    previousNonZeroCount = 0;
+
+                    if (unchangedCount >= earlyExitAfterUnchanged)
+                    {
+                        _logger.LogInformation(
+                            "Position verification abandoned after {Attempt} polls — position count unchanged at {Count}, order likely canceled by matching engine",
+                            attempt + 1, posCount);
+                        return false;
+                    }
+
                     continue;
                 }
 
-                foreach (var p in account.Positions)
+                foreach (var p in nonZeroPositions)
                 {
                     if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
                     {
@@ -148,6 +177,25 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 _logger.Log(pollLogLevel,
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
+
+                // Track unchanged count for early exit
+                if (previousNonZeroCount.HasValue && previousNonZeroCount.Value == posCount)
+                {
+                    unchangedCount++;
+                }
+                else
+                {
+                    unchangedCount = 1;
+                }
+                previousNonZeroCount = posCount;
+
+                if (unchangedCount >= earlyExitAfterUnchanged)
+                {
+                    _logger.LogInformation(
+                        "Position verification abandoned after {Attempt} polls — position count unchanged at {Count}, order likely canceled by matching engine",
+                        attempt + 1, posCount);
+                    return false;
+                }
             }
             catch (Exception ex)
             {
@@ -430,6 +478,13 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             _logger.LogDebug(
                 "Signed order: txHash={TxHash} baseAmount={BaseAmount} price={PriceInt} isAsk={IsAsk}",
                 txHash, baseAmount, priceInt, isAsk);
+
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "Lighter order params: {Asset} {Side} baseAmount={BaseAmount} priceInt={PriceInt} slippage={Slippage}% markPrice={MarkPrice} notional={Notional}",
+                    asset, side, baseAmount, priceInt, SlippagePct * 100, markPrice, notional);
+            }
 
             // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);

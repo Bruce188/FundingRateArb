@@ -737,7 +737,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         using var sizerScope = _scopeFactory.CreateScope();
         var positionSizer = sizerScope.ServiceProvider.GetRequiredService<IPositionSizer>();
         var balanceAggregator = sizerScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
-        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy, userId, ct);
+        var sizes = await positionSizer.CalculateBatchSizesAsync(candidates, userConfig.AllocationStrategy, userId, userConfig, ct);
 
         // Push balance snapshot to user's dashboard
         try
@@ -784,7 +784,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             string? error;
             try
             {
-                (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, ct);
+                (success, error) = await executionEngine.OpenPositionAsync(userId, opp, size, userConfig, ct);
             }
             catch (Exception ex)
             {
@@ -888,11 +888,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
                 _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
 
-                // Increment circuit breaker for exchanges involved (deduplicate if same exchange)
-                IncrementExchangeFailure(opp.LongExchangeId, globalConfig);
-                if (opp.ShortExchangeId != opp.LongExchangeId)
+                // Target circuit breaker to the failing exchange when identifiable
+                var failingExchangeId = ExtractFailingExchange(error, opp);
+                if (failingExchangeId.HasValue)
                 {
-                    IncrementExchangeFailure(opp.ShortExchangeId, globalConfig);
+                    IncrementExchangeFailure(failingExchangeId.Value, globalConfig);
+                }
+                else
+                {
+                    // Fallback: increment both exchanges when the failing one can't be identified
+                    IncrementExchangeFailure(opp.LongExchangeId, globalConfig);
+                    if (opp.ShortExchangeId != opp.LongExchangeId)
+                    {
+                        IncrementExchangeFailure(opp.ShortExchangeId, globalConfig);
+                    }
                 }
 
                 _logger.LogWarning(
@@ -1328,6 +1337,35 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         return error[start..colonIdx].Trim();
+    }
+
+    /// <summary>
+    /// Extracts the failing exchange ID from a non-margin error message by checking
+    /// if the error contains either exchange name. Returns null (fall back to both)
+    /// if neither name is found.
+    /// </summary>
+    internal static int? ExtractFailingExchange(string? error, ArbitrageOpportunityDto opp)
+    {
+        if (string.IsNullOrEmpty(error))
+        {
+            return null;
+        }
+
+        var containsLong = error.Contains(opp.LongExchangeName, StringComparison.OrdinalIgnoreCase);
+        var containsShort = error.Contains(opp.ShortExchangeName, StringComparison.OrdinalIgnoreCase);
+
+        if (containsLong && !containsShort)
+        {
+            return opp.LongExchangeId;
+        }
+
+        if (containsShort && !containsLong)
+        {
+            return opp.ShortExchangeId;
+        }
+
+        // Both or neither found — can't determine, fall back to null (both incremented)
+        return null;
     }
 
     /// <summary>

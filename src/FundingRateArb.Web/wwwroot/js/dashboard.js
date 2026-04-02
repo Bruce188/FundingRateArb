@@ -42,10 +42,14 @@
 
         var bestSpread = document.getElementById("best-spread");
         if (bestSpread) {
-            var spread = data.bestSpread ?? 0;
-            bestSpread.textContent = spread > 0
-                ? (spread * 100).toFixed(4) + "%"
-                : "N/A";
+            if (!data.botEnabled && (data.bestSpread ?? 0) <= 0) {
+                bestSpread.textContent = "Bot off";
+            } else {
+                var spread = data.bestSpread ?? 0;
+                bestSpread.textContent = spread > 0
+                    ? (spread * 100).toFixed(4) + "%"
+                    : "N/A";
+            }
         }
     });
 

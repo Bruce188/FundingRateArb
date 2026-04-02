@@ -67,6 +67,9 @@ public class ExecutionEngineEdgeCaseTests
         _mockUserSettings
             .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
             .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
 
         _mockFactory
             .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
@@ -244,17 +247,16 @@ public class ExecutionEngineEdgeCaseTests
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
             .Callback<ArbitragePosition>(p => savedPos = p);
 
-        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         savedPos.Should().NotBeNull();
         savedPos!.MarginUsdc.Should().Be(100m, "MarginUsdc should equal sizeUsdc, not sizeUsdc/leverage");
     }
 
     [Fact]
-    public async Task OpenPosition_PreFlightMarginCheck_UsesLeverageAdjustedMargin()
+    public async Task OpenPosition_PreFlightMarginCheck_UsesRawSizeUsdc()
     {
-        // balance=90, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is < 90 → passes.
-        // balance=15, sizeUsdc=100, leverage=5. Required margin = 100/5 = 20, which is > 15 → fails.
+        // balance=15, sizeUsdc=100. Required margin = sizeUsdc = 100 > 15 → fails.
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(15m);
@@ -262,7 +264,7 @@ public class ExecutionEngineEdgeCaseTests
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
 
-        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Insufficient margin");
@@ -292,16 +294,16 @@ public class ExecutionEngineEdgeCaseTests
                 closeCallCount++;
                 if (closeCallCount <= 2)
                 {
-                    return new OrderResultDto { Success = false, Error = "No open position found" };
+                    return new OrderResultDto { Success = false, Error = "Request timeout" };
                 }
 
                 return SuccessOrder("close-1");
             });
 
-        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         closeCallCount.Should().Be(3);
-        // No EMERGENCY CLOSE FAILED alert (only the overall LegFailed alert for the position)
+        // No EMERGENCY CLOSE FAILED alert (succeeded on retry)
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
@@ -322,7 +324,7 @@ public class ExecutionEngineEdgeCaseTests
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Exchange maintenance"));
 
-        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         // Non-retryable error → gives up on first attempt → critical alert
         _mockAlerts.Verify(
@@ -394,7 +396,7 @@ public class ExecutionEngineEdgeCaseTests
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("close-1"));
 
-        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse();
         _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
