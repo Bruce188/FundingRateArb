@@ -1219,6 +1219,49 @@ public class AsterConnectorTests
         result.Error.Should().Contain("below Aster minimum");
     }
 
+    // ── B3: RoundToTickSize via reflection ───────────────────────────────────────
+
+    [Fact]
+    public void RoundToTickSize_TickSize0_5_RoundsToNearestTick()
+    {
+        var method = typeof(AsterConnector).GetMethod("RoundToTickSize",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method.Should().NotBeNull("RoundToTickSize must exist as a private static method");
+
+        // 3517.3 / 0.5 = 7034.6 → rounds to 7035 → 7035 * 0.5 = 3517.5
+        var result = (decimal)method!.Invoke(null, new object[] { 3517.3m, 0.5m })!;
+
+        result.Should().Be(3517.5m,
+            "3517.3 rounded to nearest 0.5 tick should be 3517.5");
+    }
+
+    [Fact]
+    public void RoundToTickSize_TickSize0_0001_RoundsToNearestTick()
+    {
+        var method = typeof(AsterConnector).GetMethod("RoundToTickSize",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method.Should().NotBeNull("RoundToTickSize must exist as a private static method");
+
+        // 0.02887 / 0.0001 = 288.7 → rounds to 289 → 289 * 0.0001 = 0.0289
+        var result = (decimal)method!.Invoke(null, new object[] { 0.02887m, 0.0001m })!;
+
+        result.Should().Be(0.0289m,
+            "0.02887 rounded to nearest 0.0001 tick should be 0.0289");
+    }
+
+    [Fact]
+    public void RoundToTickSize_ZeroTickSize_FallsBackTo2dp()
+    {
+        var method = typeof(AsterConnector).GetMethod("RoundToTickSize",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method.Should().NotBeNull("RoundToTickSize must exist as a private static method");
+
+        var result = (decimal)method!.Invoke(null, new object[] { 3517.256m, 0m })!;
+
+        result.Should().Be(3517.26m,
+            "zero tick size must fall back to 2dp rounding");
+    }
+
     // ── NB8: Slippage protection uses Limit+IOC ──────────────────────────────────
 
     [Fact]

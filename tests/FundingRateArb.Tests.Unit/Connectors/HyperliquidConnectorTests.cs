@@ -866,6 +866,35 @@ public class HyperliquidConnectorTests
             "falls back to 6 decimals when symbol not found in szDecimals cache");
     }
 
+    // ── B4: Min notional round-up ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_JustBelowMinNotional_RoundsUpAndSucceeds()
+    {
+        // markPrice=3334, sizeUsdc=10, leverage=1, szDecimals=3
+        // raw quantity = 10/3334 = 0.002999... → floor to 3dp = 0.002
+        // notional = 0.002 * 3334 = $6.668 < $10
+        // after one tick (0.001): quantity = 0.003, notional = $10.002 >= $10 → success
+        const decimal markPrice = 3334m;
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, markPrice, 1m, markPrice) };
+        var symbols = new[] { new HyperLiquidFuturesSymbol { Name = "ETH", QuantityDecimals = 3 } };
+        SetupExchangeInfoSuccess(tickers, symbols);
+
+        var orderResult = new HyperLiquidOrderResult
+        {
+            OrderId = 1L,
+            FilledQuantity = 0.003m,
+            AveragePrice = markPrice,
+            Status = HyperLiquid.Net.Enums.OrderStatus.Filled,
+        };
+        SetupTradingSuccess(orderResult);
+
+        var result = await _sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 10m, leverage: 1);
+
+        result.Success.Should().BeTrue(
+            "quantity bumped by one tick should clear the $10 minimum notional");
+    }
+
     // ── NB10: Min notional validation ────────────────────────────────────────────
 
     [Fact]

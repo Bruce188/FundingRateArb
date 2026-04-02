@@ -978,6 +978,13 @@ public class ExecutionEngine : IExecutionEngine
         if (maxLev.HasValue)
         {
             _leverageCache[key] = (maxLev.Value, DateTime.UtcNow);
+
+            // NB1: Evict _leverageWarned when it grows too large.
+            // Re-logging a leverage warning is harmless, so a simple clear is acceptable.
+            if (_leverageWarned.Count > 500)
+            {
+                _leverageWarned.Clear();
+            }
         }
 
         return maxLev;

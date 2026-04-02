@@ -308,35 +308,32 @@ public class OrderPlacementReliabilityTests
     [Fact]
     public async Task HealthMonitor_ZeroPriceCountResetsWhenPricesValid()
     {
-        var monitor = CreateHealthMonitor();
-        var zeroPricePosition = MakeZeroPricePosition();
-        SetupHealthMonitorDefaults([zeroPricePosition]);
-
-        // Two zero-price checks
-        await monitor.CheckAndActAsync();
-        await monitor.CheckAndActAsync();
-
-        // Now give the position valid prices
-        zeroPricePosition.LongEntryPrice = 3000m;
-        zeroPricePosition.ShortEntryPrice = 3001m;
-
-        // Set up mark prices for the health check
+        // Set up a market data cache that returns valid prices (used for the 3rd check)
         var mockMarketDataCache = new Mock<IMarketDataCache>();
         mockMarketDataCache
             .Setup(c => c.GetMarkPrice(It.IsAny<string>(), It.IsAny<string>()))
             .Returns(3000m);
 
-        // Re-create monitor with a cache that returns prices
-        var monitor2 = CreateHealthMonitor(mockMarketDataCache.Object);
+        // Use the SAME monitor instance throughout so the counter state is preserved
+        var monitor = CreateHealthMonitor(mockMarketDataCache.Object);
+        var zeroPricePosition = MakeZeroPricePosition();
         SetupHealthMonitorDefaults([zeroPricePosition]);
 
-        var result = await monitor2.CheckAndActAsync();
-        result.ToClose.Should().BeEmpty("prices are now valid — counter should have reset");
+        // Two zero-price checks — counter increments to 2
+        await monitor.CheckAndActAsync();
+        await monitor.CheckAndActAsync();
 
-        // Set prices back to zero and check — should not close on first check
+        // Now give the position valid prices — 3rd check should see valid prices and reset counter
+        zeroPricePosition.LongEntryPrice = 3000m;
+        zeroPricePosition.ShortEntryPrice = 3001m;
+
+        var result = await monitor.CheckAndActAsync();
+        result.ToClose.Should().BeEmpty("prices are now valid — counter should have reset to 0");
+
+        // Set prices back to zero — 4th check should NOT close (counter reset to 0, now at 1)
         zeroPricePosition.LongEntryPrice = 0m;
-        var result2 = await monitor2.CheckAndActAsync();
-        result2.ToClose.Should().BeEmpty("counter was reset, first check should not close");
+        var result2 = await monitor.CheckAndActAsync();
+        result2.ToClose.Should().BeEmpty("counter was reset; first check after re-zero should not close");
     }
 
     private readonly Mock<IUnitOfWork> _monitorUow = new();
@@ -403,6 +400,73 @@ public class OrderPlacementReliabilityTests
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
         };
+    }
+
+    // ── Review-v113: NB7 — Leverage cache ───────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_SecondCall_ReusesLeverageCache()
+    {
+        // Arrange — GetMaxLeverageAsync returns 5 (matches configured leverage, no reduction)
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(5);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(5);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        // Act — call twice with the same opportunity
+        await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+        await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        // Assert — GetMaxLeverageAsync must be called exactly once per connector (cached on second call)
+        _mockLongConnector.Verify(
+            c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()),
+            Times.Once,
+            "second call within TTL must use cached leverage for Hyperliquid");
+        _mockShortConnector.Verify(
+            c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()),
+            Times.Once,
+            "second call within TTL must use cached leverage for Lighter");
+    }
+
+    [Fact]
+    public async Task LeverageReduced_Alert_EmittedOnlyOnFirstCall()
+    {
+        // Arrange — exchange max leverage (3) is lower than configured (5), so leverage is reduced
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        // Act — call twice; the leverage warning should only fire once per connector
+        await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+        await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        // Assert — only 1 LeverageReduced alert total across both calls
+        // Long connector reduces 5x→3x on call 1 (fires alert). Effective leverage is then 3.
+        // Short connector max=3 is not > effective 3, so no short alert.
+        // Call 2: cache hit, _leverageWarned already set → no duplicate alert.
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LeverageReduced)),
+            Times.Once,
+            "LeverageReduced alert must fire exactly once total (deduplicated by _leverageWarned across calls)");
     }
 
     // ── Review-v113: NB8 — Short-leg zero price fallback ────────────

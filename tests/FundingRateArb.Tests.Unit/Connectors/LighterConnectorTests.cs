@@ -137,6 +137,32 @@ public class CountingSlowHttpMessageHandler : HttpMessageHandler
     }
 }
 
+/// <summary>
+/// HTTP handler that returns responses in sequence. Repeats the last response indefinitely
+/// once all provided responses have been consumed.
+/// </summary>
+public class SequentialHttpMessageHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyList<string> _responses;
+    private int _callCount;
+
+    public SequentialHttpMessageHandler(IEnumerable<string> responses)
+    {
+        _responses = responses.ToList();
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var index = Math.Min(Interlocked.Increment(ref _callCount) - 1, _responses.Count - 1);
+        var content = _responses[index];
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+        });
+    }
+}
+
 public class LighterConnectorTests
 {
     private readonly Mock<ILogger<LighterConnector>> _loggerMock = new();
@@ -961,6 +987,102 @@ public class LighterConnectorTests
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.AtLeastOnce);
+    }
+
+    // ── B5: Baseline snapshot tests ──────────────────────────────────────────
+
+    private static string MakeAccountJson(decimal? ethSize)
+    {
+        var positionsJson = ethSize.HasValue && ethSize.Value != 0
+            ? "[{\"symbol\":\"ETH\",\"position\":\"" + ethSize.Value.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) + "\",\"margin\":\"10\",\"entry_price\":\"3000\"}]"
+            : "[]";
+        return
+            "{\n" +
+            "  \"code\": 200,\n" +
+            "  \"total\": 1,\n" +
+            "  \"accounts\": [\n" +
+            "    {\n" +
+            "      \"account_index\": 281474976624240,\n" +
+            "      \"available_balance\": \"100.00\",\n" +
+            "      \"positions\": " + positionsJson + "\n" +
+            "    }\n" +
+            "  ]\n" +
+            "}";
+    }
+
+    private LighterConnector CreateSequentialConnector(IEnumerable<string> responses)
+    {
+        var handler = new SequentialHttpMessageHandler(responses);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+        };
+        return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+    }
+
+    /// <summary>
+    /// B5-1: baseline shows ETH Long at 0.1; first poll shows 0.2 → size increased → true.
+    /// NOTE: This test takes ~8 seconds due to Task.Delay(8000) in VerifyPositionOpenedAsync.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_SizeIncreasedAboveBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // First response = baseline (0.1), subsequent = poll (0.2 → increased)
+        var responses = new List<string>
+        {
+            MakeAccountJson(0.1m),   // baseline call
+            MakeAccountJson(0.2m),   // poll 1 — size increased → should return true
+        };
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long size increased from baseline 0.1 to 0.2");
+    }
+
+    /// <summary>
+    /// B5-2: baseline has no ETH positions; first poll shows ETH Long at 0.1 → new position → true.
+    /// NOTE: This test takes ~8 seconds due to Task.Delay(8000) in VerifyPositionOpenedAsync.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_PositionAbsentFromBaseline_AppearsInPoll_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Baseline has no ETH position; first poll shows ETH Long at 0.1
+        var responses = new List<string>
+        {
+            MakeAccountJson(null),   // baseline — no positions
+            MakeAccountJson(0.1m),   // poll 1 — ETH Long appears → should return true
+        };
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long was absent from baseline but appeared in first poll");
+    }
+
+    /// <summary>
+    /// B5-3: baseline and all polls show ETH Long at 0.1 unchanged → early-exit after 5 → false.
+    /// NOTE: This test takes ~8 seconds due to Task.Delay(8000) plus poll delays.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_ExistedInBaselineAtSameSize_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Baseline + 5 polls all at size 0.1 — no change, early-exit after 5 no-change polls
+        var responses = Enumerable.Repeat(MakeAccountJson(0.1m), 10).ToList();
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse("ETH Long at baseline size 0.1 never changes — should early-exit");
     }
 }
 
