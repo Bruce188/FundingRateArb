@@ -205,7 +205,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 {
                     noChangeStreak++;
                 }
-                // If target exists at baseline size, don't increment — it might still be settling
+                else
+                {
+                    noChangeStreak = 0; // target visible at baseline size — order may still be settling
+                }
 
                 if (noChangeStreak >= noChangeEarlyExit)
                 {

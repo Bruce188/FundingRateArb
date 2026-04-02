@@ -185,7 +185,8 @@ public class CoinGlassConnector : IExchangeConnector
         lock (_backoffLock)
         {
             _consecutiveFailures++;
-            var backoffSeconds = Math.Min(60 * (int)Math.Pow(2, _consecutiveFailures - 1), 900);
+            var cappedFailures = Math.Min(_consecutiveFailures, 14); // cap to prevent 2^n overflow
+            var backoffSeconds = Math.Min(60 * (1 << (cappedFailures - 1)), 900);
             _backoffUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
             _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
                 _consecutiveFailures, backoffSeconds);

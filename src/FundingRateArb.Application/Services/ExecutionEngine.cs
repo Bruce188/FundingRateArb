@@ -995,8 +995,8 @@ public class ExecutionEngine : IExecutionEngine
         _uow.Positions.Update(position);
 
         _logger.LogCritical(
-            "Position #{Id} finalized without price-based PnL (legs closed in prior retries). " +
-            "RealizedPnl={Pnl:F4} is approximate: funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4}",
+            "Position #{Id} finalized without price-based PnL or exit fees (legs closed in prior retries). " +
+            "RealizedPnl={Pnl:F4} is approximate: funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4} (exit fees likely 0 — unrecorded)",
             position.Id, position.RealizedPnl, position.AccumulatedFunding, position.EntryFeesUsdc, position.ExitFeesUsdc);
 
         _uow.Alerts.Add(new Alert
