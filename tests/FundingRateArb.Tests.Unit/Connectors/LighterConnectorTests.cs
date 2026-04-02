@@ -341,6 +341,7 @@ public class LighterConnectorTests
 
         var btc = rates.First(r => r.Symbol == "BTC");
         btc.RawRate.Should().Be(-0.00025m);
+        btc.RatePerHour.Should().Be(-0.00025m / 8m);
         btc.Volume24hUsd.Should().Be(50000000.00m);
     }
 
