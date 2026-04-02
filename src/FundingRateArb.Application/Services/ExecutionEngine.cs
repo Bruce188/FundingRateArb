@@ -29,7 +29,7 @@ public class ExecutionEngine : IExecutionEngine
         _logger = logger;
     }
 
-    private static string TruncateError(string? error, int maxLength = 1900)
+    internal static string TruncateError(string? error, int maxLength = 1900)
         => error is null ? "" : error.Length > maxLength ? error[..maxLength] + "…" : error;
 
     public async Task<(bool Success, string? Error)> OpenPositionAsync(
@@ -455,7 +455,7 @@ public class ExecutionEngine : IExecutionEngine
                 ArbitragePositionId = position.Id,
                 Type = AlertType.LegFailed,
                 Severity = AlertSeverity.Critical,
-                Message = $"Cannot close position for {assetSymbol}: {credError}. Manual intervention required.",
+                Message = $"Cannot close position for {assetSymbol}: {TruncateError(credError)}. Manual intervention required.",
             });
             await _uow.SaveAsync(ct);
             return;
@@ -517,7 +517,7 @@ public class ExecutionEngine : IExecutionEngine
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
                         Message = $"Close failed on BOTH legs for {assetSymbol}. " +
-                                             $"Long error: {TruncateError(longEx?.Message)}. Short error: {TruncateError(shortEx?.Message)}. " +
+                                             $"Long error: {TruncateError(longEx?.Message, 900)}. Short error: {TruncateError(shortEx?.Message, 900)}. " +
                                              "Manual intervention required.",
                     });
                     await _uow.SaveAsync(ct);
@@ -582,7 +582,7 @@ public class ExecutionEngine : IExecutionEngine
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
                         Message = $"CLOSE FAILED both legs: {assetSymbol} " +
-                                             $"Long={TruncateError(longCloseError)} Short={TruncateError(shortCloseError)}. " +
+                                             $"Long={TruncateError(longCloseError, 900)} Short={TruncateError(shortCloseError, 900)}. " +
                                              "Manual intervention required.",
                     });
                 }
@@ -600,10 +600,10 @@ public class ExecutionEngine : IExecutionEngine
                         Message = $"PARTIAL CLOSE FAILURE: {assetSymbol} " +
                                              (longClose.Success
                                                  ? $"Long=closed @ {longClose.FilledPrice:F4} "
-                                                 : $"Long=FAILED: {longCloseError} ") +
+                                                 : $"Long=FAILED: {TruncateError(longCloseError, 900)} ") +
                                              (shortClose.Success
                                                  ? $"Short=closed @ {shortClose.FilledPrice:F4}. "
-                                                 : $"Short=FAILED: {shortCloseError}. ") +
+                                                 : $"Short=FAILED: {TruncateError(shortCloseError, 900)}. ") +
                                              "Manual intervention required.",
                     });
                 }

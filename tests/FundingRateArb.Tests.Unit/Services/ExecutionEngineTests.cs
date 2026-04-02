@@ -2100,4 +2100,109 @@ public class ExecutionEngineTests
             Times.Once,
             "should NOT retry when close error is null");
     }
+
+    // ── TruncateError Tests ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void TruncateError_NullInput_ReturnsEmptyString()
+    {
+        var result = ExecutionEngine.TruncateError(null);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void TruncateError_ShortInput_ReturnsUnchanged()
+    {
+        var shortError = "Insufficient margin";
+
+        var result = ExecutionEngine.TruncateError(shortError);
+
+        result.Should().Be(shortError);
+    }
+
+    [Fact]
+    public void TruncateError_LongInput_TruncatesWithEllipsis()
+    {
+        var longError = new string('x', 2500);
+
+        var result = ExecutionEngine.TruncateError(longError);
+
+        result.Length.Should().BeLessOrEqualTo(1901); // 1900 + 1 for ellipsis
+        result.Should().EndWith("…");
+    }
+
+    [Fact]
+    public void TruncateError_ExactBoundary_ReturnsUnchanged()
+    {
+        var exactError = new string('y', 1900);
+
+        var result = ExecutionEngine.TruncateError(exactError);
+
+        result.Should().Be(exactError);
+        result.Should().NotEndWith("…");
+    }
+
+    [Fact]
+    public void TruncateError_CustomMaxLength_TruncatesCorrectly()
+    {
+        var longError = new string('z', 2000);
+
+        var result = ExecutionEngine.TruncateError(longError, 900);
+
+        result.Length.Should().BeLessOrEqualTo(901); // 900 + 1 for ellipsis
+        result.Should().EndWith("…");
+    }
+
+    [Fact]
+    public async Task DualErrorAlert_BothLongErrors_StaysWithinColumnLimit()
+    {
+        // Arrange: set up a close scenario where both legs fail with long error messages
+        // This tests the "Close failed on BOTH legs" alert path (lines 519-521)
+        var longError = new string('A', 2500);
+        var shortError = new string('B', 2500);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        // Open position first
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Set up close to fail on both legs with long errors
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception(longError));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception(shortError));
+
+        Alert? capturedAlert = null;
+        _mockAlerts.Setup(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)))
+            .Callback<Alert>(a => capturedAlert = a);
+
+        var position = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchange = new Exchange { Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Name = "Lighter" },
+            Asset = new Asset { Symbol = "ETH" },
+            Status = PositionStatus.Open,
+        };
+
+        // Act
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
+
+        // Assert: the alert message must fit in the 2000-char column
+        capturedAlert.Should().NotBeNull("a LegFailed alert should have been created");
+        capturedAlert!.Message.Length.Should().BeLessOrEqualTo(2000,
+            "dual-error alert message must not exceed the nvarchar(2000) column limit");
+    }
 }
