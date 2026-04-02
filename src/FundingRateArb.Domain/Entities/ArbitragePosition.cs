@@ -15,6 +15,8 @@ public class ArbitragePosition
     public int Leverage { get; set; }
     public decimal LongEntryPrice { get; set; }
     public decimal ShortEntryPrice { get; set; }
+    public decimal? LongLiquidationPrice { get; set; }
+    public decimal? ShortLiquidationPrice { get; set; }
     public decimal EntrySpreadPerHour { get; set; }
     public decimal CurrentSpreadPerHour { get; set; }
     public decimal AccumulatedFunding { get; set; } = 0m;

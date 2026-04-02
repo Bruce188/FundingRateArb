@@ -8,5 +8,6 @@ public enum CloseReason
     PnlTargetReached,
     Rebalanced,
     Manual,
-    EmergencyLegFailed
+    EmergencyLegFailed,
+    PriceFeedLost
 }
