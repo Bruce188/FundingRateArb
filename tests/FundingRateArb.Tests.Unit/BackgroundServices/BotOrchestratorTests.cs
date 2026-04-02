@@ -1939,11 +1939,16 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyp",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -1992,11 +1997,16 @@ public class BotOrchestratorTests
 
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyp",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -2015,11 +2025,16 @@ public class BotOrchestratorTests
         // Run a second cycle with a different opportunity on the same exchanges
         var opp2 = new ArbitrageOpportunityDto
         {
-            AssetId = 2, AssetSymbol = "BTC",
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
-            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            AssetId = 2,
+            AssetSymbol = "BTC",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyp",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m,
+            SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp2] });
