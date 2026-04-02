@@ -60,7 +60,8 @@ public class StartupTimeTests : IClassFixture<StartupTimeTests.StartupTestFactor
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ConnectionStrings:DefaultConnection"] = "not-used"
+                    ["ConnectionStrings:DefaultConnection"] = "not-used",
+                    ["Seed:AdminPassword"] = "Test@Password1234!"
                 });
             });
 

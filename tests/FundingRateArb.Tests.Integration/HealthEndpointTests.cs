@@ -102,7 +102,8 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["ConnectionStrings:DefaultConnection"] = "not-used"
+                    ["ConnectionStrings:DefaultConnection"] = "not-used",
+                    ["Seed:AdminPassword"] = "Test@Password1234!"
                 });
             });
 
