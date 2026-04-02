@@ -27,6 +27,7 @@ public class BotOrchestratorTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IPositionRepository> _mockPositionRepo = new();
     private readonly Mock<IAlertRepository> _mockAlertRepo = new();
+    private readonly Mock<IExchangeRepository> _mockExchangeRepo = new();
     private readonly Mock<IUserConfigurationRepository> _mockUserConfigs = new();
     private readonly Mock<IOpportunitySnapshotRepository> _mockSnapshotRepo = new();
     private readonly Mock<ISignalEngine> _mockSignalEngine = new();
@@ -59,8 +60,13 @@ public class BotOrchestratorTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlertRepo.Object);
+        _mockUow.Setup(u => u.Exchanges).Returns(_mockExchangeRepo.Object);
         _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
         _mockUow.Setup(u => u.OpportunitySnapshots).Returns(_mockSnapshotRepo.Object);
+
+        // Default mock for exchange repository (used in circuit breaker DTO population)
+        _mockExchangeRepo.Setup(e => e.GetAllAsync())
+            .ReturnsAsync(new List<Exchange>());
 
         _mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync([]);
@@ -916,5 +922,307 @@ public class BotOrchestratorTests
 
         capturedOpp.Should().NotBeNull("adaptive threshold should select an opportunity");
         capturedOpp!.AssetSymbol.Should().Be("BTC", "should select the higher yield opportunity");
+    }
+
+    // ── Status message and circuit breaker tests ────────────────────────
+
+    private static ArbitrageOpportunityDto MakeOppNamed(
+        int assetId, string symbol,
+        int longExId, string longExName,
+        int shortExId, string shortExName,
+        decimal netYield = 0.001m)
+    {
+        return new ArbitrageOpportunityDto
+        {
+            AssetId = assetId,
+            AssetSymbol = symbol,
+            LongExchangeId = longExId,
+            ShortExchangeId = shortExId,
+            LongExchangeName = longExName,
+            ShortExchangeName = shortExName,
+            NetYieldPerHour = netYield,
+            SpreadPerHour = netYield,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m,
+        };
+    }
+
+    private BotConfiguration MakeEnabledConfig()
+    {
+        return new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 30,
+            UpdatedByUserId = TestUserId,
+        };
+    }
+
+    private void SetupStatusCapture(out List<(string Message, string Severity)> captured)
+    {
+        var capturedMessages = new List<(string, string)>();
+        var mockClients = new Mock<IHubClients<IDashboardClient>>();
+        var mockClient = new Mock<IDashboardClient>();
+        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<string, string>((msg, sev) => capturedMessages.Add((msg, sev)))
+            .Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveBalanceUpdate(It.IsAny<BalanceSnapshotDto>())).Returns(Task.CompletedTask);
+        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
+        mockClients.Setup(c => c.All).Returns(mockClient.Object);
+        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
+        captured = capturedMessages;
+    }
+
+    [Fact]
+    public async Task StatusMessage_CircuitBreaker_ShowsExchangeName()
+    {
+        SetupStatusCapture(out var capturedMessages);
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // Create opportunity involving Lighter (id=2)
+        var opp = MakeOppNamed(1, "ETH", 2, "Lighter", 3, "Aster");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        // Set circuit breaker for Lighter (id=2) broken until 10 minutes from now
+        _sut.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(10));
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var statusMessages = capturedMessages
+            .Where(m => m.Message.Contains("Lighter", StringComparison.OrdinalIgnoreCase) &&
+                        m.Message.Contains("circuit breaker", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        statusMessages.Should().NotBeEmpty("status message should mention Lighter circuit breaker");
+    }
+
+    [Fact]
+    public async Task StatusMessage_BelowThreshold_ShowsBestSpread()
+    {
+        SetupStatusCapture(out var capturedMessages);
+
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.002m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+            });
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // Opportunity with yield below user's threshold (0.002m)
+        var opp = MakeOppNamed(1, "ETH", 1, "Lighter", 2, "Aster", netYield: 0.001m);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var statusMessages = capturedMessages
+            .Where(m => m.Message.Contains("below your threshold", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        statusMessages.Should().NotBeEmpty("status message should mention threshold filtering");
+        statusMessages[0].Message.Should().Contain("0.1000%/hr", "should show the best yield in the message");
+    }
+
+    [Fact]
+    public async Task MarginError_OnlyCircuitBreaksFailingExchange()
+    {
+        SetupStatusCapture(out _);
+
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+            });
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // Lighter (2) / Aster (3) trade
+        var opp = MakeOppNamed(1, "ETH", 2, "Lighter", 3, "Aster");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        // Margin error specifically on Aster
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Insufficient margin on Aster: available=5.00, required=10.00"));
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Aster (3) should be circuit-broken
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken");
+
+        // Lighter (2) should NOT be circuit-broken
+        _sut.ExchangeCircuitBreaker.Should().NotContainKey(2, "Lighter should NOT be circuit-broken on Aster margin error");
+    }
+
+    [Fact]
+    public async Task MarginError_GenericError_CircuitBreaksBothExchanges()
+    {
+        SetupStatusCapture(out _);
+
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+            });
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // Lighter (2) / Aster (3) trade
+        var opp = MakeOppNamed(1, "ETH", 2, "Lighter", 3, "Aster");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        // Generic balance error — no exchange identified
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Insufficient margin for order"));
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Both should be circuit-broken (safe fallback)
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(2, "Lighter should be circuit-broken on generic margin error");
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken on generic margin error");
+    }
+
+    [Theory]
+    [InlineData("Insufficient margin on Aster: available=5.00, required=10.00", "Aster")]
+    [InlineData("Insufficient margin on Lighter: available=13.90, required=6.00", "Lighter")]
+    [InlineData("Insufficient margin on Hyperliquid: available=0.00, required=100.00", "Hyperliquid")]
+    [InlineData("Pre-flight balance check failed — exchange connection error", null)]
+    [InlineData(null, null)]
+    [InlineData("", null)]
+    [InlineData("Some other error", null)]
+    public void ExtractMarginErrorExchange_ParsesCorrectly(string? error, string? expected)
+    {
+        var result = BotOrchestrator.ExtractMarginErrorExchange(error);
+        result.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task CircuitBreakerState_IncludedInOpportunityResult()
+    {
+        OpportunityResultDto? capturedResult = null;
+        var mockClients = new Mock<IHubClients<IDashboardClient>>();
+        var mockClient = new Mock<IDashboardClient>();
+        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>()))
+            .Callback<OpportunityResultDto>(r => capturedResult = r)
+            .Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
+        mockClient.Setup(d => d.ReceiveBalanceUpdate(It.IsAny<BalanceSnapshotDto>())).Returns(Task.CompletedTask);
+        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
+        mockClients.Setup(c => c.All).Returns(mockClient.Object);
+        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
+
+        var config = MakeEnabledConfig();
+        config.IsEnabled = false; // disable to skip user loop
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = MakeOppNamed(1, "ETH", 2, "Lighter", 3, "Aster");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        // Set circuit breaker for Lighter (id=2)
+        _sut.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(15));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        capturedResult.Should().NotBeNull("opportunity update should be pushed");
+        capturedResult!.CircuitBreakers.Should().NotBeEmpty("circuit breaker status should be included");
+        capturedResult.CircuitBreakers.Should().Contain(cb => cb.ExchangeName == "Lighter" && cb.ExchangeId == 2,
+            "circuit breaker should identify Lighter exchange");
+        capturedResult.CircuitBreakers[0].RemainingMinutes.Should().BeGreaterThan(0);
     }
 }

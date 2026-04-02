@@ -119,7 +119,7 @@ public class ConnectivityTestServiceTests
                 .ReturnsAsync(balance);
         }
 
-        mock.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mock.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
                 Success = openSuccess,
@@ -218,7 +218,7 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
                 Success = true,
@@ -349,7 +349,7 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Unexpected SDK error"));
 
         _mockConnectorFactory
@@ -439,7 +439,7 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
                 Success = true,
@@ -500,7 +500,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(100m);
         // Cancel the token inside PlaceMarketOrderAsync callback so cancellation
         // occurs after open succeeds but before the settlement Task.Delay completes
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .Returns<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) =>
             {
                 cts.Cancel();
@@ -643,7 +643,7 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(50m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
         mockConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
@@ -673,7 +673,7 @@ public class ConnectivityTestServiceTests
         var mockDisposable = mockDisposableConnector.As<IDisposable>();
         mockDisposableConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        mockDisposableConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockDisposableConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "o-1", FilledPrice = 3000m, FilledQuantity = 0.00167m });
         mockDisposableConnector.Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
@@ -724,7 +724,7 @@ public class ConnectivityTestServiceTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()))
+        mockConnector.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto
             {
                 Success = true,

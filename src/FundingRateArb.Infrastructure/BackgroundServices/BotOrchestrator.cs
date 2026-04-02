@@ -252,6 +252,42 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Step 2: Compute + push opportunities globally (always, regardless of bot state)
         var opportunityResult = await signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
         var allOpportunities = opportunityResult.Opportunities;
+
+        // Populate circuit breaker statuses for dashboard display
+        var activeCircuitBreakers = _exchangeCircuitBreaker
+            .Where(kvp => kvp.Value.BrokenUntil > DateTime.UtcNow)
+            .ToList();
+        if (activeCircuitBreakers.Count > 0)
+        {
+            // Build exchange ID → name lookup from opportunity data
+            var exchangeNameLookup = new Dictionary<int, string>();
+            foreach (var opp in allOpportunities)
+            {
+                exchangeNameLookup.TryAdd(opp.LongExchangeId, opp.LongExchangeName);
+                exchangeNameLookup.TryAdd(opp.ShortExchangeId, opp.ShortExchangeName);
+            }
+
+            // Fall back to DB if an exchange isn't in the opportunity list
+            if (activeCircuitBreakers.Any(kvp => !exchangeNameLookup.ContainsKey(kvp.Key)))
+            {
+                var exchanges = await uow.Exchanges.GetAllAsync();
+                foreach (var ex in exchanges)
+                {
+                    exchangeNameLookup.TryAdd(ex.Id, ex.Name);
+                }
+            }
+
+            opportunityResult.CircuitBreakers = activeCircuitBreakers
+                .Select(kvp => new CircuitBreakerStatusDto
+                {
+                    ExchangeId = kvp.Key,
+                    ExchangeName = exchangeNameLookup.GetValueOrDefault(kvp.Key, $"Exchange #{kvp.Key}"),
+                    BrokenUntil = kvp.Value.BrokenUntil,
+                    RemainingMinutes = Math.Max(0, (int)Math.Ceiling((kvp.Value.BrokenUntil - DateTime.UtcNow).TotalMinutes))
+                })
+                .ToList();
+        }
+
         try
         {
             await _hubContext.Clients.Group(HubGroups.MarketData).ReceiveOpportunityUpdate(opportunityResult);
@@ -456,6 +492,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
             if (o.NetYieldPerHour < userConfig.OpenThreshold)
             {
                 // Will be handled by the "below_threshold" fallback in snapshot persistence
+                tracker.BelowThresholdCount++;
+                if (o.NetYieldPerHour > tracker.BestBelowThresholdYield)
+                {
+                    tracker.BestBelowThresholdYield = o.NetYieldPerHour;
+                }
                 continue;
             }
             userOpportunities.Add(o);
@@ -609,7 +650,86 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 }
                 else if (userOpportunities.Count == 0)
                 {
-                    await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges and coins", "info");
+                    if (tracker.CircuitBrokenKeys.Count > 0)
+                    {
+                        // Collect unique exchange names from circuit-broken opportunities
+                        var cbExchangeNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var o in allOpportunities)
+                        {
+                            var oKey = OpportunityKey(o);
+                            if (!tracker.CircuitBrokenKeys.Contains(oKey))
+                            {
+                                continue;
+                            }
+
+                            if (circuitBrokenExchangeIds.Contains(o.LongExchangeId))
+                            {
+                                cbExchangeNames.Add(o.LongExchangeName);
+                            }
+
+                            if (circuitBrokenExchangeIds.Contains(o.ShortExchangeId))
+                            {
+                                cbExchangeNames.Add(o.ShortExchangeName);
+                            }
+                        }
+
+                        if (cbExchangeNames.Count > 0)
+                        {
+                            // Build message with remaining time for each circuit-broken exchange
+                            var parts = new List<string>();
+                            foreach (var name in cbExchangeNames)
+                            {
+                                // Find the exchange ID for this name to look up remaining time
+                                var exchangeId = _exchangeCircuitBreaker
+                                    .Where(kvp => kvp.Value.BrokenUntil > DateTime.UtcNow)
+                                    .Select(kvp => kvp.Key)
+                                    .FirstOrDefault(id =>
+                                        allOpportunities.Any(o =>
+                                            (o.LongExchangeId == id && o.LongExchangeName.Equals(name, StringComparison.OrdinalIgnoreCase)) ||
+                                            (o.ShortExchangeId == id && o.ShortExchangeName.Equals(name, StringComparison.OrdinalIgnoreCase))));
+
+                                if (exchangeId != 0 && _exchangeCircuitBreaker.TryGetValue(exchangeId, out var cb))
+                                {
+                                    var remaining = (int)Math.Ceiling((cb.BrokenUntil - DateTime.UtcNow).TotalMinutes);
+                                    if (remaining > 0)
+                                    {
+                                        parts.Add($"{name} circuit breaker active (resumes in {remaining}m)");
+                                    }
+                                    else
+                                    {
+                                        parts.Add($"{name} circuit breaker active");
+                                    }
+                                }
+                                else
+                                {
+                                    parts.Add($"{name} circuit breaker active");
+                                }
+                            }
+
+                            await PushStatusExplanationAsync(userId, string.Join("; ", parts), "warning");
+                        }
+                        else
+                        {
+                            await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges and coins", "info");
+                        }
+                    }
+                    else if (tracker.BelowThresholdCount > 0)
+                    {
+                        await PushStatusExplanationAsync(userId,
+                            $"{tracker.BelowThresholdCount} opportunities below your threshold (best: {tracker.BestBelowThresholdYield * 100:F4}%/hr, yours: {userConfig.OpenThreshold * 100:F4}%/hr)", "info");
+                    }
+                    else if (tracker.ExchangeDisabledKeys.Count > 0)
+                    {
+                        await PushStatusExplanationAsync(userId, "No opportunities match your enabled exchanges", "info");
+                    }
+                    else if (tracker.AssetDisabledKeys.Count > 0)
+                    {
+                        await PushStatusExplanationAsync(userId, "No opportunities match your enabled coins", "info");
+                    }
+                    else
+                    {
+                        await PushStatusExplanationAsync(userId, "No arbitrage opportunities detected this cycle", "info");
+                    }
                 }
                 else if (cooldownSkips.Count > 0)
                 {
@@ -719,22 +839,60 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     var remOpp = candidates[remaining];
                     tracker.CapitalExhaustedKeys.Add(OpportunityKey(remOpp));
                 }
-                // Immediately trip circuit breaker for involved exchanges — margin errors are account-level
+                // Circuit-break only the exchange that reported the margin error (not both)
                 var brokenUntil = DateTime.UtcNow.AddMinutes(globalConfig.ExchangeCircuitBreakerMinutes);
-                _exchangeCircuitBreaker[opp.LongExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
-                _logger.LogWarning(
-                    "Circuit breaker OPEN for exchange {ExchangeId} due to margin error — excluded for {Minutes}m",
-                    opp.LongExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
-                if (opp.ShortExchangeId != opp.LongExchangeId)
+                var marginErrorExchange = ExtractMarginErrorExchange(error);
+                if (marginErrorExchange != null)
                 {
-                    _exchangeCircuitBreaker[opp.ShortExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                    // Targeted: only break the specific exchange that reported insufficient margin
+                    if (marginErrorExchange.Equals(opp.LongExchangeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _exchangeCircuitBreaker[opp.LongExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                        _logger.LogWarning(
+                            "Circuit breaker OPEN for exchange {ExchangeId} ({Name}) due to margin error — excluded for {Minutes}m",
+                            opp.LongExchangeId, opp.LongExchangeName, globalConfig.ExchangeCircuitBreakerMinutes);
+                        circuitBrokenExchangeIds.Add(opp.LongExchangeId);
+                    }
+                    else if (marginErrorExchange.Equals(opp.ShortExchangeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _exchangeCircuitBreaker[opp.ShortExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                        _logger.LogWarning(
+                            "Circuit breaker OPEN for exchange {ExchangeId} ({Name}) due to margin error — excluded for {Minutes}m",
+                            opp.ShortExchangeId, opp.ShortExchangeName, globalConfig.ExchangeCircuitBreakerMinutes);
+                        circuitBrokenExchangeIds.Add(opp.ShortExchangeId);
+                    }
+                    else
+                    {
+                        // Exchange name in error doesn't match either leg — break both as safe fallback
+                        _exchangeCircuitBreaker[opp.LongExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                        circuitBrokenExchangeIds.Add(opp.LongExchangeId);
+                        if (opp.ShortExchangeId != opp.LongExchangeId)
+                        {
+                            _exchangeCircuitBreaker[opp.ShortExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                            circuitBrokenExchangeIds.Add(opp.ShortExchangeId);
+                        }
+                        _logger.LogWarning(
+                            "Circuit breaker OPEN for BOTH exchanges {LongId}/{ShortId} — margin error exchange '{ErrorExchange}' not matched",
+                            opp.LongExchangeId, opp.ShortExchangeId, marginErrorExchange);
+                    }
+                }
+                else
+                {
+                    // Generic error (no specific exchange identified) — break both as safe fallback
+                    _exchangeCircuitBreaker[opp.LongExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
                     _logger.LogWarning(
                         "Circuit breaker OPEN for exchange {ExchangeId} due to margin error — excluded for {Minutes}m",
-                        opp.ShortExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
+                        opp.LongExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
+                    circuitBrokenExchangeIds.Add(opp.LongExchangeId);
+                    if (opp.ShortExchangeId != opp.LongExchangeId)
+                    {
+                        _exchangeCircuitBreaker[opp.ShortExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                        _logger.LogWarning(
+                            "Circuit breaker OPEN for exchange {ExchangeId} due to margin error — excluded for {Minutes}m",
+                            opp.ShortExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
+                        circuitBrokenExchangeIds.Add(opp.ShortExchangeId);
+                    }
                 }
-                // Update in-memory set so remaining users in this cycle also skip
-                circuitBrokenExchangeIds.Add(opp.LongExchangeId);
-                circuitBrokenExchangeIds.Add(opp.ShortExchangeId);
                 break;
             }
             else
@@ -1158,6 +1316,35 @@ public class BotOrchestrator : BackgroundService, IBotControl
         => $"{p.AssetId}_{p.LongExchangeId}_{p.ShortExchangeId}";
 
     /// <summary>
+    /// Extracts the exchange name from a margin error message.
+    /// Expected format: "Insufficient margin on {ExchangeName}: available=X, required=Y"
+    /// Returns null if the pattern is not found.
+    /// </summary>
+    internal static string? ExtractMarginErrorExchange(string? error)
+    {
+        if (string.IsNullOrEmpty(error))
+        {
+            return null;
+        }
+
+        const string prefix = "Insufficient margin on ";
+        var idx = error.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            return null;
+        }
+
+        var start = idx + prefix.Length;
+        var colonIdx = error.IndexOf(':', start);
+        if (colonIdx < 0)
+        {
+            return null;
+        }
+
+        return error[start..colonIdx].Trim();
+    }
+
+    /// <summary>
     /// Groups skip-reason tracking sets to reduce parameter count.
     /// </summary>
     internal sealed class SkipReasonTracker
@@ -1174,6 +1361,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         public HashSet<string> CircuitBrokenKeys { get; } = new();
         public HashSet<string> NotSelectedKeys { get; } = new();
 
+        // Per-user below-threshold tracking (cleared before each user iteration)
+        public int BelowThresholdCount { get; set; }
+        public decimal BestBelowThresholdYield { get; set; }
+
         /// <summary>Clears per-user skip reason sets before processing a new user.</summary>
         public void ClearPerUserSets()
         {
@@ -1181,6 +1372,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             AssetDisabledKeys.Clear();
             CircuitBrokenKeys.Clear();
             NotSelectedKeys.Clear();
+            BelowThresholdCount = 0;
+            BestBelowThresholdYield = 0;
         }
     }
 }

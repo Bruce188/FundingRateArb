@@ -162,13 +162,14 @@ public class ConnectivityTestService : IConnectivityTestService
             {
 
                 // Step 1 - Balance check
+                const decimal testSizeUsdc = 12m;
                 await Log("Step 1: Checking available balance...");
                 decimal balance;
                 try
                 {
                     balance = await connector.GetAvailableBalanceAsync(ct);
                     _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
-                    await Log("Balance check OK");
+                    await Log($"Balance: ${balance:F2} USDC");
                 }
                 catch (Exception ex)
                 {
@@ -178,9 +179,16 @@ public class ConnectivityTestService : IConnectivityTestService
                     return new ConnectivityTestResult(false, exchangeName, msg);
                 }
 
+                if (balance < testSizeUsdc)
+                {
+                    var skipMsg = $"Skipping trade test — available balance ${balance:F2} below required ${testSizeUsdc:F2}";
+                    await Log(skipMsg);
+                    return new ConnectivityTestResult(true, exchangeName, $"Balance OK (${balance:F2}), trade test skipped (insufficient margin)");
+                }
+
                 // Step 2 - Open position
-                await Log("Step 2: Opening $10 ETH Long 1x position...");
-                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, ct);
+                await Log($"Step 2: Opening ${testSizeUsdc} ETH Long 1x position...");
+                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, testSizeUsdc, 1, ct);
                 if (!openResult.Success)
                 {
                     _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
