@@ -27,7 +27,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
     private readonly string? _asterKey = Environment.GetEnvironmentVariable("TRADE_TEST_ASTER_KEY");
     private readonly string? _asterSecret = Environment.GetEnvironmentVariable("TRADE_TEST_ASTER_SECRET");
 
-    private const decimal SizeUsdc = 5m;
+    private const decimal SizeUsdc = 12m;
     private const int Leverage = 1;
     private const string Asset = "ETH";
     private static readonly Side TradeSide = Side.Long;

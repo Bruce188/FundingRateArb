@@ -237,6 +237,7 @@ public class HyperliquidConnectorTests
             CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
         };
         SetupExchangeInfoSuccess(tickers);
+        SetupPositionQuantity("ETH", 0.1m);
 
         var orderResult = new HyperLiquidOrderResult
         {
@@ -289,6 +290,7 @@ public class HyperliquidConnectorTests
             CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m),
         };
         SetupExchangeInfoSuccess(tickers);
+        SetupPositionQuantity("ETH", 0.1m);
 
         var orderResult = new HyperLiquidOrderResult { OrderId = 1L, FilledQuantity = 0.01m, AveragePrice = 3000m };
 
@@ -548,6 +550,7 @@ public class HyperliquidConnectorTests
 
         var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
         SetupExchangeInfoSuccess(tickers);
+        SetupPositionQuantity("ETH", 0.1m);
 
         string? capturedVaultAddress = null;
         _mockTrading
@@ -662,6 +665,36 @@ public class HyperliquidConnectorTests
             null);
     }
 
+    private void SetupPositionQuantity(string asset, decimal quantity)
+    {
+        var accountInfo = new HyperLiquidFuturesAccount
+        {
+            Withdrawable = 1000m,
+            Positions = [
+                new HyperLiquidPosition
+                {
+                    Position = new HyperLiquidPositionInfo
+                    {
+                        Symbol = asset,
+                        PositionQuantity = quantity,
+                    }
+                }
+            ]
+        };
+        var successResult = new WebCallResult<HyperLiquidFuturesAccount>(
+            System.Net.HttpStatusCode.OK,
+            null, null, null, null, null, null, null, null, null, null,
+            ResultDataSource.Server,
+            accountInfo,
+            null);
+        _mockAccount
+            .Setup(a => a.GetAccountInfoAsync(
+                It.IsAny<string?>(),
+                It.IsAny<string?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(successResult);
+    }
+
     // ── B-W7: szDecimals per-asset rounding ──────────────────────────────────
 
     [Fact]
@@ -751,49 +784,32 @@ public class HyperliquidConnectorTests
     }
 
     [Fact]
-    public async Task ClosePosition_FallbackQuantity_IsCapped()
+    public async Task ClosePosition_ZeroQuantity_ReturnsFailure()
     {
-        // When no position info exists, the fallback quantity should be 1_000_000, not decimal.MaxValue/1M
+        // When no position info exists, should return failure instead of using 1M fallback
         var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
         SetupExchangeInfoSuccess(tickers);
 
-        decimal? capturedQuantity = null;
-        _mockTrading
-            .Setup(t => t.PlaceOrderAsync(
-                It.IsAny<string>(),
-                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
-                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
-                It.IsAny<decimal>(),
-                It.IsAny<decimal>(),
-                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
-                It.IsAny<bool?>(),
-                It.IsAny<string?>(),
-                It.IsAny<decimal?>(),
-                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
-                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
-                It.IsAny<string?>(),
-                It.IsAny<DateTime?>(),
-                It.IsAny<CancellationToken>()))
-            .Callback<string, HyperLiquid.Net.Enums.OrderSide, HyperLiquid.Net.Enums.OrderType,
-                      decimal, decimal, HyperLiquid.Net.Enums.TimeInForce?, bool?, string?,
-                      decimal?, HyperLiquid.Net.Enums.TpSlType?, HyperLiquid.Net.Enums.TpSlGrouping?,
-                      string?, DateTime?, CancellationToken>(
-                (sym, side, type, qty, price, tif, ro, clOrdId, trig, tpsl, tpslGrp, vault, exp, ct) =>
-                {
-                    capturedQuantity = qty;
-                })
-            .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
-            {
-                OrderId = 1L,
-                FilledQuantity = 0.1m,
-                AveragePrice = 3000m,
-            }));
+        var result = await _sut.ClosePositionAsync("ETH", Side.Long);
 
-        await _sut.ClosePositionAsync("ETH", Side.Long);
-
-        capturedQuantity.Should().NotBeNull();
-        capturedQuantity.Should().BeLessOrEqualTo(1_000_000m,
-            "fallback quantity must be capped to 1M, not decimal.MaxValue/1M");
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Position quantity is zero");
+        // Verify no order was placed
+        _mockTrading.Verify(t => t.PlaceOrderAsync(
+            It.IsAny<string>(),
+            It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+            It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+            It.IsAny<decimal>(),
+            It.IsAny<decimal>(),
+            It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+            It.IsAny<bool?>(),
+            It.IsAny<string?>(),
+            It.IsAny<decimal?>(),
+            It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+            It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+            It.IsAny<string?>(),
+            It.IsAny<DateTime?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

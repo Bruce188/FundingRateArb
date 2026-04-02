@@ -49,6 +49,116 @@
         }
     });
 
+    var iconMap = { 0: "\u25B2", 1: "\u2248", 2: "\u23F0", 3: "\u26BF", 4: "\u2193", 5: "\u25CE" };
+    var nameMap = { 0: "SpreadRisk", 1: "Liquidity", 2: "TimeBased", 3: "Leverage", 4: "Loss", 5: "PnlProgress" };
+
+    function applyWarningIcons(container, warnTypes) {
+        var existing = container.querySelectorAll(".warning-icon");
+        existing.forEach(function (el) { el.remove(); });
+        (warnTypes || []).forEach(function (wt) {
+            var span = document.createElement("span");
+            span.className = "warning-icon warning-" + (nameMap[wt] || "").toLowerCase();
+            span.title = nameMap[wt] || "";
+            span.textContent = iconMap[wt] || "";
+            container.appendChild(span);
+        });
+    }
+
+    function applyWarningRowClass(el, warnLevel) {
+        el.classList.remove("table-danger", "table-warning", "table-info", "border-danger", "border-warning", "border-info");
+        if (warnLevel === 3) el.classList.add("table-danger");
+        else if (warnLevel === 2) el.classList.add("table-warning");
+        else if (warnLevel === 1) el.classList.add("table-info");
+    }
+
+    function createPositionRow(position) {
+        var tr = document.createElement("tr");
+        tr.id = "position-" + position.id;
+        var spread = position.currentSpreadPerHour ?? 0;
+        var pnl = position.unrealizedPnl ?? 0;
+        var spreadClass = spread >= 0 ? "text-success" : "text-danger";
+        var pnlClass = pnl >= 0 ? "text-success" : "text-danger";
+
+        var tdAsset = document.createElement("td");
+        var strong = document.createElement("strong");
+        strong.textContent = position.assetSymbol || "?";
+        tdAsset.appendChild(strong);
+        applyWarningIcons(tdAsset, position.warningTypes);
+        tr.appendChild(tdAsset);
+
+        var cols = [
+            position.longExchangeName || "?",
+            position.shortExchangeName || "?",
+            "$" + (position.sizeUsdc ?? 0).toFixed(2),
+            (((position.entrySpreadPerHour ?? 0) * 100).toFixed(4)) + "%"
+        ];
+        cols.forEach(function (text) {
+            var td = document.createElement("td");
+            td.textContent = text;
+            tr.appendChild(td);
+        });
+
+        var tdSpread = document.createElement("td");
+        tdSpread.className = "position-spread " + spreadClass;
+        tdSpread.textContent = (spread * 100).toFixed(4) + "%";
+        tr.appendChild(tdSpread);
+
+        var tdPnl = document.createElement("td");
+        tdPnl.className = "position-pnl " + pnlClass;
+        tdPnl.textContent = "$" + pnl.toFixed(4);
+        tr.appendChild(tdPnl);
+
+        var tdTime = document.createElement("td");
+        if (position.openedAt) {
+            var time = document.createElement("time");
+            time.className = "local-time";
+            time.setAttribute("datetime", position.openedAt);
+            time.textContent = new Date(position.openedAt).toLocaleString();
+            tdTime.appendChild(time);
+        }
+        tr.appendChild(tdTime);
+
+        applyWarningRowClass(tr, position.warningLevel ?? 0);
+        return tr;
+    }
+
+    function createPositionCard(position) {
+        var card = document.createElement("div");
+        card.className = "card mb-2 mobile-card";
+        card.id = "position-card-" + position.id;
+        var warnLevel = position.warningLevel ?? 0;
+        if (warnLevel === 3) card.classList.add("border-danger");
+        else if (warnLevel === 2) card.classList.add("border-warning");
+        else if (warnLevel === 1) card.classList.add("border-info");
+
+        var body = document.createElement("div");
+        body.className = "card-body p-2";
+
+        var headerRow = document.createElement("div");
+        headerRow.className = "d-flex justify-content-between";
+        var assetStrong = document.createElement("strong");
+        assetStrong.textContent = position.assetSymbol || "?";
+        headerRow.appendChild(assetStrong);
+        var warningSpan = document.createElement("span");
+        applyWarningIcons(warningSpan, position.warningTypes);
+        headerRow.appendChild(warningSpan);
+        body.appendChild(headerRow);
+
+        var exchangeSmall = document.createElement("small");
+        exchangeSmall.className = "text-muted";
+        exchangeSmall.textContent = (position.longExchangeName || "?") + " \u2192 " + (position.shortExchangeName || "?");
+        body.appendChild(exchangeSmall);
+
+        var detailDiv = document.createElement("div");
+        detailDiv.className = "small";
+        var spread = position.currentSpreadPerHour ?? 0;
+        detailDiv.textContent = "Size: $" + (position.sizeUsdc ?? 0).toFixed(2) + " | Spread: " + (spread * 100).toFixed(4) + "%/hr";
+        body.appendChild(detailDiv);
+
+        card.appendChild(body);
+        return card;
+    }
+
     connection.on("ReceivePositionUpdate", function (position) {
         var positionRow = document.getElementById("position-" + position.id);
         if (positionRow) {
@@ -63,29 +173,24 @@
                 spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(6) + "%";
             }
 
-            // Apply warning level row class
-            positionRow.classList.remove("table-danger", "table-warning", "table-info");
-            var warnLevel = position.warningLevel ?? 0;
-            if (warnLevel === 3) positionRow.classList.add("table-danger");
-            else if (warnLevel === 2) positionRow.classList.add("table-warning");
-            else if (warnLevel === 1) positionRow.classList.add("table-info");
+            applyWarningRowClass(positionRow, position.warningLevel ?? 0);
 
             // Update warning type icons in the first cell
             var firstTd = positionRow.querySelector("td:first-child");
             if (firstTd) {
-                var existing = firstTd.querySelectorAll(".warning-icon");
-                existing.forEach(function (el) { el.remove(); });
-
-                var warnTypes = position.warningTypes || [];
-                var iconMap = { 0: "\u25B2", 1: "\u2248", 2: "\u23F0", 3: "\u26BF", 4: "\u2193" };
-                var nameMap = { 0: "SpreadRisk", 1: "Liquidity", 2: "TimeBased", 3: "Leverage", 4: "Loss" };
-                warnTypes.forEach(function (wt) {
-                    var span = document.createElement("span");
-                    span.className = "warning-icon warning-" + (nameMap[wt] || "").toLowerCase();
-                    span.title = nameMap[wt] || "";
-                    span.textContent = iconMap[wt] || "";
-                    firstTd.appendChild(span);
-                });
+                applyWarningIcons(firstTd, position.warningTypes);
+            }
+        } else {
+            // New position — create DOM elements
+            // Desktop table row
+            var table = document.querySelector(".table-responsive table tbody");
+            if (table) {
+                table.appendChild(createPositionRow(position));
+            }
+            // Mobile card
+            var cardsContainer = document.getElementById("positions-cards");
+            if (cardsContainer) {
+                cardsContainer.appendChild(createPositionCard(position));
             }
         }
     });

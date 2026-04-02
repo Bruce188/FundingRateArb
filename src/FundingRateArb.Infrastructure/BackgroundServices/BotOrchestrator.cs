@@ -216,6 +216,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
                 closedPositionIds.Add((pos.Id, pos.UserId));
+
+                // Apply cooldown for losing trades to avoid re-entering the same pair
+                if (pos.RealizedPnl.Value < 0)
+                {
+                    var opKey = $"{pos.UserId}:{pos.AssetId}:{pos.LongExchangeId}:{pos.ShortExchangeId}";
+                    _failedOpCooldowns[opKey] = (DateTime.UtcNow.Add(BaseCooldown), 1);
+                }
             }
         }
 
@@ -565,6 +572,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
                         return true;
                     })
+                    .OrderByDescending(o => o.NetYieldPerHour)
                     .Take(1)
                     .ToList();
 

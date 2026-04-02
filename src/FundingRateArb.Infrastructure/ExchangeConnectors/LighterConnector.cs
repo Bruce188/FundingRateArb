@@ -34,7 +34,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     // Cache market metadata (orderBookDetails) for 5 minutes
     private Dictionary<string, LighterOrderBookDetail>? _marketCache;
     private DateTime _marketCacheExpiry = DateTime.MinValue;
-    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(15);
     private readonly SemaphoreSlim _cacheLock = new(1, 1);
     // Cache leverage per market to skip redundant TryUpdateLeverageAsync calls
     private readonly ConcurrentDictionary<int, int> _leverageCache = new();
@@ -371,6 +371,21 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 {
                     Success = false,
                     Error = $"Calculated base amount is zero (notional={notional}, price={markPrice})"
+                };
+            }
+
+            // Min notional validation — use MinBaseAmount if available, else $5 USDC fallback
+            var actualNotional = baseReal * markPrice;
+            var minBaseAmountParsed = long.TryParse(market.MinBaseAmount, out var minBase) ? minBase : 0L;
+            var minNotional = minBaseAmountParsed > 0
+                ? (decimal)minBaseAmountParsed / sizeMultiplier * markPrice
+                : 5m;
+            if (actualNotional < minNotional)
+            {
+                return new OrderResultDto
+                {
+                    Success = false,
+                    Error = $"Order notional ${actualNotional:F2} below Lighter minimum ${minNotional:F2}"
                 };
             }
 

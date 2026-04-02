@@ -432,10 +432,13 @@ public class ExecutionEngineTests
     [Fact]
     public async Task OpenPosition_InsufficientMarginOnLongExchange_AbortsWithoutOpeningLegs()
     {
-        // C2: requiredMargin = sizeUsdc (not sizeUsdc / leverage). Balance=90, size=100 → fail
+        // requiredMargin = sizeUsdc / leverage = 100 / 5 = 20. Balance=15 < 20 → fail
         _mockLongConnector
             .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(90m);
+            .ReturnsAsync(15m);
+        _mockShortConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
@@ -938,10 +941,10 @@ public class ExecutionEngineTests
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
 
-        // Should have tried 3 times (retry on "No open position")
+        // Should have tried 5 times (retry on "No open position")
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
-            Times.Exactly(3));
+            Times.Exactly(5));
 
         // Alert created for emergency close failure
         _mockAlerts.Verify(
@@ -2101,6 +2104,39 @@ public class ExecutionEngineTests
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
             Times.Once,
             "should NOT retry when close error is null");
+    }
+
+    [Fact]
+    public async Task EmergencyClose_RetriesExceptionsThenCreatesAlert()
+    {
+        // Arrange: long succeeds, short fails → triggers emergency close on long
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short leg failed"));
+
+        // Emergency close throws network exception every time
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection reset"));
+
+        // Act
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, CancellationToken.None);
+
+        // Assert: should retry all 5 attempts (exceptions are now retryable)
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Exactly(5),
+            "exceptions should be retried up to maxAttempts");
+
+        // Alert created only on final attempt
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Message!.Contains("EMERGENCY CLOSE FAILED"))),
+            Times.Once);
     }
 
     // ── TruncateError Tests ──────────────────────────────────────────────────────

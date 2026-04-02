@@ -93,6 +93,13 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
             }
 
+            // Min notional validation ($10 minimum for Hyperliquid)
+            var notional = quantity * markPrice;
+            if (notional < 10m)
+            {
+                return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Hyperliquid minimum $10.00" };
+            }
+
             // B5: Slippage protection
             var limitPrice = side == Side.Long
                 ? markPrice * (1 + SlippagePct)
@@ -151,9 +158,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         var quantity = await GetPositionQuantityAsync(asset, ct);
         if (quantity <= 0)
         {
-            // B4: Capped fallback. With reduceOnly=true the SDK treats it
-            // as an upper bound and only closes the actual position size.
-            quantity = 1_000_000m; // Safe upper bound; reduceOnly=true caps to actual position
+            return new OrderResultDto { Success = false, Error = "Position quantity is zero — cannot close nonexistent position" };
         }
 
         // To close: place opposite side with reduceOnly=true

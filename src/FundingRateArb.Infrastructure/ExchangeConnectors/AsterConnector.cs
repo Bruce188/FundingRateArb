@@ -113,6 +113,18 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
         }
 
+        // Min notional validation ($5 minimum)
+        var notional = quantity * markPrice;
+        if (notional < 5m)
+        {
+            return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Aster minimum $5.00" };
+        }
+
+        // Compute limit price with 0.5% slippage protection
+        var limitPrice = side == Side.Long
+            ? Math.Round(markPrice * 1.005m, 2, MidpointRounding.AwayFromZero)
+            : Math.Round(markPrice * 0.995m, 2, MidpointRounding.AwayFromZero);
+
         // B2: Abort order if SetLeverageAsync fails
         var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
         if (!leverageResult.Success)
@@ -130,11 +142,11 @@ public class AsterConnector : IExchangeConnector, IDisposable
             async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
                 symbol,
                 orderSide,
-                OrderType.Market,
+                OrderType.Limit,
                 quantity: quantity,
-                price: null,
+                price: limitPrice,
                 positionSide: null,
-                timeInForce: null,
+                timeInForce: TimeInForce.ImmediateOrCancel,
                 reduceOnly: null,
                 clientOrderId: null,
                 stopPrice: null,

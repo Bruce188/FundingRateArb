@@ -555,18 +555,31 @@ public class PositionHealthMonitorTests
     // ── D4: Price feed failure — 5 consecutive creates alert ────────────────────
 
     [Fact]
-    public async Task CheckAndAct_PriceFeedFailure_5Consecutive_CreatesAlert()
+    public async Task CheckAndAct_PriceFeedFailure_ThresholdConsecutive_CreatesAlertAndForceCloses()
     {
         var pos = MakeOpenPosition();
         _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
         SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Override config with a low threshold for test speed
+        var testConfig = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            AdaptiveHoldEnabled = true,
+            PriceFeedFailureCloseThreshold = 5,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(testConfig);
 
         // Make GetMarkPriceAsync throw every time
         _mockLongConnector
             .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
-        // Run 5 cycles to accumulate failures
+        // Run 5 cycles to accumulate failures (matching threshold)
         for (int i = 0; i < 5; i++)
         {
             await _sut.CheckAndActAsync();
@@ -1454,7 +1467,7 @@ public class PositionHealthMonitorTests
     }
 
     [Fact]
-    public void DetermineCloseReason_PnlTarget_StillFires_WithinMinHoldPeriod()
+    public void DetermineCloseReason_PnlTarget_BlockedByMinHoldBeforePnlTarget()
     {
         var pos = MakeOpenPosition();
         pos.AccumulatedFunding = 10m;
@@ -1468,14 +1481,112 @@ public class PositionHealthMonitorTests
             CloseThreshold = -0.00005m,
             AdaptiveHoldEnabled = true,
             TargetPnlMultiplier = 2.0m,
+            MinHoldBeforePnlTargetMinutes = 60,
         };
 
         // PnlTargetReached: AccumulatedFunding(10) >= TargetPnlMultiplier(2.0) * entryFee
-        // Even though position is only 0.5 hours old (< MinHoldTimeHours=2)
+        // But position is only 0.5 hours old (30 min < MinHoldBeforePnlTargetMinutes=60)
         var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
             unrealizedPnl: 0m, hoursOpen: 0.5m, spread: 0.001m);
 
-        result.Should().Be(CloseReason.PnlTargetReached, "PnlTargetReached should fire regardless of MinHoldTimeHours");
+        result.Should().BeNull("PnlTargetReached should not fire before MinHoldBeforePnlTargetMinutes");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlTargetReached_NegativeTotalPnl_DoesNotClose()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 1.0m;
+        pos.EntryFeesUsdc = 0.5m;
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 1.5m,
+            MinHoldBeforePnlTargetMinutes = 60,
+        };
+
+        // AccumulatedFunding(1.0) >= TargetPnlMultiplier(1.5) * EntryFeesUsdc(0.5) = 0.75 ✓
+        // But totalPnl = unrealizedPnl(-2.0) + AccumulatedFunding(1.0) - EntryFeesUsdc(0.5) = -1.5 < 0
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: -2.0m, hoursOpen: 2.0m, spread: 0.001m);
+
+        result.Should().BeNull("PnlTargetReached should not fire when total PnL is negative");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlTargetReached_PositivePnl_AboveMinHoldTime_Closes()
+    {
+        var pos = MakeOpenPosition();
+        pos.AccumulatedFunding = 1.0m;
+        pos.EntryFeesUsdc = 0.1m;
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 1.5m,
+            MinHoldBeforePnlTargetMinutes = 60,
+        };
+
+        // AccumulatedFunding(1.0) >= TargetPnlMultiplier(1.5) * EntryFeesUsdc(0.1) = 0.15 ✓
+        // totalPnl = unrealizedPnl(0.5) + AccumulatedFunding(1.0) - EntryFeesUsdc(0.1) = 1.4 > 0 ✓
+        // minutesOpen = 2.0 * 60 = 120 >= MinHoldBeforePnlTargetMinutes(60) ✓
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0.5m, hoursOpen: 2.0m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_EmergencySpread_BypassesMinHoldTime()
+    {
+        var pos = MakeOpenPosition();
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+            EmergencyCloseSpreadThreshold = -0.001m,
+        };
+
+        // Spread is -0.005 which is below EmergencyCloseSpreadThreshold(-0.001)
+        // hoursOpen is 0.1 (way below MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 0.1m, spread: -0.005m);
+
+        result.Should().Be(CloseReason.SpreadCollapsed, "emergency spread should bypass MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_MildSpreadCollapse_RespectsMinHoldTime()
+    {
+        var pos = MakeOpenPosition();
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            CloseThreshold = -0.00005m,
+            EmergencyCloseSpreadThreshold = -0.001m,
+        };
+
+        // Spread is -0.0001 which is below CloseThreshold(-0.00005) but above EmergencyCloseSpreadThreshold(-0.001)
+        // hoursOpen is 0.5 (below MinHoldTimeHours=2)
+        var result = PositionHealthMonitor.DetermineCloseReason(pos, config,
+            unrealizedPnl: 0m, hoursOpen: 0.5m, spread: -0.0001m);
+
+        result.Should().BeNull("mild spread collapse should respect MinHoldTimeHours");
     }
 
     // ── Task 3.1: Reap sets ClosedAt on EmergencyClosed positions ──────────────
