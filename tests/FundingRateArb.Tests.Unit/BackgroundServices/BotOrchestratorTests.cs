@@ -26,6 +26,7 @@ public class BotOrchestratorTests
     private readonly Mock<IBotConfigRepository> _mockBotConfig = new();
     private readonly Mock<IPositionRepository> _mockPositions = new();
     private readonly Mock<IAlertRepository> _mockAlerts = new();
+    private readonly Mock<IExchangeRepository> _mockExchanges = new();
     private readonly Mock<IUserConfigurationRepository> _mockUserConfigs = new();
     private readonly Mock<ISignalEngine> _mockSignalEngine = new();
     private readonly Mock<IPositionSizer> _mockPositionSizer = new();
@@ -94,7 +95,12 @@ public class BotOrchestratorTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.Positions).Returns(_mockPositions.Object);
         _mockUow.Setup(u => u.Alerts).Returns(_mockAlerts.Object);
+        _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.UserConfigurations).Returns(_mockUserConfigs.Object);
+
+        // Default mock for exchange repository (used in circuit breaker DTO population)
+        _mockExchanges.Setup(e => e.GetAllAsync())
+            .ReturnsAsync(new List<Exchange>());
 
         // Default mock for health monitor — returns empty result
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))

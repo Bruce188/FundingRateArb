@@ -225,6 +225,27 @@
 
     // C1 fix: replaced innerHTML with createElement + textContent for opportunity data
     connection.on("ReceiveOpportunityUpdate", function (data) {
+        // Display circuit breaker warnings
+        var cbContainer = document.getElementById("circuit-breaker-status");
+        if (cbContainer) {
+            cbContainer.replaceChildren();
+            var breakers = data.circuitBreakers || [];
+            if (breakers.length > 0) {
+                breakers.forEach(function (cb) {
+                    var alert = document.createElement("div");
+                    alert.className = "alert alert-warning mb-2 py-2 d-flex align-items-center";
+                    var icon = document.createElement("i");
+                    icon.className = "bi bi-exclamation-triangle-fill me-2";
+                    alert.appendChild(icon);
+                    var text = document.createElement("span");
+                    text.textContent = cb.exchangeName + " circuit breaker active" +
+                        (cb.remainingMinutes > 0 ? " (resumes in " + cb.remainingMinutes + "m)" : "");
+                    alert.appendChild(text);
+                    cbContainer.appendChild(alert);
+                });
+            }
+        }
+
         var tbody = document.getElementById("opportunities-table-body");
         var cardsContainer = document.getElementById("opportunities-cards");
 
