@@ -265,6 +265,35 @@ public class PositionSizerTests
         sizes[0].Should().Be(0.2m);
     }
 
+    [Fact]
+    public async Task CalculateBatchSizesAsync_DefensiveFloor_ClampsLeverageTo1_WhenBothConfigsAreZero()
+    {
+        // Both user and bot config have leverage=0 (corrupted DB) — floor to 1
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m, leverage: 0, volumeFraction: 0.001m);
+        config.MinPositionSizeUsdc = 0m;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 0 });
+
+        // Volume = 400 -> liquidityLimit = 400 * 0.001 = 0.4
+        // With floor leverage = 1: notional = margin * 1, capped to 0.4 / 1 = 0.4
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SpreadPerHour = 0.001m, NetYieldPerHour = 0.001m,
+                LongVolume24h = 400m, ShortVolume24h = 400m,
+                LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
+
+        // liquidityLimit = 0.4, floor leverage = 1 → margin = 0.4 / 1 = 0.4
+        sizes[0].Should().Be(0.4m);
+    }
+
     // -----------------------------------------------------------------------
     // C1: Breakeven rejection in batch path
     // -----------------------------------------------------------------------

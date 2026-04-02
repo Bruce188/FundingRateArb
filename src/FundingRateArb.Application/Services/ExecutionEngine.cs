@@ -69,6 +69,7 @@ public class ExecutionEngine : IExecutionEngine
             // Pre-flight leverage validation: use user leverage (falling back to bot config), then clamp to exchange max
             var originalLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
             var effectiveLeverage = originalLeverage;
+            if (effectiveLeverage < 1) effectiveLeverage = 1;
             try
             {
                 var longMaxTask = longConnector.GetMaxLeverageAsync(opp.AssetSymbol, ct);
@@ -271,10 +272,13 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
                         opp.AssetSymbol, secondExchangeName);
-                    await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
-                    SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                    if (!neverExisted)
+                    {
+                        SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                    }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -293,10 +297,13 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
                         opp.AssetSymbol, secondExchangeName, secondResult.Error);
-                    await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
-                    SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                    if (!neverExisted)
+                    {
+                        SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                    }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
@@ -339,13 +346,19 @@ public class ExecutionEngine : IExecutionEngine
                     // If only one leg threw, try to emergency close the successful one
                     if (!longTask.IsFaulted && longTask.IsCompletedSuccessfully && longTask.Result.Success)
                     {
-                        SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
-                        await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        if (!neverExistedLong)
+                        {
+                            SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
+                        }
                     }
                     if (!shortTask.IsFaulted && shortTask.IsCompletedSuccessfully && shortTask.Result.Success)
                     {
-                        SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
-                        await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        var neverExistedShort = await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        if (!neverExistedShort)
+                        {
+                            SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
+                        }
                     }
 
                     position.Status = PositionStatus.EmergencyClosed;
@@ -372,13 +385,19 @@ public class ExecutionEngine : IExecutionEngine
                     // If one succeeded and the other failed, emergency close the successful one
                     if (longResult.Success && !shortResult.Success)
                     {
-                        SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
-                        await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        if (!neverExistedLong)
+                        {
+                            SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                        }
                     }
                     else if (!longResult.Success && shortResult.Success)
                     {
-                        SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
-                        await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        var neverExistedShort = await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        if (!neverExistedShort)
+                        {
+                            SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                        }
                     }
 
                     position.Status = PositionStatus.EmergencyClosed;

@@ -35,6 +35,7 @@ public class PositionSizer : IPositionSizer
         var config = await _uow.BotConfig.GetActiveAsync();
         userConfig ??= await _userSettings.GetOrCreateConfigAsync(userId);
         var effectiveLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
+        if (effectiveLeverage < 1) effectiveLeverage = 1;
         var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
         var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
 

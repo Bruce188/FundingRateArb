@@ -590,6 +590,40 @@ public class ExecutionEngineTests
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    [Fact]
+    public async Task OpenPosition_DefensiveFloor_ClampsLeverageTo1_WhenBothConfigsAreZero()
+    {
+        // Both user and bot config have leverage=0 (corrupted DB)
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 0 });
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                DefaultLeverage = 0,
+                MaxCapitalPerPosition = DefaultConfig.MaxCapitalPerPosition,
+                TotalCapitalUsdc = DefaultConfig.TotalCapitalUsdc,
+                MinPositionSizeUsdc = DefaultConfig.MinPositionSizeUsdc,
+                BreakevenHoursMax = DefaultConfig.BreakevenHoursMax,
+                VolumeFraction = DefaultConfig.VolumeFraction,
+                MaxExposurePerAsset = DefaultConfig.MaxExposurePerAsset,
+                MaxExposurePerExchange = DefaultConfig.MaxExposurePerExchange,
+            });
+
+        // Leverage floor should clamp to 1 — PlaceMarketOrderAsync receives leverage=1
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 1, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     // ── ClosePositionAsync ─────────────────────────────────────────────────────
 
     private ArbitragePosition MakeOpenPosition(decimal longEntry = 3000m, decimal shortEntry = 3001m) =>
@@ -1777,6 +1811,70 @@ public class ExecutionEngineTests
         addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
         // First leg (long) must be emergency-closed
         _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_SecondLegThrows_EmergencyCloseNeverExisted_NoFeesSet()
+    {
+        // Sequential path: short is estimated fill, opens first, then long (second leg) throws
+        _mockShortConnector
+            .Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m, 0.1m));
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        // Emergency close on first leg (short) returns "no open position" — auto-liquidation
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("No open position found for 'ETH' on Lighter"));
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        // Position never existed — fees should NOT be set
+        addedPosition.EntryFeesUsdc.Should().Be(0, "no fees when position never existed on exchange");
+        addedPosition.RealizedPnl.Should().BeNull("no PnL when position never existed");
+    }
+
+    [Fact]
+    public async Task OpenPosition_SecondLegFails_EmergencyCloseNeverExisted_NoFeesSet()
+    {
+        // Sequential path: short is estimated fill, opens first, then long (second leg) fails
+        _mockShortConnector
+            .Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m, 0.1m));
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Long exchange error"));
+
+        // Emergency close on first leg (short) returns "no open position" — auto-liquidation
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("No open position found for 'ETH' on Lighter"));
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        // Position never existed — fees should NOT be set
+        addedPosition.EntryFeesUsdc.Should().Be(0, "no fees when position never existed on exchange");
+        addedPosition.RealizedPnl.Should().BeNull("no PnL when position never existed");
     }
 
     // ── B1: Restore concurrent path for reliable pairs ──────────────────────────
