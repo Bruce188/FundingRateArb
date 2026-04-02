@@ -363,6 +363,7 @@ public class ExecutionEngineTests
         result.Error.Should().NotBeNullOrEmpty();
         addedPosition.Should().NotBeNull();
         addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        addedPosition.ClosedAt.Should().NotBeNull("EmergencyClosed positions must have ClosedAt set");
         // No emergency close on first leg (it threw) and second leg never attempted
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -671,6 +672,7 @@ public class ExecutionEngineTests
         await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual, CancellationToken.None);
 
         position.Status.Should().Be(PositionStatus.EmergencyClosed);
+        position.ClosedAt.Should().NotBeNull("EmergencyClosed positions must have ClosedAt set");
         position.RealizedPnl.Should().BeNull();
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Critical)),

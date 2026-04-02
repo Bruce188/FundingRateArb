@@ -104,6 +104,10 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
 
+        // Default mock for EmergencyClosed count query (used in dashboard KPI)
+        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+            .ReturnsAsync(0);
+
         // M12: Default mock for GetRecentUnreadAsync (returns empty list)
         _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
             .ReturnsAsync(new List<Alert>());
@@ -1922,5 +1926,132 @@ public class BotOrchestratorTests
             e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<CancellationToken>()),
             Times.Exactly(2),
             "Exception with 'balance' in message must take generic failure path, not capital-exhaustion break");
+    }
+
+    // ── Task 3.1: Opening positions refresh after state change ─────────────────
+
+    [Fact]
+    public async Task RunCycle_RefreshesOpeningPositionsAfterStateChange()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        // Simulate: open succeeds, triggering positionsChanged=true
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // After positionsChanged=true, GetByStatusAsync(Opening) should be called again (refresh)
+        // Once during initial fetch (constructor default), once during refresh
+        _mockPositions.Verify(
+            p => p.GetByStatusAsync(PositionStatus.Opening),
+            Times.AtLeast(2),
+            "Opening positions should be refreshed after positions change state");
+    }
+
+    // ── Task 3.1: Exchange circuit breaker on margin error ─────────────────────
+
+    [Fact]
+    public async Task RunCycle_MarginError_TripsCircuitBreakerImmediately()
+    {
+        SetupEnabledUser();
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            ExchangeCircuitBreakerMinutes = 15,
+            ExchangeCircuitBreakerThreshold = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1, AssetSymbol = "ETH",
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        // Simulate margin error
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), opp, 100m, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Insufficient margin for order"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Run a second cycle with a different opportunity on the same exchanges
+        var opp2 = new ArbitrageOpportunityDto
+        {
+            AssetId = 2, AssetSymbol = "BTC",
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchangeName = "Hyp", ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m, SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp2] });
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // The second cycle should NOT attempt to open — exchanges are circuit-broken
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), opp2, It.IsAny<decimal>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "Circuit-broken exchanges from margin error should block subsequent opens");
+    }
+
+    // ── Dashboard EmergencyClosed count uses CountByStatusAsync ────────────────
+
+    [Fact]
+    public async Task RunCycle_UsesCountByStatusForEmergencyClosedDashboardKpi()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+            .ReturnsAsync(3);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Verify CountByStatusAsync is used (not GetByStatusAsync) for EmergencyClosed count
+        _mockPositions.Verify(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed), Times.Once);
+        _mockPositions.Verify(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed), Times.Never);
+        // Verify the count is passed to the dashboard update
+        _mockGroupClient.Verify(c => c.ReceiveDashboardUpdate(
+            It.Is<DashboardDto>(d => d.NeedsAttentionCount == 3)), Times.Once);
     }
 }

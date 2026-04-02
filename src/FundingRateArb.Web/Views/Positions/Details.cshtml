@@ -9,6 +9,14 @@
 <h2>Position #@pos.Id Details</h2>
 <a asp-action="Index" class="btn btn-outline-secondary mb-3">Back to Positions</a>
 
+@if (pos.Status == PositionStatus.EmergencyClosed || pos.Status == PositionStatus.Liquidated)
+{
+    <div class="alert alert-warning">
+        This position was @(pos.Status == PositionStatus.EmergencyClosed ? "emergency-closed" : "liquidated")
+        and may have incomplete price data.
+    </div>
+}
+
 <div class="row">
     <div class="col-md-6">
         <h5>Position Info</h5>
@@ -69,10 +77,10 @@
         <h5>Pricing & PnL</h5>
         <dl class="row">
             <dt class="col-sm-5">Long Entry Price</dt>
-            <dd class="col-sm-7">@pos.LongEntryPrice.ToString("F4")</dd>
+            <dd class="col-sm-7">@(pos.LongEntryPrice > 0 ? pos.LongEntryPrice.ToString("F4") : "N/A")</dd>
 
             <dt class="col-sm-5">Short Entry Price</dt>
-            <dd class="col-sm-7">@pos.ShortEntryPrice.ToString("F4")</dd>
+            <dd class="col-sm-7">@(pos.ShortEntryPrice > 0 ? pos.ShortEntryPrice.ToString("F4") : "N/A")</dd>
 
             <dt class="col-sm-5">Entry Spread/hr</dt>
             <dd class="col-sm-7">@pos.EntrySpreadPerHour.ToString("P4")</dd>

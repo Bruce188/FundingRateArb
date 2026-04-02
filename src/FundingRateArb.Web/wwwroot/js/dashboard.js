@@ -29,6 +29,17 @@
         var totalPnl = document.getElementById("total-pnl");
         if (totalPnl) totalPnl.textContent = (data.totalPnl ?? 0).toFixed(4);
 
+        var openingPositions = document.getElementById("opening-positions");
+        if (openingPositions) openingPositions.textContent = data.openingPositionCount || 0;
+
+        var needsAttention = document.getElementById("needs-attention");
+        if (needsAttention) {
+            var count = data.needsAttentionCount || 0;
+            needsAttention.textContent = count;
+            var badge = document.getElementById("needs-attention-badge");
+            if (badge) badge.style.display = count > 0 ? "" : "none";
+        }
+
         var bestSpread = document.getElementById("best-spread");
         if (bestSpread) {
             var spread = data.bestSpread ?? 0;

@@ -232,6 +232,60 @@ public class TradeAnalyticsServiceTests
         result!.PositionId.Should().Be(12);
     }
 
+    // ── Task 3.1: EmergencyClosed maps IsClosed=true and StatusLabel ─────────
+
+    [Fact]
+    public async Task GetAllPositionAnalyticsAsync_EmergencyClosed_MapsIsClosedTrueAndStatusLabel()
+    {
+        var positions = new List<ArbitragePosition>
+        {
+            new()
+            {
+                Id = 20, UserId = "user1", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SizeUsdc = 100m, EntrySpreadPerHour = 0.001m, AccumulatedFunding = 0m,
+                OpenedAt = DateTime.UtcNow.AddHours(-1), ClosedAt = DateTime.UtcNow,
+                Status = PositionStatus.EmergencyClosed,
+                Asset = new Asset { Symbol = "ETH" },
+                LongExchange = new Exchange { Name = "Hyp" },
+                ShortExchange = new Exchange { Name = "Lighter" },
+            },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetAllAsync(0, 50)).ReturnsAsync(positions);
+
+        var results = await _sut.GetAllPositionAnalyticsAsync(null, 0, 50);
+
+        results.Should().HaveCount(1);
+        results[0].IsClosed.Should().BeTrue("EmergencyClosed positions should map IsClosed=true");
+        results[0].StatusLabel.Should().Be("EmergencyClosed");
+    }
+
+    [Fact]
+    public async Task GetAllPositionAnalyticsAsync_OpeningPosition_MapsIsClosedFalseAndStatusLabel()
+    {
+        var positions = new List<ArbitragePosition>
+        {
+            new()
+            {
+                Id = 21, UserId = "user1", AssetId = 1, LongExchangeId = 1, ShortExchangeId = 2,
+                SizeUsdc = 100m, EntrySpreadPerHour = 0.001m, AccumulatedFunding = 0m,
+                OpenedAt = DateTime.UtcNow.AddMinutes(-1), ClosedAt = null,
+                Status = PositionStatus.Opening,
+                Asset = new Asset { Symbol = "BTC" },
+                LongExchange = new Exchange { Name = "Hyp" },
+                ShortExchange = new Exchange { Name = "Aster" },
+            },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetAllAsync(0, 50)).ReturnsAsync(positions);
+
+        var results = await _sut.GetAllPositionAnalyticsAsync(null, 0, 50);
+
+        results.Should().HaveCount(1);
+        results[0].IsClosed.Should().BeFalse("Opening positions should map IsClosed=false");
+        results[0].StatusLabel.Should().Be("Opening");
+    }
+
     [Fact]
     public async Task GetAllPositionAnalyticsAsync_WithUserId_FiltersPositions()
     {

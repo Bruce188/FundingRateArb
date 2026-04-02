@@ -320,8 +320,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
         }
 
-        // Step 3: Push global dashboard KPI update
-        await PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled);
+        // Step 3: Push global dashboard KPI update (includes opening and needs-attention counts)
+        var emergencyClosedCount = await uow.Positions.CountByStatusAsync(PositionStatus.EmergencyClosed);
+        await PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled,
+            allOpeningPositions.Count, emergencyClosedCount);
 
         // Step 4: Gate — skip position opening if global kill switch is off
         if (!globalConfig.IsEnabled)
@@ -384,7 +386,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
         BotConfiguration globalConfig,
         OpportunityResultDto opportunityResult,
         List<ArbitragePosition> allOpenPositions,
-        IReadOnlyList<ArbitragePosition> allOpeningPositions,
+        List<ArbitragePosition> allOpeningPositions,
         IUnitOfWork uow,
         ISignalEngine signalEngine,
         IExecutionEngine executionEngine,
@@ -709,6 +711,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     var remOpp = candidates[remaining];
                     tracker.CapitalExhaustedKeys.Add(OpportunityKey(remOpp));
                 }
+                // Immediately trip circuit breaker for involved exchanges — margin errors are account-level
+                var brokenUntil = DateTime.UtcNow.AddMinutes(globalConfig.ExchangeCircuitBreakerMinutes);
+                _exchangeCircuitBreaker[opp.LongExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                _logger.LogWarning(
+                    "Circuit breaker OPEN for exchange {ExchangeId} due to margin error — excluded for {Minutes}m",
+                    opp.LongExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
+                if (opp.ShortExchangeId != opp.LongExchangeId)
+                {
+                    _exchangeCircuitBreaker[opp.ShortExchangeId] = (globalConfig.ExchangeCircuitBreakerThreshold, brokenUntil);
+                    _logger.LogWarning(
+                        "Circuit breaker OPEN for exchange {ExchangeId} due to margin error — excluded for {Minutes}m",
+                        opp.ShortExchangeId, globalConfig.ExchangeCircuitBreakerMinutes);
+                }
+                // Update in-memory set so remaining users in this cycle also skip
+                circuitBrokenExchangeIds.Add(opp.LongExchangeId);
+                circuitBrokenExchangeIds.Add(opp.ShortExchangeId);
                 break;
             }
             else
@@ -739,6 +757,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
             var updatedPositions = await uow.Positions.GetOpenAsync();
             allOpenPositions.Clear();
             allOpenPositions.AddRange(updatedPositions);
+
+            var updatedOpening = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+            allOpeningPositions.Clear();
+            allOpeningPositions.AddRange(updatedOpening);
+
             await PushPositionUpdatesAsync(updatedPositions, globalConfig);
         }
     }
@@ -846,7 +869,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     private async Task PushDashboardUpdateAsync(
         List<ArbitragePosition> openPositions,
         List<ArbitrageOpportunityDto> opportunities,
-        bool botEnabled)
+        bool botEnabled,
+        int openingCount = 0,
+        int needsAttentionCount = 0)
     {
         try
         {
@@ -859,6 +884,8 @@ public class BotOrchestrator : BackgroundService, IBotControl
             {
                 BotEnabled = botEnabled,
                 OpenPositionCount = openPositions.Count,
+                OpeningPositionCount = openingCount,
+                NeedsAttentionCount = needsAttentionCount,
                 TotalPnl = totalPnl,
                 BestSpread = bestSpread,
             };

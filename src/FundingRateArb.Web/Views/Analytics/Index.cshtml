@@ -161,14 +161,17 @@
                                 <td>@s.AssetSymbol</td>
                                 <td>@s.LongExchangeName / @s.ShortExchangeName</td>
                                 <td>
-                                    @if (s.IsClosed)
-                                    {
-                                        <span class="badge bg-secondary">Closed</span>
+                                    @{
+                                        var (statusText, statusBadge) = s.StatusLabel switch
+                                        {
+                                            "Open" => ("Open", "bg-success"),
+                                            "Opening" => ("Opening", "bg-info"),
+                                            "EmergencyClosed" => ("Emergency Closed", "bg-danger"),
+                                            "Liquidated" => ("Liquidated", "bg-danger"),
+                                            _ => (s.IsClosed ? "Closed" : s.StatusLabel, "bg-secondary"),
+                                        };
                                     }
-                                    else
-                                    {
-                                        <span class="badge bg-success">Open</span>
-                                    }
+                                    <span class="badge @statusBadge">@statusText</span>
                                 </td>
                                 <td class="text-end">@s.HoursHeld.ToString("F1")</td>
                                 <td class="text-end">@s.ActualPnl.ToString("F2") USDC</td>

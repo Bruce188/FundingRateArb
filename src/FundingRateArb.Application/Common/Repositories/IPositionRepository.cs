@@ -20,6 +20,9 @@ public interface IPositionRepository
     Task<List<ArbitragePosition>> GetByUserAsync(string userId, int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetAllAsync(int skip = 0, int take = 500);
     Task<List<ArbitragePosition>> GetByStatusAsync(PositionStatus status);
+
+    /// <summary>Returns a count of positions with the given status via SQL COUNT(*), without materializing entities.</summary>
+    Task<int> CountByStatusAsync(PositionStatus status);
     Task<List<ArbitragePosition>> GetByStatusesAsync(params PositionStatus[] statuses);
 
     /// <summary>Returns positions for a specific user with the given statuses. Pushes userId filter into SQL.</summary>

@@ -1,6 +1,7 @@
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Application.Services;
 
@@ -42,7 +43,7 @@ public class TradeAnalyticsService : ITradeAnalyticsService
             HoursHeld = hoursHeld,
             EntrySpreadPerHour = position.EntrySpreadPerHour,
             SizeUsdc = position.SizeUsdc,
-            IsClosed = position.ClosedAt.HasValue,
+            IsClosed = position.Status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated,
             OpenedAt = position.OpenedAt,
             ClosedAt = position.ClosedAt,
             SpreadHistory = spreadHistory,
@@ -73,7 +74,8 @@ public class TradeAnalyticsService : ITradeAnalyticsService
                 ProjectedPnl = projectedPnl,
                 PnlDifference = difference,
                 HoursHeld = hoursHeld,
-                IsClosed = pos.ClosedAt.HasValue,
+                IsClosed = pos.Status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated,
+                StatusLabel = pos.Status.ToString(),
                 OpenedAt = pos.OpenedAt,
                 AccuracyPct = projectedPnl != 0 ? (actualPnl / projectedPnl) * 100m : null,
             };

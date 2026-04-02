@@ -77,6 +77,12 @@
                         <div>
                             <p class="text-muted small mb-1">Open Positions</p>
                             <h4 class="mb-0"><span id="open-positions">@Model.OpenPositionCount</span></h4>
+                            <small class="text-muted">
+                                <span id="opening-positions">@Model.OpeningPositionCount</span> opening
+                                <span id="needs-attention-badge" style="@(Model.NeedsAttentionCount > 0 ? "" : "display:none")">
+                                    | <span class="text-warning" id="needs-attention">@Model.NeedsAttentionCount</span> needs attention
+                                </span>
+                            </small>
                         </div>
                         <div class="text-muted">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-bar-chart" viewBox="0 0 16 16">

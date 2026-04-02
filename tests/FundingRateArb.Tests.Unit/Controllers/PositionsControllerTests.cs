@@ -412,6 +412,39 @@ public class PositionsControllerTests
         _mockPositions.Verify(p => p.GetAllAsync(It.IsAny<int>(), It.IsAny<int>()), Times.Never);
     }
 
+    // ── Details action tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Details_EmergencyClosedPosition_ReturnsViewWithoutError()
+    {
+        // Arrange — EmergencyClosed position with incomplete data (zero entry prices)
+        var position = new ArbitragePosition
+        {
+            Id = 42,
+            UserId = "trader-id",
+            Status = PositionStatus.EmergencyClosed,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            ClosedAt = DateTime.UtcNow,
+            LongEntryPrice = 0m,
+            ShortEntryPrice = 0m,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(42))
+            .ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        // Act
+        var result = await controller.Details(42);
+
+        // Assert — returns ViewResult, not a redirect (no try-catch swallowing exceptions)
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+        vm.Position.Status.Should().Be(PositionStatus.EmergencyClosed);
+        vm.Position.LongEntryPrice.Should().Be(0m);
+    }
+
     // ── Post-close status verification for non-Closed statuses ──
 
     [Theory]
