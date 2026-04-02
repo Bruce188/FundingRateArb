@@ -675,30 +675,16 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
                         if (cbExchangeNames.Count > 0)
                         {
-                            // Build message with remaining time for each circuit-broken exchange
+                            // Reuse already-populated CircuitBreakers list for name+time lookup
                             var parts = new List<string>();
                             foreach (var name in cbExchangeNames)
                             {
-                                // Find the exchange ID for this name to look up remaining time
-                                var exchangeId = _exchangeCircuitBreaker
-                                    .Where(kvp => kvp.Value.BrokenUntil > DateTime.UtcNow)
-                                    .Select(kvp => kvp.Key)
-                                    .FirstOrDefault(id =>
-                                        allOpportunities.Any(o =>
-                                            (o.LongExchangeId == id && o.LongExchangeName.Equals(name, StringComparison.OrdinalIgnoreCase)) ||
-                                            (o.ShortExchangeId == id && o.ShortExchangeName.Equals(name, StringComparison.OrdinalIgnoreCase))));
+                                var cbDto = opportunityResult.CircuitBreakers
+                                    .FirstOrDefault(cb => cb.ExchangeName.Equals(name, StringComparison.OrdinalIgnoreCase));
 
-                                if (exchangeId != 0 && _exchangeCircuitBreaker.TryGetValue(exchangeId, out var cb))
+                                if (cbDto != null && cbDto.RemainingMinutes > 0)
                                 {
-                                    var remaining = (int)Math.Ceiling((cb.BrokenUntil - DateTime.UtcNow).TotalMinutes);
-                                    if (remaining > 0)
-                                    {
-                                        parts.Add($"{name} circuit breaker active (resumes in {remaining}m)");
-                                    }
-                                    else
-                                    {
-                                        parts.Add($"{name} circuit breaker active");
-                                    }
+                                    parts.Add($"{name} circuit breaker active (resumes in {cbDto.RemainingMinutes}m)");
                                 }
                                 else
                                 {
@@ -1363,7 +1349,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         // Per-user below-threshold tracking (cleared before each user iteration)
         public int BelowThresholdCount { get; set; }
-        public decimal BestBelowThresholdYield { get; set; }
+        public decimal BestBelowThresholdYield { get; set; } = decimal.MinValue;
 
         /// <summary>Clears per-user skip reason sets before processing a new user.</summary>
         public void ClearPerUserSets()
@@ -1373,7 +1359,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
             CircuitBrokenKeys.Clear();
             NotSelectedKeys.Clear();
             BelowThresholdCount = 0;
-            BestBelowThresholdYield = 0;
+            BestBelowThresholdYield = decimal.MinValue;
         }
     }
 }

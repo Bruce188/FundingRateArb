@@ -183,7 +183,7 @@ public class ConnectivityTestService : IConnectivityTestService
                 {
                     var skipMsg = $"Skipping trade test — available balance ${balance:F2} below required ${testSizeUsdc:F2}";
                     await Log(skipMsg);
-                    return new ConnectivityTestResult(true, exchangeName, $"Balance OK (${balance:F2}), trade test skipped (insufficient margin)");
+                    return new ConnectivityTestResult(true, exchangeName, $"API connectivity OK (${balance:F2} USDC), trade test skipped (below ${testSizeUsdc:F2} minimum)");
                 }
 
                 // Step 2 - Open position

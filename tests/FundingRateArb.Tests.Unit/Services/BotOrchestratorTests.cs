@@ -1019,6 +1019,7 @@ public class BotOrchestratorTests
                         m.Message.Contains("circuit breaker", StringComparison.OrdinalIgnoreCase))
             .ToList();
         statusMessages.Should().NotBeEmpty("status message should mention Lighter circuit breaker");
+        statusMessages[0].Severity.Should().Be("warning");
     }
 
     [Fact]
@@ -1175,6 +1176,8 @@ public class BotOrchestratorTests
     [InlineData("Insufficient margin on Aster: available=5.00, required=10.00", "Aster")]
     [InlineData("Insufficient margin on Lighter: available=13.90, required=6.00", "Lighter")]
     [InlineData("Insufficient margin on Hyperliquid: available=0.00, required=100.00", "Hyperliquid")]
+    [InlineData("Insufficient margin on OKX Futures: available=1, required=5", "OKX Futures")]
+    [InlineData("Insufficient margin on Aster", null)]
     [InlineData("Pre-flight balance check failed — exchange connection error", null)]
     [InlineData(null, null)]
     [InlineData("", null)]
@@ -1223,6 +1226,103 @@ public class BotOrchestratorTests
         capturedResult!.CircuitBreakers.Should().NotBeEmpty("circuit breaker status should be included");
         capturedResult.CircuitBreakers.Should().Contain(cb => cb.ExchangeName == "Lighter" && cb.ExchangeId == 2,
             "circuit breaker should identify Lighter exchange");
-        capturedResult.CircuitBreakers[0].RemainingMinutes.Should().BeGreaterThan(0);
+        capturedResult.CircuitBreakers[0].RemainingMinutes.Should().BeInRange(14, 16);
+    }
+
+    [Fact]
+    public async Task StatusMessage_ExchangeDisabled_ShowsExchangeMessage()
+    {
+        SetupStatusCapture(out var capturedMessages);
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // User only has exchange 1 enabled, but opportunity uses exchanges 4 and 5
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1 });
+
+        var opp = MakeOppNamed(1, "ETH", 4, "Deribit", 5, "Bybit");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var statusMessages = capturedMessages
+            .Where(m => m.Message.Contains("enabled exchanges", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        statusMessages.Should().NotBeEmpty("status message should mention exchange-disabled filtering");
+    }
+
+    [Fact]
+    public async Task StatusMessage_AssetDisabled_ShowsAssetMessage()
+    {
+        SetupStatusCapture(out var capturedMessages);
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // User has exchanges 1,2 enabled but only asset 99 enabled (opp uses asset 1)
+        _mockUserSettings.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2 });
+        _mockUserSettings.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 99 });
+
+        var opp = MakeOppNamed(1, "ETH", 1, "Lighter", 2, "Aster");
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var statusMessages = capturedMessages
+            .Where(m => m.Message.Contains("enabled coins", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        statusMessages.Should().NotBeEmpty("status message should mention asset-disabled filtering");
+    }
+
+    [Fact]
+    public async Task StatusMessage_NoOpportunities_ShowsDefaultMessage()
+    {
+        SetupStatusCapture(out var capturedMessages);
+
+        var config = MakeEnabledConfig();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { TestUserId });
+
+        // No opportunities at all
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [] });
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var statusMessages = capturedMessages
+            .Where(m => m.Message.Contains("No arbitrage opportunities detected this cycle", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        statusMessages.Should().NotBeEmpty("status message should show default no-opportunities message");
     }
 }

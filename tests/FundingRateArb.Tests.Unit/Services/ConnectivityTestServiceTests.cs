@@ -756,6 +756,45 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
+    public async Task RunAsync_SkipsTradeTest_WhenBalanceBelowMinimum()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        var mockConnector = CreateMockConnector(balance: 11.99m);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue("connectivity itself works, only margin is low");
+        result.ExchangeName.Should().Be("Hyperliquid");
+        result.Error.Should().Contain("trade test skipped");
+        result.Error.Should().NotContain("Balance OK", "message should not say Balance OK when balance is insufficient");
+
+        // PlaceMarketOrderAsync should NOT be called
+        mockConnector.Verify(
+            c => c.PlaceMarketOrderAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RunAsync_ProceedsWithTradeTest_WhenBalanceAtMinimum()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        var mockConnector = CreateMockConnector(balance: 12.00m);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+
+        result.Success.Should().BeTrue();
+
+        // PlaceMarketOrderAsync SHOULD be called (boundary: 12.00 >= 12.00)
+        mockConnector.Verify(
+            c => c.PlaceMarketOrderAsync("ETH", Side.Long, 12m, 1, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
     public async Task RunTest_PurgeBranch_RemovesExpiredEntries()
     {
         // NB3: Exercise the periodic purge path that removes expired cooldown entries.
