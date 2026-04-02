@@ -20,7 +20,7 @@ public class ExecutionEngine : IExecutionEngine
 
     // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
     private readonly ConcurrentDictionary<(string Exchange, string Asset), (int MaxLeverage, DateTime Fetched)> _leverageCache = new();
-    private readonly HashSet<(string Exchange, string Asset, int MaxLeverage)> _leverageWarned = new();
+    private readonly ConcurrentDictionary<(string Exchange, string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
     public ExecutionEngine(
         IUnitOfWork uow,
@@ -90,7 +90,7 @@ public class ExecutionEngine : IExecutionEngine
                 if (longMax.HasValue && effectiveLeverage > longMax.Value)
                 {
                     // Only log/alert on first occurrence per (exchange, asset, maxLeverage) tuple
-                    if (_leverageWarned.Add((opp.LongExchangeName, opp.AssetSymbol, longMax.Value)))
+                    if (_leverageWarned.TryAdd((opp.LongExchangeName, opp.AssetSymbol, longMax.Value), 0))
                     {
                         _logger.LogWarning(
                             "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
@@ -108,7 +108,7 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (shortMax.HasValue && effectiveLeverage > shortMax.Value)
                 {
-                    if (_leverageWarned.Add((opp.ShortExchangeName, opp.AssetSymbol, shortMax.Value)))
+                    if (_leverageWarned.TryAdd((opp.ShortExchangeName, opp.AssetSymbol, shortMax.Value), 0))
                     {
                         _logger.LogWarning(
                             "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
@@ -958,6 +958,8 @@ public class ExecutionEngine : IExecutionEngine
         }
     }
 
+    // NB4: Concurrent callers may trigger redundant fetches on cache miss — accepted
+    // because duplicate writes produce the same value and the cost is bounded by the 5-minute TTL.
     private async Task<int?> GetCachedMaxLeverageAsync(IExchangeConnector connector, string asset, CancellationToken ct)
     {
         var key = (connector.ExchangeName, asset);
@@ -984,11 +986,28 @@ public class ExecutionEngine : IExecutionEngine
         string longExchangeName, string shortExchangeName, string assetSymbol,
         CancellationToken ct)
     {
+        // NB2: PnL here is approximate — price-based component is lost because
+        // legs were closed in separate retries without capturing fill data.
         position.RealizedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
         position.Status = PositionStatus.Closed;
         position.CloseReason = reason;
         position.ClosedAt = DateTime.UtcNow;
         _uow.Positions.Update(position);
+
+        _logger.LogCritical(
+            "Position #{Id} finalized without price-based PnL (legs closed in prior retries). " +
+            "RealizedPnl={Pnl:F4} is approximate: funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4}",
+            position.Id, position.RealizedPnl, position.AccumulatedFunding, position.EntryFeesUsdc, position.ExitFeesUsdc);
+
+        _uow.Alerts.Add(new Alert
+        {
+            UserId = position.UserId,
+            ArbitragePositionId = position.Id,
+            Type = AlertType.LegFailed,
+            Severity = AlertSeverity.Warning,
+            Message = $"Position #{position.Id} closed without price-based PnL (legs closed in separate retries). " +
+                      $"RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
+        });
 
         _uow.Alerts.Add(new Alert
         {

@@ -24,6 +24,7 @@ public class CoinGlassConnector : IExchangeConnector
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
     private readonly string? _apiKey;
+    private readonly object _backoffLock = new();
     private int _consecutiveFailures;
     private DateTime _backoffUntil = DateTime.MinValue;
 
@@ -53,11 +54,14 @@ public class CoinGlassConnector : IExchangeConnector
 
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
-        if (DateTime.UtcNow < _backoffUntil)
+        lock (_backoffLock)
         {
-            _logger.LogDebug("CoinGlass API in backoff until {BackoffUntil} ({Failures} consecutive failures)",
-                _backoffUntil, _consecutiveFailures);
-            return [];
+            if (DateTime.UtcNow < _backoffUntil)
+            {
+                _logger.LogDebug("CoinGlass API in backoff until {BackoffUntil} ({Failures} consecutive failures)",
+                    _backoffUntil, _consecutiveFailures);
+                return [];
+            }
         }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "api/futures/funding-rates-all");
@@ -165,8 +169,11 @@ public class CoinGlassConnector : IExchangeConnector
             _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates", rates.Count);
 
             // Reset backoff on success
-            _consecutiveFailures = 0;
-            _backoffUntil = DateTime.MinValue;
+            lock (_backoffLock)
+            {
+                _consecutiveFailures = 0;
+                _backoffUntil = DateTime.MinValue;
+            }
 
             return rates;
 
@@ -175,11 +182,14 @@ public class CoinGlassConnector : IExchangeConnector
 
     private void RecordFailure()
     {
-        _consecutiveFailures++;
-        var backoffSeconds = Math.Min(60 * (int)Math.Pow(2, _consecutiveFailures - 1), 900);
-        _backoffUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
-        _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
-            _consecutiveFailures, backoffSeconds);
+        lock (_backoffLock)
+        {
+            _consecutiveFailures++;
+            var backoffSeconds = Math.Min(60 * (int)Math.Pow(2, _consecutiveFailures - 1), 900);
+            _backoffUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
+            _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
+                _consecutiveFailures, backoffSeconds);
+        }
     }
 
     public Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)

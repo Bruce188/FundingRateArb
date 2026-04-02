@@ -87,8 +87,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         var accountIndex = GetAccountIndex();
 
-        // Record baseline position sizes before polling starts
-        var baseline = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        // N2: Record baseline position sizes before polling starts (tuple key for safety)
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>();
         try
         {
             var baselineResponse = await GetAccountAsync(accountIndex, ct);
@@ -101,7 +101,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                             System.Globalization.CultureInfo.InvariantCulture, out var sz) && sz != 0)
                     {
                         var sideKey = sz > 0 ? "Long" : "Short";
-                        baseline[$"{p.Symbol}:{sideKey}"] = Math.Abs(sz);
+                        baseline[(p.Symbol.ToUpperInvariant(), sideKey)] = Math.Abs(sz);
                     }
                 }
             }
@@ -113,6 +113,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         // Allow time for the zk-rollup transaction to settle before polling
         await Task.Delay(8000, ct);
+
+        // B2: Baseline-aware early-exit — if the target asset+side is absent for 5
+        // consecutive polls with no size delta observed, treat as a non-fill.
+        int noChangeStreak = 0;
+        const int noChangeEarlyExit = 5;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
@@ -142,9 +147,19 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     _logger.Log(pollLogLevel,
                         "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount=0",
                         attempt + 1, maxAttempts, asset, side);
+
+                    noChangeStreak++;
+                    if (noChangeStreak >= noChangeEarlyExit)
+                    {
+                        _logger.LogInformation(
+                            "Verify: no size change for {N} consecutive polls after baseline — treating as non-fill for {Asset} {Side}",
+                            noChangeStreak, asset, side);
+                        return false;
+                    }
                     continue;
                 }
 
+                bool foundTarget = false;
                 foreach (var p in nonZeroPositions)
                 {
                     if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
@@ -167,7 +182,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
                     var currentAbsSize = Math.Abs(size);
                     var sideStr = size > 0 ? "Long" : "Short";
-                    var baselineKey = $"{asset}:{sideStr}";
+                    var baselineKey = (asset.ToUpperInvariant(), sideStr);
 
                     // Detect new position or size increase compared to baseline
                     if (!baseline.TryGetValue(baselineKey, out var baselineSize) || currentAbsSize > baselineSize)
@@ -178,11 +193,27 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                             baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
                         return true;
                     }
+
+                    foundTarget = true; // position exists but size unchanged from baseline
                 }
 
                 _logger.Log(pollLogLevel,
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
+
+                if (!foundTarget)
+                {
+                    noChangeStreak++;
+                }
+                // If target exists at baseline size, don't increment — it might still be settling
+
+                if (noChangeStreak >= noChangeEarlyExit)
+                {
+                    _logger.LogInformation(
+                        "Verify: no size change for {N} consecutive polls after baseline — treating as non-fill for {Asset} {Side}",
+                        noChangeStreak, asset, side);
+                    return false;
+                }
             }
             catch (Exception ex)
             {

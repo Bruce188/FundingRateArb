@@ -112,7 +112,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                             pos.Id, checkCount);
                     }
                     toClose.Add((pos, CloseReason.StopLoss));
-                    _zeroPriceCheckCounts.TryRemove(pos.Id, out _);
+                    // NB6: Reset to 0 instead of removing — if close fails, next cycle restarts at 1
+                    _zeroPriceCheckCounts[pos.Id] = 0;
                 }
                 continue;
             }

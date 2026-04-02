@@ -404,4 +404,87 @@ public class OrderPlacementReliabilityTests
             Asset = new Asset { Id = 1, Symbol = "ETH" },
         };
     }
+
+    // ── Review-v113: NB8 — Short-leg zero price fallback ────────────
+
+    [Fact]
+    public async Task OpenPosition_ZeroShortPrice_MarkPriceFallbackSucceeds_TransitionsToOpen()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3001m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 0, FilledQuantity = 0.1m });
+        // Only short connector's mark price fallback should be called
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3001m);
+
+        var result = await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        _mockShortConnector.Verify(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
+        // Long connector should NOT need fallback since its price was non-zero
+        _mockLongConnector.Verify(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    // ── Review-v113: NB2 — BothLegsAlreadyClosed PnL assertion ──────
+
+    [Fact]
+    public async Task ClosePosition_BothLegsAlreadyClosed_PnlIsApproximate()
+    {
+        var position = MakeClosingPosition();
+        position.LongLegClosed = true;
+        position.ShortLegClosed = true;
+        position.AccumulatedFunding = 0.5m;
+        position.EntryFeesUsdc = 0.1m;
+        position.ExitFeesUsdc = 0.05m;
+
+        await _engine.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed);
+
+        position.Status.Should().Be(PositionStatus.Closed);
+        position.RealizedPnl.Should().Be(0.5m - 0.1m - 0.05m, "PnL = funding - entry fees - exit fees");
+        // NB2: Alert warns about approximate PnL
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.Severity == AlertSeverity.Warning &&
+                  al.Message.Contains("approximate"))), Times.AtLeastOnce);
+    }
+
+    // ── Review-v113: N3 — Alert.UserId assertions ───────────────────
+
+    [Fact]
+    public async Task OpenPosition_EmergencyClosed_AlertHasCorrectUserId()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "long-1", FilledPrice = 0, FilledQuantity = 0.1m });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 0, FilledQuantity = 0.1m });
+        _mockLongConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(0m);
+        _mockShortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(0m);
+
+        await _engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.UserId == TestUserId)), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ClosePosition_PartialFailure_AlertHasCorrectUserId()
+    {
+        var position = MakeClosingPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3000m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Exchange error"));
+
+        await _engine.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.UserId == position.UserId)), Times.AtLeastOnce);
+    }
 }

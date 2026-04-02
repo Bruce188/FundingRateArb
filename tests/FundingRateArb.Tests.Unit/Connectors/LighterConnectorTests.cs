@@ -885,12 +885,12 @@ public class LighterConnectorTests
     }
 
     [Fact]
-    public async Task VerifyPositionOpenedAsync_NoEarlyExit_PollsAllAttempts()
+    public async Task VerifyPositionOpenedAsync_BaselineAwareEarlyExit_ExitsAfter5EmptyPolls()
     {
         // Configure account index for the verify call
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
 
-        // Return account with no matching position — should poll all 15 times without early exit
+        // Return account with no matching position — should early-exit after 5 consecutive no-change polls
         var emptyAccountJson = """
             {
                 "code": 200,
@@ -911,12 +911,12 @@ public class LighterConnectorTests
 
         result.Should().BeFalse();
 
-        // Should log the final FAILED message after all 15 polls (no early exit)
+        // Should log the early-exit message after 5 consecutive no-change polls
         _loggerMock.Verify(
             l => l.Log(
-                LogLevel.Warning,
+                LogLevel.Information,
                 It.IsAny<EventId>(),
-                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Position verification FAILED after 15 polls")),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("no size change for 5 consecutive polls")),
                 It.IsAny<Exception>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Once);

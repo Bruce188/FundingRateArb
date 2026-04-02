@@ -662,14 +662,15 @@ public class CoinGlassConnectorTests
         // using reflection to clear the backoff, simulating time passage
         var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        backoffField?.SetValue(connector, DateTime.MinValue);
+        backoffField.Should().NotBeNull("_backoffUntil field must exist for backoff testing");
+        backoffField!.SetValue(connector, DateTime.MinValue);
 
         // Second call succeeds — should reset failure counter
         var result2 = await connector.GetFundingRatesAsync();
         result2.Should().NotBeEmpty();
 
         // Set backoff to past again to simulate time passage
-        backoffField?.SetValue(connector, DateTime.MinValue);
+        backoffField!.SetValue(connector, DateTime.MinValue);
 
         // Third call should succeed (backoff was reset by successful call)
         var result3 = await connector.GetFundingRatesAsync();
@@ -711,5 +712,53 @@ public class CoinGlassConnectorTests
             Times.Once(),
             ItExpr.IsAny<HttpRequestMessage>(),
             ItExpr.IsAny<CancellationToken>());
+    }
+
+    // ── Review-v113: NB9 — Backoff duration boundary tests ──────────
+
+    [Fact]
+    public async Task GetFundingRatesAsync_FirstFailure_BackoffIsApproximately60Seconds()
+    {
+        var errorResponse = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var (connector, _) = CreateConnectorWithHandler(errorResponse);
+
+        var before = DateTime.UtcNow;
+        await connector.GetFundingRatesAsync();
+        var after = DateTime.UtcNow;
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        backoffField.Should().NotBeNull();
+        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+
+        // First failure: backoff = 60 * 2^0 = 60 seconds
+        var backoffDuration = backoffUntil - before;
+        backoffDuration.TotalSeconds.Should().BeInRange(58, 65, "first failure should backoff ~60 seconds");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_ManyFailures_BackoffCappedAt900Seconds()
+    {
+        var errorResponse = new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        var (connector, _) = CreateConnectorWithHandler(errorResponse);
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        backoffField.Should().NotBeNull();
+
+        // Simulate 10 consecutive failures by resetting backoff between each call
+        for (int i = 0; i < 10; i++)
+        {
+            backoffField!.SetValue(connector, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+        }
+
+        var before = DateTime.UtcNow;
+        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+        var backoffDuration = backoffUntil - before;
+
+        // Cap is 900 seconds (15 minutes)
+        backoffDuration.TotalSeconds.Should().BeLessOrEqualTo(905, "backoff should be capped at 900 seconds");
+        backoffDuration.TotalSeconds.Should().BeGreaterOrEqualTo(895, "after many failures backoff should approach cap");
     }
 }

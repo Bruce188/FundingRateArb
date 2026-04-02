@@ -23,6 +23,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly MarkPriceCacheHelper _markPriceCache = new();
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
+    private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
+    private volatile bool _symbolInfoLoaded;
 
     public AsterConnector(
         IAsterRestClient restClient,
@@ -398,14 +400,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
     private async Task EnsureSymbolInfoCachedAsync(string symbol, CancellationToken ct)
     {
-        // Already cached — skip fetch
-        if (_quantityPrecisionCache.ContainsKey(symbol) && _tickSizeCache.ContainsKey(symbol))
-        {
-            return;
-        }
+        // NB5: Double-checked locking to prevent duplicate exchange-info fetches on cold start
+        if (_symbolInfoLoaded) return;
 
+        await _symbolInfoLock.WaitAsync(ct);
         try
         {
+            if (_symbolInfoLoaded) return;
+
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
                 async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
@@ -424,14 +426,23 @@ public class AsterConnector : IExchangeConnector, IDisposable
                     }
                     else
                     {
-                        _tickSizeCache[s.Name] = 1m / (decimal)Math.Pow(10, s.PricePrecision);
+                        // N4: Use integer exponentiation to avoid double-to-decimal cast error
+                        decimal divisor = 1m;
+                        for (int i = 0; i < s.PricePrecision; i++) divisor *= 10m;
+                        _tickSizeCache[s.Name] = 1m / divisor;
                     }
                 }
+
+                _symbolInfoLoaded = true;
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning("Failed to fetch exchange info for symbol info lookup: {Error}", ex.Message);
+        }
+        finally
+        {
+            _symbolInfoLock.Release();
         }
     }
 
