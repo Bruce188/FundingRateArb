@@ -621,8 +621,9 @@ public class ExecutionEngine : IExecutionEngine
                     position.Id, assetSymbol, reason);
             }
 
-            // Only update Closing status on first close attempt (not on retry)
-            if (position.Status != PositionStatus.Closing)
+            // Only update Closing status on first close attempt (not on retry).
+            // Preserve EmergencyClosed status — it indicates exchange drift and should not be overwritten.
+            if (position.Status != PositionStatus.Closing && position.Status != PositionStatus.EmergencyClosed)
             {
                 position.Status = PositionStatus.Closing;
                 position.ClosingStartedAt = DateTime.UtcNow;

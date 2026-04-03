@@ -1457,5 +1457,69 @@ public class BotOrchestratorTests
         // Cycle 3: reconciliation fires
         await _sut.RunCycleAsync(CancellationToken.None);
         _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // Cycles 4-5: no reconciliation (counter reset)
+        await _sut.RunCycleAsync(CancellationToken.None);
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // Cycle 6: reconciliation fires again
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
+    // ── Part D: Emergency close for reaped positions ─────────────────────────
+
+    [Fact]
+    public async Task RunCycle_ReapedPositions_AttemptEmergencyClose()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 1,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [] });
+
+        // Health monitor returns one reaped position
+        var reaped = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
+        {
+            (42, TestUserId, 1, 2, PositionStatus.Opening)
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                Array.Empty<(ArbitragePosition, CloseReason)>(),
+                reaped));
+
+        // Mock the position lookup for emergency close
+        var reapedPos = new ArbitragePosition
+        {
+            Id = 42,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.EmergencyClosed,
+            ClosedAt = DateTime.UtcNow,
+            Asset = new Asset { Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+        _mockPositionRepo.Setup(r => r.GetByIdAsync(42)).ReturnsAsync(reapedPos);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(TestUserId, reapedPos, CloseReason.ExchangeDrift, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

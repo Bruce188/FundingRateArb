@@ -2915,4 +2915,59 @@ public class ExecutionEngineTests
 
         result.Should().BeNull();
     }
+
+    // ── Reconciliation: CheckPositionsExistOnExchangesBatchAsync ─────────────
+
+    [Fact]
+    public async Task CheckPositionsExistBatch_TwoPositionsSameGroup_ReturnsCorrectResults()
+    {
+        var pos1 = MakeReconciliationPosition();
+        pos1.Id = 1;
+        var pos2 = MakeReconciliationPosition();
+        pos2.Id = 2;
+        pos2.Asset = new Asset { Id = 2, Symbol = "BTC" };
+
+        _mockLongConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _mockLongConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _mockLongConnector.Setup(c => c.HasOpenPositionAsync("BTC", Side.Long, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _mockShortConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _mockShortConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _mockShortConnector.Setup(c => c.HasOpenPositionAsync("BTC", Side.Short, It.IsAny<CancellationToken>())).ReturnsAsync(true);
+
+        var result = await _sut.CheckPositionsExistOnExchangesBatchAsync(new[] { pos1, pos2 });
+
+        result[1].Should().Be(PositionExistsResult.BothPresent);
+        result[2].Should().Be(PositionExistsResult.LongMissing);
+    }
+
+    [Fact]
+    public async Task CheckPositionsExistBatch_NullNavProperties_ReturnsUnknown()
+    {
+        var pos = MakeReconciliationPosition();
+        pos.LongExchange = null!;
+
+        var result = await _sut.CheckPositionsExistOnExchangesBatchAsync(new[] { pos });
+
+        result[pos.Id].Should().Be(PositionExistsResult.Unknown);
+    }
+
+    [Fact]
+    public async Task CheckPositionsExistBatch_ConnectorCreationFails_AllGroupUnknown()
+    {
+        var pos1 = MakeReconciliationPosition();
+        pos1.Id = 1;
+        var pos2 = MakeReconciliationPosition();
+        pos2.Id = 2;
+        pos2.Asset = new Asset { Id = 2, Symbol = "BTC" };
+
+        // Override default credential setup — return empty list so connector creation fails
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<UserExchangeCredential>());
+
+        var result = await _sut.CheckPositionsExistOnExchangesBatchAsync(new[] { pos1, pos2 });
+
+        result[1].Should().Be(PositionExistsResult.Unknown);
+        result[2].Should().Be(PositionExistsResult.Unknown);
+    }
 }

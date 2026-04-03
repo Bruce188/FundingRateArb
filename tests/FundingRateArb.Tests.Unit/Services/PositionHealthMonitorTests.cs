@@ -1780,7 +1780,7 @@ public class PositionHealthMonitorTests
     }
 
     [Fact]
-    public async Task ReconcileOpenPositions_WhenCheckThrows_SkipsPositionAndContinues()
+    public async Task ReconcileOpenPositions_WhenOneResultUnknown_SkipsItAndProcessesOthers()
     {
         var pos1 = MakeOpenPosition();
         pos1.Id = 10;
@@ -1873,5 +1873,68 @@ public class PositionHealthMonitorTests
         _mockExecutionEngine.Verify(
             e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    // ── B.1: Opening position reconciliation ─────────────────────────────────
+
+    [Fact]
+    public async Task ReconcileOpenPositions_OpeningPositionExistsOnExchange_RecoveredToOpen()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 100,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-3),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionExistsOnExchangesAsync(pos, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.Status.Should().Be(PositionStatus.Open);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ReconcileOpenPositions_OpeningPositionMissing_MarkedFailed()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 101,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-3),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionExistsOnExchangesAsync(pos, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.Status.Should().Be(PositionStatus.Failed);
+        pos.ClosedAt.Should().NotBeNull();
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
     }
 }

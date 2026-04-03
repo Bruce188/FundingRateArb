@@ -163,7 +163,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     {
         var markPrice = await GetMarkPriceAsync(asset, ct);
 
-        // Try to get actual position size from account info (signed: positive = long, negative = short)
+        // Try to get actual position size from account info
+        // GetPositionQuantityAsync returns signed qty (positive = long, negative = short);
+        // take Abs for close size since the exchange close API expects unsigned quantity
         var (rawQuantity, apiConfirmed) = await GetPositionQuantityAsync(asset, ct);
         var quantity = Math.Abs(rawQuantity);
         if (quantity <= 0)

@@ -247,6 +247,9 @@ public class CoinGlassConnector : IExchangeConnector
         return Task.FromResult<DateTime?>(null);
     }
 
+    public Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
+        => Task.FromResult<bool?>(false);
+
     /// <summary>
     /// Normalizes exchange-specific symbols to a common format.
     /// e.g., "BTCUSDT" -> "BTC", "ETH-USD-PERP" -> "ETH"

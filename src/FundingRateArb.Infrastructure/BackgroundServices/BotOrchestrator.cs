@@ -317,6 +317,28 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
         }
 
+        // Emergency close exchange cleanup for reaped positions
+        foreach (var reaped in healthResult.ReapedPositions)
+        {
+            try
+            {
+                using var closeScope = _scopeFactory.CreateScope();
+                var closeEngine = closeScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+                var closeUow = closeScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                var pos = await closeUow.Positions.GetByIdAsync(reaped.PositionId);
+                if (pos is null) continue;
+
+                using var closeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                closeCts.CancelAfter(TimeSpan.FromSeconds(30));
+                await closeEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, closeCts.Token);
+                _logger.LogWarning("Emergency close attempted for reaped position #{Id}", reaped.PositionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Emergency close failed for reaped position #{Id}", reaped.PositionId);
+            }
+        }
+
         // Fetch ALL open positions after health monitor so closed positions are excluded
         var allOpenPositions = await uow.Positions.GetOpenAsync();
 
