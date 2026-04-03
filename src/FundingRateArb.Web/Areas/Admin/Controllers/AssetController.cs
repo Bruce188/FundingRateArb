@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Web.ViewModels.Admin;
@@ -49,8 +50,8 @@ public class AssetController : Controller
         await _uow.SaveAsync();
         _uow.Assets.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            "Created", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            "Created", "Asset", asset.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         TempData["Success"] = $"Asset '{asset.Symbol}' created successfully.";
         return RedirectToAction(nameof(Index));
@@ -102,8 +103,8 @@ public class AssetController : Controller
         await _uow.SaveAsync();
         _uow.Assets.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            "Updated", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            "Updated", "Asset", asset.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         TempData["Success"] = $"Asset '{asset.Symbol}' updated successfully.";
         return RedirectToAction(nameof(Index));
@@ -135,8 +136,8 @@ public class AssetController : Controller
             await _uow.SaveAsync();
             _uow.Assets.InvalidateCache();
 
-            _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-                "Deleted", "Asset", asset.Id, User.Identity?.Name ?? "unknown");
+            _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+                "Deleted", "Asset", asset.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
         }
         catch (Microsoft.EntityFrameworkCore.DbUpdateException)
         {

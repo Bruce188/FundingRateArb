@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels.Admin;
@@ -120,14 +121,14 @@ public class BotConfigController : Controller
         }
 
         config.LastUpdatedAt = DateTime.UtcNow;
-        config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
+        config.UpdatedByUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "system";
 
         _uow.BotConfig.Update(config);
         await _uow.SaveAsync();
         _uow.BotConfig.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            "Updated", "BotConfiguration", config.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            "Updated", "BotConfiguration", config.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         TempData["Success"] = "Bot configuration saved successfully.";
         return RedirectToAction(nameof(Index));
@@ -139,14 +140,14 @@ public class BotConfigController : Controller
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
         config.IsEnabled = !config.IsEnabled;
         config.LastUpdatedAt = DateTime.UtcNow;
-        config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
+        config.UpdatedByUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "system";
 
         _uow.BotConfig.Update(config);
         await _uow.SaveAsync();
         _uow.BotConfig.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            config.IsEnabled ? "Enabled" : "Disabled", "BotConfiguration", config.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            config.IsEnabled ? "Enabled" : "Disabled", "BotConfiguration", config.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         var status = config.IsEnabled ? "enabled" : "disabled";
         TempData["Success"] = $"Bot {status} successfully.";
