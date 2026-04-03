@@ -317,7 +317,7 @@ public class LighterConnectorTests
         var handler = new MockHttpMessageHandler(json, status);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -328,7 +328,7 @@ public class LighterConnectorTests
         configure(handler);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -631,7 +631,7 @@ public class LighterConnectorTests
 
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -660,7 +660,7 @@ public class LighterConnectorTests
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -722,7 +722,7 @@ public class LighterConnectorTests
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -1055,7 +1055,7 @@ public class LighterConnectorTests
         var handler = new SequentialHttpMessageHandler(responses);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -1128,24 +1128,6 @@ public class LighterConnectorTests
     // ── Verification: baseline snapshot + timing tests ────────────────────────
 
     /// <summary>
-    /// Position exists at baseline size, all polls show same size → returns false.
-    /// Exercises the early-exit path when size at baseline is unchanged.
-    /// </summary>
-    [Fact]
-    public async Task VerifyPosition_PositionExistsAtBaselineSize_ReturnsFalse()
-    {
-        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
-
-        // All calls return ETH Long at 0.5 — baseline 0.5, polls 0.5 → no change
-        var responses = Enumerable.Repeat(MakeAccountJson(0.5m), 12).ToList();
-        var sut = CreateSequentialConnector(responses);
-
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
-
-        result.Should().BeFalse("position at baseline size 0.5 with no change should return false");
-    }
-
-    /// <summary>
     /// Baseline shows ETH Long at 0.5, poll shows 1.0 → size increased → returns true.
     /// </summary>
     [Fact]
@@ -1205,7 +1187,7 @@ public class LighterConnectorTests
         var handler = new SequentialStatusHttpMessageHandler(responses);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -1270,38 +1252,137 @@ public class LighterConnectorTests
             Times.Once);
     }
 
+    // ── ComputeInitialDelayMs static method tests ────────────────────────
+
+    [Fact]
+    public void ComputeInitialDelayMs_AboveMax_ClampsTo15000()
+    {
+        LighterConnector.ComputeInitialDelayMs(20000).Should().Be(15000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_BelowMin_ClampsTo5000()
+    {
+        LighterConnector.ComputeInitialDelayMs(1000).Should().Be(5000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Zero_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(0).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_InRange_ReturnsExactValue()
+    {
+        LighterConnector.ComputeInitialDelayMs(10000).Should().Be(10000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Negative_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(-500).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Infinity_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(double.PositiveInfinity).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_NaN_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(double.NaN).Should().Be(8000);
+    }
+
+    // ── Grace check negative path tests (B2) ────────────────────────
+
     /// <summary>
-    /// Verify that _lastPredictedSettlementMs is used for initial delay and clamped to [5s, 15s].
-    /// Sets the field to 20000 (above max) via reflection and verifies execution completes
-    /// within expected timing bounds (proving the clamp is applied).
+    /// All 10 regular polls exhaust, grace check finds position at baseline size → returns false.
     /// </summary>
     [Fact]
-    public async Task VerifyPosition_UsesPredictedExecutionTime_ClampsDelay()
+    public async Task VerifyPosition_GraceCheckPositionAtBaselineSize_ReturnsFalse()
     {
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
 
-        // Empty positions — will trigger early exit via no-change streak
-        var responses = Enumerable.Repeat(MakeAccountJson(null), 12).ToList();
+        // ETH at baseline size — foundTarget=true, resets noChangeStreak
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        // No ETH position — foundTarget=false, increments noChangeStreak
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        var responses = new List<string>();
+        responses.Add(ethAtBaseline); // baseline — ETH Long at 0.5
+        // Alternate to prevent early-exit: ethBase resets streak, noETH increments
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        responses.Add(ethAtBaseline); // grace check — ETH Long at 0.5 (same as baseline) → false
+
         var sut = CreateSequentialConnector(responses);
 
-        // Set _lastPredictedSettlementMs to 20000 via reflection (above 15000 max clamp)
-        var field = typeof(LighterConnector).GetField("_lastPredictedSettlementMs",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-        field.Should().NotBeNull("_lastPredictedSettlementMs field must exist");
-        field!.SetValue(sut, 20000.0);
-
-        var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
-        sw.Stop();
 
-        result.Should().BeFalse();
+        result.Should().BeFalse("grace check found position at baseline size — no increase detected");
+    }
 
-        // Initial delay should be clamped to 15000ms (not 20000ms)
-        // Total time: ~15s initial + poll delays (~2s+3s+4s+5s for 5 no-change polls) = ~29s
-        // Without clamp it would be ~20s initial. We verify it's under 35s (generous bound)
-        // and above 14s (proving the 15s clamp was applied, not the default 8s)
-        sw.ElapsedMilliseconds.Should().BeGreaterThan(14000,
-            "initial delay should be at least 15s when predicted time is clamped from 20s to 15s");
+    /// <summary>
+    /// All 10 regular polls exhaust, grace check HTTP call throws → returns false (not throws).
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_GraceCheckThrows_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        // 1 baseline + 10 polls (alternating to prevent early exit) + 1 grace check (500)
+        var responses = new List<(string content, HttpStatusCode status)>();
+        responses.Add((ethAtBaseline, HttpStatusCode.OK)); // baseline
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0
+                ? (noEthJson, HttpStatusCode.OK)
+                : (ethAtBaseline, HttpStatusCode.OK));
+        responses.Add(("{}", HttpStatusCode.InternalServerError)); // grace check — 500
+
+        var handler = new SequentialStatusHttpMessageHandler(responses);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse("grace check HTTP error should result in false, not exception");
     }
 }
 
@@ -1665,7 +1746,7 @@ public class ExchangeConnectorFactoryTests
         var handler = new MockHttpMessageHandler("{}");
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var logger = new Mock<ILogger<LighterConnector>>();
         var connector = new LighterConnector(httpClient, logger.Object, config);

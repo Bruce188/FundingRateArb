@@ -78,8 +78,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     /// <inheritdoc />
     /// <remarks>
-    /// Waits 8 seconds for the zk-rollup transaction to settle, then polls GetAccountAsync
-    /// up to 15 times with 3-second delays to verify the position exists on-chain.
+    /// Waits for the zk-rollup transaction to settle using a dynamic initial delay
+    /// (5-15s, clamped from the predicted execution time returned by sendTx, default 8s),
+    /// then polls GetAccountAsync up to 10 times with linearly increasing backoff (2-6s).
+    /// If all polls are exhausted, performs a final 10s grace check.
     /// Detects the target position by comparing current sizes against a baseline snapshot
     /// taken before polling, rather than relying on total position count.
     /// </remarks>
@@ -89,7 +91,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         var accountIndex = GetAccountIndex();
 
-        // N2: Record baseline position sizes before polling starts (tuple key for safety)
+        // Record baseline position sizes before polling starts (tuple key for safety)
         var baseline = new Dictionary<(string Symbol, string Side), decimal>();
         try
         {
@@ -114,19 +116,19 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
 
         // Allow time for the zk-rollup transaction to settle before polling
-        var initialDelayMs = _lastPredictedSettlementMs > 0
-            ? (int)Math.Clamp(_lastPredictedSettlementMs, 5000, 15000)
-            : 8000;
+        var predictedMs = Volatile.Read(ref _lastPredictedSettlementMs);
+        Volatile.Write(ref _lastPredictedSettlementMs, 0);
+        var initialDelayMs = ComputeInitialDelayMs(predictedMs);
         await Task.Delay(initialDelayMs, ct);
 
-        // B2: Baseline-aware early-exit — if the target asset+side is absent for 5
+        // Baseline-aware early-exit — if the target asset+side is absent for 5
         // consecutive polls with no size delta observed, treat as a non-fill.
         int noChangeStreak = 0;
         const int noChangeEarlyExit = 5;
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
-            // NB1: Delay between retries, not before the first attempt (exponential backoff)
+            // Delay between retries, not before the first attempt (linearly increasing backoff)
             if (attempt > 0)
             {
                 var delayMs = Math.Min(6000, 2000 + attempt * 1000);
@@ -165,49 +167,22 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     continue;
                 }
 
-                bool foundTarget = false;
-                foreach (var p in nonZeroPositions)
+                var matchResult = TryMatchPosition(nonZeroPositions, asset, side, baseline);
+
+                if (matchResult.IsNewOrIncreased)
                 {
-                    if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture, out var size))
-                    {
-                        continue;
-                    }
-
-                    // Long = positive size, Short = negative size
-                    var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
-                    if (!isSideMatch)
-                    {
-                        continue;
-                    }
-
-                    var currentAbsSize = Math.Abs(size);
-                    var sideStr = size > 0 ? "Long" : "Short";
-                    var baselineKey = (asset.ToUpperInvariant(), sideStr);
-
-                    // Detect new position or size increase compared to baseline
-                    if (!baseline.TryGetValue(baselineKey, out var baselineSize) || currentAbsSize > baselineSize)
-                    {
-                        _logger.Log(pollLogLevel,
-                            "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size} baselineSize={Baseline}",
-                            attempt + 1, maxAttempts, asset, side, posCount, size,
-                            baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
-                        return true;
-                    }
-
-                    foundTarget = true; // position exists but size unchanged from baseline
+                    _logger.Log(pollLogLevel,
+                        "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=true positionCount={Count} size={Size} baselineSize={Baseline}",
+                        attempt + 1, maxAttempts, asset, side, posCount, matchResult.Size,
+                        matchResult.BaselineSize);
+                    return true;
                 }
 
                 _logger.Log(pollLogLevel,
                     "Verify poll {Attempt}/{Max}: asset={Asset} side={Side} found=false positionCount={Count}",
                     attempt + 1, maxAttempts, asset, side, posCount);
 
-                if (!foundTarget)
+                if (!matchResult.FoundAtBaseline)
                 {
                     noChangeStreak++;
                 }
@@ -243,23 +218,13 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             var graceAccount = graceResponse?.Accounts?.FirstOrDefault();
             if (graceAccount?.Positions is not null)
             {
-                foreach (var p in graceAccount.Positions)
+                var graceResult = TryMatchPosition(graceAccount.Positions, asset, side, baseline);
+                if (graceResult.IsNewOrIncreased)
                 {
-                    if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase)) continue;
-                    if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
-                            System.Globalization.CultureInfo.InvariantCulture, out var sz) || sz == 0) continue;
-                    var isSideMatch = (side == Side.Long && sz > 0) || (side == Side.Short && sz < 0);
-                    if (!isSideMatch) continue;
-                    var absSize = Math.Abs(sz);
-                    var sideStr = sz > 0 ? "Long" : "Short";
-                    var bKey = (asset.ToUpperInvariant(), sideStr);
-                    if (!baseline.TryGetValue(bKey, out var bSize) || absSize > bSize)
-                    {
-                        _logger.LogInformation(
-                            "Verify GRACE CHECK: found position for {Asset} {Side} size={Size}",
-                            asset, side, sz);
-                        return true;
-                    }
+                    _logger.LogInformation(
+                        "Verify GRACE CHECK: found position for {Asset} {Side} size={Size}",
+                        asset, side, graceResult.Size);
+                    return true;
                 }
             }
         }
@@ -273,6 +238,62 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             maxAttempts, asset, side, accountIndex);
         return false;
     }
+
+    /// <summary>
+    /// Computes the initial delay before polling begins, clamped to [5000, 15000] ms.
+    /// Returns 8000 ms when the predicted time is zero, negative, or non-finite.
+    /// </summary>
+    internal static int ComputeInitialDelayMs(double predictedMs)
+    {
+        if (predictedMs > 0 && double.IsFinite(predictedMs))
+            return (int)Math.Clamp(predictedMs, 5000, 15000);
+        return 8000;
+    }
+
+    /// <summary>
+    /// Checks whether any position in the list matches the target asset and side,
+    /// and whether its size is new or increased compared to the baseline snapshot.
+    /// </summary>
+    private static PositionMatchResult TryMatchPosition(
+        IEnumerable<LighterAccountPosition> positions,
+        string asset,
+        Side side,
+        Dictionary<(string Symbol, string Side), decimal> baseline)
+    {
+        foreach (var p in positions)
+        {
+            if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var size) || size == 0)
+                continue;
+
+            var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
+            if (!isSideMatch)
+                continue;
+
+            var absSize = Math.Abs(size);
+            var sideStr = size > 0 ? "Long" : "Short";
+            var baselineKey = (asset.ToUpperInvariant(), sideStr);
+
+            if (!baseline.TryGetValue(baselineKey, out var baselineSize) || absSize > baselineSize)
+            {
+                return new PositionMatchResult(true, false, size, baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
+            }
+
+            // Position exists at baseline size — not new or increased
+            return new PositionMatchResult(false, true, size, baselineSize);
+        }
+
+        return new PositionMatchResult(false, false, 0m, 0m);
+    }
+
+    private readonly record struct PositionMatchResult(
+        bool IsNewOrIncreased,
+        bool FoundAtBaseline,
+        decimal Size,
+        decimal BaselineSize);
 
     // ── Funding Rates ──
     // Note: HttpClient has AddStandardResilienceHandler applied at registration (Program.cs).
@@ -551,7 +572,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
             // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);
-            _lastPredictedSettlementMs = sendResult.PredictedExecutionTimeMs;
+            Volatile.Write(ref _lastPredictedSettlementMs, sendResult.PredictedExecutionTimeMs);
 
             _logger.LogInformation(
                 "Order placed on Lighter: txHash={TxHash} market={Asset} side={Side}",
