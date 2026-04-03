@@ -1438,4 +1438,24 @@ public class BotOrchestratorTests
         var act = () => _sut.RunCycleAsync(CancellationToken.None);
         await act.Should().NotThrowAsync();
     }
+
+    [Fact]
+    public async Task RunCycle_ReconciliationIntervalThree_OnlyReconcileEveryThirdCycle()
+    {
+        var config = MakeEnabledConfig();
+        config.ReconciliationIntervalCycles = 3;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        SetupMinimalCycleMocks();
+
+        // Cycles 1 and 2: no reconciliation
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Never);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Never);
+
+        // Cycle 3: reconciliation fires
+        await _sut.RunCycleAsync(CancellationToken.None);
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
 }

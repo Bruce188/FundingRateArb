@@ -285,8 +285,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
         // Runs after the close loop so time-sensitive closes execute first
-        _cycleCount++;
-        if (globalConfig.ReconciliationIntervalCycles > 0 && _cycleCount >= globalConfig.ReconciliationIntervalCycles)
+        if (globalConfig.ReconciliationIntervalCycles > 0 && ++_cycleCount >= globalConfig.ReconciliationIntervalCycles)
         {
             _cycleCount = 0;
             try

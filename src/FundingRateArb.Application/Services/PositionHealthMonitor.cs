@@ -432,6 +432,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         var batchResults = await _executionEngine.CheckPositionsExistOnExchangesBatchAsync(openPositions, ct);
 
         var reconciled = 0;
+        var survivingLegCloses = new List<ArbitragePosition>();
         foreach (var pos in openPositions)
         {
             try
@@ -473,21 +474,16 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     Message = $"Position #{pos.Id}: {driftDetail} — marked ExchangeDrift. Manual review required.",
                 });
 
-                // For single-leg drift, attempt to close the surviving leg
-                if (result == PositionExistsResult.LongMissing || result == PositionExistsResult.ShortMissing)
+                // For single-leg drift, flag the missing leg and queue surviving-leg close
+                if (result == PositionExistsResult.LongMissing)
                 {
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
-                            _logger.LogInformation("Surviving leg close attempted for position #{Id}", pos.Id);
-                        }
-                        catch (Exception closeEx)
-                        {
-                            _logger.LogWarning(closeEx, "Failed to close surviving leg for position #{Id}", pos.Id);
-                        }
-                    }, ct);
+                    pos.LongLegClosed = true;
+                    survivingLegCloses.Add(pos);
+                }
+                else if (result == PositionExistsResult.ShortMissing)
+                {
+                    pos.ShortLegClosed = true;
+                    survivingLegCloses.Add(pos);
                 }
 
                 reconciled++;
@@ -502,6 +498,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             await _uow.SaveAsync(ct);
             _logger.LogWarning("Reconciliation completed: {Count} positions marked as ExchangeDrift", reconciled);
+        }
+
+        // Close surviving legs after SaveAsync commits the drift status (within DI scope lifetime)
+        foreach (var pos in survivingLegCloses)
+        {
+            try
+            {
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
+                _logger.LogInformation("Surviving leg close attempted for position #{Id}", pos.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to close surviving leg for position #{Id}", pos.Id);
+            }
         }
     }
 }
