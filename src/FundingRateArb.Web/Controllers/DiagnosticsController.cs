@@ -1,6 +1,7 @@
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -14,17 +15,23 @@ public class DiagnosticsController : ControllerBase
 {
     private readonly IUnitOfWork _uow;
     private readonly IBotDiagnostics _diagnostics;
+    private readonly IBotControl _botControl;
+    private readonly IExecutionEngine _executionEngine;
     private readonly IConfiguration _config;
     private readonly ILogger<DiagnosticsController> _logger;
 
     public DiagnosticsController(
         IUnitOfWork uow,
         IBotDiagnostics diagnostics,
+        IBotControl botControl,
+        IExecutionEngine executionEngine,
         IConfiguration config,
         ILogger<DiagnosticsController> logger)
     {
         _uow = uow;
         _diagnostics = diagnostics;
+        _botControl = botControl;
+        _executionEngine = executionEngine;
         _config = config;
         _logger = logger;
     }
@@ -132,4 +139,96 @@ public class DiagnosticsController : ControllerBase
             return StatusCode(503, new { error = "Database unreachable" });
         }
     }
+
+    [HttpPost("actions")]
+    [EnableRateLimiting("diagnostics-write")]
+    public async Task<IActionResult> ExecuteAction([FromBody] DiagnosticsActionRequest request, CancellationToken ct)
+    {
+        var apiKey = _config["Diagnostics:ApiKey"];
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            return StatusCode(503, new { error = "Diagnostics API key not configured" });
+        }
+
+        var providedKey = Request.Headers["X-Diagnostics-Key"].FirstOrDefault();
+        if (string.IsNullOrEmpty(providedKey) || providedKey != apiKey)
+        {
+            return Unauthorized(new { error = "Invalid or missing X-Diagnostics-Key header" });
+        }
+
+        if (string.IsNullOrEmpty(request.Action))
+        {
+            return BadRequest(new { error = "Action is required" });
+        }
+
+        _logger.LogWarning("Diagnostics action invoked: {Action} with parameters {@Parameters}",
+            request.Action, request.Parameters);
+
+        switch (request.Action.ToLowerInvariant())
+        {
+            case "clear_circuit_breakers":
+                _botControl.ClearCooldowns();
+                return Ok(new { action = request.Action, result = "Circuit breakers cleared" });
+
+            case "force_close_position":
+                return await ForceClosePositionAsync(request, ct);
+
+            case "toggle_dry_run":
+                return await ToggleDryRunAsync(ct);
+
+            case "trigger_immediate_cycle":
+                _botControl.TriggerImmediateCycle();
+                return Ok(new { action = request.Action, result = "Immediate cycle triggered" });
+
+            default:
+                return BadRequest(new { error = $"Unknown action: {request.Action}" });
+        }
+    }
+
+    private async Task<IActionResult> ForceClosePositionAsync(DiagnosticsActionRequest request, CancellationToken ct)
+    {
+        if (request.Parameters is null || !request.Parameters.TryGetValue("positionId", out var posIdStr)
+            || !int.TryParse(posIdStr, out var positionId))
+        {
+            return BadRequest(new { error = "Parameter 'positionId' is required (integer)" });
+        }
+
+        var position = await _uow.Positions.GetByIdAsync(positionId);
+        if (position is null)
+        {
+            return NotFound(new { error = $"Position {positionId} not found" });
+        }
+
+        if (position.Status != PositionStatus.Open && position.Status != PositionStatus.Opening)
+        {
+            return BadRequest(new { error = $"Position {positionId} is not open (status: {position.Status})" });
+        }
+
+        await _executionEngine.ClosePositionAsync(position.UserId, position, CloseReason.Manual, ct);
+
+        _logger.LogWarning("Force-closed position {PositionId} via diagnostics API", positionId);
+
+        return Ok(new { action = "force_close_position", result = $"Position {positionId} close initiated" });
+    }
+
+    private async Task<IActionResult> ToggleDryRunAsync(CancellationToken ct)
+    {
+        var config = await _uow.BotConfig.GetActiveTrackedAsync();
+        config.DryRunEnabled = !config.DryRunEnabled;
+        config.LastUpdatedAt = DateTime.UtcNow;
+        _uow.BotConfig.Update(config);
+        await _uow.SaveAsync(ct);
+        _uow.BotConfig.InvalidateCache();
+
+        var status = config.DryRunEnabled ? "enabled" : "disabled";
+        _logger.LogWarning("Dry run {Status} via diagnostics API", status);
+
+        return Ok(new { action = "toggle_dry_run", result = $"Dry run {status}", dryRunEnabled = config.DryRunEnabled });
+    }
+}
+
+public class DiagnosticsActionRequest
+{
+    public string Action { get; set; } = null!;
+    public Dictionary<string, string>? Parameters { get; set; }
 }
