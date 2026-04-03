@@ -699,7 +699,10 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     // Check daily rotation cap
                     var today = DateOnly.FromDateTime(DateTime.UtcNow);
                     var (date, count) = _dailyRotationCounts.GetValueOrDefault(userId, (today, 0));
-                    if (date != today) count = 0; // Reset counter on new day
+                    if (date != today)
+                    {
+                        count = 0; // Reset counter on new day
+                    }
 
                     var rotationExecuted = false;
 

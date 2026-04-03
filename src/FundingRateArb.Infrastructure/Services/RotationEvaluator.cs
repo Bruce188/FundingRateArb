@@ -22,7 +22,9 @@ public class RotationEvaluator : IRotationEvaluator
         BotConfiguration globalConfig)
     {
         if (openPositions.Count == 0 || opportunities.Count == 0)
+        {
             return null;
+        }
 
         // Only consider Open positions (not Opening, Closing, etc.)
         var eligiblePositions = openPositions
@@ -30,7 +32,9 @@ public class RotationEvaluator : IRotationEvaluator
             .ToList();
 
         if (eligiblePositions.Count == 0)
+        {
             return null;
+        }
 
         // Find worst position by CurrentSpreadPerHour
         var worstPosition = eligiblePositions.MinBy(p => p.CurrentSpreadPerHour)!;
