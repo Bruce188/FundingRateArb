@@ -24,9 +24,21 @@ public class CoinGlassConnector : IExchangeConnector
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
     private readonly string? _apiKey;
-    private readonly object _backoffLock = new();
-    private int _consecutiveFailures;
-    private DateTime _backoffUntil = DateTime.MinValue;
+    private static readonly object BackoffLock = new();
+    private static int _consecutiveFailures;
+    private static DateTime _backoffUntil = DateTime.MinValue;
+    private static int _lastLoggedBackoffLevel;
+
+    /// <summary>Resets static backoff state. For unit testing only.</summary>
+    internal static void ResetBackoffState()
+    {
+        lock (BackoffLock)
+        {
+            _consecutiveFailures = 0;
+            _backoffUntil = DateTime.MinValue;
+            _lastLoggedBackoffLevel = 0;
+        }
+    }
 
     /// <summary>
     /// Exchanges that already have dedicated connectors. Rates from these
@@ -54,7 +66,7 @@ public class CoinGlassConnector : IExchangeConnector
 
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
-        lock (_backoffLock)
+        lock (BackoffLock)
         {
             if (DateTime.UtcNow < _backoffUntil)
             {
@@ -169,10 +181,16 @@ public class CoinGlassConnector : IExchangeConnector
             _logger.LogInformation("CoinGlass aggregator returned {Count} funding rates", rates.Count);
 
             // Reset backoff on success
-            lock (_backoffLock)
+            lock (BackoffLock)
             {
+                if (_consecutiveFailures > 0)
+                {
+                    _logger.LogInformation("CoinGlass API recovered after {Failures} consecutive failures",
+                        _consecutiveFailures);
+                }
                 _consecutiveFailures = 0;
                 _backoffUntil = DateTime.MinValue;
+                _lastLoggedBackoffLevel = 0;
             }
 
             return rates;
@@ -182,14 +200,20 @@ public class CoinGlassConnector : IExchangeConnector
 
     private void RecordFailure()
     {
-        lock (_backoffLock)
+        lock (BackoffLock)
         {
             _consecutiveFailures++;
             var cappedFailures = Math.Min(_consecutiveFailures, 14); // cap to prevent 2^n overflow
             var backoffSeconds = Math.Min(60 * (1 << (cappedFailures - 1)), 900);
             _backoffUntil = DateTime.UtcNow.AddSeconds(backoffSeconds);
-            _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
-                _consecutiveFailures, backoffSeconds);
+
+            // Only log on first failure or when backoff level changes
+            if (_consecutiveFailures == 1 || cappedFailures != _lastLoggedBackoffLevel)
+            {
+                _lastLoggedBackoffLevel = cappedFailures;
+                _logger.LogWarning("CoinGlass API failure #{Count} — backing off for {Seconds}s",
+                    _consecutiveFailures, backoffSeconds);
+            }
         }
     }
 
