@@ -759,16 +759,20 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
             // 4. Calculate base amount using pre-computed quantity directly
             var sizeMultiplier = (long)Math.Pow(10, market.SizeDecimals);
-            var baseAmount = (long)(quantity * sizeMultiplier);
 
-            if (baseAmount <= 0)
+            // NB3: Validate decimal product before (long) cast to prevent overflow
+            var baseAmountDecimal = quantity * sizeMultiplier;
+            if (baseAmountDecimal > 1_000_000_000_000m || baseAmountDecimal <= 0)
             {
                 return new OrderResultDto
                 {
                     Success = false,
-                    Error = $"Calculated base amount is zero (quantity={quantity}, sizeMultiplier={sizeMultiplier})"
+                    Error = baseAmountDecimal <= 0
+                        ? $"Calculated base amount is zero (quantity={quantity}, sizeMultiplier={sizeMultiplier})"
+                        : $"Base amount {baseAmountDecimal} exceeds safety limit"
                 };
             }
+            var baseAmount = (long)baseAmountDecimal;
 
             // Min notional validation — use MinBaseAmount if available, else $5 USDC fallback
             var actualNotional = quantity * markPrice;
@@ -783,11 +787,6 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     Success = false,
                     Error = $"Order notional ${actualNotional:F2} below Lighter minimum ${minNotional:F2}"
                 };
-            }
-
-            if (baseAmount > 1_000_000_000_000L)
-            {
-                throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
             }
 
             // 5. Calculate price in Lighter integer format with slippage
@@ -839,12 +838,15 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 "Order placed on Lighter: txHash={TxHash} market={Asset} side={Side}",
                 sendResult.TxHash ?? txHash, asset, side);
 
+            // B1: Return the truncated quantity actually sent to the exchange, not the raw input
+            var actualQuantity = (decimal)baseAmount / sizeMultiplier;
+
             return new OrderResultDto
             {
                 Success = true,
                 OrderId = sendResult.TxHash ?? txHash,
                 FilledPrice = markPrice,
-                FilledQuantity = quantity,
+                FilledQuantity = actualQuantity,
                 IsEstimatedFill = true,
             };
         }

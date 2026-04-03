@@ -4,6 +4,8 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
 using HyperLiquid.Net.Enums;
 using HyperLiquid.Net.Interfaces.Clients;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
@@ -13,6 +15,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly IMarkPriceCache _markPriceCache;
+    private readonly ILogger<HyperliquidConnector> _logger;
     private readonly ConcurrentDictionary<string, int> _szDecimalsCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _vaultAddress;
 
@@ -22,12 +25,14 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         IHyperLiquidRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider,
         IMarkPriceCache markPriceCache,
-        string? vaultAddress = null)
+        string? vaultAddress = null,
+        ILogger<HyperliquidConnector>? logger = null)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
         _markPriceCache = markPriceCache;
         _vaultAddress = vaultAddress;
+        _logger = logger ?? NullLogger<HyperliquidConnector>.Instance;
     }
 
     public string ExchangeName => "Hyperliquid";
@@ -194,12 +199,16 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             {
                 // Round up by one tick to clear minimum notional
                 var tick = 1m / (decimal)Math.Pow(10, szDecimals);
+                var originalQuantity = roundedQuantity;
                 roundedQuantity += tick;
                 notional = roundedQuantity * markPrice;
                 if (notional < 10m)
                 {
                     return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Hyperliquid minimum $10.00" };
                 }
+                _logger.LogWarning(
+                    "Min-notional bump activated: quantity adjusted from {From} to {To} for {Asset}",
+                    originalQuantity, roundedQuantity, asset);
             }
 
             var limitPrice = side == Side.Long

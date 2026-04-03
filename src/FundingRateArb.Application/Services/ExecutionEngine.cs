@@ -177,8 +177,22 @@ public class ExecutionEngine : IExecutionEngine
 
             // Compute shared target quantity for delta-neutral coordination
             var referencePrice = Math.Min(longMarkPrice, shortMarkPrice);
+
+            // B2: Guard against zero/negative mark price before division
+            if (referencePrice <= 0)
+            {
+                return (false, $"Mark price invalid: long={longMarkPrice}, short={shortMarkPrice}");
+            }
+
+            // NB2: Guard against pathological price divergence between exchanges
+            var priceDivergence = Math.Abs(longMarkPrice - shortMarkPrice) / Math.Max(longMarkPrice, shortMarkPrice);
+            if (priceDivergence > 0.02m)
+            {
+                return (false, $"Mark price divergence too high between exchanges ({priceDivergence:P1})");
+            }
+
             var coarsestPrecision = Math.Min(longPrecision, shortPrecision);
-            var targetQuantity = Math.Round(sizeUsdc * effectiveLeverage / referencePrice, coarsestPrecision, MidpointRounding.ToZero);
+            var targetQuantity = Math.Round(sizeUsdc * (decimal)effectiveLeverage / referencePrice, coarsestPrecision, MidpointRounding.ToZero);
 
             // Validate min notional (use highest exchange minimum — Hyperliquid = $10)
             if (targetQuantity * referencePrice < 10m)

@@ -1073,12 +1073,14 @@ public class ExecutionEngineTests
     [Fact]
     public async Task OpenPosition_FillQuantityMismatch_LogsWarning()
     {
+        // NB4: Use 1-3% mismatch (not 20%) to test warning path, not critical path
+        // 0.100 vs 0.098 → mismatch = 0.002/0.100 = 2% → warning, not critical
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.10m });
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.100m });
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.08m });
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.098m });
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
@@ -1087,7 +1089,8 @@ public class ExecutionEngineTests
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         savedPos.Should().NotBeNull();
-        savedPos!.Notes.Should().Contain("mismatch");
+        savedPos!.Notes.Should().Contain("Quantity mismatch");
+        savedPos.Notes.Should().NotContain("CRITICAL", "2% mismatch should produce warning, not critical");
     }
 
     [Fact]
@@ -3046,8 +3049,9 @@ public class ExecutionEngineTests
         _mockLongConnector.Setup(c => c.IsEstimatedFillExchange).Returns(false);
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(false);
 
+        // Mark prices within 2% divergence (NB2 guard): 3000 vs 3050 = 1.64% < 2%
         _mockLongConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
-        _mockShortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(3100m);
+        _mockShortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(3050m);
         _mockLongConnector.Setup(c => c.GetQuantityPrecisionAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(4);
         _mockShortConnector.Setup(c => c.GetQuantityPrecisionAsync("ETH", It.IsAny<CancellationToken>())).ReturnsAsync(3);
 
@@ -3061,7 +3065,7 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => shortQuantity = qty)
-            .ReturnsAsync(SuccessOrder("short-1", 3100m, 0.166m));
+            .ReturnsAsync(SuccessOrder("short-1", 3050m, 0.166m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3069,7 +3073,7 @@ public class ExecutionEngineTests
         shortQuantity.Should().NotBeNull();
         longQuantity.Should().Be(shortQuantity, "both legs must receive the same pre-computed quantity");
 
-        // referencePrice = min(3000, 3100) = 3000, coarsestPrecision = min(4, 3) = 3
+        // referencePrice = min(3000, 3050) = 3000, coarsestPrecision = min(4, 3) = 3
         // targetQuantity = Math.Round(100 * 5 / 3000, 3, ToZero) = Math.Round(0.16666..., 3, ToZero) = 0.166
         longQuantity.Should().Be(0.166m);
     }
@@ -3250,5 +3254,187 @@ public class ExecutionEngineTests
         savedPosition.Should().NotBeNull();
         savedPosition!.LongFilledQuantity.Should().Be(0.166666m);
         savedPosition.ShortFilledQuantity.Should().Be(0.166666m);
+    }
+
+    // ── Review tests: B3 — min-notional and zero-fill edge cases ──────────────
+
+    [Fact]
+    public async Task OpenPosition_BelowMinNotional_ReturnsFailure()
+    {
+        // High mark price + tiny sizeUsdc → targetQuantity * referencePrice < $10
+        // markPrice = 50000, sizeUsdc = 1, leverage = 1 → targetQuantity = 1*1/50000 = 0.00002
+        // At precision 6, that's 0.00002 → notional = 0.00002*50000 = $1 < $10
+        _mockLongConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(50000m);
+        _mockShortConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(50000m);
+
+        var config = new BotConfiguration { IsEnabled = true, DefaultLeverage = 1, UpdatedByUserId = "admin" };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 1m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("minimum notional");
+
+        // Verify no orders were placed
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockShortConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task SequentialPath_FirstLegZeroFill_HandlesGracefully()
+    {
+        // Use a fresh mock with IPositionVerifiable set up before .Object access
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+
+        // First leg returns FilledQuantity = 0 with Success = true
+        mockVerifiableShort
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0m, IsEstimatedFill = true });
+
+        // Verification returns false (no position found)
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        ArbitragePosition? savedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse("zero-fill first leg should not proceed to second leg");
+        savedPosition.Should().NotBeNull();
+        savedPosition!.Status.Should().NotBe(PositionStatus.Opening, "position should not remain in Opening status");
+    }
+
+    [Fact]
+    public async Task OpenPosition_MarkPriceZero_ReturnsFailure()
+    {
+        // Mock GetMarkPriceAsync returning 0
+        _mockLongConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(0m);
+        _mockShortConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Mark price invalid");
+
+        // No orders should be placed
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    // ── Review tests: NB5 — sequential path overfill ──────────────────────────
+
+    [Fact]
+    public async Task SequentialPath_FirstLegOverfill_CapsAtTargetQuantity()
+    {
+        // Use a fresh mock with IPositionVerifiable set up before .Object access
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+
+        // Calculate expected targetQuantity:
+        // sizeUsdc=100, leverage=5, referencePrice=3000, coarsestPrecision=6
+        // targetQuantity = Math.Round(100*5/3000, 6, ToZero) = Math.Round(0.166666..., 6, ToZero) = 0.166666
+        var expectedTarget = Math.Round(100m * 5m / 3000m, 6, MidpointRounding.ToZero); // 0.166666
+
+        // First leg (short, estimated-fill) overfills — returns more than targetQuantity
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        mockVerifiableShort
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.20m, IsEstimatedFill = true });
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        // Capture the quantity passed to the second leg (long)
+        decimal? secondLegQuantity = null;
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => secondLegQuantity = qty)
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = expectedTarget });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        // Second leg should receive min(targetQuantity, firstFill) = min(0.166666, 0.20) = 0.166666
+        secondLegQuantity.Should().NotBeNull();
+        secondLegQuantity.Should().BeLessThanOrEqualTo(expectedTarget,
+            "second leg should be capped at targetQuantity when first leg overfills");
+    }
+
+    // ── Review tests: N4 — ForceConcurrentExecution failure path ──────────────
+
+    [Fact]
+    public async Task ForceConcurrentExecution_OneLegFails_EmergencyCloses()
+    {
+        // ForceConcurrentExecution = true, one estimated-fill leg fails
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            ForceConcurrentExecution = true,
+            UpdatedByUserId = "admin",
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+
+        // Long succeeds
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        // Short fails
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Exchange unavailable"));
+
+        // Emergency close for the long leg
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "cl", FilledPrice = 3000m, FilledQuantity = 0.1m });
+
+        ArbitragePosition? savedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        // With ForceConcurrentExecution, the concurrent path is used — no sequential verification happens.
+        // VerifyPositionOpenedAsync is only called in the sequential path, so it should never be called here.
+        // (We can't call .As<IPositionVerifiable> after .Object was accessed, but the concurrent path
+        // never invokes VerifyPositionOpenedAsync — that's only in the sequential branch.)
+
+        // Emergency close should have been triggered for the successful long leg
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once, "successful leg should be emergency closed when other leg fails");
     }
 }

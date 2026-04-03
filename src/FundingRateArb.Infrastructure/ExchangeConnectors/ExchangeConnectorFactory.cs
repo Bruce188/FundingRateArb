@@ -158,7 +158,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
         var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
-        return new HyperliquidConnector(restClient, pipelineProvider, markPriceCache, subAccountAddress);
+        var hlLogger = _serviceProvider.GetRequiredService<ILogger<HyperliquidConnector>>();
+        return new HyperliquidConnector(restClient, pipelineProvider, markPriceCache, subAccountAddress, hlLogger);
     }
 
     private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
