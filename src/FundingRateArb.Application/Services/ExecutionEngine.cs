@@ -529,8 +529,8 @@ public class ExecutionEngine : IExecutionEngine
 
             position.Status = PositionStatus.Open;
 
-            var longNotional = longResult.FilledPrice * longResult.FilledQuantity;
-            var shortNotional = shortResult.FilledPrice * shortResult.FilledQuantity;
+            var longNotional = position.LongEntryPrice * longResult.FilledQuantity;
+            var shortNotional = position.ShortEntryPrice * shortResult.FilledQuantity;
             position.EntryFeesUsdc = (longNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.LongExchangeName))
                                    + (shortNotional * ExchangeFeeConstants.GetTakerFeeRate(opp.ShortExchangeName));
 
