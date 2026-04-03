@@ -246,7 +246,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     internal static int ComputeInitialDelayMs(double predictedMs)
     {
         if (predictedMs > 0 && double.IsFinite(predictedMs))
+        {
             return (int)Math.Clamp(predictedMs, 5000, 15000);
+        }
+
         return 8000;
     }
 
@@ -263,15 +266,21 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         foreach (var p in positions)
         {
             if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
                     System.Globalization.CultureInfo.InvariantCulture, out var size) || size == 0)
+            {
                 continue;
+            }
 
             var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
             if (!isSideMatch)
+            {
                 continue;
+            }
 
             var absSize = Math.Abs(size);
             var sideStr = size > 0 ? "Long" : "Short";

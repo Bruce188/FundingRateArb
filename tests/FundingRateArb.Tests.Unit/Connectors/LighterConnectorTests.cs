@@ -1232,7 +1232,10 @@ public class LighterConnectorTests
         // Pattern: baseline(0.5), noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase
         // This prevents the streak from reaching 5 consecutive no-change polls
         for (int i = 0; i < 10; i++)
+        {
             responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        }
+
         responses.Add(MakeAccountJson(1.0m)); // grace check — ETH Long at 1.0 (above baseline)
 
         var sut = CreateSequentialConnector(responses);
@@ -1329,7 +1332,10 @@ public class LighterConnectorTests
         responses.Add(ethAtBaseline); // baseline — ETH Long at 0.5
         // Alternate to prevent early-exit: ethBase resets streak, noETH increments
         for (int i = 0; i < 10; i++)
+        {
             responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        }
+
         responses.Add(ethAtBaseline); // grace check — ETH Long at 0.5 (same as baseline) → false
 
         var sut = CreateSequentialConnector(responses);
@@ -1368,9 +1374,11 @@ public class LighterConnectorTests
         var responses = new List<(string content, HttpStatusCode status)>();
         responses.Add((ethAtBaseline, HttpStatusCode.OK)); // baseline
         for (int i = 0; i < 10; i++)
+        {
             responses.Add(i % 2 == 0
                 ? (noEthJson, HttpStatusCode.OK)
                 : (ethAtBaseline, HttpStatusCode.OK));
+        }
         responses.Add(("{}", HttpStatusCode.InternalServerError)); // grace check — 500
 
         var handler = new SequentialStatusHttpMessageHandler(responses);
