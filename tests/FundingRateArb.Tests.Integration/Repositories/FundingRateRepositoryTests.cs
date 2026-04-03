@@ -79,6 +79,34 @@ public class FundingRateRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task GetLatestPerExchangePerAsset_ReturnsMarkPriceAndRatePerHour()
+    {
+        // Arrange
+        var snapshot = new FundingRateSnapshot
+        {
+            ExchangeId = _fixture.TestExchange.Id,
+            AssetId = _fixture.TestAsset.Id,
+            RatePerHour = 0.0005m,
+            RawRate = 0.0005m,
+            MarkPrice = 65_000m,
+            IndexPrice = 64_990m,
+            Volume24hUsd = 1_000_000m,
+            RecordedAt = DateTime.UtcNow
+        };
+
+        _fixture.UnitOfWork.FundingRates.Add(snapshot);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.FundingRates.GetLatestPerExchangePerAssetAsync();
+
+        // Assert
+        results.Should().ContainSingle();
+        results[0].MarkPrice.Should().Be(65_000m);
+        results[0].RatePerHour.Should().Be(0.0005m);
+    }
+
+    [Fact]
     public async Task GetHistory_FiltersCorrectDateRange()
     {
         // Arrange

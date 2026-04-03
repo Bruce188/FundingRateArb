@@ -27,7 +27,8 @@ public class FundingRateSnapshotConfiguration : IEntityTypeConfiguration<Funding
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasIndex(f => new { f.ExchangeId, f.AssetId, f.RecordedAt })
-            .HasDatabaseName("IX_FundingRateSnapshots_Exchange_Asset_RecordedAt")
-            .IsDescending(false, false, true);
+            .HasDatabaseName("IX_FundingRateSnapshots_Exchange_Asset_Recorded")
+            .IsDescending(false, false, true)
+            .IncludeProperties(f => new { f.MarkPrice, f.RatePerHour });
     }
 }
