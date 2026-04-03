@@ -83,8 +83,8 @@ public class BotOrchestratorTests
         _mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
 
-        // Default mock for EmergencyClosed count (used in dashboard KPI)
-        _mockPositionRepo.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+        // Default mock for needs-attention count (used in dashboard KPI)
+        _mockPositionRepo.Setup(p => p.CountByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(0);
 
         // Default: enable test user for the multi-user loop

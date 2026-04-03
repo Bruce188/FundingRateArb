@@ -69,9 +69,21 @@ public interface IPositionVerifiable
     Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default);
 
     /// <summary>
+    /// Captures a snapshot of current position sizes, keyed by (Symbol, Side).
+    /// Used as a baseline before placing orders so that CheckPositionExistsAsync can
+    /// distinguish new positions from pre-existing ones.
+    /// </summary>
+    Task<IReadOnlyDictionary<(string Symbol, string Side), decimal>?> CapturePositionSnapshotAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyDictionary<(string Symbol, string Side), decimal>?>(null);
+
+    /// <summary>
     /// Single read-only check whether a position exists on the exchange for the given asset and side.
+    /// When baseline is provided, returns true only if the position size increased vs baseline
+    /// (indicating a new position was opened, not a pre-existing one).
     /// Returns true if found, false if not found, null if the check could not be performed.
     /// </summary>
-    Task<bool?> CheckPositionExistsAsync(string asset, Side side, CancellationToken ct = default)
+    Task<bool?> CheckPositionExistsAsync(string asset, Side side,
+        IReadOnlyDictionary<(string Symbol, string Side), decimal>? baseline = null,
+        CancellationToken ct = default)
         => Task.FromResult<bool?>(null);
 }

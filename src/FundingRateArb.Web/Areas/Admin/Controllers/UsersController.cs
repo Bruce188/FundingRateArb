@@ -102,8 +102,8 @@ public class UsersController : Controller
             await _userManager.AddToRolesAsync(user, filteredRoles);
         }
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser} — roles changed from [{OldRoles}] to [{NewRoles}]",
-            "RoleChanged", "User", model.UserId, User.Identity?.Name ?? "unknown",
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId} — roles changed from [{OldRoles}] to [{NewRoles}]",
+            "RoleChanged", "User", model.UserId, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown",
             string.Join(", ", currentRoles), string.Join(", ", filteredRoles));
 
         TempData["Success"] = $"Role updated for {user.Email}.";

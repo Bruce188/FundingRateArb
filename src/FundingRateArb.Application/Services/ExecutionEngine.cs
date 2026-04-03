@@ -251,6 +251,20 @@ public class ExecutionEngine : IExecutionEngine
                     ? (longConnector, Side.Long, opp.LongExchangeName, shortConnector, Side.Short, opp.ShortExchangeName)
                     : (shortConnector, Side.Short, opp.ShortExchangeName, longConnector, Side.Long, opp.LongExchangeName);
 
+                // Capture position baseline before placing order so CheckPositionExistsAsync
+                // can distinguish new positions from pre-existing ones
+                IReadOnlyDictionary<(string Symbol, string Side), decimal>? positionBaseline = null;
+                if (firstConnector is IPositionVerifiable baselineVerifiable)
+                {
+                    positionBaseline = await baselineVerifiable.CapturePositionSnapshotAsync(ct);
+                    if (positionBaseline is null)
+                    {
+                        _logger.LogWarning(
+                            "Could not capture position baseline for {Asset} on {Exchange} — existence check will use no-baseline fallback",
+                            opp.AssetSymbol, firstExchangeName);
+                    }
+                }
+
                 // Open first leg (with 45-second timeout)
                 OrderResultDto firstResult;
                 try
@@ -302,8 +316,8 @@ public class ExecutionEngine : IExecutionEngine
                         _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — performing final existence check",
                             opp.AssetSymbol, firstExchangeName);
 
-                        // One final read-only check before giving up
-                        var positionExists = await verifiable.CheckPositionExistsAsync(opp.AssetSymbol, firstSide, ct);
+                        // One final read-only check before giving up — pass baseline to detect pre-existing positions
+                        var positionExists = await verifiable.CheckPositionExistsAsync(opp.AssetSymbol, firstSide, positionBaseline, ct);
 
                         if (positionExists == true)
                         {

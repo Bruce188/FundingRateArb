@@ -146,10 +146,14 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
                 var unrealizedPnl = longPnl + shortPnl;
 
+                // Calculate liquidation prices and distance
+                var minLiquidationDistance = ComputeLiquidationDistance(
+                    pos, currentLongMark, currentShortMark);
+
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
-                // Determine close reason (priority: stop-loss > PnL target > max hold > spread collapsed)
-                var reason = DetermineCloseReason(pos, config, unrealizedPnl, hoursOpen, spread);
+                // Determine close reason (priority: stop-loss > liquidation > PnL target > max hold > spread collapsed)
+                var reason = DetermineCloseReason(pos, config, unrealizedPnl, hoursOpen, spread, minLiquidationDistance);
 
                 if (reason.HasValue)
                 {
@@ -162,6 +166,27 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
                     toClose.Add((pos, reason.Value));
                     continue; // skip alert check — position will be closed
+                }
+
+                // Liquidation early warning at 2x threshold
+                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationWarningPct * 2m)
+                {
+                    var recentLiqAlert = await _uow.Alerts.GetRecentAsync(
+                        pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(1));
+
+                    if (recentLiqAlert is null)
+                    {
+                        _uow.Alerts.Add(new Alert
+                        {
+                            UserId = pos.UserId,
+                            ArbitragePositionId = pos.Id,
+                            Type = AlertType.MarginWarning,
+                            Severity = AlertSeverity.Warning,
+                            Message = $"Liquidation warning: {assetSymbol} " +
+                                      $"{longExchangeName}/{shortExchangeName} " +
+                                      $"distance={minLiquidationDistance.Value:P1} (threshold={config.LiquidationWarningPct:P1})",
+                        });
+                    }
                 }
 
                 // Alert if spread below alert threshold (but above close threshold)
@@ -347,12 +372,18 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     public static CloseReason? DetermineCloseReason(
         ArbitragePosition pos, BotConfiguration config,
-        decimal unrealizedPnl, decimal hoursOpen, decimal spread)
+        decimal unrealizedPnl, decimal hoursOpen, decimal spread,
+        decimal? minLiquidationDistance = null)
     {
-        // Priority: StopLoss > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
+        // Priority: StopLoss > LiquidationRisk > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
         {
             return CloseReason.StopLoss;
+        }
+
+        if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationWarningPct)
+        {
+            return CloseReason.LiquidationRisk;
         }
 
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
@@ -394,6 +425,42 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Calculates liquidation prices for both legs and returns the minimum distance
+    /// as a fraction (0.0 = at liquidation, 1.0 = 100% distance from liquidation).
+    /// Updates LongLiquidationPrice and ShortLiquidationPrice on the position.
+    /// Returns null if leverage is zero or entry prices are invalid.
+    /// </summary>
+    public static decimal? ComputeLiquidationDistance(
+        ArbitragePosition pos, decimal currentLongMark, decimal currentShortMark)
+    {
+        if (pos.Leverage <= 0 || pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
+        {
+            return null;
+        }
+
+        // Long liquidation: price drops to entry * (1 - 1/leverage)
+        var longLiqPrice = pos.LongEntryPrice * (1m - 1m / pos.Leverage);
+        // Short liquidation: price rises to entry * (1 + 1/leverage)
+        var shortLiqPrice = pos.ShortEntryPrice * (1m + 1m / pos.Leverage);
+
+        pos.LongLiquidationPrice = longLiqPrice;
+        pos.ShortLiquidationPrice = shortLiqPrice;
+
+        // Distance from current mark to liquidation as fraction of entry-to-liquidation range
+        var longRange = pos.LongEntryPrice - longLiqPrice;
+        var shortRange = shortLiqPrice - pos.ShortEntryPrice;
+
+        var longDistance = longRange > 0
+            ? (currentLongMark - longLiqPrice) / longRange
+            : decimal.MaxValue;
+        var shortDistance = shortRange > 0
+            ? (shortLiqPrice - currentShortMark) / shortRange
+            : decimal.MaxValue;
+
+        return Math.Min(longDistance, shortDistance);
     }
 
     /// <summary>

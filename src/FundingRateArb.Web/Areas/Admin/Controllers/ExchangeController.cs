@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
@@ -71,8 +72,8 @@ public class ExchangeController : Controller
         await _uow.SaveAsync();
         _uow.Exchanges.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            "Created", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            "Created", "Exchange", exchange.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         TempData["Success"] = $"Exchange '{exchange.Name}' created successfully.";
         return RedirectToAction(nameof(Index));
@@ -147,8 +148,8 @@ public class ExchangeController : Controller
         await _uow.SaveAsync();
         _uow.Exchanges.InvalidateCache();
 
-        _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-            "Updated", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
+        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+            "Updated", "Exchange", exchange.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
 
         TempData["Success"] = $"Exchange '{exchange.Name}' updated successfully.";
         return RedirectToAction(nameof(Index));
@@ -180,8 +181,8 @@ public class ExchangeController : Controller
             await _uow.SaveAsync();
             _uow.Exchanges.InvalidateCache();
 
-            _logger.LogInformation("Admin {Action}: {EntityType} {EntityId} by {AdminUser}",
-                "Deleted", "Exchange", exchange.Id, User.Identity?.Name ?? "unknown");
+            _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
+                "Deleted", "Exchange", exchange.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
         }
         catch (Microsoft.EntityFrameworkCore.DbUpdateException)
         {

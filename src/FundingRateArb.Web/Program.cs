@@ -398,6 +398,12 @@ try
             opt.PermitLimit = 200;
             opt.QueueLimit = 0;
         });
+        options.AddFixedWindowLimiter("diagnostics-write", opt =>
+        {
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.PermitLimit = 5;
+            opt.QueueLimit = 0;
+        });
     });
 
     // --- Background Services ---
@@ -407,6 +413,7 @@ try
     builder.Services.AddSingleton<BotOrchestrator>();
     builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());
+    builder.Services.AddSingleton<IBotDiagnostics>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
 
     // --- MVC ---
