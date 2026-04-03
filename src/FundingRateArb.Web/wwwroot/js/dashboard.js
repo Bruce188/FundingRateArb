@@ -231,10 +231,13 @@
             positionCard.remove();
         }
 
-        // Hide section if no positions remain
+        // Hide section if no positions remain (check both table and cards)
         var posTable = document.getElementById("positions-table");
         var tbody = posTable ? posTable.querySelector("tbody") : null;
-        if (tbody && tbody.children.length === 0) {
+        var cardsContainer = document.getElementById("positions-cards");
+        var tableEmpty = !tbody || tbody.children.length === 0;
+        var cardsEmpty = !cardsContainer || cardsContainer.children.length === 0;
+        if (tableEmpty && cardsEmpty) {
             var section = document.getElementById("positions-section");
             if (section) {
                 section.classList.add("d-none");

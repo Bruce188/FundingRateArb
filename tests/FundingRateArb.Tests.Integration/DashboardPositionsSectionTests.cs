@@ -67,6 +67,10 @@ public class DashboardPositionsSectionTests : IClassFixture<DashboardPositionsSe
             "positions cards should always be in DOM for authenticated users");
         html.Should().Contain("id=\"positions-empty\"",
             "empty-state placeholder should be present when no positions exist");
+
+        // Section must be hidden (d-none) when there are zero positions
+        html.Should().Match("*id=\"positions-section\"*d-none*",
+            "positions section must have d-none class when there are zero positions");
     }
 
     public void Dispose()
