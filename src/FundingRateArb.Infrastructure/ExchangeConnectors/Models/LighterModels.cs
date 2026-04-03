@@ -167,6 +167,12 @@ public class LighterOrderBookDetail
     [JsonPropertyName("last_trade_price")]
     public decimal LastTradePrice { get; set; }
 
+    [JsonPropertyName("best_bid")]
+    public decimal BestBid { get; set; }
+
+    [JsonPropertyName("best_ask")]
+    public decimal BestAsk { get; set; }
+
     [JsonPropertyName("default_initial_margin_fraction")]
     public int DefaultInitialMarginFraction { get; set; }
 
@@ -221,6 +227,48 @@ public class LighterNonceResponse
 
     [JsonPropertyName("nonce")]
     public int Nonce { get; set; }
+}
+
+// ── TX Status API model (/api/v1/tx) ──
+
+/// <summary>
+/// Response from GET /api/v1/tx?hash={txHash}.
+/// Status codes: 0=Failed, 1=Pending, 2=Executed.
+/// </summary>
+public class LighterTxStatusResponse
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("status")]
+    public int Status { get; set; }
+}
+
+// ── Inactive Orders API model (/api/v1/accountInactiveOrders) ──
+
+/// <summary>
+/// A single inactive order from /api/v1/accountInactiveOrders.
+/// </summary>
+public class LighterInactiveOrder
+{
+    [JsonPropertyName("market_id")]
+    public int MarketId { get; set; }
+
+    [JsonPropertyName("cancel_reason")]
+    public int CancelReason { get; set; }
+}
+
+/// <summary>
+/// Response from GET /api/v1/accountInactiveOrders.
+/// Cancellation codes: 8=Margin, 9=Slippage, 10=Liquidity, 16=Balance.
+/// </summary>
+public class LighterInactiveOrdersResponse
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("inactive_orders")]
+    public List<LighterInactiveOrder>? InactiveOrders { get; set; }
 }
 
 // ── Send Transaction API model (/api/v1/sendTx) ──

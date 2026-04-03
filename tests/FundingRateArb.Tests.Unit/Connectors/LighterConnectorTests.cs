@@ -1094,6 +1094,149 @@ public class LighterConnectorTests
             Times.AtLeastOnce);
     }
 
+    // ── TX Status Polling Tests ────────────────────────────────────────────
+
+    [Fact]
+    public async Task CheckTxStatus_Status0_ReturnsFailed()
+    {
+        // Status 0 = Failed → should return (false, 0) immediately
+        var txStatusJson = """{"code": 200, "status": 0}""";
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("tx?hash=", txStatusJson);
+        });
+
+        var (succeeded, status) = await sut.CheckTxStatusAsync("0xabc123", CancellationToken.None);
+
+        succeeded.Should().BeFalse("tx status 0 means the order failed");
+        status.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CheckTxStatus_Status2_ReturnsExecuted()
+    {
+        // Status 2 = Executed → should return (true, 2)
+        var txStatusJson = """{"code": 200, "status": 2}""";
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("tx?hash=", txStatusJson);
+        });
+
+        var (succeeded, status) = await sut.CheckTxStatusAsync("0xabc123", CancellationToken.None);
+
+        succeeded.Should().BeTrue("tx status 2 means the order executed");
+        status.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CheckTxStatus_Status1After3Polls_ReturnsPending()
+    {
+        // Status 1 = Pending after 3 polls → should return (true, 1) — treat as likely executing
+        var pendingJson = """{"code": 200, "status": 1}""";
+        var handler = new CountingHttpMessageHandler(pendingJson);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var (succeeded, status) = await sut.CheckTxStatusAsync("0xabc123", CancellationToken.None);
+
+        succeeded.Should().BeTrue("status 1 after 3 polls means pending — proceed to position verification");
+        status.Should().Be(1);
+        handler.CallCount.Should().Be(3, "should poll 3 times for pending status");
+    }
+
+    [Fact]
+    public async Task CheckTxStatus_ApiError_ReturnsNull()
+    {
+        // API error (e.g., 500 or endpoint not found) → should return (true, -1) as fallback
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("tx?hash=", "Not Found", System.Net.HttpStatusCode.NotFound);
+        });
+
+        var (succeeded, status) = await sut.CheckTxStatusAsync("0xabc123", CancellationToken.None);
+
+        succeeded.Should().BeTrue("API error should fall back to position verification");
+        status.Should().Be(-1, "status -1 signals fallback");
+    }
+
+    [Fact]
+    public async Task GetCancellationReasonAsync_ReturnsReasonString()
+    {
+        // Cancellation code 9 = Slippage
+        var inactiveOrdersJson = """
+            {
+                "code": 200,
+                "inactive_orders": [
+                    { "market_id": 0, "cancel_reason": 9 }
+                ]
+            }
+            """;
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("accountInactiveOrders", inactiveOrdersJson);
+        });
+
+        var reason = await sut.GetCancellationReasonAsync(0, CancellationToken.None);
+
+        reason.Should().Contain("Slippage", "cancel_reason 9 should decode to Slippage");
+    }
+
+    // ── Adaptive Slippage Tests ────────────────────────────────────────────
+
+    [Fact]
+    public void GetSlippagePct_TightSpread_ReturnsFloor()
+    {
+        // Best bid=3500, ask=3501 → spread = (3501-3500)/3500 = 0.0286% → tight → 0.5%
+        var result = LighterConnector.ComputeSlippagePct(3500m, 3501m);
+        result.Should().Be(0.005m, "tight spread should return 0.5% floor");
+    }
+
+    [Fact]
+    public void GetSlippagePct_WideSpread_ReturnsDoubleSpread()
+    {
+        // Best bid=3500, ask=3510 → spread = 10/3500 = 0.2857% → wide (>=0.2%)
+        // max(0.5%, 0.002857 * 2) = max(0.005, 0.005714) = 0.005714
+        var result = LighterConnector.ComputeSlippagePct(3500m, 3510m);
+        result.Should().BeGreaterThan(0.005m, "wide spread should return more than 0.5%");
+        result.Should().BeLessThanOrEqualTo(0.02m, "should be capped at 2%");
+    }
+
+    [Fact]
+    public void GetSlippagePct_VeryWideSpread_CapsAt2Percent()
+    {
+        // Best bid=3500, ask=3600 → spread = 100/3500 = 2.857% → spread*2 = 5.71% → cap at 2%
+        var result = LighterConnector.ComputeSlippagePct(3500m, 3600m);
+        result.Should().Be(0.02m, "very wide spread should be capped at 2%");
+    }
+
+    [Fact]
+    public void GetSlippagePct_ZeroBid_ReturnsDefault()
+    {
+        // Invalid bid → fallback to 0.5%
+        var result = LighterConnector.ComputeSlippagePct(0m, 3500m);
+        result.Should().Be(0.005m, "zero bid should fall back to 0.5%");
+    }
+
+    [Fact]
+    public void GetSlippagePct_ZeroAsk_ReturnsDefault()
+    {
+        // Invalid ask → fallback to 0.5%
+        var result = LighterConnector.ComputeSlippagePct(3500m, 0m);
+        result.Should().Be(0.005m, "zero ask should fall back to 0.5%");
+    }
+
+    [Fact]
+    public void GetSlippagePct_EqualBidAsk_ReturnsFloor()
+    {
+        // Same bid/ask → spread is 0 → 0.5%
+        var result = LighterConnector.ComputeSlippagePct(3500m, 3500m);
+        result.Should().Be(0.005m, "zero spread should return 0.5% floor");
+    }
+
     // ── B5: Baseline snapshot tests ──────────────────────────────────────────
 
     private static string MakeAccountJson(decimal? ethSize)
