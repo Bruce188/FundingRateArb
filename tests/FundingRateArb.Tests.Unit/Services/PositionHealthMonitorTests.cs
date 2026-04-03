@@ -1824,9 +1824,14 @@ public class PositionHealthMonitorTests
 
         pos.Status.Should().Be(PositionStatus.EmergencyClosed);
         pos.CloseReason.Should().Be(CloseReason.ExchangeDrift);
+        pos.LongLegClosed.Should().BeTrue("long leg should be flagged as closed before ClosePositionAsync");
+        pos.ShortLegClosed.Should().BeFalse("short leg should not be flagged");
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
             al => al.Severity == AlertSeverity.Critical && al.Message.Contains("long leg missing"))), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -1842,8 +1847,31 @@ public class PositionHealthMonitorTests
 
         pos.Status.Should().Be(PositionStatus.EmergencyClosed);
         pos.CloseReason.Should().Be(CloseReason.ExchangeDrift);
+        pos.ShortLegClosed.Should().BeTrue("short leg should be flagged as closed before ClosePositionAsync");
+        pos.LongLegClosed.Should().BeFalse("long leg should not be flagged");
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
             al => al.Severity == AlertSeverity.Critical && al.Message.Contains("short leg missing"))), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileOpenPositions_WhenBothMissing_DoesNotCallClosePositionAsync()
+    {
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionsExistOnExchangesBatchAsync(It.IsAny<IReadOnlyList<ArbitragePosition>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<int, PositionExistsResult> { { pos.Id, PositionExistsResult.BothMissing } });
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.LongLegClosed.Should().BeFalse("no leg flags set for both-missing case");
+        pos.ShortLegClosed.Should().BeFalse("no leg flags set for both-missing case");
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), It.IsAny<CloseReason>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }
