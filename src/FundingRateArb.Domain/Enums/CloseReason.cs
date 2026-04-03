@@ -9,5 +9,8 @@ public enum CloseReason
     Rebalanced,
     Manual,
     EmergencyLegFailed,
-    PriceFeedLost
+    PriceFeedLost,
+    ExchangeDrift,
+    LiquidationRisk,
+    Rotation
 }

@@ -30,6 +30,9 @@ public class ArbitragePosition
     public bool LongLegClosed { get; set; }
     public bool ShortLegClosed { get; set; }
 
+    /// <summary>True if this position was opened in dry-run (paper trading) mode.</summary>
+    public bool IsDryRun { get; set; }
+
     [MaxLength(200)]
     public string? LongOrderId { get; set; }
 

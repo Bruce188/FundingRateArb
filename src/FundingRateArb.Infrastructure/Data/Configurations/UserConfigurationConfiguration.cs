@@ -24,6 +24,7 @@ public class UserConfigurationConfiguration : IEntityTypeConfiguration<UserConfi
         builder.Property(c => c.DailyDrawdownPausePct).HasColumnType("decimal(18,4)");
         builder.Property(c => c.MaxExposurePerAsset).HasColumnType("decimal(18,4)");
         builder.Property(c => c.MaxExposurePerExchange).HasColumnType("decimal(18,4)");
+        builder.Property(c => c.RotationThresholdPerHour).HasColumnType("decimal(18,10)");
 
         builder.HasIndex(c => c.UserId).IsUnique();
 

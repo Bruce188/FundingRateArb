@@ -27,6 +27,17 @@ public class UserConfiguration
     public int FundingWindowMinutes { get; set; } = 10;
     public decimal MaxExposurePerAsset { get; set; } = 0.5m;
     public decimal MaxExposurePerExchange { get; set; } = 0.7m;
+    public bool DryRunEnabled { get; set; }
+
+    /// <summary>Minimum spread/hr improvement over current position to justify rotation.</summary>
+    public decimal RotationThresholdPerHour { get; set; } = 0.0003m;
+
+    /// <summary>Minimum minutes a position must be held before rotation is considered.</summary>
+    public int MinHoldBeforeRotationMinutes { get; set; } = 30;
+
+    /// <summary>Maximum position rotations per day to prevent churning.</summary>
+    public int MaxRotationsPerDay { get; set; } = 5;
+
     public bool EmailNotificationsEnabled { get; set; }
     public bool EmailCriticalAlerts { get; set; }
     public bool EmailDailySummary { get; set; }

@@ -123,6 +123,13 @@ public class BotConfiguration
     [Range(0.1, 0.9)]
     public decimal LiquidationWarningPct { get; set; } = 0.50m;
 
+    /// <summary>Number of bot cycles between exchange position reconciliation checks.</summary>
+    [Range(1, 100)]
+    public int ReconciliationIntervalCycles { get; set; } = 10;
+
+    /// <summary>Enable dry-run (paper trading) mode globally.</summary>
+    public bool DryRunEnabled { get; set; }
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }
