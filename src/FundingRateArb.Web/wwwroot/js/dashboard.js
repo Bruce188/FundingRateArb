@@ -195,8 +195,16 @@
             // NB6: Dedup guard — re-check after creation race
             if (document.getElementById("position-" + safeId)) return;
 
-            // New position — create DOM elements
-            // B1: Use positions-table ID to target the correct table
+            // New position — reveal section if hidden and create DOM elements
+            var section = document.getElementById("positions-section");
+            if (section) {
+                section.classList.remove("d-none");
+            }
+            var emptyMsg = document.getElementById("positions-empty");
+            if (emptyMsg) {
+                emptyMsg.classList.add("d-none");
+            }
+
             var posTable = document.getElementById("positions-table");
             var tbody = posTable ? posTable.querySelector("tbody") : null;
             if (tbody) {
@@ -221,6 +229,23 @@
         var positionCard = document.getElementById("position-card-" + parsedId);
         if (positionCard) {
             positionCard.remove();
+        }
+
+        // Hide section if no positions remain (check both table and cards)
+        var posTable = document.getElementById("positions-table");
+        var tbody = posTable ? posTable.querySelector("tbody") : null;
+        var cardsContainer = document.getElementById("positions-cards");
+        var tableEmpty = !tbody || tbody.children.length === 0;
+        var cardsEmpty = !cardsContainer || cardsContainer.children.length === 0;
+        if (tableEmpty && cardsEmpty) {
+            var section = document.getElementById("positions-section");
+            if (section) {
+                section.classList.add("d-none");
+            }
+            var emptyMsg = document.getElementById("positions-empty");
+            if (emptyMsg) {
+                emptyMsg.classList.remove("d-none");
+            }
         }
         // Open position count is updated authoritatively by ReceiveDashboardUpdate
     });
