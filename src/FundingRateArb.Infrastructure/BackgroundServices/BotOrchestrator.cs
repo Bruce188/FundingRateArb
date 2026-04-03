@@ -146,13 +146,15 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     private void IncrementAssetExchangeFailure(int assetId, int exchangeId)
     {
+        var now = DateTime.UtcNow;
+        var cooldownUntil = now.Add(AssetCooldownDuration);
         _assetExchangeCooldowns.AddOrUpdate(
             (assetId, exchangeId),
-            _ => (1, 1 >= AssetCooldownThreshold ? DateTime.UtcNow.Add(AssetCooldownDuration) : DateTime.MinValue),
+            _ => (1, 1 >= AssetCooldownThreshold ? cooldownUntil : DateTime.MinValue),
             (_, current) =>
             {
                 var f = current.Failures + 1;
-                return (f, f >= AssetCooldownThreshold ? DateTime.UtcNow.Add(AssetCooldownDuration) : current.CooldownUntil);
+                return (f, f >= AssetCooldownThreshold ? cooldownUntil : current.CooldownUntil);
             });
     }
 
@@ -218,14 +220,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _failedOpCooldowns.TryRemove(key, out _);
         }
 
-        // Sweep expired asset-exchange cooldowns
-        var expiredAssetCooldowns = _assetExchangeCooldowns
-            .Where(kvp => kvp.Value.CooldownUntil < DateTime.UtcNow && kvp.Value.CooldownUntil != DateTime.MinValue)
-            .Select(kvp => kvp.Key)
-            .ToList();
-        foreach (var key in expiredAssetCooldowns)
+        // Sweep expired asset-exchange cooldowns.
+        // Pre-threshold entries (CooldownUntil == DateTime.MinValue) are bounded by
+        // the finite set of (asset, exchange) pairs and cleaned on successful opens.
+        if (!_assetExchangeCooldowns.IsEmpty)
         {
-            _assetExchangeCooldowns.TryRemove(key, out _);
+            var now = DateTime.UtcNow;
+            var expiredAssetCooldowns = _assetExchangeCooldowns
+                .Where(kvp => kvp.Value.CooldownUntil != DateTime.MinValue && kvp.Value.CooldownUntil < now)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            foreach (var key in expiredAssetCooldowns)
+            {
+                _assetExchangeCooldowns.TryRemove(key, out _);
+            }
         }
 
         using var scope = _scopeFactory.CreateScope();

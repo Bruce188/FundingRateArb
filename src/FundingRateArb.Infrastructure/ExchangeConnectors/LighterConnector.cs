@@ -312,11 +312,20 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     {
         try
         {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
             var accountIndex = GetAccountIndex();
-            var accountResponse = await GetAccountAsync(accountIndex, ct);
+            var accountResponse = await GetAccountAsync(accountIndex, cts.Token);
             var account = accountResponse?.Accounts?.FirstOrDefault();
 
-            if (account?.Positions is null)
+            if (account is null)
+            {
+                _logger.LogWarning("Account not found on Lighter when checking position existence for {Asset}", asset);
+                return null;
+            }
+
+            if (account.Positions is null)
             {
                 return false;
             }

@@ -2156,8 +2156,8 @@ public class BotOrchestratorTests
         _sut.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
 
         // Asset 2 on exchange 1 should NOT be cooled down
-        _sut.AssetExchangeCooldowns.TryGetValue((2, 1), out var cooldown);
-        cooldown.Failures.Should().Be(0, "asset-level cooldown should not affect other assets on the same exchange");
+        _sut.AssetExchangeCooldowns.Should().NotContainKey((2, 1),
+            "asset-level cooldown should not affect other assets on the same exchange");
     }
 
     [Fact]
