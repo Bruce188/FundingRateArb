@@ -56,8 +56,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
     };
 
-    /// <summary>Slippage tolerance for market orders (0.5%).</summary>
-    private const decimal SlippagePct = 0.005m;
+    /// <summary>Default slippage tolerance for market orders (0.5%).</summary>
+    private const decimal DefaultSlippagePct = 0.005m;
+
+    /// <summary>Maximum slippage tolerance (2%).</summary>
+    private const decimal MaxSlippagePct = 0.02m;
 
     public LighterConnector(
         HttpClient httpClient,
@@ -237,6 +240,48 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             "Position verification FAILED after {Max} polls + grace check: asset={Asset} side={Side} accountIndex={AccountIndex}",
             maxAttempts, asset, side, accountIndex);
         return false;
+    }
+
+    /// <summary>
+    /// Computes adaptive slippage based on the bid-ask spread.
+    /// Floor: 0.5% (DefaultSlippagePct). Cap: 2% (MaxSlippagePct).
+    /// For wide spreads (>= 0.2%): max(0.5%, spread * 2) capped at 2%.
+    /// Falls back to 0.5% if bid or ask is zero/invalid.
+    /// </summary>
+    internal static decimal ComputeSlippagePct(decimal bestBid, decimal bestAsk)
+    {
+        if (bestBid <= 0 || bestAsk <= 0 || bestBid >= bestAsk)
+        {
+            return DefaultSlippagePct;
+        }
+
+        var spread = (bestAsk - bestBid) / bestBid;
+
+        // Tight spread (< 0.2%) → use floor
+        if (spread < 0.002m)
+        {
+            return DefaultSlippagePct;
+        }
+
+        // Wide spread → max(floor, spread * 2) capped at MaxSlippagePct
+        var adaptive = Math.Max(DefaultSlippagePct, spread * 2m);
+        return Math.Min(adaptive, MaxSlippagePct);
+    }
+
+    /// <summary>
+    /// Gets the per-market slippage percentage from cached market data.
+    /// Falls back to DefaultSlippagePct if bid/ask data is unavailable.
+    /// </summary>
+    private decimal GetSlippagePct(LighterOrderBookDetail market)
+    {
+        var slippage = ComputeSlippagePct(market.BestBid, market.BestAsk);
+        if (slippage != DefaultSlippagePct)
+        {
+            _logger.LogDebug(
+                "Adaptive slippage for {Symbol}: {Slippage}% (bid={Bid} ask={Ask})",
+                market.Symbol, slippage * 100, market.BestBid, market.BestAsk);
+        }
+        return slippage;
     }
 
     /// <summary>
@@ -692,19 +737,20 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
             }
 
-            // 5. Calculate price in Lighter integer format with slippage
+            // 5. Calculate price in Lighter integer format with adaptive slippage
+            var slippagePct = GetSlippagePct(market);
             var priceMultiplier = (long)Math.Pow(10, market.PriceDecimals);
             bool isAsk = side == Side.Short;
             long priceInt;
             if (isAsk)
             {
                 // Selling: accept slightly lower price
-                priceInt = (long)(markPrice * (1m - SlippagePct) * priceMultiplier);
+                priceInt = (long)(markPrice * (1m - slippagePct) * priceMultiplier);
             }
             else
             {
                 // Buying: accept slightly higher price
-                priceInt = (long)(markPrice * (1m + SlippagePct) * priceMultiplier);
+                priceInt = (long)(markPrice * (1m + slippagePct) * priceMultiplier);
             }
 
             // Bounds check: native signer's SignCreateOrder takes int price
@@ -733,21 +779,48 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             {
                 _logger.LogInformation(
                     "Lighter order params: {Asset} {Side} baseAmount={BaseAmount} priceInt={PriceInt} slippage={Slippage}% markPrice={MarkPrice} notional={Notional}",
-                    asset, side, baseAmount, priceInt, SlippagePct * 100, markPrice, notional);
+                    asset, side, baseAmount, priceInt, slippagePct * 100, markPrice, notional);
             }
 
             // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);
             Volatile.Write(ref _lastPredictedSettlementMs, sendResult.PredictedExecutionTimeMs);
 
+            var effectiveTxHash = sendResult.TxHash ?? txHash;
+
             _logger.LogInformation(
                 "Order placed on Lighter: txHash={TxHash} market={Asset} side={Side}",
-                sendResult.TxHash ?? txHash, asset, side);
+                effectiveTxHash, asset, side);
+
+            // 8. Check tx status — early-exit if the order failed on-chain
+            if (!string.IsNullOrEmpty(effectiveTxHash))
+            {
+                var (proceed, txStatus) = await CheckTxStatusAsync(effectiveTxHash, ct);
+                if (!proceed)
+                {
+                    // TX failed — look up cancellation reason for diagnostics
+                    var reason = await GetCancellationReasonAsync(market.MarketId, ct);
+                    var errorMsg = reason is not null
+                        ? $"Order failed on-chain: {reason} (txHash={effectiveTxHash})"
+                        : $"Order failed on-chain (txHash={effectiveTxHash})";
+
+                    _logger.LogWarning(
+                        "Order failed on Lighter: txHash={TxHash} reason={Reason}",
+                        effectiveTxHash, reason ?? "unknown");
+
+                    return new OrderResultDto
+                    {
+                        Success = false,
+                        OrderId = effectiveTxHash,
+                        Error = errorMsg
+                    };
+                }
+            }
 
             return new OrderResultDto
             {
                 Success = true,
-                OrderId = sendResult.TxHash ?? txHash,
+                OrderId = effectiveTxHash,
                 FilledPrice = markPrice,
                 FilledQuantity = baseReal,
                 IsEstimatedFill = true,
@@ -855,16 +928,17 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             // 3. To close: reverse the side (Long->Sell, Short->Buy)
             bool isAsk = side == Side.Long;
 
-            // 4. Calculate price with slippage
+            // 4. Calculate price with adaptive slippage
+            var slippagePct = GetSlippagePct(market);
             var priceMultiplier = (long)Math.Pow(10, market.PriceDecimals);
             long priceInt;
             if (isAsk)
             {
-                priceInt = (long)(markPrice * (1m - SlippagePct) * priceMultiplier);
+                priceInt = (long)(markPrice * (1m - slippagePct) * priceMultiplier);
             }
             else
             {
-                priceInt = (long)(markPrice * (1m + SlippagePct) * priceMultiplier);
+                priceInt = (long)(markPrice * (1m + slippagePct) * priceMultiplier);
             }
 
             // Bounds check: native signer's SignCreateOrder takes int price
@@ -1027,6 +1101,135 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             .ReadFromJsonAsync<LighterNonceResponse>(JsonOptions, ct);
 
         return nonceResponse?.Nonce ?? throw new InvalidOperationException("Failed to fetch nonce from Lighter");
+    }
+
+    /// <summary>
+    /// Polls the tx status endpoint up to 3 times (1-2s apart).
+    /// Returns (proceed, status) where:
+    ///   - proceed=false, status=0  → tx failed, abort immediately
+    ///   - proceed=true,  status=2  → tx executed, proceed to verification
+    ///   - proceed=true,  status=1  → still pending after 3 polls, proceed to verification
+    ///   - proceed=true,  status=-1 → API error/unavailable, fall back to verification
+    /// </summary>
+    internal async Task<(bool Proceed, int Status)> CheckTxStatusAsync(string txHash, CancellationToken ct)
+    {
+        const int maxPolls = 3;
+
+        for (int i = 0; i < maxPolls; i++)
+        {
+            if (i > 0)
+            {
+                await Task.Delay(i == 1 ? 1000 : 2000, ct);
+            }
+
+            try
+            {
+                var response = await _httpClient.GetAsync($"tx?hash={Uri.EscapeDataString(txHash)}", ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogDebug(
+                        "TX status check returned {StatusCode} for {TxHash} — falling back to position verification",
+                        (int)response.StatusCode, txHash);
+                    return (true, -1);
+                }
+
+                var txStatus = await response.Content.ReadFromJsonAsync<LighterTxStatusResponse>(JsonOptions, ct);
+                if (txStatus is null)
+                {
+                    _logger.LogDebug("TX status response was null for {TxHash} — falling back", txHash);
+                    return (true, -1);
+                }
+
+                switch (txStatus.Status)
+                {
+                    case 0: // Failed
+                        _logger.LogWarning(
+                            "TX status check: order FAILED for txHash={TxHash} (status=0)",
+                            txHash);
+                        return (false, 0);
+
+                    case 2: // Executed
+                        _logger.LogInformation(
+                            "TX status check: order EXECUTED for txHash={TxHash} (status=2)",
+                            txHash);
+                        return (true, 2);
+
+                    case 1: // Pending — continue polling
+                        _logger.LogDebug(
+                            "TX status check: PENDING for txHash={TxHash} (poll {Poll}/{Max})",
+                            txHash, i + 1, maxPolls);
+                        break;
+
+                    default:
+                        _logger.LogDebug(
+                            "TX status check: unknown status {Status} for txHash={TxHash} — falling back",
+                            txStatus.Status, txHash);
+                        return (true, -1);
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogDebug(ex,
+                    "TX status check failed for txHash={TxHash} — falling back to position verification",
+                    txHash);
+                return (true, -1);
+            }
+        }
+
+        // Still pending after all polls — proceed to position verification
+        _logger.LogInformation(
+            "TX status check: still PENDING after {Max} polls for txHash={TxHash} — proceeding to verification",
+            maxPolls, txHash);
+        return (true, 1);
+    }
+
+    /// <summary>
+    /// Fetches the cancellation reason for the most recent inactive order on the given market.
+    /// Fire-and-forget diagnostic — does not throw on failure.
+    /// Cancellation codes: 8=Margin, 9=Slippage, 10=Liquidity, 16=Balance.
+    /// </summary>
+    internal async Task<string?> GetCancellationReasonAsync(int marketId, CancellationToken ct)
+    {
+        try
+        {
+            var accountIndex = GetAccountIndex();
+            var response = await _httpClient.GetAsync(
+                $"accountInactiveOrders?account_index={accountIndex}", ct);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var result = await response.Content
+                .ReadFromJsonAsync<LighterInactiveOrdersResponse>(JsonOptions, ct);
+
+            // Last in API response order = most recent (Lighter returns in insertion order)
+            var order = result?.InactiveOrders?
+                .Where(o => o.MarketId == marketId)
+                .LastOrDefault();
+
+            if (order is null)
+            {
+                return null;
+            }
+
+            var reasonText = order.CancelReason switch
+            {
+                8 => "Margin insufficient",
+                9 => "Slippage tolerance exceeded",
+                10 => "Insufficient liquidity",
+                16 => "Balance insufficient",
+                _ => $"Unknown (code={order.CancelReason})"
+            };
+
+            return reasonText;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Failed to fetch cancellation reason for market {MarketId}", marketId);
+            return null;
+        }
     }
 
     /// <summary>
