@@ -1014,11 +1014,11 @@ public class ExecutionEngine : IExecutionEngine
     }
 
     // NB4: Concurrent callers may trigger redundant fetches on cache miss — accepted
-    // because duplicate writes produce the same value and the cost is bounded by the 5-minute TTL.
+    // because duplicate writes produce the same value and the cost is bounded by the 1-hour TTL.
     private async Task<int?> GetCachedMaxLeverageAsync(IExchangeConnector connector, string asset, CancellationToken ct)
     {
         var key = (connector.ExchangeName, asset);
-        if (_leverageCache.TryGetValue(key, out var cached) && cached.Fetched > DateTime.UtcNow.AddMinutes(-5))
+        if (_leverageCache.TryGetValue(key, out var cached) && cached.Fetched > DateTime.UtcNow.AddMinutes(-60))
         {
             return cached.MaxLeverage;
         }
