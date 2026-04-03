@@ -23,6 +23,9 @@ public interface IPositionRepository
 
     /// <summary>Returns a count of positions with the given status via SQL COUNT(*), without materializing entities.</summary>
     Task<int> CountByStatusAsync(PositionStatus status);
+
+    /// <summary>Returns a count of positions matching any of the given statuses via SQL COUNT(*).</summary>
+    Task<int> CountByStatusesAsync(params PositionStatus[] statuses);
     Task<List<ArbitragePosition>> GetByStatusesAsync(params PositionStatus[] statuses);
 
     /// <summary>Returns positions for a specific user with the given statuses. Pushes userId filter into SQL.</summary>

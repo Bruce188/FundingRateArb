@@ -64,6 +64,8 @@ public class DashboardControllerTests
             .ReturnsAsync([]);
         _mockPositionRepo.Setup(r => r.CountByStatusAsync(It.IsAny<PositionStatus>()))
             .ReturnsAsync(0);
+        _mockPositionRepo.Setup(r => r.CountByStatusesAsync(It.IsAny<PositionStatus[]>()))
+            .ReturnsAsync(0);
         _mockFundingRateRepo.Setup(r => r.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync([]);
         _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
@@ -662,11 +664,11 @@ public class DashboardControllerTests
     [Fact]
     public async Task Index_NonZeroOpeningAndEmergencyClosed_PopulatesViewModelCounts()
     {
-        // Arrange — CountByStatusAsync returns nonzero values
+        // Arrange — CountByStatusAsync/CountByStatusesAsync returns nonzero values
         _mockPositionRepo.Setup(r => r.CountByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(3);
-        _mockPositionRepo.Setup(r => r.CountByStatusAsync(PositionStatus.EmergencyClosed))
-            .ReturnsAsync(2);
+        _mockPositionRepo.Setup(r => r.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed))
+            .ReturnsAsync(5);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto());
 
@@ -677,7 +679,7 @@ public class DashboardControllerTests
         var viewResult = result.Should().BeOfType<ViewResult>().Subject;
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.OpeningPositionCount.Should().Be(3);
-        model.NeedsAttentionCount.Should().Be(2);
+        model.NeedsAttentionCount.Should().Be(5);
     }
 
     // ── NB4: Non-admin uses GetOpenByUserAsync ──────────────────────────

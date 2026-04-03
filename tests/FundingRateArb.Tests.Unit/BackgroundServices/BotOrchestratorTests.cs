@@ -110,8 +110,8 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>());
 
-        // Default mock for EmergencyClosed count query (used in dashboard KPI)
-        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+        // Default mock for needs-attention count query (used in dashboard KPI)
+        _mockPositions.Setup(p => p.CountByStatusesAsync(It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(0);
 
         // M12: Default mock for GetRecentUnreadAsync (returns empty list)
@@ -2054,22 +2054,22 @@ public class BotOrchestratorTests
             "Circuit-broken exchanges from margin error should block subsequent opens");
     }
 
-    // ── Dashboard EmergencyClosed count uses CountByStatusAsync ────────────────
+    // ── Dashboard needs-attention count uses CountByStatusesAsync ────────────────
 
     [Fact]
-    public async Task RunCycle_UsesCountByStatusForEmergencyClosedDashboardKpi()
+    public async Task RunCycle_UsesCountByStatusesForNeedsAttentionDashboardKpi()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto());
-        _mockPositions.Setup(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed))
+        _mockPositions.Setup(p => p.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed))
             .ReturnsAsync(3);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Verify CountByStatusAsync is used (not GetByStatusAsync) for EmergencyClosed count
-        _mockPositions.Verify(p => p.CountByStatusAsync(PositionStatus.EmergencyClosed), Times.Once);
+        // Verify CountByStatusesAsync is used with both EmergencyClosed and Failed
+        _mockPositions.Verify(p => p.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed), Times.Once);
         _mockPositions.Verify(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed), Times.Never);
         // Verify the count is passed to the dashboard update
         _mockGroupClient.Verify(c => c.ReceiveDashboardUpdate(

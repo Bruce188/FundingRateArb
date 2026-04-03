@@ -115,7 +115,7 @@ public class DashboardController : Controller
         }
 
         var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
-        var needsAttentionCount = await _uow.Positions.CountByStatusAsync(PositionStatus.EmergencyClosed);
+        var needsAttentionCount = await _uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
 
         var positionSummaries = openPositions.Select(p => new PositionSummaryDto
         {
