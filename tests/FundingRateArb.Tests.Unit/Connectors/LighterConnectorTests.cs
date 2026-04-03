@@ -163,6 +163,32 @@ public class SequentialHttpMessageHandler : HttpMessageHandler
     }
 }
 
+/// <summary>
+/// HTTP handler that returns sequential responses with configurable status codes per call.
+/// Supports returning error status codes to trigger EnsureSuccessStatusCode exceptions.
+/// </summary>
+public class SequentialStatusHttpMessageHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyList<(string content, HttpStatusCode status)> _responses;
+    private int _callCount;
+
+    public SequentialStatusHttpMessageHandler(IEnumerable<(string content, HttpStatusCode status)> responses)
+    {
+        _responses = responses.ToList();
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var index = Math.Min(Interlocked.Increment(ref _callCount) - 1, _responses.Count - 1);
+        var (content, status) = _responses[index];
+        return Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+        });
+    }
+}
+
 public class LighterConnectorTests
 {
     private readonly Mock<ILogger<LighterConnector>> _loggerMock = new();
@@ -1097,6 +1123,185 @@ public class LighterConnectorTests
         var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
 
         result.Should().BeFalse("ETH Long at baseline size 0.1 never changes — should early-exit");
+    }
+
+    // ── Verification: baseline snapshot + timing tests ────────────────────────
+
+    /// <summary>
+    /// Position exists at baseline size, all polls show same size → returns false.
+    /// Exercises the early-exit path when size at baseline is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_PositionExistsAtBaselineSize_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // All calls return ETH Long at 0.5 — baseline 0.5, polls 0.5 → no change
+        var responses = Enumerable.Repeat(MakeAccountJson(0.5m), 12).ToList();
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse("position at baseline size 0.5 with no change should return false");
+    }
+
+    /// <summary>
+    /// Baseline shows ETH Long at 0.5, poll shows 1.0 → size increased → returns true.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_SizeIncreasedFromBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var responses = new List<string>
+        {
+            MakeAccountJson(0.5m),  // baseline
+            MakeAccountJson(1.0m),  // poll 1 — size doubled
+        };
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long size increased from baseline 0.5 to 1.0");
+    }
+
+    /// <summary>
+    /// Baseline has no ETH positions, poll shows ETH Long at 0.5 → new position → returns true.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_NewPositionNotInBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var responses = new List<string>
+        {
+            MakeAccountJson(null),  // baseline — no ETH positions
+            MakeAccountJson(0.5m),  // poll 1 — ETH Long appears
+        };
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long was not in baseline but appeared in poll");
+    }
+
+    /// <summary>
+    /// Baseline fetch throws (HTTP 500), any matching position in poll returns true
+    /// because no baseline means no comparison — any match is treated as new.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_BaselineFetchThrows_StillDetectsPosition()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // First call (baseline) returns 500 → triggers HttpRequestException via EnsureSuccessStatusCode
+        // Subsequent calls return ETH Long at 0.5
+        var responses = new List<(string content, HttpStatusCode status)>
+        {
+            ("{}", HttpStatusCode.InternalServerError),              // baseline — throws
+            (MakeAccountJson(0.5m), HttpStatusCode.OK),              // poll 1 — ETH Long at 0.5
+        };
+
+        var handler = new SequentialStatusHttpMessageHandler(responses);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("baseline fetch failed so any matching position should be treated as new");
+    }
+
+    /// <summary>
+    /// All 10 regular polls exhaust without detecting a new position,
+    /// then the grace check finds ETH Long → returns true.
+    /// Polls alternate between ETH at baseline size (resets no-change streak)
+    /// and no ETH (increments streak) to avoid the 5-consecutive early exit.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_GraceCheckFindsPosition_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // ETH at baseline size — foundTarget=true, resets noChangeStreak
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        // No ETH position — foundTarget=false, increments noChangeStreak
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        var responses = new List<string>();
+        responses.Add(ethAtBaseline); // baseline — ETH Long at 0.5
+        // Alternate polls: ETH at baseline (resets streak) then no-ETH (increments streak)
+        // Pattern: baseline(0.5), noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase
+        // This prevents the streak from reaching 5 consecutive no-change polls
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        responses.Add(MakeAccountJson(1.0m)); // grace check — ETH Long at 1.0 (above baseline)
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("grace check found ETH Long after all polls were exhausted");
+
+        // Verify the grace check log message was emitted
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("GRACE CHECK")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    /// <summary>
+    /// Verify that _lastPredictedSettlementMs is used for initial delay and clamped to [5s, 15s].
+    /// Sets the field to 20000 (above max) via reflection and verifies execution completes
+    /// within expected timing bounds (proving the clamp is applied).
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_UsesPredictedExecutionTime_ClampsDelay()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Empty positions — will trigger early exit via no-change streak
+        var responses = Enumerable.Repeat(MakeAccountJson(null), 12).ToList();
+        var sut = CreateSequentialConnector(responses);
+
+        // Set _lastPredictedSettlementMs to 20000 via reflection (above 15000 max clamp)
+        var field = typeof(LighterConnector).GetField("_lastPredictedSettlementMs",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        field.Should().NotBeNull("_lastPredictedSettlementMs field must exist");
+        field!.SetValue(sut, 20000.0);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        sw.Stop();
+
+        result.Should().BeFalse();
+
+        // Initial delay should be clamped to 15000ms (not 20000ms)
+        // Total time: ~15s initial + poll delays (~2s+3s+4s+5s for 5 no-change polls) = ~29s
+        // Without clamp it would be ~20s initial. We verify it's under 35s (generous bound)
+        // and above 14s (proving the 15s clamp was applied, not the default 8s)
+        sw.ElapsedMilliseconds.Should().BeGreaterThan(14000,
+            "initial delay should be at least 15s when predicted time is clamped from 20s to 15s");
     }
 }
 

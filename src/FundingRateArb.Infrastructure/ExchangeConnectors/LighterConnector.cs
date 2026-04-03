@@ -39,6 +39,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     // Cache leverage per market to skip redundant TryUpdateLeverageAsync calls
     private readonly ConcurrentDictionary<int, int> _leverageCache = new();
 
+    // Last predicted settlement time from SendTransactionAsync, used for smarter verification delays
+    private double _lastPredictedSettlementMs;
+
     // In-flight refresh task — prevents thundering-herd when multiple callers see an expired cache.
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
     private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
@@ -82,8 +85,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     /// </remarks>
     public async Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default)
     {
-        const int maxAttempts = 15;
-        const int delayMs = 3000;
+        const int maxAttempts = 10;
 
         var accountIndex = GetAccountIndex();
 
@@ -112,7 +114,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
 
         // Allow time for the zk-rollup transaction to settle before polling
-        await Task.Delay(8000, ct);
+        var initialDelayMs = _lastPredictedSettlementMs > 0
+            ? (int)Math.Clamp(_lastPredictedSettlementMs, 5000, 15000)
+            : 8000;
+        await Task.Delay(initialDelayMs, ct);
 
         // B2: Baseline-aware early-exit — if the target asset+side is absent for 5
         // consecutive polls with no size delta observed, treat as a non-fill.
@@ -121,9 +126,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
         for (int attempt = 0; attempt < maxAttempts; attempt++)
         {
-            // NB1: Delay between retries, not before the first attempt
+            // NB1: Delay between retries, not before the first attempt (exponential backoff)
             if (attempt > 0)
             {
+                var delayMs = Math.Min(6000, 2000 + attempt * 1000);
                 await Task.Delay(delayMs, ct);
             }
 
@@ -226,8 +232,44 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             }
         }
 
+        // Final grace check — one more attempt after extended delay
+        _logger.LogInformation(
+            "Verify: all {Max} polls exhausted for {Asset} {Side} — waiting 10s for final grace check",
+            maxAttempts, asset, side);
+        await Task.Delay(10_000, ct);
+        try
+        {
+            var graceResponse = await GetAccountAsync(accountIndex, ct);
+            var graceAccount = graceResponse?.Accounts?.FirstOrDefault();
+            if (graceAccount?.Positions is not null)
+            {
+                foreach (var p in graceAccount.Positions)
+                {
+                    if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                            System.Globalization.CultureInfo.InvariantCulture, out var sz) || sz == 0) continue;
+                    var isSideMatch = (side == Side.Long && sz > 0) || (side == Side.Short && sz < 0);
+                    if (!isSideMatch) continue;
+                    var absSize = Math.Abs(sz);
+                    var sideStr = sz > 0 ? "Long" : "Short";
+                    var bKey = (asset.ToUpperInvariant(), sideStr);
+                    if (!baseline.TryGetValue(bKey, out var bSize) || absSize > bSize)
+                    {
+                        _logger.LogInformation(
+                            "Verify GRACE CHECK: found position for {Asset} {Side} size={Size}",
+                            asset, side, sz);
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Grace check failed for {Asset}", asset);
+        }
+
         _logger.LogWarning(
-            "Position verification FAILED after {Max} polls: asset={Asset} side={Side} accountIndex={AccountIndex}",
+            "Position verification FAILED after {Max} polls + grace check: asset={Asset} side={Side} accountIndex={AccountIndex}",
             maxAttempts, asset, side, accountIndex);
         return false;
     }
@@ -509,6 +551,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
             // 7. Submit the signed transaction
             var sendResult = await SendTransactionAsync(txType, txInfo, ct);
+            _lastPredictedSettlementMs = sendResult.PredictedExecutionTimeMs;
 
             _logger.LogInformation(
                 "Order placed on Lighter: txHash={TxHash} market={Asset} side={Side}",
