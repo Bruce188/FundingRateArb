@@ -309,13 +309,58 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     /// Delegates to CheckPositionExistsAsync.
     /// </summary>
     public Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
-        => CheckPositionExistsAsync(asset, side, ct);
+        => CheckPositionExistsAsync(asset, side, baseline: null, ct);
+
+    /// <summary>
+    /// Captures a snapshot of current position sizes for baseline comparison.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<(string Symbol, string Side), decimal>?> CapturePositionSnapshotAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var accountIndex = GetAccountIndex();
+            var accountResponse = await GetAccountAsync(accountIndex, cts.Token);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+
+            var snapshot = new Dictionary<(string Symbol, string Side), decimal>();
+            if (account?.Positions is null)
+            {
+                return snapshot;
+            }
+
+            foreach (var p in account.Positions)
+            {
+                if (decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var sz) && sz != 0)
+                {
+                    var sideKey = sz > 0 ? "Long" : "Short";
+                    snapshot[(p.Symbol.ToUpperInvariant(), sideKey)] = Math.Abs(sz);
+                }
+            }
+
+            return snapshot;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to capture position snapshot for baseline");
+            return null;
+        }
+    }
 
     /// <summary>
     /// Single read-only check whether a position exists for the given asset and side.
-    /// Uses a single GetAccountAsync call with no polling or retries.
+    /// When baseline is provided, returns true only if position size increased vs baseline.
     /// </summary>
-    public async Task<bool?> CheckPositionExistsAsync(string asset, Side side, CancellationToken ct = default)
+    public async Task<bool?> CheckPositionExistsAsync(string asset, Side side,
+        IReadOnlyDictionary<(string Symbol, string Side), decimal>? baseline = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -353,7 +398,25 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
                 if (isSideMatch)
                 {
-                    return true;
+                    if (baseline is null)
+                    {
+                        return true;
+                    }
+
+                    var sideKey = size > 0 ? "Long" : "Short";
+                    var key = (p.Symbol.ToUpperInvariant(), sideKey);
+                    var currentSize = Math.Abs(size);
+                    var baselineSize = baseline.TryGetValue(key, out var bs) ? bs : 0m;
+
+                    if (currentSize > baselineSize)
+                    {
+                        return true;
+                    }
+
+                    _logger.LogWarning(
+                        "Position exists for {Asset} {Side} but size {Current} <= baseline {Baseline} — treating as pre-existing",
+                        asset, side, currentSize, baselineSize);
+                    return false;
                 }
             }
 

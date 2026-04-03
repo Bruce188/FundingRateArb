@@ -2702,7 +2702,7 @@ public class ExecutionEngineTests
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         mockVerifiableShort.As<IPositionVerifiable>()
-            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<IReadOnlyDictionary<(string, string), decimal>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
         _mockFactory
@@ -2738,7 +2738,7 @@ public class ExecutionEngineTests
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         mockVerifiableShort.As<IPositionVerifiable>()
-            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<IReadOnlyDictionary<(string, string), decimal>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
 
         _mockFactory
@@ -2777,7 +2777,7 @@ public class ExecutionEngineTests
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         mockVerifiableShort.As<IPositionVerifiable>()
-            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<IReadOnlyDictionary<(string, string), decimal>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((bool?)null);
         // Emergency close succeeds (position did exist)
         mockVerifiableShort.Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2815,7 +2815,7 @@ public class ExecutionEngineTests
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
         mockVerifiableShort.As<IPositionVerifiable>()
-            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<IReadOnlyDictionary<(string, string), decimal>?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((bool?)null);
         // Emergency close: no position found
         mockVerifiableShort.Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))

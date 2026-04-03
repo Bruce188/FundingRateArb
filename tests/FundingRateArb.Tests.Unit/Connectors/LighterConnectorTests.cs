@@ -1457,6 +1457,133 @@ public class LighterConnectorTests
 
         result.Should().BeFalse("grace check HTTP error should result in false, not exception");
     }
+
+    // ── CapturePositionSnapshotAsync ─────────────────────────────
+
+    [Fact]
+    public async Task CaptureSnapshot_WithPositions_ReturnsCorrectKeys()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var json = """
+        {
+          "code": 200, "total": 1,
+          "accounts": [{
+            "account_index": 281474976624240, "available_balance": "100.00",
+            "positions": [
+              {"symbol":"ETH","position":"0.5000","margin":"10","entry_price":"3000"},
+              {"symbol":"BTC","position":"-0.0100","margin":"50","entry_price":"65000"}
+            ]
+          }]
+        }
+        """;
+        var sut = CreateConnector(json);
+
+        var snapshot = await sut.CapturePositionSnapshotAsync();
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Should().ContainKey(("ETH", "Long")).WhoseValue.Should().Be(0.5m);
+        snapshot.Should().ContainKey(("BTC", "Short")).WhoseValue.Should().Be(0.01m);
+        snapshot.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task CaptureSnapshot_NullPositions_ReturnsEmptyDictionary()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var json = """
+        {
+          "code": 200, "total": 1,
+          "accounts": [{"account_index": 281474976624240, "available_balance": "100.00"}]
+        }
+        """;
+        var sut = CreateConnector(json);
+
+        var snapshot = await sut.CapturePositionSnapshotAsync();
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CaptureSnapshot_ZeroSizePosition_IsExcluded()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var json = """
+        {
+          "code": 200, "total": 1,
+          "accounts": [{
+            "account_index": 281474976624240, "available_balance": "100.00",
+            "positions": [{"symbol":"ETH","position":"0.0000","margin":"10","entry_price":"3000"}]
+          }]
+        }
+        """;
+        var sut = CreateConnector(json);
+
+        var snapshot = await sut.CapturePositionSnapshotAsync();
+
+        snapshot.Should().NotBeNull();
+        snapshot!.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CaptureSnapshot_ApiError_ReturnsNull()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector("{}", HttpStatusCode.InternalServerError);
+
+        var snapshot = await sut.CapturePositionSnapshotAsync();
+
+        snapshot.Should().BeNull();
+    }
+
+    // ── CheckPositionExistsAsync with baseline ───────────────────
+
+    [Fact]
+    public async Task CheckPositionExists_WithBaseline_SizeLargerThanBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector(MakeAccountJson(1.0m));
+        var baseline = new Dictionary<(string, string), decimal> { [("ETH", "Long")] = 0.5m };
+
+        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+
+        result.Should().BeTrue("position size 1.0 > baseline 0.5 indicates a new position");
+    }
+
+    [Fact]
+    public async Task CheckPositionExists_WithBaseline_SizeEqualToBaseline_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector(MakeAccountJson(0.5m));
+        var baseline = new Dictionary<(string, string), decimal> { [("ETH", "Long")] = 0.5m };
+
+        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+
+        result.Should().BeFalse("position size equals baseline — pre-existing position");
+    }
+
+    [Fact]
+    public async Task CheckPositionExists_WithBaseline_AssetNotInBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector(MakeAccountJson(0.5m));
+        var baseline = new Dictionary<(string, string), decimal>(); // empty — asset not present
+
+        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+
+        result.Should().BeTrue("asset absent from baseline defaults to 0 — any size is new");
+    }
+
+    [Fact]
+    public async Task CheckPositionExists_NullBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector(MakeAccountJson(0.5m));
+
+        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline: null);
+
+        result.Should().BeTrue("null baseline falls back to legacy behavior — any match returns true");
+    }
 }
 
 /// <summary>
