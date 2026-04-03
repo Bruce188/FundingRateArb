@@ -330,7 +330,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty();
         addedPosition.Should().NotBeNull();
-        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
         // Second leg (long) should never be called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -396,8 +396,8 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty();
         addedPosition.Should().NotBeNull();
-        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
-        addedPosition.ClosedAt.Should().NotBeNull("EmergencyClosed positions must have ClosedAt set");
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
+        addedPosition.ClosedAt.Should().NotBeNull("Failed positions must have ClosedAt set");
         // No emergency close on first leg (it threw) and second leg never attempted
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -1843,7 +1843,7 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeFalse();
         addedPosition.Should().NotBeNull();
-        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
         // Position never existed — fees should NOT be set
         addedPosition.EntryFeesUsdc.Should().Be(0, "no fees when position never existed on exchange");
         addedPosition.RealizedPnl.Should().BeNull("no PnL when position never existed");
@@ -1875,7 +1875,7 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeFalse();
         addedPosition.Should().NotBeNull();
-        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
         // Position never existed — fees should NOT be set
         addedPosition.EntryFeesUsdc.Should().Be(0, "no fees when position never existed on exchange");
         addedPosition.RealizedPnl.Should().BeNull("no PnL when position never existed");
@@ -2098,7 +2098,7 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeFalse();
         addedPosition.Should().NotBeNull();
-        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
         // No fees should be recorded since position never existed
         addedPosition.EntryFeesUsdc.Should().Be(0, "no fees when position never existed");
         addedPosition.ExitFeesUsdc.Should().Be(0, "no fees when position never existed");
@@ -2683,5 +2683,155 @@ public class ExecutionEngineTests
         // Await the result — sequential path catches the exception and returns (false, message)
         var result = await task;
         result.Success.Should().BeFalse("should fail when order times out");
+    }
+
+    // ── Verification failure + CheckPositionExistsAsync (Failed-Open Cascade) ────
+
+    [Fact]
+    public async Task VerificationFailure_ExchangeConfirmsNoPosition_SetsFailed()
+    {
+        // Arrange: first leg (short) is estimated-fill, verification fails, CheckPositionExistsAsync returns false
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        addedPosition!.Status.Should().Be(PositionStatus.Failed);
+        addedPosition.ClosedAt.Should().NotBeNull();
+        // No emergency close attempt since CheckPositionExistsAsync returned false
+        mockVerifiableShort.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Severity == AlertSeverity.Warning)), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task VerificationFailure_ExchangeConfirmsPositionExists_ProceedsToSecondLeg()
+    {
+        // Arrange: verification fails but CheckPositionExistsAsync returns true => continue to second leg
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        // Second leg (long) succeeds
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.1m));
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue("should proceed to second leg when final check confirms position exists");
+        addedPosition!.Status.Should().Be(PositionStatus.Open);
+        // Second leg was opened
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task VerificationFailure_ExchangeCheckFails_FallsBackToEmergencyClose()
+    {
+        // Arrange: CheckPositionExistsAsync returns null => fall back to emergency close
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+        // Emergency close succeeds (position did exist)
+        mockVerifiableShort.Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "close-1", FilledPrice = 3001m, FilledQuantity = 0.1m });
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed, "should use EmergencyClosed when emergency close confirms position existed");
+        addedPosition.ClosedAt.Should().NotBeNull();
+        // Emergency close was attempted
+        mockVerifiableShort.Verify(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task VerificationFailure_CheckNull_EmergencyCloseNeverExisted_SetsFailed()
+    {
+        // Arrange: CheckPositionExistsAsync returns null, emergency close returns "no open position"
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+        // Emergency close: no position found
+        mockVerifiableShort.Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("No open position found for 'ETH' on Lighter"));
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        addedPosition!.Status.Should().Be(PositionStatus.Failed, "should use Failed when emergency close confirms position never existed");
     }
 }

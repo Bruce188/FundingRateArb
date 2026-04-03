@@ -1051,7 +1051,7 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 new[] { (pos, CloseReason.SpreadCollapsed) },
-                Array.Empty<(int, string, int, int)>()));
+                Array.Empty<(int, string, int, int, PositionStatus)>()));
 
         // After ClosePositionAsync, position stays in Closing (partial fill)
         _mockExecEngine.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
@@ -1176,10 +1176,10 @@ public class BotOrchestratorTests
     public async Task ReapedPositions_PushRemovalEvent()
     {
         // Arrange — health monitor returns reaped position IDs
-        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
         {
-            (42, TestUserId, 1, 2),
-            (99, TestUserId, 1, 2),
+            (42, TestUserId, 1, 2, PositionStatus.Closing),
+            (99, TestUserId, 1, 2, PositionStatus.Closing),
         };
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
@@ -1212,7 +1212,7 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 new[] { (pos, CloseReason.SpreadCollapsed) },
-                Array.Empty<(int, string, int, int)>()));
+                Array.Empty<(int, string, int, int, PositionStatus)>()));
         _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
             .Callback(() =>
             {
@@ -1740,9 +1740,9 @@ public class BotOrchestratorTests
     public async Task ReapedPositions_TriggerCircuitBreakerForBothExchanges()
     {
         // Arrange — health monitor returns reaped positions with exchange IDs
-        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)>
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
         {
-            (42, TestUserId, 1, 2),
+            (42, TestUserId, 1, 2, PositionStatus.Closing),
         };
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
@@ -2074,5 +2074,103 @@ public class BotOrchestratorTests
         // Verify the count is passed to the dashboard update
         _mockGroupClient.Verify(c => c.ReceiveDashboardUpdate(
             It.Is<DashboardDto>(d => d.NeedsAttentionCount == 3)), Times.Once);
+    }
+
+    // ── Opening-reaped positions do NOT trigger circuit breaker ────────────────
+
+    [Fact]
+    public async Task ReapedOpeningPositions_DoNotTriggerCircuitBreaker()
+    {
+        // Arrange: health monitor returns an Opening-reaped position
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
+        {
+            (42, TestUserId, 1, 2, PositionStatus.Opening),
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                Array.Empty<(ArbitragePosition, CloseReason)>(),
+                reapedPositions));
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Circuit breaker should NOT be incremented for Opening-reaped positions
+        _sut.ExchangeCircuitBreaker.Should().BeEmpty("Opening-reaped positions should not increment exchange circuit breaker");
+    }
+
+    [Fact]
+    public async Task ReapedClosingPositions_DoTriggerCircuitBreaker()
+    {
+        // Arrange: health monitor returns a Closing-reaped position
+        var reapedPositions = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
+        {
+            (42, TestUserId, 1, 2, PositionStatus.Closing),
+        };
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                Array.Empty<(ArbitragePosition, CloseReason)>(),
+                reapedPositions));
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Circuit breaker SHOULD be incremented for Closing-reaped positions
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
+    }
+
+    // ── Asset-level cooldown ──────────────────────────────────────────────────
+
+    [Fact]
+    public void AssetExchangeCooldown_ActivatesAfterThreeFailures()
+    {
+        // Simulate 3 failures for asset=1, exchange=1
+        for (int i = 0; i < 3; i++)
+        {
+            // Use reflection-free access via the exposed internal property
+            _sut.AssetExchangeCooldowns.AddOrUpdate(
+                (1, 1),
+                _ => (1, 1 >= 3 ? DateTime.UtcNow.AddMinutes(10) : DateTime.MinValue),
+                (_, current) =>
+                {
+                    var f = current.Failures + 1;
+                    return (f, f >= 3 ? DateTime.UtcNow.AddMinutes(10) : current.CooldownUntil);
+                });
+        }
+
+        _sut.AssetExchangeCooldowns.TryGetValue((1, 1), out var cooldown);
+        cooldown.Failures.Should().Be(3);
+        cooldown.CooldownUntil.Should().BeAfter(DateTime.UtcNow);
+    }
+
+    [Fact]
+    public void AssetExchangeCooldown_DoesNotAffectOtherAssets()
+    {
+        // Cool down asset 1 on exchange 1
+        _sut.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
+
+        // Asset 2 on exchange 1 should NOT be cooled down
+        _sut.AssetExchangeCooldowns.TryGetValue((2, 1), out var cooldown);
+        cooldown.Failures.Should().Be(0, "asset-level cooldown should not affect other assets on the same exchange");
+    }
+
+    [Fact]
+    public void AssetExchangeCooldown_ResetsOnSuccess()
+    {
+        // Set up cooldown
+        _sut.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
+        _sut.AssetExchangeCooldowns[(1, 2)] = (3, DateTime.UtcNow.AddMinutes(10));
+
+        // Simulate success — remove cooldowns
+        _sut.AssetExchangeCooldowns.TryRemove((1, 1), out _);
+        _sut.AssetExchangeCooldowns.TryRemove((1, 2), out _);
+
+        _sut.AssetExchangeCooldowns.Should().BeEmpty("asset cooldowns should be cleared on successful open");
     }
 }

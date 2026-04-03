@@ -45,4 +45,11 @@ public interface IPositionVerifiable
     /// Retries up to 3 times with 2-second delays to allow for tx propagation.
     /// </summary>
     Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default);
+
+    /// <summary>
+    /// Single read-only check whether a position exists on the exchange for the given asset and side.
+    /// Returns true if found, false if not found, null if the check could not be performed.
+    /// </summary>
+    Task<bool?> CheckPositionExistsAsync(string asset, Side side, CancellationToken ct = default)
+        => Task.FromResult<bool?>(null);
 }

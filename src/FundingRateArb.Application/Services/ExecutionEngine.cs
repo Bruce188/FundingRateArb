@@ -215,15 +215,15 @@ public class ExecutionEngine : IExecutionEngine
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "First leg threw for {Asset} on {Exchange}", opp.AssetSymbol, firstExchangeName);
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = PositionStatus.Failed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = userId,
                         Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) threw: {TruncateError(ex.Message)}",
+                        Severity = AlertSeverity.Warning,
+                        Message = $"Position open failed: {opp.AssetSymbol} — first leg ({firstExchangeName}) threw: {TruncateError(ex.Message)}",
                     });
                     await _uow.SaveAsync(ct);
                     return (false, ex.Message);
@@ -232,7 +232,7 @@ public class ExecutionEngine : IExecutionEngine
                 if (!firstResult.Success)
                 {
                     // First leg failed cleanly — no fees lost, just abort
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = PositionStatus.Failed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -252,26 +252,64 @@ public class ExecutionEngine : IExecutionEngine
                     var verified = await verifiable.VerifyPositionOpenedAsync(opp.AssetSymbol, firstSide, ct);
                     if (!verified)
                     {
-                        _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — aborting second leg",
+                        _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — performing final existence check",
                             opp.AssetSymbol, firstExchangeName);
-                        // B3: Attempt emergency close — tx may have succeeded on-chain but verification timed out
-                        var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                        if (!neverExisted)
+
+                        // One final read-only check before giving up
+                        var positionExists = await verifiable.CheckPositionExistsAsync(opp.AssetSymbol, firstSide, ct);
+
+                        if (positionExists == true)
                         {
-                            SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                            // Position opened on-chain, verification was just too slow — proceed
+                            _logger.LogInformation(
+                                "Position confirmed on {Exchange} after verification timeout for {Asset} — proceeding with second leg",
+                                firstExchangeName, opp.AssetSymbol);
+                            // Fall through to second leg logic
                         }
-                        position.Status = PositionStatus.EmergencyClosed;
-                        position.ClosedAt = DateTime.UtcNow;
-                        _uow.Positions.Update(position);
-                        _uow.Alerts.Add(new Alert
+                        else if (positionExists == false)
                         {
-                            UserId = userId,
-                            Type = AlertType.LegFailed,
-                            Severity = AlertSeverity.Critical,
-                            Message = $"Position verification failed on {firstExchangeName} for {opp.AssetSymbol} — tx may have failed on-chain",
-                        });
-                        await _uow.SaveAsync(ct);
-                        return (false, $"Position verification failed on {firstExchangeName} — tx may have failed on-chain");
+                            // Position never existed on-chain
+                            _logger.LogInformation(
+                                "No position found on {Exchange} for {Asset} — tx likely failed on-chain",
+                                firstExchangeName, opp.AssetSymbol);
+                            position.Status = PositionStatus.Failed;
+                            position.ClosedAt = DateTime.UtcNow;
+                            _uow.Positions.Update(position);
+                            _uow.Alerts.Add(new Alert
+                            {
+                                UserId = userId,
+                                Type = AlertType.LegFailed,
+                                Severity = AlertSeverity.Warning,
+                                Message = $"Position open failed for {opp.AssetSymbol} on {firstExchangeName} — tx never opened on-chain",
+                            });
+                            await _uow.SaveAsync(ct);
+                            return (false, $"Position open failed on {firstExchangeName} — tx never opened on-chain");
+                        }
+                        else // null — check failed, fall back to emergency close
+                        {
+                            _logger.LogWarning(
+                                "Could not determine position state on {Exchange} for {Asset} — falling back to emergency close",
+                                firstExchangeName, opp.AssetSymbol);
+                            var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                            position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                            position.ClosedAt = DateTime.UtcNow;
+                            if (!neverExisted)
+                            {
+                                SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                            }
+                            _uow.Positions.Update(position);
+                            _uow.Alerts.Add(new Alert
+                            {
+                                UserId = userId,
+                                Type = AlertType.LegFailed,
+                                Severity = neverExisted ? AlertSeverity.Warning : AlertSeverity.Critical,
+                                Message = neverExisted
+                                    ? $"Position open failed for {opp.AssetSymbol} on {firstExchangeName} — tx never opened on-chain"
+                                    : $"Position verification failed on {firstExchangeName} for {opp.AssetSymbol} — emergency closed",
+                            });
+                            await _uow.SaveAsync(ct);
+                            return (false, $"Position verification failed on {firstExchangeName}");
+                        }
                     }
                 }
 
@@ -288,7 +326,7 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
                         opp.AssetSymbol, secondExchangeName);
                     var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
@@ -313,7 +351,7 @@ public class ExecutionEngine : IExecutionEngine
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
                         opp.AssetSymbol, secondExchangeName, secondResult.Error);
                     var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
@@ -359,12 +397,14 @@ public class ExecutionEngine : IExecutionEngine
                     var shortEx = shortTask.IsFaulted ? shortTask.Exception?.GetBaseException() : null;
 
                     // If only one leg threw, try to emergency close the successful one
+                    var allNeverExisted = true;
                     if (!longTask.IsFaulted && longTask.IsCompletedSuccessfully && longTask.Result.Success)
                     {
                         var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
                             SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
+                            allNeverExisted = false;
                         }
                     }
                     if (!shortTask.IsFaulted && shortTask.IsCompletedSuccessfully && shortTask.Result.Success)
@@ -373,10 +413,11 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedShort)
                         {
                             SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
+                            allNeverExisted = false;
                         }
                     }
 
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = allNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";
@@ -398,12 +439,14 @@ public class ExecutionEngine : IExecutionEngine
                 if (!longResult.Success || !shortResult.Success)
                 {
                     // If one succeeded and the other failed, emergency close the successful one
+                    var concurrentNeverExisted = true;
                     if (longResult.Success && !shortResult.Success)
                     {
                         var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
                             SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                            concurrentNeverExisted = false;
                         }
                     }
                     else if (!longResult.Success && shortResult.Success)
@@ -412,10 +455,16 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedShort)
                         {
                             SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                            concurrentNeverExisted = false;
                         }
                     }
+                    else
+                    {
+                        // Both legs failed — no emergency close needed, position never opened
+                        concurrentNeverExisted = true;
+                    }
 
-                    position.Status = PositionStatus.EmergencyClosed;
+                    position.Status = concurrentNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var error = !longResult.Success ? longResult.Error : shortResult.Error;

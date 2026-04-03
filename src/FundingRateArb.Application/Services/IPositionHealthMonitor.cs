@@ -13,9 +13,9 @@ public interface IPositionHealthMonitor
 /// </summary>
 public record HealthCheckResult(
     IReadOnlyList<(ArbitragePosition Position, CloseReason Reason)> ToClose,
-    IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)> ReapedPositions)
+    IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)> ReapedPositions)
 {
     public static readonly HealthCheckResult Empty = new(
         Array.Empty<(ArbitragePosition, CloseReason)>(),
-        Array.Empty<(int, string, int, int)>());
+        Array.Empty<(int, string, int, int, PositionStatus)>());
 }
