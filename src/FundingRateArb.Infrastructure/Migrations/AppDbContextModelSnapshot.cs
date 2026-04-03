@@ -323,7 +323,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<bool>("DryRunEnabled")
-                        .HasColumnType("bit");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
 
                     b.Property<decimal>("EmergencyCloseSpreadThreshold")
                         .ValueGeneratedOnAdd()
@@ -405,7 +407,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasDefaultValue(0.0002m);
 
                     b.Property<int>("ReconciliationIntervalCycles")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(10);
 
                     b.Property<int>("SlippageBufferBps")
                         .HasColumnType("int");
@@ -742,7 +746,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<bool>("DryRunEnabled")
-                        .HasColumnType("bit");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
 
                     b.Property<bool>("EmailCriticalAlerts")
                         .HasColumnType("bit");
@@ -781,10 +787,14 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<int>("MaxRotationsPerDay")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(5);
 
                     b.Property<int>("MinHoldBeforeRotationMinutes")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(30);
 
                     b.Property<decimal>("MinPositionSizeUsdc")
                         .HasColumnType("decimal(18,2)");
@@ -799,7 +809,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("int");
 
                     b.Property<decimal>("RotationThresholdPerHour")
-                        .HasColumnType("decimal(18,10)");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,10)")
+                        .HasDefaultValue(0.0003m);
 
                     b.Property<decimal>("StopLossPct")
                         .HasColumnType("decimal(18,4)");

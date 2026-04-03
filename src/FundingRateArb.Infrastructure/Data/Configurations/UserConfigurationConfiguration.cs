@@ -24,7 +24,10 @@ public class UserConfigurationConfiguration : IEntityTypeConfiguration<UserConfi
         builder.Property(c => c.DailyDrawdownPausePct).HasColumnType("decimal(18,4)");
         builder.Property(c => c.MaxExposurePerAsset).HasColumnType("decimal(18,4)");
         builder.Property(c => c.MaxExposurePerExchange).HasColumnType("decimal(18,4)");
-        builder.Property(c => c.RotationThresholdPerHour).HasColumnType("decimal(18,10)");
+        builder.Property(c => c.RotationThresholdPerHour).HasColumnType("decimal(18,10)").HasDefaultValue(0.0003m);
+        builder.Property(c => c.MinHoldBeforeRotationMinutes).HasDefaultValue(30);
+        builder.Property(c => c.MaxRotationsPerDay).HasDefaultValue(5);
+        builder.Property(c => c.DryRunEnabled).HasDefaultValue(false);
 
         builder.HasIndex(c => c.UserId).IsUnique();
 

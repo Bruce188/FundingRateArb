@@ -22,21 +22,21 @@ namespace FundingRateArb.Infrastructure.Migrations
                 table: "UserConfigurations",
                 type: "int",
                 nullable: false,
-                defaultValue: 0);
+                defaultValue: 5);
 
             migrationBuilder.AddColumn<int>(
                 name: "MinHoldBeforeRotationMinutes",
                 table: "UserConfigurations",
                 type: "int",
                 nullable: false,
-                defaultValue: 0);
+                defaultValue: 30);
 
             migrationBuilder.AddColumn<decimal>(
                 name: "RotationThresholdPerHour",
                 table: "UserConfigurations",
                 type: "decimal(18,10)",
                 nullable: false,
-                defaultValue: 0m);
+                defaultValue: 0.0003m);
 
             migrationBuilder.AddColumn<bool>(
                 name: "DryRunEnabled",
@@ -50,7 +50,7 @@ namespace FundingRateArb.Infrastructure.Migrations
                 table: "BotConfigurations",
                 type: "int",
                 nullable: false,
-                defaultValue: 0);
+                defaultValue: 10);
 
             migrationBuilder.AddColumn<bool>(
                 name: "IsDryRun",
