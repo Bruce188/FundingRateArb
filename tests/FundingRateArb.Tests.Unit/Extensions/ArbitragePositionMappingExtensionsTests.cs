@@ -33,12 +33,16 @@ public class ArbitragePositionMappingExtensionsTests
             Asset = new Asset { Id = 5, Symbol = "BTC", Name = "Bitcoin" },
             LongExchange = new Exchange
             {
-                Id = 10, Name = "Hyperliquid", ApiBaseUrl = "https://api.hl.com",
+                Id = 10,
+                Name = "Hyperliquid",
+                ApiBaseUrl = "https://api.hl.com",
                 WsBaseUrl = "wss://ws.hl.com"
             },
             ShortExchange = new Exchange
             {
-                Id = 20, Name = "LighterDEX", ApiBaseUrl = "https://api.lighter.xyz",
+                Id = 20,
+                Name = "LighterDEX",
+                ApiBaseUrl = "https://api.lighter.xyz",
                 WsBaseUrl = "wss://ws.lighter.xyz"
             },
         };
