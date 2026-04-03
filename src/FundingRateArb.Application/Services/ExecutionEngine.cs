@@ -1263,7 +1263,9 @@ public class ExecutionEngine : IExecutionEngine
 
             // If either check failed (null), we can't confirm drift
             if (longExists is null || shortExists is null)
+            {
                 return null;
+            }
 
             return longExists.Value && shortExists.Value;
         }
@@ -1313,7 +1315,9 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogWarning("Cannot reconcile positions for {UserId}/{LongExchange}/{ShortExchange}: {Error}",
                         group.Key.UserId, group.Key.LongExchange, group.Key.ShortExchange, error);
                     foreach (var p in group)
+                    {
                         results[p.Id] = PositionExistsResult.Unknown;
+                    }
                     continue;
                 }
                 longConnector = l;

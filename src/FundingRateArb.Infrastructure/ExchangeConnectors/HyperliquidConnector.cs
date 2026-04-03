@@ -336,7 +336,10 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     public async Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
     {
         var (rawQty, confirmed) = await GetPositionQuantityAsync(asset, ct);
-        if (!confirmed) return null;
+        if (!confirmed)
+        {
+            return null;
+        }
         return (side == Side.Long && rawQty > 0) || (side == Side.Short && rawQty < 0);
     }
 
