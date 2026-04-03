@@ -17,6 +17,7 @@ using FundingRateArb.Infrastructure.Repositories;
 using FundingRateArb.Infrastructure.Seed;
 using FundingRateArb.Infrastructure.Services;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -204,6 +205,14 @@ try
         }
     }
     builder.Services.AddScoped<IApiKeyVault, ApiKeyVault>();
+
+    // --- Forwarded Headers (Azure App Service TLS termination) ---
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+    });
 
     // --- Caching ---
     builder.Services.AddMemoryCache();
@@ -441,6 +450,7 @@ try
     }
 
     // --- Middleware Pipeline ---
+    app.UseForwardedHeaders();
     if (!app.Environment.IsDevelopment())
     {
         app.UseExceptionHandler("/Home/Error");
