@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Domain.Entities;
@@ -27,6 +28,21 @@ public class UserConfiguration
     public int FundingWindowMinutes { get; set; } = 10;
     public decimal MaxExposurePerAsset { get; set; } = 0.5m;
     public decimal MaxExposurePerExchange { get; set; } = 0.7m;
+    /// <summary>Enable dry-run (paper trading) mode for this user.</summary>
+    public bool DryRunEnabled { get; set; }
+
+    /// <summary>Minimum spread/hr improvement over current position to justify rotation.</summary>
+    [Range(0, 0.01)]
+    public decimal RotationThresholdPerHour { get; set; } = 0.0003m;
+
+    /// <summary>Minimum minutes a position must be held before rotation is considered.</summary>
+    [Range(0, 1440)]
+    public int MinHoldBeforeRotationMinutes { get; set; } = 30;
+
+    /// <summary>Maximum position rotations per day to prevent churning.</summary>
+    [Range(0, 50)]
+    public int MaxRotationsPerDay { get; set; } = 5;
+
     public bool EmailNotificationsEnabled { get; set; }
     public bool EmailCriticalAlerts { get; set; }
     public bool EmailDailySummary { get; set; }
