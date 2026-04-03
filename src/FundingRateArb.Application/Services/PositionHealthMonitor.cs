@@ -423,4 +423,56 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // Fallback to shared constants when DB rate is not loaded
         return ExchangeFeeConstants.GetTakerFeeRate(exchangeName ?? string.Empty);
     }
+
+    public async Task ReconcileOpenPositionsAsync(CancellationToken ct = default)
+    {
+        var openPositions = await _uow.Positions.GetOpenTrackedAsync();
+        if (openPositions.Count == 0) return;
+
+        var reconciled = 0;
+        foreach (var pos in openPositions)
+        {
+            try
+            {
+                var exists = await _executionEngine.CheckPositionExistsOnExchangesAsync(pos, ct);
+
+                // null = API failure, skip (don't treat as drift)
+                if (exists is null) continue;
+
+                if (!exists.Value)
+                {
+                    _logger.LogWarning(
+                        "Exchange drift detected for position #{Id} ({Asset} {LongExchange}/{ShortExchange}) — position missing from exchanges",
+                        pos.Id, pos.Asset?.Symbol, pos.LongExchange?.Name, pos.ShortExchange?.Name);
+
+                    pos.Status = PositionStatus.EmergencyClosed;
+                    pos.CloseReason = CloseReason.ExchangeDrift;
+                    pos.ClosedAt = DateTime.UtcNow;
+                    _uow.Positions.Update(pos);
+
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = pos.UserId,
+                        ArbitragePositionId = pos.Id,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Position #{pos.Id} missing from exchanges — marked ExchangeDrift. " +
+                                  $"Manual review required.",
+                    });
+
+                    reconciled++;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Reconciliation failed for position #{Id}", pos.Id);
+            }
+        }
+
+        if (reconciled > 0)
+        {
+            await _uow.SaveAsync(ct);
+            _logger.LogWarning("Reconciliation completed: {Count} positions marked as ExchangeDrift", reconciled);
+        }
+    }
 }

@@ -31,6 +31,14 @@ public interface IExchangeConnector
     /// Returns null if the settlement time cannot be determined.
     /// </summary>
     Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether a position exists on the exchange for the given asset and side.
+    /// Used by reconciliation to detect positions closed externally (exchange drift).
+    /// Returns true if position exists, false if not, null if the check failed.
+    /// </summary>
+    Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
+        => Task.FromResult<bool?>(null);
 }
 
 /// <summary>
