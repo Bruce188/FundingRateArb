@@ -398,6 +398,12 @@ try
             opt.PermitLimit = 200;
             opt.QueueLimit = 0;
         });
+        options.AddFixedWindowLimiter("diagnostics-write", opt =>
+        {
+            opt.Window = TimeSpan.FromMinutes(1);
+            opt.PermitLimit = 5;
+            opt.QueueLimit = 0;
+        });
     });
 
     // --- Background Services ---
