@@ -53,20 +53,30 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // Cycle counter for periodic reconciliation
     private int _cycleCount;
 
+    // Per-opportunity cooldown after rotation — prevents flip-flopping
+    private readonly ConcurrentDictionary<string, DateTime> _rotationCooldowns = new();
+    private static readonly TimeSpan RotationCooldownDuration = TimeSpan.FromMinutes(5);
+
+    // Track daily rotation count per user
+    private readonly ConcurrentDictionary<string, (DateOnly Date, int Count)> _dailyRotationCounts = new();
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
+    private readonly IRotationEvaluator _rotationEvaluator;
     private readonly ILogger<BotOrchestrator> _logger;
 
     public BotOrchestrator(
         IServiceScopeFactory scopeFactory,
         IFundingRateReadinessSignal readinessSignal,
         IHubContext<DashboardHub, IDashboardClient> hubContext,
+        IRotationEvaluator rotationEvaluator,
         ILogger<BotOrchestrator> logger)
     {
         _scopeFactory = scopeFactory;
         _readinessSignal = readinessSignal;
         _hubContext = hubContext;
+        _rotationEvaluator = rotationEvaluator;
         _logger = logger;
     }
 
@@ -209,6 +219,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// <summary>Exposes exchange circuit breaker state for unit testing.</summary>
     internal ConcurrentDictionary<int, (int Failures, DateTime BrokenUntil)> ExchangeCircuitBreaker => _exchangeCircuitBreaker;
 
+    /// <summary>Exposes rotation cooldowns for unit testing.</summary>
+    internal ConcurrentDictionary<string, DateTime> RotationCooldowns => _rotationCooldowns;
+
+    /// <summary>Exposes daily rotation counts for unit testing.</summary>
+    internal ConcurrentDictionary<string, (DateOnly Date, int Count)> DailyRotationCounts => _dailyRotationCounts;
+
     /// <summary>
     /// One bot cycle: health-monitor ALL open positions, then iterate enabled users.
     /// Exposed as internal for unit testing.
@@ -252,6 +268,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
             foreach (var key in expiredAssetCooldowns)
             {
                 _assetExchangeCooldowns.TryRemove(key, out _);
+            }
+        }
+
+        // Sweep expired rotation cooldowns
+        if (!_rotationCooldowns.IsEmpty)
+        {
+            var now = DateTime.UtcNow;
+            var expiredRotations = _rotationCooldowns
+                .Where(kvp => kvp.Value < now)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            foreach (var key in expiredRotations)
+            {
+                _rotationCooldowns.TryRemove(key, out _);
             }
         }
 
@@ -643,12 +673,87 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Max positions gate (includes Opening positions to prevent rapid-fire loop)
         if ((userOpenPositions.Count + userOpeningPositions.Count) >= userConfig.MaxConcurrentPositions)
         {
-            _logger.LogDebug(
-                "Max concurrent positions reached for user {UserId} ({Open}+{Opening}/{Max})",
-                userId, userOpenPositions.Count, userOpeningPositions.Count, userConfig.MaxConcurrentPositions);
-            await PushStatusExplanationAsync(userId,
-                $"{userOpenPositions.Count + userOpeningPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
-            return;
+            // Evaluate position rotation when all slots are full
+            if (userOpenPositions.Count > 0 && allOpportunities.Count > 0)
+            {
+                var rotationRec = _rotationEvaluator.Evaluate(
+                    userOpenPositions, allOpportunities, userConfig, globalConfig);
+
+                if (rotationRec is not null)
+                {
+                    // Check daily rotation cap
+                    var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                    var (date, count) = _dailyRotationCounts.GetValueOrDefault(userId, (today, 0));
+                    if (date != today) count = 0; // Reset counter on new day
+
+                    var rotationExecuted = false;
+
+                    if (count >= userConfig.MaxRotationsPerDay)
+                    {
+                        _logger.LogDebug("Rotation skipped for {UserId} — daily cap reached ({Count}/{Max})",
+                            userId, count, userConfig.MaxRotationsPerDay);
+                    }
+                    else
+                    {
+                        // Check rotation cooldown for the replacement opportunity
+                        var cooldownKey = $"{userId}:{rotationRec.ReplacementAssetId}:{rotationRec.ReplacementLongExchangeId}:{rotationRec.ReplacementShortExchangeId}";
+                        if (_rotationCooldowns.TryGetValue(cooldownKey, out var cooldownUntil) && DateTime.UtcNow < cooldownUntil)
+                        {
+                            _logger.LogDebug("Rotation skipped — replacement opportunity on cooldown until {Until}", cooldownUntil);
+                        }
+                        else
+                        {
+                            // Execute rotation: close worst position
+                            var positionToClose = userOpenPositions.First(p => p.Id == rotationRec.PositionId);
+                            _logger.LogInformation(
+                                "Rotating position {PositionId} ({Asset} spread={Spread:F6}/hr) → {Replacement} (yield={Yield:F6}/hr, improvement={Improvement:F6}/hr)",
+                                rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
+                                rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
+
+                            await executionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
+
+                            // Track cooldown and daily count
+                            _rotationCooldowns[cooldownKey] = DateTime.UtcNow.Add(RotationCooldownDuration);
+                            _dailyRotationCounts[userId] = (today, count + 1);
+
+                            rotationExecuted = true;
+                        }
+                    }
+
+                    if (rotationExecuted)
+                    {
+                        // Rotation freed a slot — continue to normal candidate filtering + opening
+                        // The freed slot will be picked up by the existing open-position logic
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "Max concurrent positions reached for user {UserId} ({Open}+{Opening}/{Max})",
+                            userId, userOpenPositions.Count, userOpeningPositions.Count, userConfig.MaxConcurrentPositions);
+                        await PushStatusExplanationAsync(userId,
+                            $"{userOpenPositions.Count + userOpeningPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
+                        return;
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug(
+                        "Max concurrent positions reached for user {UserId} ({Open}+{Opening}/{Max})",
+                        userId, userOpenPositions.Count, userOpeningPositions.Count, userConfig.MaxConcurrentPositions);
+                    await PushStatusExplanationAsync(userId,
+                        $"{userOpenPositions.Count + userOpeningPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
+                    return;
+                }
+            }
+            else
+            {
+                _logger.LogDebug(
+                    "Max concurrent positions reached for user {UserId} ({Open}+{Opening}/{Max})",
+                    userId, userOpenPositions.Count, userOpeningPositions.Count, userConfig.MaxConcurrentPositions);
+                await PushStatusExplanationAsync(userId,
+                    $"{userOpenPositions.Count + userOpeningPositions.Count}/{userConfig.MaxConcurrentPositions} position slots occupied", "info");
+                return;
+            }
         }
 
         // Filter candidates: exclude active/opening positions and cooled-down opportunities

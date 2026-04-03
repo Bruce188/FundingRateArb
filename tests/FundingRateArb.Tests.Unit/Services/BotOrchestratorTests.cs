@@ -39,6 +39,7 @@ public class BotOrchestratorTests
     private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<ILogger<BotOrchestrator>> _mockLogger = new();
+    private readonly Mock<IRotationEvaluator> _mockRotationEvaluator = new();
     private readonly BotOrchestrator _sut;
 
     public BotOrchestratorTests()
@@ -127,6 +128,7 @@ public class BotOrchestratorTests
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,
             _mockHubContext.Object,
+            _mockRotationEvaluator.Object,
             _mockLogger.Object);
     }
 
