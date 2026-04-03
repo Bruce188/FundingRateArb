@@ -2032,4 +2032,116 @@ public class PositionHealthMonitorTests
 
         pos.Status.Should().Be(PositionStatus.Closing, "API failure should not change status");
     }
+
+    // ── ComputeLiquidationDistance ────────────────────────────────
+
+    [Fact]
+    public void ComputeLiquidationDistance_CalculatesCorrectLiquidationPrices()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        // Leverage 5: long liq = 3000 * (1 - 1/5) = 2400, short liq = 3000 * (1 + 1/5) = 3600
+
+        PositionHealthMonitor.ComputeLiquidationDistance(pos, 3000m, 3000m);
+
+        pos.LongLiquidationPrice.Should().Be(2400m);
+        pos.ShortLiquidationPrice.Should().Be(3600m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_AtEntryPrice_ReturnsOne()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        // At entry: mark == entry → distance = (3000 - 2400) / (3000 - 2400) = 1.0
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 3000m, 3000m);
+
+        distance.Should().Be(1.0m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_HalfwayToLiquidation_ReturnsPointFive()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        // Long liq=2400, range=600. Halfway: mark=2700, distance=(2700-2400)/600=0.5
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 2700m, 3000m);
+
+        distance.Should().Be(0.5m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ShortLegCloser_ReturnsShortDistance()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        // Short liq=3600, range=600. Mark=3450: distance=(3600-3450)/600=0.25
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 3000m, 3450m);
+
+        distance.Should().Be(0.25m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ZeroLeverage_ReturnsNull()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        pos.Leverage = 0;
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 3000m, 3000m);
+
+        distance.Should().BeNull();
+    }
+
+    // ── DetermineCloseReason with LiquidationRisk ────────────────
+
+    [Fact]
+    public void DetermineCloseReason_LiquidationDistanceBelowThreshold_ReturnsLiquidationRisk()
+    {
+        var pos = MakeOpenPosition(marginUsdc: 100m);
+        var config = new BotConfiguration { StopLossPct = 0.10m, LiquidationWarningPct = 0.50m };
+
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 1m, spread: 0.001m,
+            minLiquidationDistance: 0.3m);
+
+        reason.Should().Be(CloseReason.LiquidationRisk);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_LiquidationDistanceAboveThreshold_ReturnsNull()
+    {
+        var pos = MakeOpenPosition(marginUsdc: 100m);
+        var config = new BotConfiguration { StopLossPct = 0.10m, LiquidationWarningPct = 0.50m };
+
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 1m, spread: 0.001m,
+            minLiquidationDistance: 0.8m);
+
+        reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void DetermineCloseReason_StopLossTakesPriorityOverLiquidation()
+    {
+        var pos = MakeOpenPosition(marginUsdc: 100m);
+        var config = new BotConfiguration { StopLossPct = 0.10m, LiquidationWarningPct = 0.50m };
+
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: -15m, hoursOpen: 1m, spread: 0.001m,
+            minLiquidationDistance: 0.3m);
+
+        reason.Should().Be(CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_NullLiquidationDistance_DoesNotTrigger()
+    {
+        var pos = MakeOpenPosition(marginUsdc: 100m);
+        var config = new BotConfiguration { StopLossPct = 0.10m, LiquidationWarningPct = 0.50m };
+
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 1m, spread: 0.001m,
+            minLiquidationDistance: null);
+
+        reason.Should().BeNull();
+    }
 }
