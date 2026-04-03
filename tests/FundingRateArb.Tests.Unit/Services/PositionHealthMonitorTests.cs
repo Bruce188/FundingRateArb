@@ -1936,5 +1936,100 @@ public class PositionHealthMonitorTests
         pos.Status.Should().Be(PositionStatus.Failed);
         pos.ClosedAt.Should().NotBeNull();
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        // Cleanup close should be attempted for any surviving legs
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ReconcileOpenPositions_OpeningPositionApiFailure_LeftInOpening()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 102,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Opening,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-3),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionExistsOnExchangesAsync(pos, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.Status.Should().Be(PositionStatus.Opening, "API failure should not change status");
+    }
+
+    // ── B.2: Closing position reconciliation ─────────────────────────────────
+
+    [Fact]
+    public async Task ReconcileOpenPositions_ClosingPositionGoneFromExchanges_FinalizedAsClosed()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 103,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-3),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionExistsOnExchangesAsync(pos, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.Status.Should().Be(PositionStatus.Closed);
+        pos.ClosedAt.Should().NotBeNull();
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task ReconcileOpenPositions_ClosingPositionApiFailure_LeftInClosing()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 104,
+            UserId = "admin-user-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closing,
+            ClosingStartedAt = DateTime.UtcNow.AddMinutes(-3),
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync([]);
+        _mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Closing)).ReturnsAsync([pos]);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+        _mockExecutionEngine
+            .Setup(e => e.CheckPositionExistsOnExchangesAsync(pos, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+
+        await _sut.ReconcileOpenPositionsAsync();
+
+        pos.Status.Should().Be(PositionStatus.Closing, "API failure should not change status");
     }
 }

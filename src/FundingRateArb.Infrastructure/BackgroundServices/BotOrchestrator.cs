@@ -317,8 +317,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
             }
         }
 
-        // Emergency close exchange cleanup for reaped positions
-        foreach (var reaped in healthResult.ReapedPositions)
+        // Emergency close exchange cleanup for reaped Closing positions
+        // Skip Opening-reaped — may never have had legs placed on exchanges
+        foreach (var reaped in healthResult.ReapedPositions.Where(r => r.OriginalStatus != PositionStatus.Opening))
         {
             try
             {

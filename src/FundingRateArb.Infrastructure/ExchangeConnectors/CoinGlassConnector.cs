@@ -247,8 +247,9 @@ public class CoinGlassConnector : IExchangeConnector
         return Task.FromResult<DateTime?>(null);
     }
 
+    // Read-only aggregator — cannot verify position state; return null (unknown) so reconciliation skips
     public Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
-        => Task.FromResult<bool?>(false);
+        => Task.FromResult<bool?>(null);
 
     /// <summary>
     /// Normalizes exchange-specific symbols to a common format.

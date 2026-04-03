@@ -1493,7 +1493,7 @@ public class BotOrchestratorTests
         // Health monitor returns one reaped position
         var reaped = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
         {
-            (42, TestUserId, 1, 2, PositionStatus.Opening)
+            (42, TestUserId, 1, 2, PositionStatus.Closing)
         };
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(

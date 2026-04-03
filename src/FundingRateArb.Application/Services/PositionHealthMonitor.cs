@@ -444,6 +444,17 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
                 else if (exists == false)
                 {
+                    // Attempt cleanup of any surviving leg before marking Failed
+                    // (if one leg was placed but the other failed, this closes the surviving one)
+                    try
+                    {
+                        await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
+                    }
+                    catch (Exception closeEx)
+                    {
+                        _logger.LogWarning(closeEx, "Cleanup close failed for Opening position #{Id}", pos.Id);
+                    }
+
                     pos.Status = PositionStatus.Failed;
                     pos.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(pos);
