@@ -38,6 +38,7 @@ public class BotOrchestratorMultiUserTests
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockGroupClient = new();
+    private readonly Mock<IRotationEvaluator> _mockRotationEvaluator = new();
     private readonly BotOrchestrator _sut;
 
     private static readonly BotConfiguration EnabledConfig = new()
@@ -106,6 +107,7 @@ public class BotOrchestratorMultiUserTests
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,
             _mockHubContext.Object,
+            _mockRotationEvaluator.Object,
             NullLogger<BotOrchestrator>.Instance);
     }
 

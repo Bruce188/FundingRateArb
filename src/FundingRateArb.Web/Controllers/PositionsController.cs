@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Extensions;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels;
@@ -37,23 +38,7 @@ public class PositionsController : Controller
             ? await _uow.Positions.GetAllAsync()
             : await _uow.Positions.GetByUserAsync(userId);
 
-        var positionDtos = positions.Select(p => new PositionSummaryDto
-        {
-            Id = p.Id,
-            AssetSymbol = p.Asset?.Symbol ?? $"Asset #{p.AssetId}",
-            LongExchangeName = p.LongExchange?.Name ?? $"Exchange #{p.LongExchangeId}",
-            ShortExchangeName = p.ShortExchange?.Name ?? $"Exchange #{p.ShortExchangeId}",
-            SizeUsdc = p.SizeUsdc,
-            MarginUsdc = p.MarginUsdc,
-            EntrySpreadPerHour = p.EntrySpreadPerHour,
-            CurrentSpreadPerHour = p.CurrentSpreadPerHour,
-            AccumulatedFunding = p.AccumulatedFunding,
-            UnrealizedPnl = p.AccumulatedFunding,
-            RealizedPnl = p.RealizedPnl,
-            Status = p.Status,
-            OpenedAt = p.OpenedAt,
-            ClosedAt = p.ClosedAt,
-        }).ToList();
+        var positionDtos = positions.Select(p => p.ToSummaryDto()).ToList();
 
         return View(new PositionIndexViewModel { Positions = positionDtos });
     }
@@ -79,30 +64,7 @@ public class PositionsController : Controller
             return Forbid();
         }
 
-        var positionDto = new PositionDetailsDto
-        {
-            Id = position.Id,
-            AssetSymbol = position.Asset?.Symbol ?? $"Asset #{position.AssetId}",
-            AssetId = position.AssetId,
-            LongExchangeName = position.LongExchange?.Name ?? $"Exchange #{position.LongExchangeId}",
-            LongExchangeId = position.LongExchangeId,
-            ShortExchangeName = position.ShortExchange?.Name ?? $"Exchange #{position.ShortExchangeId}",
-            ShortExchangeId = position.ShortExchangeId,
-            SizeUsdc = position.SizeUsdc,
-            MarginUsdc = position.MarginUsdc,
-            Leverage = position.Leverage,
-            LongEntryPrice = position.LongEntryPrice,
-            ShortEntryPrice = position.ShortEntryPrice,
-            EntrySpreadPerHour = position.EntrySpreadPerHour,
-            CurrentSpreadPerHour = position.CurrentSpreadPerHour,
-            AccumulatedFunding = position.AccumulatedFunding,
-            RealizedPnl = position.RealizedPnl,
-            Status = position.Status,
-            CloseReason = position.CloseReason,
-            OpenedAt = position.OpenedAt,
-            ClosedAt = position.ClosedAt,
-            Notes = position.Notes,
-        };
+        var positionDto = position.ToDetailsDto();
 
         var vm = new PositionDetailsViewModel
         {

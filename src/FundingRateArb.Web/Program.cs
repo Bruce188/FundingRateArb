@@ -233,6 +233,7 @@ try
     builder.Services.AddScoped<IRateAnalyticsService, RateAnalyticsService>();
     builder.Services.AddScoped<IRatePredictionService, RatePredictionService>();
     builder.Services.AddScoped<IPortfolioRebalancer, PortfolioRebalancer>();
+    builder.Services.AddSingleton<IRotationEvaluator, RotationEvaluator>();
     builder.Services.AddSingleton<IEmailService, EmailService>();
     builder.Services.AddScoped<IConnectivityTestService, ConnectivityTestService>();
 
