@@ -192,4 +192,58 @@ public class RotationEvaluatorTests
         result.ReplacementAssetId.Should().Be(3);
         result.ImprovementPerHour.Should().Be(0.0008m - 0.0001m);
     }
+
+    [Fact]
+    public void Evaluate_SpreadImprovementEqualsThreshold_ReturnsNull()
+    {
+        // Position: spread=0.0002/hr, opened 60 min ago
+        var position = MakePosition(id: 1, currentSpread: 0.0002m, openedAt: DateTime.UtcNow.AddMinutes(-60));
+        // Best opportunity: yield=0.0005/hr → improvement = 0.0003 == threshold
+        var opportunity = MakeOpportunity(netYield: 0.0005m);
+        var userConfig = MakeUserConfig(rotationThreshold: 0.0003m, minHoldMinutes: 30);
+        var globalConfig = MakeGlobalConfig();
+
+        var result = _sut.Evaluate([position], [opportunity], userConfig, globalConfig);
+
+        // Improvement exactly equals threshold — should NOT rotate (uses <=)
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void Evaluate_EmptyPositions_ReturnsNull()
+    {
+        var opportunity = MakeOpportunity(netYield: 0.001m);
+        var userConfig = MakeUserConfig();
+        var globalConfig = MakeGlobalConfig();
+
+        var result = _sut.Evaluate([], [opportunity], userConfig, globalConfig);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void Evaluate_EmptyOpportunities_ReturnsNull()
+    {
+        var position = MakePosition(id: 1, currentSpread: 0.0001m);
+        var userConfig = MakeUserConfig();
+        var globalConfig = MakeGlobalConfig();
+
+        var result = _sut.Evaluate([position], [], userConfig, globalConfig);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public void Evaluate_NonOpenPosition_Excluded()
+    {
+        // Only position has Opening status — should be excluded from evaluation
+        var position = MakePosition(id: 1, currentSpread: 0.0001m, status: PositionStatus.Opening);
+        var opportunity = MakeOpportunity(netYield: 0.001m);
+        var userConfig = MakeUserConfig();
+        var globalConfig = MakeGlobalConfig();
+
+        var result = _sut.Evaluate([position], [opportunity], userConfig, globalConfig);
+
+        result.Should().BeNull();
+    }
 }

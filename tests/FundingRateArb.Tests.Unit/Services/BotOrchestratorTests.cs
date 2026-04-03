@@ -1524,4 +1524,309 @@ public class BotOrchestratorTests
             e => e.ClosePositionAsync(TestUserId, reapedPos, CloseReason.ExchangeDrift, It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    // ── B3: Orchestrator rotation execution test ─────────────────────────
+
+    [Fact]
+    public async Task RunCycle_RotationRecommended_ClosesPositionAndTracksState()
+    {
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 1,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                RotationThresholdPerHour = 0.0003m,
+                MinHoldBeforeRotationMinutes = 30,
+                MaxRotationsPerDay = 5,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var existingPosition = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.0001m,
+            EntrySpreadPerHour = 0.0002m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            Status = PositionStatus.Open,
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([existingPosition]);
+
+        var opp = MakeOpp(2, "BTC", longExId: 1, shortExId: 3);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        var recommendation = new RotationRecommendationDto(
+            PositionId: 10,
+            PositionAsset: "ETH",
+            CurrentSpreadPerHour: 0.0001m,
+            ReplacementAssetId: 2,
+            ReplacementAsset: "BTC",
+            ReplacementLongExchange: "Hyperliquid",
+            ReplacementShortExchange: "Aster",
+            ReplacementLongExchangeId: 1,
+            ReplacementShortExchangeId: 3,
+            ReplacementNetYieldPerHour: 0.0005m,
+            ImprovementPerHour: 0.0004m);
+
+        _mockRotationEvaluator.Setup(r => r.Evaluate(
+                It.IsAny<IReadOnlyList<ArbitragePosition>>(),
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<UserConfiguration>(),
+                It.IsAny<BotConfiguration>()))
+            .Returns(recommendation);
+
+        _mockExecutionEngine.Setup(e => e.ClosePositionAsync(TestUserId, existingPosition, CloseReason.Rotation, It.IsAny<CancellationToken>()))
+            .Callback(() => existingPosition.Status = PositionStatus.Closed)
+            .Returns(Task.CompletedTask);
+
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(TestUserId, existingPosition, CloseReason.Rotation, It.IsAny<CancellationToken>()),
+            Times.Once);
+
+        var cooldownKey = $"{TestUserId}:2:1:3";
+        _sut.RotationCooldowns.Should().ContainKey(cooldownKey);
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        _sut.DailyRotationCounts.Should().ContainKey(TestUserId);
+        _sut.DailyRotationCounts[TestUserId].Count.Should().Be(1);
+        _sut.DailyRotationCounts[TestUserId].Date.Should().Be(today);
+    }
+
+    // ── B4: Daily cap enforcement test ─────────────────────────
+
+    [Fact]
+    public async Task RunCycle_RotationDailyCapReached_SkipsRotation()
+    {
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 1,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                RotationThresholdPerHour = 0.0003m,
+                MinHoldBeforeRotationMinutes = 30,
+                MaxRotationsPerDay = 2,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var existingPosition = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.0001m,
+            EntrySpreadPerHour = 0.0002m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            Status = PositionStatus.Open,
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([existingPosition]);
+
+        var opp = MakeOpp(2, "BTC", longExId: 1, shortExId: 3);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        var recommendation = new RotationRecommendationDto(
+            PositionId: 10,
+            PositionAsset: "ETH",
+            CurrentSpreadPerHour: 0.0001m,
+            ReplacementAssetId: 2,
+            ReplacementAsset: "BTC",
+            ReplacementLongExchange: "Hyperliquid",
+            ReplacementShortExchange: "Aster",
+            ReplacementLongExchangeId: 1,
+            ReplacementShortExchangeId: 3,
+            ReplacementNetYieldPerHour: 0.0005m,
+            ImprovementPerHour: 0.0004m);
+
+        _mockRotationEvaluator.Setup(r => r.Evaluate(
+                It.IsAny<IReadOnlyList<ArbitragePosition>>(),
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<UserConfiguration>(),
+                It.IsAny<BotConfiguration>()))
+            .Returns(recommendation);
+
+        // Pre-populate daily rotation count at max
+        _sut.DailyRotationCounts[TestUserId] = (DateOnly.FromDateTime(DateTime.UtcNow), 2);
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Close should NOT have been called
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), CloseReason.Rotation, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    // ── B5: Rotation cooldown enforcement test ─────────────────────────
+
+    [Fact]
+    public async Task RunCycle_RotationCooldownActive_SkipsRotation()
+    {
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 1,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                RotationThresholdPerHour = 0.0003m,
+                MinHoldBeforeRotationMinutes = 30,
+                MaxRotationsPerDay = 5,
+            });
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            VolumeFraction = 0.001m,
+            UpdatedByUserId = TestUserId,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var existingPosition = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.0001m,
+            EntrySpreadPerHour = 0.0002m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            Status = PositionStatus.Open,
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([existingPosition]);
+
+        var opp = MakeOpp(2, "BTC", longExId: 1, shortExId: 3);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+
+        var recommendation = new RotationRecommendationDto(
+            PositionId: 10,
+            PositionAsset: "ETH",
+            CurrentSpreadPerHour: 0.0001m,
+            ReplacementAssetId: 2,
+            ReplacementAsset: "BTC",
+            ReplacementLongExchange: "Hyperliquid",
+            ReplacementShortExchange: "Aster",
+            ReplacementLongExchangeId: 1,
+            ReplacementShortExchangeId: 3,
+            ReplacementNetYieldPerHour: 0.0005m,
+            ImprovementPerHour: 0.0004m);
+
+        _mockRotationEvaluator.Setup(r => r.Evaluate(
+                It.IsAny<IReadOnlyList<ArbitragePosition>>(),
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<UserConfiguration>(),
+                It.IsAny<BotConfiguration>()))
+            .Returns(recommendation);
+
+        // Pre-populate cooldown for the replacement opportunity with a future timestamp
+        var cooldownKey = $"{TestUserId}:2:1:3";
+        _sut.RotationCooldowns[cooldownKey] = DateTime.UtcNow.AddMinutes(10);
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Close should NOT have been called
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(), CloseReason.Rotation, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

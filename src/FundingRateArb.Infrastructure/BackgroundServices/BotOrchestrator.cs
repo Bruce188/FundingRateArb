@@ -674,10 +674,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
         if ((userOpenPositions.Count + userOpeningPositions.Count) >= userConfig.MaxConcurrentPositions)
         {
             // Evaluate position rotation when all slots are full
-            if (userOpenPositions.Count > 0 && allOpportunities.Count > 0)
+            if (userOpenPositions.Count > 0 && userOpportunities.Count > 0)
             {
                 var rotationRec = _rotationEvaluator.Evaluate(
-                    userOpenPositions, allOpportunities, userConfig, globalConfig);
+                    userOpenPositions, userOpportunities, userConfig, globalConfig);
 
                 if (rotationRec is not null)
                 {
@@ -704,19 +704,35 @@ public class BotOrchestrator : BackgroundService, IBotControl
                         else
                         {
                             // Execute rotation: close worst position
-                            var positionToClose = userOpenPositions.First(p => p.Id == rotationRec.PositionId);
-                            _logger.LogInformation(
-                                "Rotating position {PositionId} ({Asset} spread={Spread:F6}/hr) → {Replacement} (yield={Yield:F6}/hr, improvement={Improvement:F6}/hr)",
-                                rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
-                                rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
+                            var positionToClose = userOpenPositions.FirstOrDefault(p => p.Id == rotationRec.PositionId);
+                            if (positionToClose is null)
+                            {
+                                _logger.LogWarning("Rotation target position {PositionId} not found in user open positions", rotationRec.PositionId);
+                            }
+                            else
+                            {
+                                _logger.LogInformation(
+                                    "Rotating position {PositionId} ({Asset} spread={Spread:F6}/hr) → {Replacement} (yield={Yield:F6}/hr, improvement={Improvement:F6}/hr)",
+                                    rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
+                                    rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
 
-                            await executionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
+                                await executionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
 
-                            // Track cooldown and daily count
-                            _rotationCooldowns[cooldownKey] = DateTime.UtcNow.Add(RotationCooldownDuration);
-                            _dailyRotationCounts[userId] = (today, count + 1);
+                                // Always set cooldown to prevent retry storms even on failure
+                                _rotationCooldowns[cooldownKey] = DateTime.UtcNow.Add(RotationCooldownDuration);
 
-                            rotationExecuted = true;
+                                // Only track daily count and mark executed if close succeeded
+                                if (positionToClose.Status != PositionStatus.Open)
+                                {
+                                    _dailyRotationCounts[userId] = (today, count + 1);
+                                    userOpenPositions = userOpenPositions.Where(p => p.Id != rotationRec.PositionId).ToList();
+                                    rotationExecuted = true;
+                                }
+                                else
+                                {
+                                    _logger.LogWarning("Rotation close failed for position {PositionId} — status still Open", positionToClose.Id);
+                                }
+                            }
                         }
                     }
 
