@@ -306,6 +306,7 @@ try
     // --- Exchange Connectors ---
     // API credentials come from User Secrets — never appsettings
     // See: dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "0x..."
+    builder.Services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
     builder.Services.AddScoped<HyperliquidConnector>();
     builder.Services.AddHttpClient<LighterConnector>(client =>
     {

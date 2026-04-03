@@ -9,6 +9,7 @@ using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
 using HyperLiquid.Net.Interfaces.Clients.SpotApi;
 using HyperLiquid.Net.Objects.Models;
 using Moq;
+using FundingRateArb.Application.Common.Exchanges;
 using Polly;
 using Polly.Registry;
 
@@ -57,7 +58,7 @@ public class HyperliquidConnectorTests
         _mockPipelineProvider.Setup(p => p.GetPipeline(It.IsAny<string>()))
             .Returns(ResiliencePipeline.Empty);
 
-        _sut = new HyperliquidConnector(_mockRestClient.Object, _mockPipelineProvider.Object);
+        _sut = new HyperliquidConnector(_mockRestClient.Object, _mockPipelineProvider.Object, new SingletonMarkPriceCache());
     }
 
     // ── Exchange Name ──────────────────────────────────────────────────────────
@@ -514,7 +515,7 @@ public class HyperliquidConnectorTests
     {
         // Arrange — connector with vault address set
         var vaultConnector = new HyperliquidConnector(
-            _mockRestClient.Object, _mockPipelineProvider.Object, vaultAddress: "0xVaultAddr123");
+            _mockRestClient.Object, _mockPipelineProvider.Object, new SingletonMarkPriceCache(), vaultAddress: "0xVaultAddr123");
 
         var accountInfo = new HyperLiquidFuturesAccount { Withdrawable = 500m };
         var successResult = new WebCallResult<HyperLiquidFuturesAccount>(
@@ -546,7 +547,7 @@ public class HyperliquidConnectorTests
     {
         // Arrange — connector with vault address set
         var vaultConnector = new HyperliquidConnector(
-            _mockRestClient.Object, _mockPipelineProvider.Object, vaultAddress: "0xVaultAddr123");
+            _mockRestClient.Object, _mockPipelineProvider.Object, new SingletonMarkPriceCache(), vaultAddress: "0xVaultAddr123");
 
         var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
         SetupExchangeInfoSuccess(tickers);
