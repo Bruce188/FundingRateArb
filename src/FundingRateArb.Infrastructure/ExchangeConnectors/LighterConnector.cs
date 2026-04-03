@@ -375,13 +375,13 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             .ToList();
 
         var missingPriceSymbols = lighterSymbols
-            .Where(s => !indexPriceBySymbol.ContainsKey(s) || indexPriceBySymbol[s] <= 0)
+            .Where(s => !indexPriceBySymbol.TryGetValue(s, out var p) || p <= 0)
             .ToList();
 
         if (missingPriceSymbols.Count > 0)
         {
             _logger.LogDebug("Lighter assetDetails missing mark prices for {Count} symbols, trying orderBookDetails fallback", missingPriceSymbols.Count);
-            var fallbackTasks = missingPriceSymbols.Select(async symbol =>
+            foreach (var symbol in missingPriceSymbols)
             {
                 try
                 {
@@ -391,12 +391,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                         indexPriceBySymbol[symbol] = market.LastTradePrice;
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "Mark price fallback failed for {Symbol}", symbol);
                 }
-            });
-            await Task.WhenAll(fallbackTasks);
+            }
         }
 
         var volumeBySymbol = statsResponse?.OrderBookStats?

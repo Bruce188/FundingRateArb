@@ -514,6 +514,39 @@ public class LighterConnectorTests
         btc.MarkPrice.Should().Be(69750.000000m, "BTC had a valid index_price, no fallback needed");
     }
 
+    [Fact]
+    public async Task GetFundingRates_FallbackThrows_ReturnsRatesWithZeroMarkPrice()
+    {
+        // assetDetails returns IndexPrice "0" for ETH AND orderBookDetails returns HTTP 500
+        var assetDetailsWithZeroEth = """
+            {
+                "code": 200,
+                "asset_details": [
+                    { "asset_id": 0, "symbol": "USDC", "index_price": "1.000000" },
+                    { "asset_id": 1, "symbol": "ETH", "index_price": "0" },
+                    { "asset_id": 2, "symbol": "BTC", "index_price": "69750.000000" }
+                ]
+            }
+            """;
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", FundingRatesJson);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", assetDetailsWithZeroEth);
+            h.AddRoute("orderBookDetails", "Internal Server Error", HttpStatusCode.InternalServerError);
+        });
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(2, "rates must still be returned when fallback fails");
+        var eth = rates.First(r => r.Symbol == "ETH");
+        eth.MarkPrice.Should().Be(0m, "ETH mark price must be zero when both assetDetails and orderBookDetails fail");
+
+        var btc = rates.First(r => r.Symbol == "BTC");
+        btc.MarkPrice.Should().Be(69750.000000m, "BTC had a valid index_price, no fallback needed");
+    }
+
     // ── GetMarkPriceAsync ─────────────────────────────────────────
 
     [Fact]
