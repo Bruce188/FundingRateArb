@@ -468,9 +468,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
 
         // Step 3: Push global dashboard KPI update (includes opening and needs-attention counts)
-        var emergencyClosedCount = await uow.Positions.CountByStatusAsync(PositionStatus.EmergencyClosed);
+        var needsAttentionCount = await uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
         await PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled,
-            allOpeningPositions.Count, emergencyClosedCount);
+            allOpeningPositions.Count, needsAttentionCount);
 
         // Step 4: Gate — skip position opening if global kill switch is off
         if (!globalConfig.IsEnabled)

@@ -140,6 +140,10 @@ public class PositionRepository : IPositionRepository
         _context.ArbitragePositions
             .CountAsync(p => p.Status == status);
 
+    public Task<int> CountByStatusesAsync(params PositionStatus[] statuses) =>
+        _context.ArbitragePositions
+            .CountAsync(p => statuses.Contains(p.Status));
+
     public Task<List<ArbitragePosition>> GetByStatusesAsync(params PositionStatus[] statuses) =>
         _context.ArbitragePositions
             .Include(p => p.Asset)
