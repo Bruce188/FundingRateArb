@@ -10,6 +10,7 @@ public static class ArbitragePositionMappingExtensions
         return new PositionSummaryDto
         {
             Id = pos.Id,
+            // Intentional: unified fallback format across all call sites (was string.Empty in Dashboard, "?" in BotOrchestrator)
             AssetSymbol = pos.Asset?.Symbol ?? $"Asset #{pos.AssetId}",
             LongExchangeName = pos.LongExchange?.Name ?? $"Exchange #{pos.LongExchangeId}",
             ShortExchangeName = pos.ShortExchange?.Name ?? $"Exchange #{pos.ShortExchangeId}",
@@ -18,6 +19,7 @@ public static class ArbitragePositionMappingExtensions
             EntrySpreadPerHour = pos.EntrySpreadPerHour,
             CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
             AccumulatedFunding = pos.AccumulatedFunding,
+            // Note: DashboardController previously omitted this; now unified with other call sites
             UnrealizedPnl = pos.AccumulatedFunding, // best estimate until live mark-to-market
             RealizedPnl = pos.RealizedPnl,
             Status = pos.Status,

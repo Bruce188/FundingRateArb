@@ -104,6 +104,22 @@ public class ArbitragePositionMappingExtensionsTests
         dto.AssetSymbol.Should().Be("Asset #7");
         dto.LongExchangeName.Should().Be("Exchange #15");
         dto.ShortExchangeName.Should().Be("Exchange #25");
+        dto.RealizedPnl.Should().BeNull();
+        dto.ClosedAt.Should().BeNull();
+        dto.Status.Should().Be(PositionStatus.Opening);
+        dto.SizeUsdc.Should().Be(2000m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_UnrealizedPnl_MirrorsAccumulatedFunding()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.AccumulatedFunding = 99.99m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnrealizedPnl.Should().Be(99.99m);
+        dto.AccumulatedFunding.Should().Be(99.99m);
     }
 
     [Fact]
@@ -146,5 +162,9 @@ public class ArbitragePositionMappingExtensionsTests
         dto.AssetSymbol.Should().Be("Asset #7");
         dto.LongExchangeName.Should().Be("Exchange #15");
         dto.ShortExchangeName.Should().Be("Exchange #25");
+        dto.RealizedPnl.Should().BeNull();
+        dto.ClosedAt.Should().BeNull();
+        dto.Status.Should().Be(PositionStatus.Opening);
+        dto.SizeUsdc.Should().Be(2000m);
     }
 }
