@@ -499,7 +499,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Part A: Reconcile Open positions — detect exchange drift
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
-        if (openPositions.Count == 0) return;
+        if (openPositions.Count == 0)
+        {
+            return;
+        }
 
         var batchResults = await _executionEngine.CheckPositionsExistOnExchangesBatchAsync(openPositions, ct);
 
@@ -516,7 +519,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
 
                 if (result == PositionExistsResult.Unknown || result == PositionExistsResult.BothPresent)
+                {
                     continue;
+                }
 
                 string driftDetail;
                 switch (result)

@@ -465,7 +465,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var result = await pipeline.ExecuteAsync(
                 async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
 
-            if (!result.Success) return null;
+            if (!result.Success)
+            {
+                return null;
+            }
 
             var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol &&
                 ((side == Side.Long && p.PositionAmount > 0) || (side == Side.Short && p.PositionAmount < 0)));

@@ -327,7 +327,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 var closeEngine = closeScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
                 var closeUow = closeScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
                 var pos = await closeUow.Positions.GetByIdAsync(reaped.PositionId);
-                if (pos is null) continue;
+                if (pos is null)
+                {
+                    continue;
+                }
 
                 using var closeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 closeCts.CancelAfter(TimeSpan.FromSeconds(30));
