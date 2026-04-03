@@ -426,42 +426,146 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     public async Task ReconcileOpenPositionsAsync(CancellationToken ct = default)
     {
-        var openPositions = await _uow.Positions.GetOpenTrackedAsync();
-        if (openPositions.Count == 0) return;
-
-        var reconciled = 0;
-        foreach (var pos in openPositions)
+        // Part B.1: Reconcile Opening positions — recover or fail stuck opens
+        var openingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Opening);
+        foreach (var pos in openingPositions)
         {
             try
             {
                 var exists = await _executionEngine.CheckPositionExistsOnExchangesAsync(pos, ct);
-
-                // null = API failure, skip (don't treat as drift)
-                if (exists is null) continue;
-
-                if (!exists.Value)
+                if (exists == true)
                 {
+                    pos.Status = PositionStatus.Open;
+                    _uow.Positions.Update(pos);
+                    await _uow.SaveAsync(ct);
                     _logger.LogWarning(
-                        "Exchange drift detected for position #{Id} ({Asset} {LongExchange}/{ShortExchange}) — position missing from exchanges",
-                        pos.Id, pos.Asset?.Symbol, pos.LongExchange?.Name, pos.ShortExchange?.Name);
+                        "Opening position #{Id} ({Asset}) recovered — both legs confirmed on exchanges, transitioned to Open",
+                        pos.Id, pos.Asset?.Symbol ?? "?");
+                }
+                else if (exists == false)
+                {
+                    // Attempt cleanup of any surviving leg before marking Failed
+                    // (if one leg was placed but the other failed, this closes the surviving one)
+                    try
+                    {
+                        await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
+                    }
+                    catch (Exception closeEx)
+                    {
+                        _logger.LogWarning(closeEx, "Cleanup close failed for Opening position #{Id}", pos.Id);
+                    }
 
-                    pos.Status = PositionStatus.EmergencyClosed;
-                    pos.CloseReason = CloseReason.ExchangeDrift;
+                    pos.Status = PositionStatus.Failed;
                     pos.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(pos);
-
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = pos.UserId,
-                        ArbitragePositionId = pos.Id,
-                        Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"Position #{pos.Id} missing from exchanges — marked ExchangeDrift. " +
-                                  $"Manual review required.",
-                    });
-
-                    reconciled++;
+                    await _uow.SaveAsync(ct);
+                    _logger.LogWarning(
+                        "Opening position #{Id} ({Asset}) not found on exchanges — marked as Failed",
+                        pos.Id, pos.Asset?.Symbol ?? "?");
                 }
+                // null → API failure, skip
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Opening reconciliation failed for position #{Id}", pos.Id);
+            }
+        }
+
+        // Part B.2: Reconcile Closing positions — finalize if both legs gone
+        var closingPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Closing);
+        foreach (var pos in closingPositions)
+        {
+            try
+            {
+                var exists = await _executionEngine.CheckPositionExistsOnExchangesAsync(pos, ct);
+                if (exists == false)
+                {
+                    pos.Status = PositionStatus.Closed;
+                    pos.ClosedAt = DateTime.UtcNow;
+                    _uow.Positions.Update(pos);
+                    await _uow.SaveAsync(ct);
+                    _logger.LogWarning(
+                        "Closing position #{Id} ({Asset}) confirmed gone from exchanges — finalized as Closed",
+                        pos.Id, pos.Asset?.Symbol ?? "?");
+                }
+                // true or one-leg present → leave in Closing (retry logic will handle)
+                // null → API failure, skip
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Closing reconciliation failed for position #{Id}", pos.Id);
+            }
+        }
+
+        // Part A: Reconcile Open positions — detect exchange drift
+        var openPositions = await _uow.Positions.GetOpenTrackedAsync();
+        if (openPositions.Count == 0) return;
+
+        var batchResults = await _executionEngine.CheckPositionsExistOnExchangesBatchAsync(openPositions, ct);
+
+        var reconciled = 0;
+        var survivingLegCloses = new List<ArbitragePosition>();
+        foreach (var pos in openPositions)
+        {
+            try
+            {
+                if (!batchResults.TryGetValue(pos.Id, out var result))
+                {
+                    _logger.LogDebug("Position #{Id} not included in batch results — skipping", pos.Id);
+                    continue;
+                }
+
+                if (result == PositionExistsResult.Unknown || result == PositionExistsResult.BothPresent)
+                    continue;
+
+                string driftDetail;
+                switch (result)
+                {
+                    case PositionExistsResult.BothMissing:
+                        driftDetail = "both legs missing from exchanges";
+                        break;
+                    case PositionExistsResult.LongMissing:
+                        driftDetail = $"long leg missing from {pos.LongExchange?.Name}, short leg still present on {pos.ShortExchange?.Name}";
+                        break;
+                    case PositionExistsResult.ShortMissing:
+                        driftDetail = $"short leg missing from {pos.ShortExchange?.Name}, long leg still present on {pos.LongExchange?.Name}";
+                        break;
+                    default:
+                        continue;
+                }
+
+                _logger.LogWarning(
+                    "Exchange drift detected for position #{Id} ({Asset} {LongExchange}/{ShortExchange}) — {Detail}",
+                    pos.Id, pos.Asset?.Symbol, pos.LongExchange?.Name, pos.ShortExchange?.Name, driftDetail);
+
+                pos.Status = PositionStatus.EmergencyClosed;
+                pos.CloseReason = CloseReason.ExchangeDrift;
+                pos.ClosedAt = DateTime.UtcNow;
+
+                // For single-leg drift, flag the missing leg before Update so all mutations are captured
+                if (result == PositionExistsResult.LongMissing)
+                {
+                    pos.LongLegClosed = true;
+                    survivingLegCloses.Add(pos);
+                }
+                else if (result == PositionExistsResult.ShortMissing)
+                {
+                    pos.ShortLegClosed = true;
+                    survivingLegCloses.Add(pos);
+                }
+
+                _uow.Positions.Update(pos);
+
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = pos.UserId,
+                    ArbitragePositionId = pos.Id,
+                    Type = AlertType.LegFailed,
+                    Severity = AlertSeverity.Critical,
+                    Message = $"Position #{pos.Id}: {driftDetail} — marked ExchangeDrift. Manual review required.",
+                });
+
+                reconciled++;
             }
             catch (Exception ex)
             {
@@ -473,6 +577,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             await _uow.SaveAsync(ct);
             _logger.LogWarning("Reconciliation completed: {Count} positions marked as ExchangeDrift", reconciled);
+        }
+
+        // Close surviving legs after SaveAsync commits the drift status (within DI scope lifetime)
+        foreach (var pos in survivingLegCloses)
+        {
+            try
+            {
+                await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
+                _logger.LogInformation("Surviving leg close attempted for position #{Id}", pos.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to close surviving leg for position #{Id}", pos.Id);
+            }
         }
     }
 }

@@ -164,7 +164,10 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         var markPrice = await GetMarkPriceAsync(asset, ct);
 
         // Try to get actual position size from account info
-        var (quantity, apiConfirmed) = await GetPositionQuantityAsync(asset, ct);
+        // GetPositionQuantityAsync returns signed qty (positive = long, negative = short);
+        // take Abs for close size since the exchange close API expects unsigned quantity
+        var (rawQuantity, apiConfirmed) = await GetPositionQuantityAsync(asset, ct);
+        var quantity = Math.Abs(rawQuantity);
         if (quantity <= 0)
         {
             var error = apiConfirmed
@@ -326,19 +329,22 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     }
 
     /// <summary>
-    /// Fetches the actual open position quantity for the given asset from account info.
-    /// Returns 0 if no position is found or the call fails.
+    /// Checks whether a position exists on this exchange for the given asset and side.
+    /// Returns true if an open position matching the requested direction exists,
+    /// false if confirmed absent, null if the API call failed.
     /// </summary>
-    /// <summary>
-    /// Returns (quantity, apiConfirmed). apiConfirmed=true means the API successfully
-    /// returned data (position genuinely doesn't exist). apiConfirmed=false means the
     public async Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
     {
-        var (qty, confirmed) = await GetPositionQuantityAsync(asset, ct);
+        var (rawQty, confirmed) = await GetPositionQuantityAsync(asset, ct);
         if (!confirmed) return null;
-        return qty > 0;
+        return (side == Side.Long && rawQty > 0) || (side == Side.Short && rawQty < 0);
     }
 
+    /// <summary>
+    /// Fetches the actual open position quantity for the given asset from account info.
+    /// Returns the raw signed quantity (positive = long, negative = short) and whether
+    /// the API call succeeded. apiConfirmed=true means the API successfully returned data
+    /// (position genuinely doesn't exist if qty is 0). apiConfirmed=false means the
     /// API call failed or returned an unexpected result (transient — allow retry).
     /// </summary>
     private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)
@@ -360,8 +366,8 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 .FirstOrDefault(p => p.Position?.Symbol == asset);
 
             var qty = position?.Position?.PositionQuantity ?? 0m;
-            // API succeeded — if qty is 0, the position genuinely doesn't exist
-            return qty > 0 ? (Math.Abs(qty), true) : (0m, true);
+            // API succeeded — return raw signed quantity (positive = long, negative = short)
+            return (qty, true);
         }
         catch
         {

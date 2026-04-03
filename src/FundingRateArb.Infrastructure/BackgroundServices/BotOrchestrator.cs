@@ -265,19 +265,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
         var healthResult = await healthMonitor.CheckAndActAsync(ct);
 
-        // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
-        _cycleCount++;
-        if (globalConfig.ReconciliationIntervalCycles > 0 && _cycleCount % globalConfig.ReconciliationIntervalCycles == 0)
-        {
-            try
-            {
-                await healthMonitor.ReconcileOpenPositionsAsync(ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Periodic reconciliation failed — will retry next interval");
-            }
-        }
         var closedPositionIds = new List<(int PositionId, string UserId)>();
         foreach (var (pos, reason) in healthResult.ToClose)
         {
@@ -293,6 +280,21 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     var opKey = $"{pos.UserId}:{pos.AssetId}:{pos.LongExchangeId}:{pos.ShortExchangeId}";
                     _failedOpCooldowns[opKey] = (DateTime.UtcNow.Add(BaseCooldown), 1);
                 }
+            }
+        }
+
+        // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
+        // Runs after the close loop so time-sensitive closes execute first
+        if (globalConfig.ReconciliationIntervalCycles > 0 && ++_cycleCount >= globalConfig.ReconciliationIntervalCycles)
+        {
+            _cycleCount = 0;
+            try
+            {
+                await healthMonitor.ReconcileOpenPositionsAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Periodic reconciliation failed — will retry next interval");
             }
         }
 
@@ -312,6 +314,29 @@ public class BotOrchestrator : BackgroundService, IBotControl
             if (reaped.ShortExchangeId != reaped.LongExchangeId)
             {
                 IncrementExchangeFailure(reaped.ShortExchangeId, globalConfig);
+            }
+        }
+
+        // Emergency close exchange cleanup for reaped Closing positions
+        // Skip Opening-reaped — may never have had legs placed on exchanges
+        foreach (var reaped in healthResult.ReapedPositions.Where(r => r.OriginalStatus != PositionStatus.Opening))
+        {
+            try
+            {
+                using var closeScope = _scopeFactory.CreateScope();
+                var closeEngine = closeScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+                var closeUow = closeScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                var pos = await closeUow.Positions.GetByIdAsync(reaped.PositionId);
+                if (pos is null) continue;
+
+                using var closeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                closeCts.CancelAfter(TimeSpan.FromSeconds(30));
+                await closeEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, closeCts.Token);
+                _logger.LogWarning("Emergency close attempted for reaped position #{Id}", reaped.PositionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Emergency close failed for reaped position #{Id}", reaped.PositionId);
             }
         }
 

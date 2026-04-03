@@ -467,7 +467,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
             if (!result.Success) return null;
 
-            var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol && p.PositionAmount != 0);
+            var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol &&
+                ((side == Side.Long && p.PositionAmount > 0) || (side == Side.Short && p.PositionAmount < 0)));
             return pos != null;
         }
         catch
