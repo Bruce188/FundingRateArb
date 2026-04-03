@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Extensions;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
@@ -1328,23 +1329,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
     internal static PositionSummaryDto MapPositionToDto(ArbitragePosition pos, BotConfiguration config)
     {
-        var dto = new PositionSummaryDto
-        {
-            Id = pos.Id,
-            AssetSymbol = pos.Asset?.Symbol ?? "?",
-            LongExchangeName = pos.LongExchange?.Name ?? "?",
-            ShortExchangeName = pos.ShortExchange?.Name ?? "?",
-            SizeUsdc = pos.SizeUsdc,
-            MarginUsdc = pos.MarginUsdc,
-            EntrySpreadPerHour = pos.EntrySpreadPerHour,
-            CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
-            AccumulatedFunding = pos.AccumulatedFunding,
-            UnrealizedPnl = pos.AccumulatedFunding, // best estimate until live mark-to-market
-            RealizedPnl = pos.RealizedPnl,
-            Status = pos.Status,
-            OpenedAt = pos.OpenedAt,
-            ClosedAt = pos.ClosedAt,
-        };
+        var dto = pos.ToSummaryDto();
 
         ComputeWarnings(dto, pos, config);
         return dto;

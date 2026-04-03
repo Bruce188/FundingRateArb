@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Extensions;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Enums;
@@ -117,22 +118,7 @@ public class DashboardController : Controller
         var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
         var needsAttentionCount = await _uow.Positions.CountByStatusAsync(PositionStatus.EmergencyClosed);
 
-        var positionSummaries = openPositions.Select(p => new PositionSummaryDto
-        {
-            Id = p.Id,
-            AssetSymbol = p.Asset?.Symbol ?? string.Empty,
-            LongExchangeName = p.LongExchange?.Name ?? string.Empty,
-            ShortExchangeName = p.ShortExchange?.Name ?? string.Empty,
-            SizeUsdc = p.SizeUsdc,
-            MarginUsdc = p.MarginUsdc,
-            EntrySpreadPerHour = p.EntrySpreadPerHour,
-            CurrentSpreadPerHour = p.CurrentSpreadPerHour,
-            AccumulatedFunding = p.AccumulatedFunding,
-            RealizedPnl = p.RealizedPnl,
-            Status = p.Status,
-            OpenedAt = p.OpenedAt,
-            ClosedAt = p.ClosedAt
-        }).ToList();
+        var positionSummaries = openPositions.Select(p => p.ToSummaryDto()).ToList();
 
         var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
         var bestSpread = opportunities.Count > 0
