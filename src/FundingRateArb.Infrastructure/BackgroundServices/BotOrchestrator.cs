@@ -265,19 +265,6 @@ public class BotOrchestrator : BackgroundService, IBotControl
         // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
         var healthResult = await healthMonitor.CheckAndActAsync(ct);
 
-        // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
-        _cycleCount++;
-        if (globalConfig.ReconciliationIntervalCycles > 0 && _cycleCount % globalConfig.ReconciliationIntervalCycles == 0)
-        {
-            try
-            {
-                await healthMonitor.ReconcileOpenPositionsAsync(ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Periodic reconciliation failed — will retry next interval");
-            }
-        }
         var closedPositionIds = new List<(int PositionId, string UserId)>();
         foreach (var (pos, reason) in healthResult.ToClose)
         {
@@ -293,6 +280,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     var opKey = $"{pos.UserId}:{pos.AssetId}:{pos.LongExchangeId}:{pos.ShortExchangeId}";
                     _failedOpCooldowns[opKey] = (DateTime.UtcNow.Add(BaseCooldown), 1);
                 }
+            }
+        }
+
+        // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
+        // Runs after the close loop so time-sensitive closes execute first
+        _cycleCount++;
+        if (globalConfig.ReconciliationIntervalCycles > 0 && _cycleCount >= globalConfig.ReconciliationIntervalCycles)
+        {
+            _cycleCount = 0;
+            try
+            {
+                await healthMonitor.ReconcileOpenPositionsAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Periodic reconciliation failed — will retry next interval");
             }
         }
 

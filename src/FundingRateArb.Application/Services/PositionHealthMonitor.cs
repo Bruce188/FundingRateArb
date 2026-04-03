@@ -429,39 +429,68 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
         if (openPositions.Count == 0) return;
 
+        var batchResults = await _executionEngine.CheckPositionsExistOnExchangesBatchAsync(openPositions, ct);
+
         var reconciled = 0;
         foreach (var pos in openPositions)
         {
             try
             {
-                var exists = await _executionEngine.CheckPositionExistsOnExchangesAsync(pos, ct);
+                if (!batchResults.TryGetValue(pos.Id, out var result) || result == PositionExistsResult.Unknown || result == PositionExistsResult.BothPresent)
+                    continue;
 
-                // null = API failure, skip (don't treat as drift)
-                if (exists is null) continue;
-
-                if (!exists.Value)
+                string driftDetail;
+                switch (result)
                 {
-                    _logger.LogWarning(
-                        "Exchange drift detected for position #{Id} ({Asset} {LongExchange}/{ShortExchange}) — position missing from exchanges",
-                        pos.Id, pos.Asset?.Symbol, pos.LongExchange?.Name, pos.ShortExchange?.Name);
-
-                    pos.Status = PositionStatus.EmergencyClosed;
-                    pos.CloseReason = CloseReason.ExchangeDrift;
-                    pos.ClosedAt = DateTime.UtcNow;
-                    _uow.Positions.Update(pos);
-
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = pos.UserId,
-                        ArbitragePositionId = pos.Id,
-                        Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"Position #{pos.Id} missing from exchanges — marked ExchangeDrift. " +
-                                  $"Manual review required.",
-                    });
-
-                    reconciled++;
+                    case PositionExistsResult.BothMissing:
+                        driftDetail = "both legs missing from exchanges";
+                        break;
+                    case PositionExistsResult.LongMissing:
+                        driftDetail = $"long leg missing from {pos.LongExchange?.Name}, short leg still present on {pos.ShortExchange?.Name}";
+                        break;
+                    case PositionExistsResult.ShortMissing:
+                        driftDetail = $"short leg missing from {pos.ShortExchange?.Name}, long leg still present on {pos.LongExchange?.Name}";
+                        break;
+                    default:
+                        continue;
                 }
+
+                _logger.LogWarning(
+                    "Exchange drift detected for position #{Id} ({Asset} {LongExchange}/{ShortExchange}) — {Detail}",
+                    pos.Id, pos.Asset?.Symbol, pos.LongExchange?.Name, pos.ShortExchange?.Name, driftDetail);
+
+                pos.Status = PositionStatus.EmergencyClosed;
+                pos.CloseReason = CloseReason.ExchangeDrift;
+                pos.ClosedAt = DateTime.UtcNow;
+                _uow.Positions.Update(pos);
+
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = pos.UserId,
+                    ArbitragePositionId = pos.Id,
+                    Type = AlertType.LegFailed,
+                    Severity = AlertSeverity.Critical,
+                    Message = $"Position #{pos.Id}: {driftDetail} — marked ExchangeDrift. Manual review required.",
+                });
+
+                // For single-leg drift, attempt to close the surviving leg
+                if (result == PositionExistsResult.LongMissing || result == PositionExistsResult.ShortMissing)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _executionEngine.ClosePositionAsync(pos.UserId, pos, CloseReason.ExchangeDrift, ct);
+                            _logger.LogInformation("Surviving leg close attempted for position #{Id}", pos.Id);
+                        }
+                        catch (Exception closeEx)
+                        {
+                            _logger.LogWarning(closeEx, "Failed to close surviving leg for position #{Id}", pos.Id);
+                        }
+                    }, ct);
+                }
+
+                reconciled++;
             }
             catch (Exception ex)
             {

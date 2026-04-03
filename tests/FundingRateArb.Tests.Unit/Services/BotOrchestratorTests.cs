@@ -1395,4 +1395,47 @@ public class BotOrchestratorTests
             .ToList();
         statusMessages.Should().NotBeEmpty("status message should show default no-opportunities message");
     }
+
+    // ── Periodic reconciliation tests ───────────────────────────────────────
+
+    private void SetupMinimalCycleMocks()
+    {
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [] });
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync()).ReturnsAsync(new List<string>());
+    }
+
+    [Fact]
+    public async Task RunCycle_AtReconciliationInterval_CallsReconcile()
+    {
+        var config = MakeEnabledConfig();
+        config.ReconciliationIntervalCycles = 1; // reconcile every cycle
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        SetupMinimalCycleMocks();
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockHealthMonitor.Verify(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RunCycle_ReconciliationThrows_ContinuesCycle()
+    {
+        var config = MakeEnabledConfig();
+        config.ReconciliationIntervalCycles = 1;
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        SetupMinimalCycleMocks();
+        _mockHealthMonitor
+            .Setup(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Reconciliation failure"));
+
+        // Should not throw — cycle continues despite reconciliation failure
+        var act = () => _sut.RunCycleAsync(CancellationToken.None);
+        await act.Should().NotThrowAsync();
+    }
 }

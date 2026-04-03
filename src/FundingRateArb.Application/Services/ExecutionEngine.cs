@@ -1282,4 +1282,96 @@ public class ExecutionEngine : IExecutionEngine
             await DisposeConnectorAsync(shortConnector);
         }
     }
+
+    public async Task<Dictionary<int, PositionExistsResult>> CheckPositionsExistOnExchangesBatchAsync(
+        IReadOnlyList<ArbitragePosition> positions, CancellationToken ct = default)
+    {
+        var results = new Dictionary<int, PositionExistsResult>();
+
+        // Group positions by (UserId, LongExchangeName, ShortExchangeName) to share connectors
+        var groups = positions
+            .Where(p => p.LongExchange?.Name is not null && p.ShortExchange?.Name is not null && p.Asset?.Symbol is not null)
+            .GroupBy(p => (p.UserId, LongExchange: p.LongExchange!.Name, ShortExchange: p.ShortExchange!.Name));
+
+        // Mark positions with missing nav properties as Unknown
+        foreach (var p in positions.Where(p => p.LongExchange?.Name is null || p.ShortExchange?.Name is null || p.Asset?.Symbol is null))
+        {
+            _logger.LogWarning("Position #{Id} missing navigation properties for batch reconciliation", p.Id);
+            results[p.Id] = PositionExistsResult.Unknown;
+        }
+
+        foreach (var group in groups)
+        {
+            IExchangeConnector? longConnector = null;
+            IExchangeConnector? shortConnector = null;
+            try
+            {
+                var (l, s, error) = await CreateUserConnectorsAsync(group.Key.UserId, group.Key.LongExchange, group.Key.ShortExchange);
+                if (error is not null)
+                {
+                    _logger.LogWarning("Cannot reconcile positions for {UserId}/{LongExchange}/{ShortExchange}: {Error}",
+                        group.Key.UserId, group.Key.LongExchange, group.Key.ShortExchange, error);
+                    foreach (var p in group)
+                        results[p.Id] = PositionExistsResult.Unknown;
+                    continue;
+                }
+                longConnector = l;
+                shortConnector = s;
+
+                foreach (var pos in group)
+                {
+                    try
+                    {
+                        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                        cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+                        var longTask = longConnector.HasOpenPositionAsync(pos.Asset!.Symbol, Side.Long, cts.Token);
+                        var shortTask = shortConnector.HasOpenPositionAsync(pos.Asset!.Symbol, Side.Short, cts.Token);
+                        await Task.WhenAll(longTask, shortTask);
+
+                        var longExists = longTask.Result;
+                        var shortExists = shortTask.Result;
+
+                        if (longExists is null || shortExists is null)
+                        {
+                            results[pos.Id] = PositionExistsResult.Unknown;
+                        }
+                        else if (longExists.Value && shortExists.Value)
+                        {
+                            results[pos.Id] = PositionExistsResult.BothPresent;
+                        }
+                        else if (!longExists.Value && !shortExists.Value)
+                        {
+                            results[pos.Id] = PositionExistsResult.BothMissing;
+                        }
+                        else if (!longExists.Value)
+                        {
+                            results[pos.Id] = PositionExistsResult.LongMissing;
+                        }
+                        else
+                        {
+                            results[pos.Id] = PositionExistsResult.ShortMissing;
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _logger.LogWarning("Batch reconciliation timeout for position #{Id}", pos.Id);
+                        results[pos.Id] = PositionExistsResult.Unknown;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Batch reconciliation check failed for position #{Id}", pos.Id);
+                        results[pos.Id] = PositionExistsResult.Unknown;
+                    }
+                }
+            }
+            finally
+            {
+                await DisposeConnectorAsync(longConnector);
+                await DisposeConnectorAsync(shortConnector);
+            }
+        }
+
+        return results;
+    }
 }
