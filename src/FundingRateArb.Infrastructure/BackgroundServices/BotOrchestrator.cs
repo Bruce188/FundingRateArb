@@ -1020,22 +1020,31 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
                 _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
 
-                // Track asset-exchange level failures
-                IncrementAssetExchangeFailure(opp.AssetId, opp.LongExchangeId);
-                if (opp.ShortExchangeId != opp.LongExchangeId)
+                // Identify the culpable exchange from error context (used for both cooldown and circuit breaker)
+                var failingExchangeId = ExtractFailingExchange(error, opp);
+
+                // Track asset-exchange level failures — target only the culpable exchange
+                if (failingExchangeId.HasValue)
                 {
-                    IncrementAssetExchangeFailure(opp.AssetId, opp.ShortExchangeId);
+                    IncrementAssetExchangeFailure(opp.AssetId, failingExchangeId.Value);
+                }
+                else
+                {
+                    // Fallback: increment both when the failing exchange can't be identified
+                    IncrementAssetExchangeFailure(opp.AssetId, opp.LongExchangeId);
+                    if (opp.ShortExchangeId != opp.LongExchangeId)
+                    {
+                        IncrementAssetExchangeFailure(opp.AssetId, opp.ShortExchangeId);
+                    }
                 }
 
-                // Target circuit breaker to the failing exchange when identifiable
-                var failingExchangeId = ExtractFailingExchange(error, opp);
+                // Target circuit breaker to the failing exchange
                 if (failingExchangeId.HasValue)
                 {
                     IncrementExchangeFailure(failingExchangeId.Value, globalConfig);
                 }
                 else
                 {
-                    // Fallback: increment both exchanges when the failing one can't be identified
                     IncrementExchangeFailure(opp.LongExchangeId, globalConfig);
                     if (opp.ShortExchangeId != opp.LongExchangeId)
                     {

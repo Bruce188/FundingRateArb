@@ -2128,6 +2128,152 @@ public class BotOrchestratorTests
     // ── Asset-level cooldown ──────────────────────────────────────────────────
 
     [Fact]
+    public async Task GenericOpenFailure_IdentifiableExchange_OnlyCoolsLongExchange()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Order rejected by Hyperliquid: rate limit"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+            "long exchange (Hyperliquid) identified in error — should be cooled down");
+        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _sut.AssetExchangeCooldowns.Should().NotContainKey((1, 2),
+            "short exchange (Lighter) not in error — should NOT be cooled down");
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_IdentifiableExchange_OnlyCoolsShortExchange()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Connection to Lighter timed out"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+            "short exchange (Lighter) identified in error — should be cooled down");
+        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+        _sut.AssetExchangeCooldowns.Should().NotContainKey((1, 1),
+            "long exchange (Hyperliquid) not in error — should NOT be cooled down");
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_UnidentifiableExchange_CoolsBothExchanges()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Network timeout"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+            "unidentifiable error — both exchanges should be cooled down (long)");
+        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+            "unidentifiable error — both exchanges should be cooled down (short)");
+        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_NullError_CoolsBothExchanges()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Unexpected failure"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+            "exception path (null error) — both exchanges should be cooled down (long)");
+        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+            "exception path (null error) — both exchanges should be cooled down (short)");
+        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+    }
+
+    [Fact]
     public void AssetExchangeCooldown_ActivatesAfterThreeFailures()
     {
         // Simulate 3 failures for asset=1, exchange=1
