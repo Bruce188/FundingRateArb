@@ -509,9 +509,9 @@ public class OrderPlacementReliabilityTests
 
         position.Status.Should().Be(PositionStatus.Closed);
         position.RealizedPnl.Should().Be(0.5m - 0.1m - 0.05m, "PnL = funding - entry fees - exit fees");
-        // NB2: Alert warns about approximate PnL
+        // NB2: Alert escalates approximate PnL as Critical
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
-            al => al.Severity == AlertSeverity.Warning &&
+            al => al.Severity == AlertSeverity.Critical &&
                   al.Message.Contains("approximate"))), Times.AtLeastOnce);
     }
 

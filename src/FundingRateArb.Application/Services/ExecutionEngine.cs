@@ -1066,7 +1066,7 @@ public class ExecutionEngine : IExecutionEngine
             UserId = position.UserId,
             ArbitragePositionId = position.Id,
             Type = AlertType.LegFailed,
-            Severity = AlertSeverity.Warning,
+            Severity = AlertSeverity.Critical,
             Message = $"Position #{position.Id} closed without price-based PnL (legs closed in separate retries). " +
                       $"RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
         });
