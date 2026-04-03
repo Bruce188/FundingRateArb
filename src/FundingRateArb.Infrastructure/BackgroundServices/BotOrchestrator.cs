@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.BackgroundServices;
 
-public class BotOrchestrator : BackgroundService, IBotControl
+public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
@@ -135,6 +135,21 @@ public class BotOrchestrator : BackgroundService, IBotControl
     public void ClearCooldowns() => _failedOpCooldowns.Clear();
     // C6: Cancel the timer wait to trigger an immediate cycle
     public void TriggerImmediateCycle() => _immediateCts.Cancel();
+
+    public IReadOnlyList<CircuitBreakerStatusDto> GetCircuitBreakerStates()
+    {
+        var now = DateTime.UtcNow;
+        return _exchangeCircuitBreaker
+            .Where(kvp => kvp.Value.BrokenUntil > now)
+            .Select(kvp => new CircuitBreakerStatusDto
+            {
+                ExchangeId = kvp.Key,
+                ExchangeName = $"Exchange-{kvp.Key}",
+                BrokenUntil = kvp.Value.BrokenUntil,
+                RemainingMinutes = (int)Math.Ceiling((kvp.Value.BrokenUntil - now).TotalMinutes)
+            })
+            .ToList();
+    }
 
     private void IncrementExchangeFailure(int exchangeId, BotConfiguration config)
     {
