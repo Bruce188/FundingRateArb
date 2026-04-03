@@ -44,6 +44,11 @@ public class BotOrchestrator : BackgroundService, IBotControl
     // Per-exchange circuit breaker — keyed by exchangeId
     private readonly ConcurrentDictionary<int, (int Failures, DateTime BrokenUntil)> _exchangeCircuitBreaker = new();
 
+    // Per-asset per-exchange cooldown — prevents repeated open failures for same asset+exchange
+    private readonly ConcurrentDictionary<(int AssetId, int ExchangeId), (int Failures, DateTime CooldownUntil)> _assetExchangeCooldowns = new();
+    private const int AssetCooldownThreshold = 3;
+    private static readonly TimeSpan AssetCooldownDuration = TimeSpan.FromMinutes(10);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -139,6 +144,23 @@ public class BotOrchestrator : BackgroundService, IBotControl
         }
     }
 
+    private void IncrementAssetExchangeFailure(int assetId, int exchangeId)
+    {
+        var now = DateTime.UtcNow;
+        var cooldownUntil = now.Add(AssetCooldownDuration);
+        _assetExchangeCooldowns.AddOrUpdate(
+            (assetId, exchangeId),
+            _ => (1, 1 >= AssetCooldownThreshold ? cooldownUntil : DateTime.MinValue),
+            (_, current) =>
+            {
+                var f = current.Failures + 1;
+                return (f, f >= AssetCooldownThreshold ? cooldownUntil : current.CooldownUntil);
+            });
+    }
+
+    /// <summary>Exposes asset-exchange cooldown state for unit testing.</summary>
+    internal ConcurrentDictionary<(int AssetId, int ExchangeId), (int Failures, DateTime CooldownUntil)> AssetExchangeCooldowns => _assetExchangeCooldowns;
+
     public void RecordCloseResult(decimal realizedPnl, string? userId = null)
     {
         if (string.IsNullOrEmpty(userId))
@@ -198,6 +220,22 @@ public class BotOrchestrator : BackgroundService, IBotControl
             _failedOpCooldowns.TryRemove(key, out _);
         }
 
+        // Sweep expired asset-exchange cooldowns.
+        // Pre-threshold entries (CooldownUntil == DateTime.MinValue) are bounded by
+        // the finite set of (asset, exchange) pairs and cleaned on successful opens.
+        if (!_assetExchangeCooldowns.IsEmpty)
+        {
+            var now = DateTime.UtcNow;
+            var expiredAssetCooldowns = _assetExchangeCooldowns
+                .Where(kvp => kvp.Value.CooldownUntil != DateTime.MinValue && kvp.Value.CooldownUntil < now)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            foreach (var key in expiredAssetCooldowns)
+            {
+                _assetExchangeCooldowns.TryRemove(key, out _);
+            }
+        }
+
         using var scope = _scopeFactory.CreateScope();
         var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var globalConfig = await uow.BotConfig.GetActiveAsync();
@@ -230,8 +268,12 @@ public class BotOrchestrator : BackgroundService, IBotControl
         await PushPositionRemovalsAsync(healthResult.ReapedPositions, closedPositionIds);
 
         // Trigger circuit breaker for exchanges involved in reaped positions
+        // Only count Closing-reaped as exchange failures — Opening-reaped are asset/tx failures, not exchange issues
         foreach (var reaped in healthResult.ReapedPositions)
         {
+            if (reaped.OriginalStatus == PositionStatus.Opening)
+                continue;
+
             IncrementExchangeFailure(reaped.LongExchangeId, globalConfig);
             if (reaped.ShortExchangeId != reaped.LongExchangeId)
             {
@@ -573,6 +615,17 @@ public class BotOrchestrator : BackgroundService, IBotControl
                     tracker.CooldownKeys.Add(key);
                     return false;
                 }
+                // Asset-exchange cooldown — skip if same asset+exchange combo has repeated failures
+                if (_assetExchangeCooldowns.TryGetValue((opp.AssetId, opp.LongExchangeId), out var longAc)
+                    && longAc.CooldownUntil > DateTime.UtcNow)
+                {
+                    return false;
+                }
+                if (_assetExchangeCooldowns.TryGetValue((opp.AssetId, opp.ShortExchangeId), out var shortAc)
+                    && shortAc.CooldownUntil > DateTime.UtcNow)
+                {
+                    return false;
+                }
                 return true;
             })
             .ToList();
@@ -608,6 +661,18 @@ public class BotOrchestrator : BackgroundService, IBotControl
                         if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
                         {
                             tracker.CooldownKeys.Add(key);
+                            return false;
+                        }
+
+                        // Asset-exchange cooldown
+                        if (_assetExchangeCooldowns.TryGetValue((opp.AssetId, opp.LongExchangeId), out var longAc2)
+                            && longAc2.CooldownUntil > DateTime.UtcNow)
+                        {
+                            return false;
+                        }
+                        if (_assetExchangeCooldowns.TryGetValue((opp.AssetId, opp.ShortExchangeId), out var shortAc2)
+                            && shortAc2.CooldownUntil > DateTime.UtcNow)
+                        {
                             return false;
                         }
 
@@ -808,6 +873,10 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 _exchangeCircuitBreaker.TryRemove(opp.LongExchangeId, out _);
                 _exchangeCircuitBreaker.TryRemove(opp.ShortExchangeId, out _);
 
+                // Reset asset-exchange cooldowns on successful open
+                _assetExchangeCooldowns.TryRemove((opp.AssetId, opp.LongExchangeId), out _);
+                _assetExchangeCooldowns.TryRemove((opp.AssetId, opp.ShortExchangeId), out _);
+
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _hubContext.Clients.Group($"user-{userId}").ReceiveNotification(msg);
                 await _hubContext.Clients.Group(HubGroups.Admins).ReceiveNotification(msg);
@@ -887,6 +956,13 @@ public class BotOrchestrator : BackgroundService, IBotControl
                 var delay = TimeSpan.FromTicks(
                     Math.Min(BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), MaxCooldown.Ticks));
                 _failedOpCooldowns[cooldownKey] = (DateTime.UtcNow + delay, failures);
+
+                // Track asset-exchange level failures
+                IncrementAssetExchangeFailure(opp.AssetId, opp.LongExchangeId);
+                if (opp.ShortExchangeId != opp.LongExchangeId)
+                {
+                    IncrementAssetExchangeFailure(opp.AssetId, opp.ShortExchangeId);
+                }
 
                 // Target circuit breaker to the failing exchange when identifiable
                 var failingExchangeId = ExtractFailingExchange(error, opp);
@@ -1083,7 +1159,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
     /// Pushes ReceivePositionRemoval for reaped and closed positions to their owning user's group.
     /// </summary>
     private async Task PushPositionRemovalsAsync(
-        IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId)> reapedPositions,
+        IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)> reapedPositions,
         List<(int PositionId, string UserId)> closedPositions)
     {
         var allRemovals = reapedPositions

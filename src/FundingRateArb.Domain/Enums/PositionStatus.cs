@@ -7,5 +7,6 @@ public enum PositionStatus
     Closing,
     Closed,
     EmergencyClosed,
-    Liquidated
+    Liquidated,
+    Failed
 }

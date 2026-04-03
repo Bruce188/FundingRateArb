@@ -113,10 +113,10 @@ public class ExecutionEngineEdgeCaseTests
         result.Error.Should().NotBeNull();
 
         // C-EE2: A sentinel position IS persisted before legs fire (with Opening status),
-        // then updated to EmergencyClosed after failure. Exactly one Add call expected.
+        // then updated to Failed after failure (both legs failed, nothing to emergency-close).
         _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Once);
         _mockPositions.Verify(p => p.Update(It.Is<ArbitragePosition>(
-            pos => pos.Status == PositionStatus.EmergencyClosed)), Times.Once);
+            pos => pos.Status == PositionStatus.Failed)), Times.Once);
     }
 
     // ── Test 2: Emergency close of long leg throws HttpRequestException ────────

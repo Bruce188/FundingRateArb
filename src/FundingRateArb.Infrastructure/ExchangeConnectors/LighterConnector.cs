@@ -304,6 +304,61 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         decimal Size,
         decimal BaselineSize);
 
+    /// <summary>
+    /// Single read-only check whether a position exists for the given asset and side.
+    /// Uses a single GetAccountAsync call with no polling or retries.
+    /// </summary>
+    public async Task<bool?> CheckPositionExistsAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var accountIndex = GetAccountIndex();
+            var accountResponse = await GetAccountAsync(accountIndex, cts.Token);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+
+            if (account is null)
+            {
+                _logger.LogWarning("Account not found on Lighter when checking position existence for {Asset}", asset);
+                return null;
+            }
+
+            if (account.Positions is null)
+            {
+                return false;
+            }
+
+            foreach (var p in account.Positions)
+            {
+                if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var size) || size == 0)
+                {
+                    continue;
+                }
+
+                var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
+                if (isSideMatch)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check position existence for {Asset} {Side}", asset, side);
+            return null;
+        }
+    }
+
     // ── Funding Rates ──
     // Note: HttpClient has AddStandardResilienceHandler applied at registration (Program.cs).
     // No internal Polly pipeline is used here to avoid double-retry (M-LC3).
