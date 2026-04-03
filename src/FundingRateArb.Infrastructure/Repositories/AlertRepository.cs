@@ -59,6 +59,18 @@ public class AlertRepository : IAlertRepository
             .ToListAsync();
     }
 
+    public async Task<Dictionary<AlertSeverity, int>> GetSeverityCountsAsync(TimeSpan within)
+    {
+        var cutoff = DateTime.UtcNow - within;
+        var counts = await _context.Alerts
+            .Where(a => a.CreatedAt >= cutoff)
+            .GroupBy(a => a.Severity)
+            .Select(g => new { Severity = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        return counts.ToDictionary(x => x.Severity, x => x.Count);
+    }
+
     public void Add(Alert alert) => _context.Alerts.Add(alert);
 
     public void Update(Alert alert) => _context.Alerts.Update(alert);

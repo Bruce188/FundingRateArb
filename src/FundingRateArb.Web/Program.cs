@@ -407,6 +407,7 @@ try
     builder.Services.AddSingleton<BotOrchestrator>();
     builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());
+    builder.Services.AddSingleton<IBotDiagnostics>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
 
     // --- MVC ---
