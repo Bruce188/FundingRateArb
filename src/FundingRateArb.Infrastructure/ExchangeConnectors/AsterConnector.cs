@@ -456,6 +456,26 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
     }
 
+    public async Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+
+            if (!result.Success) return null;
+
+            var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol && p.PositionAmount != 0);
+            return pos != null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static decimal RoundToTickSize(decimal price, decimal tickSize)
     {
         if (tickSize <= 0)

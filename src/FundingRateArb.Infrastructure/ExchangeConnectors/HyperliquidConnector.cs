@@ -332,6 +332,13 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     /// <summary>
     /// Returns (quantity, apiConfirmed). apiConfirmed=true means the API successfully
     /// returned data (position genuinely doesn't exist). apiConfirmed=false means the
+    public async Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        var (qty, confirmed) = await GetPositionQuantityAsync(asset, ct);
+        if (!confirmed) return null;
+        return qty > 0;
+    }
+
     /// API call failed or returned an unexpected result (transient — allow retry).
     /// </summary>
     private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)

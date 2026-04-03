@@ -6,6 +6,12 @@ namespace FundingRateArb.Application.Services;
 public interface IPositionHealthMonitor
 {
     Task<HealthCheckResult> CheckAndActAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Reconciles Open positions against exchanges. Marks positions as ExchangeDrift
+    /// if missing from both exchanges. Called periodically by the orchestrator.
+    /// </summary>
+    Task ReconcileOpenPositionsAsync(CancellationToken ct = default);
 }
 
 /// <summary>

@@ -49,6 +49,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
     private const int AssetCooldownThreshold = 3;
     private static readonly TimeSpan AssetCooldownDuration = TimeSpan.FromMinutes(10);
 
+    // Cycle counter for periodic reconciliation
+    private int _cycleCount;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
@@ -70,6 +73,21 @@ public class BotOrchestrator : BackgroundService, IBotControl
     {
         // Wait for first FundingRateFetcher cycle to complete (with 120s timeout)
         await _readinessSignal.WaitForReadyAsync(ct);
+
+        // Startup reconciliation: verify positions match exchange state before first cycle
+        try
+        {
+            using var reconcileScope = _scopeFactory.CreateScope();
+            var healthMonitor = reconcileScope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
+            using var reconcileCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            reconcileCts.CancelAfter(TimeSpan.FromMinutes(2));
+            await healthMonitor.ReconcileOpenPositionsAsync(reconcileCts.Token);
+            _logger.LogInformation("Startup reconciliation completed");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Startup reconciliation failed — continuing with normal cycle");
+        }
 
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
 
@@ -246,6 +264,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
 
         // Step 1: Always run health monitor for ALL open positions (regardless of user or bot state)
         var healthResult = await healthMonitor.CheckAndActAsync(ct);
+
+        // Periodic exchange reconciliation: every N cycles, verify Open positions still exist on exchanges
+        _cycleCount++;
+        if (globalConfig.ReconciliationIntervalCycles > 0 && _cycleCount % globalConfig.ReconciliationIntervalCycles == 0)
+        {
+            try
+            {
+                await healthMonitor.ReconcileOpenPositionsAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Periodic reconciliation failed — will retry next interval");
+            }
+        }
         var closedPositionIds = new List<(int PositionId, string UserId)>();
         foreach (var (pos, reason) in healthResult.ToClose)
         {

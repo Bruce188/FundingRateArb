@@ -1224,4 +1224,62 @@ public class ExecutionEngine : IExecutionEngine
 
         return false;
     }
+
+    public async Task<bool?> CheckPositionExistsOnExchangesAsync(ArbitragePosition position, CancellationToken ct = default)
+    {
+        var longExchangeName = position.LongExchange?.Name;
+        var shortExchangeName = position.ShortExchange?.Name;
+        var assetSymbol = position.Asset?.Symbol;
+
+        if (longExchangeName is null || shortExchangeName is null || assetSymbol is null)
+        {
+            _logger.LogWarning("Position #{Id} missing navigation properties for reconciliation", position.Id);
+            return null;
+        }
+
+        IExchangeConnector? longConnector = null;
+        IExchangeConnector? shortConnector = null;
+        try
+        {
+            var (l, s, error) = await CreateUserConnectorsAsync(position.UserId, longExchangeName, shortExchangeName);
+            if (error is not null)
+            {
+                _logger.LogWarning("Cannot reconcile position #{Id}: {Error}", position.Id, error);
+                return null;
+            }
+            longConnector = l;
+            shortConnector = s;
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(15));
+
+            var longTask = longConnector.HasOpenPositionAsync(assetSymbol, Side.Long, cts.Token);
+            var shortTask = shortConnector.HasOpenPositionAsync(assetSymbol, Side.Short, cts.Token);
+            await Task.WhenAll(longTask, shortTask);
+
+            var longExists = longTask.Result;
+            var shortExists = shortTask.Result;
+
+            // If either check failed (null), we can't confirm drift
+            if (longExists is null || shortExists is null)
+                return null;
+
+            return longExists.Value && shortExists.Value;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("Reconciliation timeout for position #{Id}", position.Id);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Reconciliation check failed for position #{Id}", position.Id);
+            return null;
+        }
+        finally
+        {
+            await DisposeConnectorAsync(longConnector);
+            await DisposeConnectorAsync(shortConnector);
+        }
+    }
 }
