@@ -1,6 +1,7 @@
 using CryptoExchange.Net.Objects;
 using CryptoExchange.Net.Objects.Errors;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using HyperLiquid.Net.Enums;
@@ -9,7 +10,6 @@ using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
 using HyperLiquid.Net.Interfaces.Clients.SpotApi;
 using HyperLiquid.Net.Objects.Models;
 using Moq;
-using FundingRateArb.Application.Common.Exchanges;
 using Polly;
 using Polly.Registry;
 

@@ -272,7 +272,9 @@ public class BotOrchestrator : BackgroundService, IBotControl
         foreach (var reaped in healthResult.ReapedPositions)
         {
             if (reaped.OriginalStatus == PositionStatus.Opening)
+            {
                 continue;
+            }
 
             IncrementExchangeFailure(reaped.LongExchangeId, globalConfig);
             if (reaped.ShortExchangeId != reaped.LongExchangeId)
