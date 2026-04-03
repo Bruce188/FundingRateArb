@@ -104,7 +104,10 @@ public class DashboardPositionsSectionTests : IClassFixture<DashboardPositionsSe
                              || (d.ServiceType.IsGenericType &&
                                  d.ServiceType.GetGenericTypeDefinition() == typeof(DbContextOptions<>)))
                     .ToList();
-                foreach (var d in efDescriptors) services.Remove(d);
+                foreach (var d in efDescriptors)
+                {
+                    services.Remove(d);
+                }
 
                 services.AddDbContext<AppDbContext>(options =>
                     options.UseInMemoryDatabase(DbName));
@@ -113,18 +116,27 @@ public class DashboardPositionsSectionTests : IClassFixture<DashboardPositionsSe
                 var streamDescriptors = services
                     .Where(d => d.ServiceType == typeof(IMarketDataStream))
                     .ToList();
-                foreach (var d in streamDescriptors) services.Remove(d);
+                foreach (var d in streamDescriptors)
+                {
+                    services.Remove(d);
+                }
                 services.AddSingleton<IMarketDataStream>(new StubStream());
 
                 // Remove background hosted services
                 var hostedDescriptors = services.Where(d => d.ServiceType == typeof(IHostedService)).ToList();
-                foreach (var d in hostedDescriptors) services.Remove(d);
+                foreach (var d in hostedDescriptors)
+                {
+                    services.Remove(d);
+                }
 
                 // Remove and replace IBotControl
                 var botControlDescriptors = services
                     .Where(d => d.ServiceType == typeof(IBotControl))
                     .ToList();
-                foreach (var d in botControlDescriptors) services.Remove(d);
+                foreach (var d in botControlDescriptors)
+                {
+                    services.Remove(d);
+                }
                 services.AddSingleton<IBotControl>(new StubBotControl());
 
                 // Add test authentication
@@ -145,7 +157,9 @@ public class DashboardPositionsSectionTests : IClassFixture<DashboardPositionsSe
         protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         {
             if (!Request.Headers.ContainsKey("X-Test-Auth"))
+            {
                 return Task.FromResult(AuthenticateResult.NoResult());
+            }
 
             var claims = new[]
             {
