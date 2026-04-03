@@ -352,15 +352,19 @@
     </div>
 </div>
 
-@if (Model.IsAuthenticated && Model.OpenPositions.Count > 0)
+@if (Model.IsAuthenticated)
 {
-    <div class="row mt-4">
+    var hasPositions = Model.OpenPositions.Count > 0;
+    <div class="row mt-4 @(hasPositions ? "" : "d-none")" id="positions-section">
         <div class="col-12">
             <div class="card border-0 shadow-sm">
                 <div class="card-header bg-white">
                     <h5 class="mb-0">Open Positions</h5>
                 </div>
                 <div class="card-body p-0">
+                    <div id="positions-empty" class="text-center text-muted py-4 @(hasPositions ? "d-none" : "")">
+                        No open positions
+                    </div>
                     @* Mobile card view (< 576px) *@
                     <div id="positions-cards" class="d-sm-none p-2">
                         @foreach (var pos in Model.OpenPositions)
