@@ -1342,4 +1342,93 @@ public class AsterConnectorTests
         // For Buy side: limitPrice = markPrice * 1.005 = 3500 * 1.005 = 3517.50
         capturedPrice.Should().Be(Math.Round(3500m * 1.005m, 2, MidpointRounding.AwayFromZero));
     }
+
+    // ── PlaceMarketOrderByQuantityAsync ──────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_RoundsToExchangePrecision()
+    {
+        // Verify that quantity is rounded to qtyPrecision (default 3 when exchange info not loaded)
+        // Input quantity 0.14286 should be rounded to 0.142 (ToZero with 3 decimals)
+        decimal? capturedQuantity = null;
+        var tradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<Aster.Net.Enums.OrderSide>(),
+                It.IsAny<Aster.Net.Enums.OrderType>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                It.IsAny<Aster.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.WorkingType?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+                {
+                    capturedQuantity = (decimal?)invocation.Arguments[3];
+                }))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 1 }));
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        // Pre-computed quantity = 0.14286, default precision is 3 (exchange info not loaded)
+        await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.14286m, leverage: 5);
+
+        capturedQuantity.Should().NotBeNull("quantity must be passed to PlaceOrderAsync");
+        capturedQuantity.Should().Be(0.142m, "0.14286 rounded ToZero at precision 3 = 0.142");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_BelowMinNotional_ReturnsFalse()
+    {
+        // quantity=0.001 * markPrice=3500 = $3.50 < $5 minimum
+        var client = BuildClientWithOrderResult(SuccessOrder(new AsterOrder { Id = 1 }));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.001m, leverage: 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("below Aster minimum");
+    }
+
+    // ── GetQuantityPrecisionAsync (public interface) ────────────────────────────
+
+    [Fact]
+    public async Task GetQuantityPrecision_ReturnsDefaultWhenExchangeInfoNotLoaded()
+    {
+        // When exchange info fetch is not performed, default precision is 3
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var precision = await sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(3, "default fallback precision is 3 when exchange info is unavailable");
+    }
 }

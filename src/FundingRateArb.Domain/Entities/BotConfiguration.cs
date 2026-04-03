@@ -130,6 +130,13 @@ public class BotConfiguration
     /// <summary>Enable dry-run (paper trading) mode globally.</summary>
     public bool DryRunEnabled { get; set; }
 
+    /// <summary>
+    /// When true, skip sequential execution path and use Task.WhenAll even for estimated-fill exchanges.
+    /// Risk: if on-chain tx fails, one-sided position requires emergency close.
+    /// Default false — sequential remains safe default until exchange reliability is validated.
+    /// </summary>
+    public bool ForceConcurrentExecution { get; set; }
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

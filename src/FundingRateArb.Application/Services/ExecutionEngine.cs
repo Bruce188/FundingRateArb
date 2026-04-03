@@ -129,15 +129,28 @@ public class ExecutionEngine : IExecutionEngine
                 _logger.LogWarning(ex, "Pre-flight leverage check failed for {Asset}, using configured leverage", opp.AssetSymbol);
             }
 
-            // Pre-flight margin check: verify both exchanges have sufficient balance
-            // before opening any legs. sizeUsdc IS the margin amount per side — connectors
-            // multiply by leverage internally to get notional.
+            // Pre-flight margin check + quantity coordination: fetch balances, mark prices,
+            // and precision in parallel to avoid adding latency to the critical path.
             var requiredMargin = sizeUsdc;
+            decimal longMarkPrice, shortMarkPrice;
+            int longPrecision, shortPrecision;
             try
             {
                 var longBalanceTask = longConnector.GetAvailableBalanceAsync(ct);
                 var shortBalanceTask = shortConnector.GetAvailableBalanceAsync(ct);
-                await Task.WhenAll(longBalanceTask, shortBalanceTask);
+                var longMarkPriceTask = longConnector.GetMarkPriceAsync(opp.AssetSymbol, ct);
+                var shortMarkPriceTask = shortConnector.GetMarkPriceAsync(opp.AssetSymbol, ct);
+                var longPrecisionTask = longConnector.GetQuantityPrecisionAsync(opp.AssetSymbol, ct);
+                var shortPrecisionTask = shortConnector.GetQuantityPrecisionAsync(opp.AssetSymbol, ct);
+
+                await Task.WhenAll(longBalanceTask, shortBalanceTask,
+                    longMarkPriceTask, shortMarkPriceTask,
+                    longPrecisionTask, shortPrecisionTask);
+
+                longMarkPrice = longMarkPriceTask.Result;
+                shortMarkPrice = shortMarkPriceTask.Result;
+                longPrecision = longPrecisionTask.Result;
+                shortPrecision = shortPrecisionTask.Result;
 
                 if (longBalanceTask.Result < requiredMargin)
                 {
@@ -162,6 +175,31 @@ public class ExecutionEngine : IExecutionEngine
                 return (false, "Pre-flight balance check failed — exchange connection error");
             }
 
+            // Compute shared target quantity for delta-neutral coordination
+            var referencePrice = Math.Min(longMarkPrice, shortMarkPrice);
+
+            // B2: Guard against zero/negative mark price before division
+            if (referencePrice <= 0)
+            {
+                return (false, $"Mark price invalid: long={longMarkPrice}, short={shortMarkPrice}");
+            }
+
+            // NB2: Guard against pathological price divergence between exchanges
+            var priceDivergence = Math.Abs(longMarkPrice - shortMarkPrice) / Math.Max(longMarkPrice, shortMarkPrice);
+            if (priceDivergence > 0.02m)
+            {
+                return (false, $"Mark price divergence too high between exchanges ({priceDivergence:P1})");
+            }
+
+            var coarsestPrecision = Math.Min(longPrecision, shortPrecision);
+            var targetQuantity = Math.Round(sizeUsdc * (decimal)effectiveLeverage / referencePrice, coarsestPrecision, MidpointRounding.ToZero);
+
+            // Validate min notional (use highest exchange minimum — Hyperliquid = $10)
+            if (targetQuantity * referencePrice < 10m)
+            {
+                return (false, $"Target quantity {targetQuantity} x reference price {referencePrice} = {targetQuantity * referencePrice:F2} below minimum notional");
+            }
+
             // C-EE2: Persist a sentinel record BEFORE firing legs so that a crash after one leg
             // succeeds leaves a recoverable audit trail.
             var position = new ArbitragePosition
@@ -183,11 +221,20 @@ public class ExecutionEngine : IExecutionEngine
             await _uow.SaveAsync(ct);
 
             // B1: Use concurrent path when both connectors are reliable (no estimated fills).
-            // Only use sequential when at least one leg is estimated-fill (fire-and-forget).
+            // Only use sequential when at least one leg is estimated-fill (fire-and-forget),
+            // unless ForceConcurrentExecution overrides.
             OrderResultDto longResult;
             OrderResultDto shortResult;
 
-            if (longConnector.IsEstimatedFillExchange || shortConnector.IsEstimatedFillExchange)
+            var useSequential = (longConnector.IsEstimatedFillExchange || shortConnector.IsEstimatedFillExchange)
+                && !config.ForceConcurrentExecution;
+
+            if (config.ForceConcurrentExecution && (longConnector.IsEstimatedFillExchange || shortConnector.IsEstimatedFillExchange))
+            {
+                _logger.LogWarning("ForceConcurrentExecution enabled — skipping position verification for estimated-fill exchanges");
+            }
+
+            if (useSequential)
             {
                 // NB2: Log warning when both connectors are estimated-fill
                 if (longConnector.IsEstimatedFillExchange && shortConnector.IsEstimatedFillExchange)
@@ -224,7 +271,7 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     using var firstOrderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     firstOrderCts.CancelAfter(TimeSpan.FromSeconds(45));
-                    firstResult = await firstConnector.PlaceMarketOrderAsync(opp.AssetSymbol, firstSide, sizeUsdc, effectiveLeverage, firstOrderCts.Token);
+                    firstResult = await firstConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, firstSide, targetQuantity, effectiveLeverage, firstOrderCts.Token);
                 }
                 catch (Exception ex)
                 {
@@ -333,7 +380,11 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     using var secondOrderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     secondOrderCts.CancelAfter(TimeSpan.FromSeconds(45));
-                    secondResult = await secondConnector.PlaceMarketOrderAsync(opp.AssetSymbol, secondSide, sizeUsdc, effectiveLeverage, secondOrderCts.Token);
+                    var secondQuantity = Math.Min(targetQuantity, firstResult.FilledQuantity);
+                    // Re-round to second exchange's precision
+                    var secondPrecision = firstIsLong ? shortPrecision : longPrecision;
+                    secondQuantity = Math.Round(secondQuantity, secondPrecision, MidpointRounding.ToZero);
+                    secondResult = await secondConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, secondSide, secondQuantity, effectiveLeverage, secondOrderCts.Token);
                 }
                 catch (Exception ex)
                 {
@@ -392,8 +443,8 @@ public class ExecutionEngine : IExecutionEngine
                 // Concurrent path: both connectors are reliable, use Task.WhenAll for speed (with 45-second timeout)
                 using var concurrentCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 concurrentCts.CancelAfter(TimeSpan.FromSeconds(45));
-                var longTask = longConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Long, sizeUsdc, effectiveLeverage, concurrentCts.Token);
-                var shortTask = shortConnector.PlaceMarketOrderAsync(opp.AssetSymbol, Side.Short, sizeUsdc, effectiveLeverage, concurrentCts.Token);
+                var longTask = longConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Long, targetQuantity, effectiveLeverage, concurrentCts.Token);
+                var shortTask = shortConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Short, targetQuantity, effectiveLeverage, concurrentCts.Token);
 
                 try
                 {
@@ -498,6 +549,8 @@ public class ExecutionEngine : IExecutionEngine
             position.ShortEntryPrice = shortResult.FilledPrice;
             position.LongOrderId = longResult.OrderId;
             position.ShortOrderId = shortResult.OrderId;
+            position.LongFilledQuantity = longResult.FilledQuantity;
+            position.ShortFilledQuantity = shortResult.FilledQuantity;
 
             // Guard: entry prices must be non-zero before transitioning to Open
             if (position.LongEntryPrice <= 0 || position.ShortEntryPrice <= 0)
@@ -553,13 +606,27 @@ public class ExecutionEngine : IExecutionEngine
                 _logger.LogWarning("Position #{Id} has estimated fill prices (Lighter) — PnL may be approximate", position.Id);
             }
 
-            // B7: Validate fill quantities
+            // B7: Validate fill quantities — tightened thresholds for quantity coordination
             var longQ = longResult.FilledQuantity;
             var shortQ = shortResult.FilledQuantity;
             if (longQ > 0 && shortQ > 0)
             {
                 var mismatchPct = Math.Abs(longQ - shortQ) / Math.Max(longQ, shortQ);
-                if (mismatchPct > 0.05m)
+                if (mismatchPct > 0.03m)
+                {
+                    _logger.LogCritical("Fill quantity mismatch CRITICAL: long={LongQ}, short={ShortQ} ({Pct:P1}) for {Asset} — quantity coordination may have failed",
+                        longQ, shortQ, mismatchPct, opp.AssetSymbol);
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = userId,
+                        ArbitragePositionId = position.Id,
+                        Type = AlertType.QuantityMismatch,
+                        Severity = AlertSeverity.Critical,
+                        Message = $"Fill quantity mismatch {mismatchPct:P1}: long={longQ:F6}, short={shortQ:F6} for {opp.AssetSymbol} — coordination logic may have failed",
+                    });
+                    position.Notes = $"CRITICAL quantity mismatch: long={longQ:F6}, short={shortQ:F6} ({mismatchPct:P1})";
+                }
+                else if (mismatchPct > 0.01m)
                 {
                     _logger.LogWarning("Fill quantity mismatch: long={LongQ}, short={ShortQ} ({Pct:P1}) for {Asset}",
                         longQ, shortQ, mismatchPct, opp.AssetSymbol);

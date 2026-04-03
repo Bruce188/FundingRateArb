@@ -910,4 +910,107 @@ public class HyperliquidConnectorTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("below Hyperliquid minimum $10.00");
     }
+
+    // ── PlaceMarketOrderByQuantityAsync ──────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_RoundsToSzDecimals()
+    {
+        // With szDecimals=3 (from exchange info), quantity 0.14286 should be rounded to 0.142
+        const decimal markPrice = 3000m;
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, markPrice, 1m, markPrice) };
+        var symbols = new[] { new HyperLiquidFuturesSymbol { Name = "ETH", QuantityDecimals = 3 } };
+        SetupExchangeInfoSuccess(tickers, symbols);
+
+        decimal? capturedQuantity = null;
+        _mockTrading
+            .Setup(t => t.PlaceOrderAsync(
+                It.IsAny<string>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderSide>(),
+                It.IsAny<HyperLiquid.Net.Enums.OrderType>(),
+                It.IsAny<decimal>(),
+                It.IsAny<decimal>(),
+                It.IsAny<HyperLiquid.Net.Enums.TimeInForce?>(),
+                It.IsAny<bool?>(),
+                It.IsAny<string?>(),
+                It.IsAny<decimal?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlType?>(),
+                It.IsAny<HyperLiquid.Net.Enums.TpSlGrouping?>(),
+                It.IsAny<string?>(),
+                It.IsAny<DateTime?>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, HyperLiquid.Net.Enums.OrderSide, HyperLiquid.Net.Enums.OrderType,
+                decimal, decimal, HyperLiquid.Net.Enums.TimeInForce?, bool?, string?, decimal?,
+                HyperLiquid.Net.Enums.TpSlType?, HyperLiquid.Net.Enums.TpSlGrouping?, string?,
+                DateTime?, CancellationToken>(
+                (symbol, side, type, qty, price, tif, ro, cid, tp, tpsl, tpslg, vault, exp, ct) =>
+                {
+                    capturedQuantity = qty;
+                })
+            .ReturnsAsync(CreateOrderWebCallResult(new HyperLiquidOrderResult
+            {
+                OrderId = 1L,
+                FilledQuantity = 0.142m,
+                AveragePrice = markPrice,
+                Status = HyperLiquid.Net.Enums.OrderStatus.Filled,
+            }));
+
+        var result = await _sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.14286m, leverage: 5);
+
+        result.Success.Should().BeTrue();
+        capturedQuantity.Should().Be(0.142m, "0.14286 rounded ToZero at precision 3 = 0.142");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_BelowMinNotional_RoundsUp()
+    {
+        // markPrice=3334, quantity=0.002, szDecimals=3
+        // notional = 0.002 * 3334 = $6.668 < $10
+        // after one tick (0.001): quantity = 0.003, notional = $10.002 >= $10 → success
+        const decimal markPrice = 3334m;
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, markPrice, 1m, markPrice) };
+        var symbols = new[] { new HyperLiquidFuturesSymbol { Name = "ETH", QuantityDecimals = 3 } };
+        SetupExchangeInfoSuccess(tickers, symbols);
+
+        var orderResult = new HyperLiquidOrderResult
+        {
+            OrderId = 1L,
+            FilledQuantity = 0.003m,
+            AveragePrice = markPrice,
+            Status = HyperLiquid.Net.Enums.OrderStatus.Filled,
+        };
+        SetupTradingSuccess(orderResult);
+
+        var result = await _sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.002m, leverage: 1);
+
+        result.Success.Should().BeTrue(
+            "quantity bumped by one tick should clear the $10 minimum notional");
+    }
+
+    // ── GetQuantityPrecisionAsync (public interface) ────────────────────────────
+
+    [Fact]
+    public async Task GetQuantityPrecision_ReturnsCachedSzDecimals()
+    {
+        // When exchange info provides szDecimals, the public method should return it
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
+        var symbols = new[] { new HyperLiquidFuturesSymbol { Name = "ETH", QuantityDecimals = 4 } };
+        SetupExchangeInfoSuccess(tickers, symbols);
+
+        var precision = await _sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetQuantityPrecision_DefaultsTo6_WhenNotInCache()
+    {
+        // When exchange info doesn't contain the symbol, default to 6
+        var tickers = new[] { CreateTicker("ETH", 0.0001m, 3000m, 1m, 3000m) };
+        SetupExchangeInfoSuccess(tickers); // no symbols provided
+
+        var precision = await _sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(6, "default fallback precision is 6 when symbol not in szDecimals cache");
+    }
 }
