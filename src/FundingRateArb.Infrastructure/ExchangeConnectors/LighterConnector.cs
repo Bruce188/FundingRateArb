@@ -305,9 +305,13 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         decimal BaselineSize);
 
     /// <summary>
+    /// Checks whether a position exists on this exchange for the given asset and side.
+    /// Delegates to CheckPositionExistsAsync.
+    /// </summary>
     public Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
         => CheckPositionExistsAsync(asset, side, ct);
 
+    /// <summary>
     /// Single read-only check whether a position exists for the given asset and side.
     /// Uses a single GetAccountAsync call with no polling or retries.
     /// </summary>
