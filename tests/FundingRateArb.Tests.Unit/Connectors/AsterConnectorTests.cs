@@ -1251,6 +1251,20 @@ public class AsterConnectorTests
     }
 
     [Fact]
+    public void RoundToTickSize_MidpointValue_RoundsAwayFromZero()
+    {
+        var method = typeof(AsterConnector).GetMethod("RoundToTickSize",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        method.Should().NotBeNull("RoundToTickSize must exist as a private static method");
+
+        // 3517.25 / 0.5 = 7034.5 — exact midpoint. AwayFromZero rounds to 7035.
+        var result = (decimal)method!.Invoke(null, new object[] { 3517.25m, 0.5m })!;
+
+        result.Should().Be(3517.5m,
+            "midpoint values must round away from zero (not banker's rounding)");
+    }
+
+    [Fact]
     public void RoundToTickSize_ZeroTickSize_FallsBackTo2dp()
     {
         var method = typeof(AsterConnector).GetMethod("RoundToTickSize",

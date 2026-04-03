@@ -460,9 +460,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
     {
         if (tickSize <= 0)
         {
-            return Math.Round(price, 2);
+            return Math.Round(price, 2, MidpointRounding.AwayFromZero);
         }
 
-        return Math.Round(price / tickSize) * tickSize;
+        return Math.Round(price / tickSize, 0, MidpointRounding.AwayFromZero) * tickSize;
     }
 }
