@@ -716,13 +716,20 @@ public class BotOrchestrator : BackgroundService, IBotControl
                                     rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
                                     rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
 
-                                await executionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
+                                try
+                                {
+                                    await executionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogWarning(ex, "Rotation close threw for position {PositionId}", positionToClose.Id);
+                                }
 
-                                // Always set cooldown to prevent retry storms even on failure
+                                // Always set cooldown to prevent retry storms, even on failure/exception
                                 _rotationCooldowns[cooldownKey] = DateTime.UtcNow.Add(RotationCooldownDuration);
 
-                                // Only track daily count and mark executed if close succeeded
-                                if (positionToClose.Status != PositionStatus.Open)
+                                // Only count as success if position fully closed
+                                if (positionToClose.Status == PositionStatus.Closed)
                                 {
                                     _dailyRotationCounts[userId] = (today, count + 1);
                                     userOpenPositions = userOpenPositions.Where(p => p.Id != rotationRec.PositionId).ToList();
@@ -730,7 +737,7 @@ public class BotOrchestrator : BackgroundService, IBotControl
                                 }
                                 else
                                 {
-                                    _logger.LogWarning("Rotation close failed for position {PositionId} — status still Open", positionToClose.Id);
+                                    _logger.LogWarning("Rotation close did not complete for position {PositionId} — status is {Status}", positionToClose.Id, positionToClose.Status);
                                 }
                             }
                         }
