@@ -163,6 +163,32 @@ public class SequentialHttpMessageHandler : HttpMessageHandler
     }
 }
 
+/// <summary>
+/// HTTP handler that returns sequential responses with configurable status codes per call.
+/// Supports returning error status codes to trigger EnsureSuccessStatusCode exceptions.
+/// </summary>
+public class SequentialStatusHttpMessageHandler : HttpMessageHandler
+{
+    private readonly IReadOnlyList<(string content, HttpStatusCode status)> _responses;
+    private int _callCount;
+
+    public SequentialStatusHttpMessageHandler(IEnumerable<(string content, HttpStatusCode status)> responses)
+    {
+        _responses = responses.ToList();
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var index = Math.Min(Interlocked.Increment(ref _callCount) - 1, _responses.Count - 1);
+        var (content, status) = _responses[index];
+        return Task.FromResult(new HttpResponseMessage(status)
+        {
+            Content = new StringContent(content, System.Text.Encoding.UTF8, "application/json")
+        });
+    }
+}
+
 public class LighterConnectorTests
 {
     private readonly Mock<ILogger<LighterConnector>> _loggerMock = new();
@@ -291,7 +317,7 @@ public class LighterConnectorTests
         var handler = new MockHttpMessageHandler(json, status);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -302,7 +328,7 @@ public class LighterConnectorTests
         configure(handler);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -605,7 +631,7 @@ public class LighterConnectorTests
 
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -634,7 +660,7 @@ public class LighterConnectorTests
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -696,7 +722,7 @@ public class LighterConnectorTests
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
@@ -1029,7 +1055,7 @@ public class LighterConnectorTests
         var handler = new SequentialHttpMessageHandler(responses);
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
     }
@@ -1097,6 +1123,266 @@ public class LighterConnectorTests
         var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
 
         result.Should().BeFalse("ETH Long at baseline size 0.1 never changes — should early-exit");
+    }
+
+    // ── Verification: baseline snapshot + timing tests ────────────────────────
+
+    /// <summary>
+    /// Baseline shows ETH Long at 0.5, poll shows 1.0 → size increased → returns true.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_SizeIncreasedFromBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var responses = new List<string>
+        {
+            MakeAccountJson(0.5m),  // baseline
+            MakeAccountJson(1.0m),  // poll 1 — size doubled
+        };
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long size increased from baseline 0.5 to 1.0");
+    }
+
+    /// <summary>
+    /// Baseline has no ETH positions, poll shows ETH Long at 0.5 → new position → returns true.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_NewPositionNotInBaseline_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var responses = new List<string>
+        {
+            MakeAccountJson(null),  // baseline — no ETH positions
+            MakeAccountJson(0.5m),  // poll 1 — ETH Long appears
+        };
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long was not in baseline but appeared in poll");
+    }
+
+    /// <summary>
+    /// Baseline fetch throws (HTTP 500), any matching position in poll returns true
+    /// because no baseline means no comparison — any match is treated as new.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_BaselineFetchThrows_StillDetectsPosition()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // First call (baseline) returns 500 → triggers HttpRequestException via EnsureSuccessStatusCode
+        // Subsequent calls return ETH Long at 0.5
+        var responses = new List<(string content, HttpStatusCode status)>
+        {
+            ("{}", HttpStatusCode.InternalServerError),              // baseline — throws
+            (MakeAccountJson(0.5m), HttpStatusCode.OK),              // poll 1 — ETH Long at 0.5
+        };
+
+        var handler = new SequentialStatusHttpMessageHandler(responses);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("baseline fetch failed so any matching position should be treated as new");
+    }
+
+    /// <summary>
+    /// All 10 regular polls exhaust without detecting a new position,
+    /// then the grace check finds ETH Long → returns true.
+    /// Polls alternate between ETH at baseline size (resets no-change streak)
+    /// and no ETH (increments streak) to avoid the 5-consecutive early exit.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_GraceCheckFindsPosition_ReturnsTrue()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // ETH at baseline size — foundTarget=true, resets noChangeStreak
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        // No ETH position — foundTarget=false, increments noChangeStreak
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        var responses = new List<string>();
+        responses.Add(ethAtBaseline); // baseline — ETH Long at 0.5
+        // Alternate polls: ETH at baseline (resets streak) then no-ETH (increments streak)
+        // Pattern: baseline(0.5), noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase, noETH, ethBase
+        // This prevents the streak from reaching 5 consecutive no-change polls
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        responses.Add(MakeAccountJson(1.0m)); // grace check — ETH Long at 1.0 (above baseline)
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("grace check found ETH Long after all polls were exhausted");
+
+        // Verify the grace check log message was emitted
+        _loggerMock.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("GRACE CHECK")),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    // ── ComputeInitialDelayMs static method tests ────────────────────────
+
+    [Fact]
+    public void ComputeInitialDelayMs_AboveMax_ClampsTo15000()
+    {
+        LighterConnector.ComputeInitialDelayMs(20000).Should().Be(15000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_BelowMin_ClampsTo5000()
+    {
+        LighterConnector.ComputeInitialDelayMs(1000).Should().Be(5000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Zero_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(0).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_InRange_ReturnsExactValue()
+    {
+        LighterConnector.ComputeInitialDelayMs(10000).Should().Be(10000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Negative_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(-500).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_Infinity_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(double.PositiveInfinity).Should().Be(8000);
+    }
+
+    [Fact]
+    public void ComputeInitialDelayMs_NaN_ReturnsDefault8000()
+    {
+        LighterConnector.ComputeInitialDelayMs(double.NaN).Should().Be(8000);
+    }
+
+    // ── Grace check negative path tests (B2) ────────────────────────
+
+    /// <summary>
+    /// All 10 regular polls exhaust, grace check finds position at baseline size → returns false.
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_GraceCheckPositionAtBaselineSize_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // ETH at baseline size — foundTarget=true, resets noChangeStreak
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        // No ETH position — foundTarget=false, increments noChangeStreak
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        var responses = new List<string>();
+        responses.Add(ethAtBaseline); // baseline — ETH Long at 0.5
+        // Alternate to prevent early-exit: ethBase resets streak, noETH increments
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0 ? noEthJson : ethAtBaseline);
+        responses.Add(ethAtBaseline); // grace check — ETH Long at 0.5 (same as baseline) → false
+
+        var sut = CreateSequentialConnector(responses);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse("grace check found position at baseline size — no increase detected");
+    }
+
+    /// <summary>
+    /// All 10 regular polls exhaust, grace check HTTP call throws → returns false (not throws).
+    /// </summary>
+    [Fact]
+    public async Task VerifyPosition_GraceCheckThrows_ReturnsFalse()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var ethAtBaseline = MakeAccountJson(0.5m);
+        var noEthJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "account_index": 281474976624240,
+                        "available_balance": "100.00",
+                        "positions": [
+                            { "symbol": "BTC", "position": "0.0100", "margin": "10", "entry_price": "60000" }
+                        ]
+                    }
+                ]
+            }
+            """;
+
+        // 1 baseline + 10 polls (alternating to prevent early exit) + 1 grace check (500)
+        var responses = new List<(string content, HttpStatusCode status)>();
+        responses.Add((ethAtBaseline, HttpStatusCode.OK)); // baseline
+        for (int i = 0; i < 10; i++)
+            responses.Add(i % 2 == 0
+                ? (noEthJson, HttpStatusCode.OK)
+                : (ethAtBaseline, HttpStatusCode.OK));
+        responses.Add(("{}", HttpStatusCode.InternalServerError)); // grace check — 500
+
+        var handler = new SequentialStatusHttpMessageHandler(responses);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeFalse("grace check HTTP error should result in false, not exception");
     }
 }
 
@@ -1460,7 +1746,7 @@ public class ExchangeConnectorFactoryTests
         var handler = new MockHttpMessageHandler("{}");
         var httpClient = new HttpClient(handler)
         {
-            BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/")
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
         var logger = new Mock<ILogger<LighterConnector>>();
         var connector = new LighterConnector(httpClient, logger.Object, config);
