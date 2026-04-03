@@ -367,6 +367,38 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             return [];
         }
 
+        // Fall back to orderBookDetails (LastTradePrice) for symbols missing from assetDetails
+        var lighterSymbols = allRates
+            .Where(r => r.Exchange.Equals("lighter", StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.Symbol)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var missingPriceSymbols = lighterSymbols
+            .Where(s => !indexPriceBySymbol.ContainsKey(s) || indexPriceBySymbol[s] <= 0)
+            .ToList();
+
+        if (missingPriceSymbols.Count > 0)
+        {
+            _logger.LogDebug("Lighter assetDetails missing mark prices for {Count} symbols, trying orderBookDetails fallback", missingPriceSymbols.Count);
+            var fallbackTasks = missingPriceSymbols.Select(async symbol =>
+            {
+                try
+                {
+                    var market = await GetMarketDetailAsync(symbol, ct);
+                    if (market is not null && market.LastTradePrice > 0)
+                    {
+                        indexPriceBySymbol[symbol] = market.LastTradePrice;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Mark price fallback failed for {Symbol}", symbol);
+                }
+            });
+            await Task.WhenAll(fallbackTasks);
+        }
+
         var volumeBySymbol = statsResponse?.OrderBookStats?
             .ToDictionary(s => s.Symbol, s => s.DailyQuoteTokenVolume)
             ?? new Dictionary<string, decimal>();
