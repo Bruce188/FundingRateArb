@@ -11,5 +11,6 @@ public enum AlertType
     BotError,
     MarginWarning,
     PriceFeedFailure,
-    LeverageReduced
+    LeverageReduced,
+    QuantityMismatch
 }

@@ -156,6 +156,113 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         }
     }
 
+    /// <summary>
+    /// Places a market order using a pre-computed quantity instead of computing from sizeUsdc.
+    /// The quantity is rounded to szDecimals (may reduce, never increase).
+    /// </summary>
+    public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
+        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+    {
+        try
+        {
+            var markPrice = await GetMarkPriceAsync(asset, ct);
+
+            if (markPrice <= 0)
+            {
+                return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+            }
+
+            // Set leverage before placing the order
+            var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
+            await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.SetLeverageAsync(
+                    asset, leverage, MarginType.Cross, null, null, token),
+                ct);
+
+            var sdkSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
+            var szDecimals = _szDecimalsCache.TryGetValue(asset, out var cached) ? cached : 6;
+            var roundedQuantity = Math.Round(quantity, szDecimals, MidpointRounding.ToZero);
+
+            if (roundedQuantity <= 0)
+            {
+                return new OrderResultDto { Success = false, Error = $"Rounded quantity is zero for {asset} (quantity={quantity}, szDecimals={szDecimals})" };
+            }
+
+            // Min notional validation ($10 minimum for Hyperliquid)
+            var notional = roundedQuantity * markPrice;
+            if (notional < 10m)
+            {
+                // Round up by one tick to clear minimum notional
+                var tick = 1m / (decimal)Math.Pow(10, szDecimals);
+                roundedQuantity += tick;
+                notional = roundedQuantity * markPrice;
+                if (notional < 10m)
+                {
+                    return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Hyperliquid minimum $10.00" };
+                }
+            }
+
+            var limitPrice = side == Side.Long
+                ? markPrice * (1 + SlippagePct)
+                : markPrice * (1 - SlippagePct);
+
+            var orderResult = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                    symbol: asset,
+                    side: sdkSide,
+                    orderType: OrderType.Market,
+                    quantity: roundedQuantity,
+                    price: limitPrice,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: false,
+                    clientOrderId: null,
+                    triggerPrice: null,
+                    tpSlType: null,
+                    tpSlGrouping: null,
+                    vaultAddress: _vaultAddress,
+                    expireAfter: null,
+                    ct: token),
+                ct);
+
+            if (!orderResult.Success)
+            {
+                return new OrderResultDto
+                {
+                    Success = false,
+                    Error = orderResult.Error!.ToString(),
+                };
+            }
+
+            var data = orderResult.Data;
+            return new OrderResultDto
+            {
+                Success = true,
+                OrderId = data.OrderId.ToString(),
+                FilledQuantity = data.FilledQuantity ?? 0m,
+                FilledPrice = data.AveragePrice ?? 0m,
+            };
+        }
+        catch (Exception ex)
+        {
+            return new OrderResultDto { Success = false, Error = ex.Message };
+        }
+    }
+
+    /// <summary>
+    /// Returns the number of decimal places used for order quantities on Hyperliquid for the given asset.
+    /// </summary>
+    public async Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default)
+    {
+        // Ensure szDecimals cache is populated by fetching exchange info
+        if (!_szDecimalsCache.TryGetValue(asset, out var cached))
+        {
+            // Trigger cache population via GetMarkPriceAsync which loads exchange info
+            await GetMarkPriceAsync(asset, ct);
+            cached = _szDecimalsCache.TryGetValue(asset, out var refreshed) ? refreshed : 6;
+        }
+        return cached;
+    }
+
     public async Task<OrderResultDto> ClosePositionAsync(
         string asset,
         Side side,

@@ -22,6 +22,8 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
         builder.Property(p => p.LongLiquidationPrice).HasColumnType("decimal(18,4)");
         builder.Property(p => p.ShortLiquidationPrice).HasColumnType("decimal(18,4)");
         builder.Property(p => p.RealizedPnl).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.LongFilledQuantity).HasColumnType("decimal(28,12)");
+        builder.Property(p => p.ShortFilledQuantity).HasColumnType("decimal(28,12)");
         builder.Property(p => p.LongLegClosed).HasDefaultValue(false);
         builder.Property(p => p.ShortLegClosed).HasDefaultValue(false);
         builder.Property(p => p.LongOrderId).HasMaxLength(200);

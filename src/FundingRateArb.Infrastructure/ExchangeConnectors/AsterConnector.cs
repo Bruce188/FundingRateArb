@@ -109,7 +109,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
             return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
         }
 
-        var qtyPrecision = await GetQuantityPrecisionAsync(symbol, ct);
+        var qtyPrecision = await GetSymbolQuantityPrecisionAsync(symbol, ct);
         var quantity = Math.Round(sizeUsdc * leverage / markPrice, qtyPrecision, MidpointRounding.ToZero);
 
         // B3: Zero-quantity guard
@@ -182,6 +182,105 @@ public class AsterConnector : IExchangeConnector, IDisposable
             FilledPrice = order.AveragePrice,
             FilledQuantity = order.QuantityFilled,
         };
+    }
+
+    /// <summary>
+    /// Places a market order using a pre-computed quantity instead of computing from sizeUsdc.
+    /// The quantity is rounded to the exchange's precision (may reduce, never increase).
+    /// </summary>
+    public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
+        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+    {
+        var symbol = asset + "USDT";
+        var orderSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
+
+        var markPrice = await GetMarkPriceAsync(asset, ct);
+
+        if (markPrice <= 0)
+        {
+            return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+        }
+
+        var qtyPrecision = await GetSymbolQuantityPrecisionAsync(symbol, ct);
+        var roundedQuantity = Math.Round(quantity, qtyPrecision, MidpointRounding.ToZero);
+
+        if (roundedQuantity <= 0)
+        {
+            return new OrderResultDto { Success = false, Error = $"Rounded quantity is zero for {asset} (quantity={quantity}, precision={qtyPrecision})" };
+        }
+
+        // Min notional validation ($5 minimum)
+        var notional = roundedQuantity * markPrice;
+        if (notional < 5m)
+        {
+            return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below Aster minimum $5.00" };
+        }
+
+        // Compute limit price with 0.5% slippage protection, rounded to tick size
+        var tickSize = await GetTickSizeAsync(symbol, ct);
+        var limitPrice = side == Side.Long
+            ? RoundToTickSize(markPrice * 1.005m, tickSize)
+            : RoundToTickSize(markPrice * 0.995m, tickSize);
+
+        var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
+        if (!leverageResult.Success)
+        {
+            return new OrderResultDto
+            {
+                Success = false,
+                Error = $"Failed to set leverage to {leverage}x on {symbol}: {leverageResult.Error?.Message ?? "unknown"}. Aborting order."
+            };
+        }
+
+        var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
+
+        var result = await pipeline.ExecuteAsync(
+            async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                symbol,
+                orderSide,
+                OrderType.Limit,
+                quantity: roundedQuantity,
+                price: limitPrice,
+                positionSide: null,
+                timeInForce: TimeInForce.ImmediateOrCancel,
+                reduceOnly: null,
+                clientOrderId: null,
+                stopPrice: null,
+                closePosition: null,
+                activationPrice: null,
+                callbackRate: null,
+                workingType: null,
+                priceProtect: null,
+                receiveWindow: null,
+                ct: token),
+            ct);
+
+        if (!result.Success)
+        {
+            return new OrderResultDto
+            {
+                Success = false,
+                Error = result.Error?.Message ?? "Unknown error",
+            };
+        }
+
+        var order = result.Data!;
+        return new OrderResultDto
+        {
+            Success = true,
+            OrderId = order.Id.ToString(),
+            FilledPrice = order.AveragePrice,
+            FilledQuantity = order.QuantityFilled,
+        };
+    }
+
+    /// <summary>
+    /// Returns the number of decimal places used for order quantities on Aster for the given asset.
+    /// </summary>
+    public async Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default)
+    {
+        var symbol = asset + "USDT";
+        return await GetSymbolQuantityPrecisionAsync(symbol, ct);
     }
 
     /// <inheritdoc />
@@ -377,7 +476,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
     }
 
-    private async Task<int> GetQuantityPrecisionAsync(string symbol, CancellationToken ct)
+    private async Task<int> GetSymbolQuantityPrecisionAsync(string symbol, CancellationToken ct)
     {
         if (_quantityPrecisionCache.TryGetValue(symbol, out var cached))
         {

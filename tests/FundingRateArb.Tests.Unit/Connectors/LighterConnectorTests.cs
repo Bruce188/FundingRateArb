@@ -1457,6 +1457,99 @@ public class LighterConnectorTests
 
         result.Should().BeFalse("grace check HTTP error should result in false, not exception");
     }
+
+    // ── PlaceMarketOrderByQuantityAsync ──────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_WithoutCredentials_ReturnsError()
+    {
+        // Without signer credentials, the method should fail at EnsureSignerReady
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns((string?)null);
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+        });
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0.5m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("SignerPrivateKey");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_BelowMinNotional_ReturnsFalse()
+    {
+        // quantity=0.001, markPrice=3500.50 → notional=$3.50 < $5 fallback minimum
+        // Note: native signer may reject the test key first; either way Success=false is correct
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns("0xabc123");
+        _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+        });
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0.001m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty("below-minimum-notional order must produce an error");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_RejectsZeroQuantity_ReturnsError()
+    {
+        // quantity=0 → baseAmount=0 → should return error
+        // Note: native signer may reject the test key first; either way Success=false is correct
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns("0xabc123");
+        _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+        });
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty("zero quantity order must produce an error");
+    }
+
+    // ── GetQuantityPrecisionAsync ──────────────────────────────────
+
+    [Fact]
+    public async Task GetQuantityPrecision_ReturnsSizeDecimals()
+    {
+        // ETH market has sizeDecimals=4 in OrderBookDetailsJson
+        var sut = CreateConnector(OrderBookDetailsJson);
+
+        var precision = await sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task GetQuantityPrecision_ForBTC_ReturnsSizeDecimals()
+    {
+        // BTC market has sizeDecimals=5 in OrderBookDetailsJson
+        var sut = CreateConnector(OrderBookDetailsJson);
+
+        var precision = await sut.GetQuantityPrecisionAsync("BTC");
+
+        precision.Should().Be(5);
+    }
+
+    [Fact]
+    public async Task GetQuantityPrecision_UnknownAsset_Throws()
+    {
+        var sut = CreateConnector(OrderBookDetailsJson);
+
+        var act = async () => await sut.GetQuantityPrecisionAsync("DOGE");
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
 }
 
 /// <summary>

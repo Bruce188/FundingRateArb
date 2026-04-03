@@ -701,6 +701,172 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
+    // ── Place Market Order by Quantity ──
+
+    public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
+        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+    {
+        _logger.LogInformation(
+            "PlaceMarketOrderByQuantityAsync: {Asset} {Side} quantity={Quantity} leverage={Leverage}",
+            asset, side, quantity, leverage);
+
+        try
+        {
+            EnsureSignerReady();
+
+            // 1. Get market metadata for the asset
+            var market = await GetMarketDetailAsync(asset, ct)
+                ?? throw new KeyNotFoundException($"Asset '{asset}' not found on Lighter DEX");
+
+            var markPrice = market.LastTradePrice;
+
+            _logger.LogDebug(
+                "Market detail: {Asset} marketId={MarketId} price={Price} sizeDecimals={SizeDecimals}",
+                asset, market.MarketId, markPrice, market.SizeDecimals);
+
+            if (markPrice <= 0)
+            {
+                throw new InvalidOperationException($"No valid price for '{asset}' on Lighter");
+            }
+
+            // 2. Validate leverage against market's IMF limits
+            if (market.MinInitialMarginFraction > 0)
+            {
+                var maxLeverage = 10_000 / market.MinInitialMarginFraction;
+                if (leverage > maxLeverage)
+                {
+                    return new OrderResultDto
+                    {
+                        Success = false,
+                        Error = $"Leverage {leverage}x exceeds {asset} market max {maxLeverage}x (MinIMF={market.MinInitialMarginFraction})"
+                    };
+                }
+            }
+
+            // 3. Update leverage for this market
+            if (!_leverageCache.TryGetValue(market.MarketId, out var cachedLeverage) || cachedLeverage != leverage)
+            {
+                if (!await TryUpdateLeverageAsync(market.MarketId, leverage, ct))
+                {
+                    return new OrderResultDto
+                    {
+                        Success = false,
+                        Error = $"Failed to set leverage {leverage}x for {asset} on Lighter"
+                    };
+                }
+                _leverageCache[market.MarketId] = leverage;
+            }
+
+            // 4. Calculate base amount using pre-computed quantity directly
+            var sizeMultiplier = (long)Math.Pow(10, market.SizeDecimals);
+            var baseAmount = (long)(quantity * sizeMultiplier);
+
+            if (baseAmount <= 0)
+            {
+                return new OrderResultDto
+                {
+                    Success = false,
+                    Error = $"Calculated base amount is zero (quantity={quantity}, sizeMultiplier={sizeMultiplier})"
+                };
+            }
+
+            // Min notional validation — use MinBaseAmount if available, else $5 USDC fallback
+            var actualNotional = quantity * markPrice;
+            var minBaseAmountParsed = long.TryParse(market.MinBaseAmount, out var minBase) ? minBase : 0L;
+            var minNotional = minBaseAmountParsed > 0
+                ? (decimal)minBaseAmountParsed / sizeMultiplier * markPrice
+                : 5m;
+            if (actualNotional < minNotional)
+            {
+                return new OrderResultDto
+                {
+                    Success = false,
+                    Error = $"Order notional ${actualNotional:F2} below Lighter minimum ${minNotional:F2}"
+                };
+            }
+
+            if (baseAmount > 1_000_000_000_000L)
+            {
+                throw new InvalidOperationException($"Base amount {baseAmount} exceeds safety limit");
+            }
+
+            // 5. Calculate price in Lighter integer format with slippage
+            var priceMultiplier = (long)Math.Pow(10, market.PriceDecimals);
+            bool isAsk = side == Side.Short;
+            long priceInt;
+            if (isAsk)
+            {
+                priceInt = (long)(markPrice * (1m - SlippagePct) * priceMultiplier);
+            }
+            else
+            {
+                priceInt = (long)(markPrice * (1m + SlippagePct) * priceMultiplier);
+            }
+
+            if (priceInt <= 0 || priceInt > int.MaxValue)
+            {
+                throw new InvalidOperationException($"Price {priceInt} exceeds int range for Lighter API");
+            }
+
+            // 6. Get nonce and sign order
+            var nonce = await GetNextNonceAsync(ct);
+            var clientOrderIndex = (int)(Interlocked.Increment(ref _orderCounter) % int.MaxValue);
+
+            _logger.LogDebug(
+                "Nonce for order: {Nonce} accountIndex={AccountIndex}",
+                nonce, _accountIndex);
+
+            var (txType, txInfo, txHash) = _signer.SignMarketOrder(
+                market.MarketId, clientOrderIndex, baseAmount, (int)priceInt,
+                isAsk, reduceOnly: false, nonce);
+
+            _logger.LogDebug(
+                "Signed order: txHash={TxHash} baseAmount={BaseAmount} price={PriceInt} isAsk={IsAsk}",
+                txHash, baseAmount, priceInt, isAsk);
+
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "Lighter order params: {Asset} {Side} baseAmount={BaseAmount} priceInt={PriceInt} slippage={Slippage}% markPrice={MarkPrice} quantity={Quantity}",
+                    asset, side, baseAmount, priceInt, SlippagePct * 100, markPrice, quantity);
+            }
+
+            // 7. Submit the signed transaction
+            var sendResult = await SendTransactionAsync(txType, txInfo, ct);
+            Volatile.Write(ref _lastPredictedSettlementMs, sendResult.PredictedExecutionTimeMs);
+
+            _logger.LogInformation(
+                "Order placed on Lighter: txHash={TxHash} market={Asset} side={Side}",
+                sendResult.TxHash ?? txHash, asset, side);
+
+            return new OrderResultDto
+            {
+                Success = true,
+                OrderId = sendResult.TxHash ?? txHash,
+                FilledPrice = markPrice,
+                FilledQuantity = quantity,
+                IsEstimatedFill = true,
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "PlaceMarketOrderByQuantityAsync failed for {Asset}", asset);
+            return new OrderResultDto
+            {
+                Success = false,
+                Error = ex.Message
+            };
+        }
+    }
+
+    // ── Quantity Precision ──
+
+    public async Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default)
+    {
+        var market = await GetMarketDetailAsync(asset, ct);
+        return market?.SizeDecimals ?? throw new KeyNotFoundException($"Asset '{asset}' not found on Lighter DEX");
+    }
+
     // ── Close Position ──
 
     /// <remarks>

@@ -39,6 +39,12 @@ public class ArbitragePosition
     [MaxLength(200)]
     public string? ShortOrderId { get; set; }
 
+    /// <summary>Actual filled quantity on the long exchange (for audit trail).</summary>
+    public decimal? LongFilledQuantity { get; set; }
+
+    /// <summary>Actual filled quantity on the short exchange (for audit trail).</summary>
+    public decimal? ShortFilledQuantity { get; set; }
+
     public DateTime OpenedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAt { get; set; }
 

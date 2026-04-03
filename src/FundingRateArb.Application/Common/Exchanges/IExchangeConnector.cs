@@ -39,6 +39,20 @@ public interface IExchangeConnector
     /// </summary>
     Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
         => Task.FromResult<bool?>(null);
+
+    /// <summary>
+    /// Places a market order using a pre-computed quantity instead of computing from sizeUsdc.
+    /// Used by ExecutionEngine for delta-neutral quantity coordination.
+    /// </summary>
+    Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not support quantity-based orders");
+
+    /// <summary>
+    /// Returns the number of decimal places used for order quantities on this exchange for the given asset.
+    /// Used by ExecutionEngine to determine the coarsest rounding grid across exchanges.
+    /// </summary>
+    Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not support quantity precision query");
 }
 
 /// <summary>
