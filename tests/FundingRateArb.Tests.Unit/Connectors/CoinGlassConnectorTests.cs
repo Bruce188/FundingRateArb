@@ -11,6 +11,11 @@ namespace FundingRateArb.Tests.Unit.Connectors;
 
 public class CoinGlassConnectorTests
 {
+    public CoinGlassConnectorTests()
+    {
+        CoinGlassConnector.ResetBackoffState();
+    }
+
     private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler) CreateConnectorWithHandler(
         HttpResponseMessage response, string? apiKey = null)
     {
@@ -661,7 +666,7 @@ public class CoinGlassConnectorTests
         // Since we can't easily time-travel, we test the reset on success by
         // using reflection to clear the backoff, simulating time passage
         var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         backoffField.Should().NotBeNull("_backoffUntil field must exist for backoff testing");
         backoffField!.SetValue(connector, DateTime.MinValue);
 
@@ -727,9 +732,9 @@ public class CoinGlassConnectorTests
         var after = DateTime.UtcNow;
 
         var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         backoffField.Should().NotBeNull();
-        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+        var backoffUntil = (DateTime)backoffField!.GetValue(null)!;
 
         // First failure: backoff = 60 * 2^0 = 60 seconds
         var backoffDuration = backoffUntil - before;
@@ -743,7 +748,7 @@ public class CoinGlassConnectorTests
         var (connector, _) = CreateConnectorWithHandler(errorResponse);
 
         var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
         backoffField.Should().NotBeNull();
 
         // Simulate 10 consecutive failures by resetting backoff between each call
@@ -754,7 +759,7 @@ public class CoinGlassConnectorTests
         }
 
         var before = DateTime.UtcNow;
-        var backoffUntil = (DateTime)backoffField!.GetValue(connector)!;
+        var backoffUntil = (DateTime)backoffField!.GetValue(null)!;
         var backoffDuration = backoffUntil - before;
 
         // Cap is 900 seconds (15 minutes)
