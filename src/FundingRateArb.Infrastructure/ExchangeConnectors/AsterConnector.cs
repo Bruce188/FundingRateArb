@@ -20,7 +20,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly IAsterRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly ILogger<AsterConnector> _logger;
-    private readonly MarkPriceCacheHelper _markPriceCache = new();
+    private readonly IMarkPriceCache _markPriceCache;
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
     private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
@@ -29,10 +29,12 @@ public class AsterConnector : IExchangeConnector, IDisposable
     public AsterConnector(
         IAsterRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider,
-        ILogger<AsterConnector> logger)
+        ILogger<AsterConnector> logger,
+        IMarkPriceCache markPriceCache)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
+        _markPriceCache = markPriceCache;
         _logger = logger;
     }
 
@@ -259,7 +261,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
         var symbol = asset + "USDT";
-        return await _markPriceCache.GetOrRefreshAsync(symbol, async token =>
+        return await _markPriceCache.GetOrRefreshAsync(ExchangeName, symbol, async token =>
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
@@ -324,7 +326,6 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
     public void Dispose()
     {
-        _markPriceCache.Dispose();
         GC.SuppressFinalize(this);
     }
 

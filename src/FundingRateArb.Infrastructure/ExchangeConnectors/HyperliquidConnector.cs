@@ -12,7 +12,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 {
     private readonly IHyperLiquidRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
-    private readonly MarkPriceCacheHelper _markPriceCache = new();
+    private readonly IMarkPriceCache _markPriceCache;
     private readonly ConcurrentDictionary<string, int> _szDecimalsCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly string? _vaultAddress;
 
@@ -21,10 +21,12 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     public HyperliquidConnector(
         IHyperLiquidRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider,
+        IMarkPriceCache markPriceCache,
         string? vaultAddress = null)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
+        _markPriceCache = markPriceCache;
         _vaultAddress = vaultAddress;
     }
 
@@ -220,7 +222,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
     public async Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default)
     {
-        return await _markPriceCache.GetOrRefreshAsync(asset, async token =>
+        return await _markPriceCache.GetOrRefreshAsync(ExchangeName, asset, async token =>
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
@@ -285,7 +287,6 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
     public void Dispose()
     {
-        _markPriceCache.Dispose();
         GC.SuppressFinalize(this);
     }
 

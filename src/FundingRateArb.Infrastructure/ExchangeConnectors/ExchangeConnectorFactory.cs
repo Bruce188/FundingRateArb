@@ -157,7 +157,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
-        return new HyperliquidConnector(restClient, pipelineProvider, subAccountAddress);
+        var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
+        return new HyperliquidConnector(restClient, pipelineProvider, markPriceCache, subAccountAddress);
     }
 
     private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
@@ -174,7 +175,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
         var logger = _serviceProvider.GetRequiredService<ILogger<AsterConnector>>();
-        return new AsterConnector(restClient, pipelineProvider, logger);
+        var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
+        return new AsterConnector(restClient, pipelineProvider, logger, markPriceCache);
     }
 
     private LighterConnector? CreateLighterConnector(

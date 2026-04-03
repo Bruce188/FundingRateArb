@@ -1476,6 +1476,7 @@ public class ExchangeConnectorFactoryTests
         // Register stub HttpClient so LighterConnector can be instantiated
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
 
         // Use stub config with defaults so connectors construct without throwing
         var configMock = new Mock<IConfiguration>();
@@ -1489,7 +1490,7 @@ public class ExchangeConnectorFactoryTests
             var mockRestClient = new Mock<HyperLiquid.Net.Interfaces.Clients.IHyperLiquidRestClient>();
             var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
             mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
-            return new HyperliquidConnector(mockRestClient.Object, mockProvider.Object);
+            return new HyperliquidConnector(mockRestClient.Object, mockProvider.Object, new SingletonMarkPriceCache());
         });
         services.AddSingleton<AsterConnector>(_ =>
         {
@@ -1497,7 +1498,7 @@ public class ExchangeConnectorFactoryTests
             var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
             mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
             var logger = Mock.Of<ILogger<AsterConnector>>();
-            return new AsterConnector(mockRestClient.Object, mockProvider.Object, logger);
+            return new AsterConnector(mockRestClient.Object, mockProvider.Object, logger, new SingletonMarkPriceCache());
         });
         services.AddSingleton<LighterConnector>(_ =>
         {
@@ -1570,6 +1571,7 @@ public class ExchangeConnectorFactoryTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
 
         // Mock the ResiliencePipelineProvider that Hyperliquid/Aster connectors need
         var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
