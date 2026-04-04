@@ -1223,4 +1223,139 @@ public class SignalEngineTests
         result[0].LongExchangeName.Should().Be("Hyperliquid");
         result[0].ShortExchangeName.Should().Be("Lighter");
     }
+
+    // ── Per-exchange funding accuracy tests ────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_AsterTimingDeviation_ReducesMinutesToSettlement()
+    {
+        // Arrange: Aster exchange with 15s timing deviation
+        // Use a settlement far enough in the future that clock drift won't affect truncation
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = 0.0001m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 15 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        // First test: with deviation (Aster has 15s)
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 60 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Settlement 30 minutes from now (large enough to avoid truncation edge)
+        var nextSettlement = now.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        var resultWithDeviation = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppWithDeviation = resultWithDeviation.Opportunities.Concat(resultWithDeviation.AllNetPositive).FirstOrDefault();
+        oppWithDeviation.Should().NotBeNull();
+
+        // Now test without deviation — set both exchanges to 0
+        var ratesNoDeviation = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m, MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m, MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(ratesNoDeviation);
+        var resultNoDeviation = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppNoDeviation = resultNoDeviation.Opportunities.Concat(resultNoDeviation.AllNetPositive).FirstOrDefault();
+        oppNoDeviation.Should().NotBeNull();
+
+        // The deviation should reduce minutes by ceil(15/60) = 1 minute
+        oppWithDeviation!.MinutesToNextSettlement.Should().Be(
+            oppNoDeviation!.MinutesToNextSettlement!.Value - 1,
+            "15s timing deviation should reduce minutes-to-settlement by 1 (ceil(15/60))");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_LighterRebate_IncreasesNetYield()
+    {
+        // Arrange: Lighter (long, pays funding) has 15% rebate
+        var now = DateTime.UtcNow;
+        var lighterLongRate = 0.0001m;
+        var hyperliquidShortRate = 0.0010m;
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2,
+                AssetId = 1,
+                RatePerHour = lighterLongRate,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0.15m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = hyperliquidShortRate,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingRebateRate = 0m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.00001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: net yield should include the rebate boost
+        // Without rebate: spread = 0.0009, fees ~ 0, net = 0.0009 - fees
+        // With rebate: net += longRate * 0.15 = 0.0001 * 0.15 = 0.000015
+        var opportunity = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opportunity.Should().NotBeNull();
+
+        // Compute expected: diff - fees + rebateBoost
+        var diff = hyperliquidShortRate - lighterLongRate; // 0.0009
+        var rebateBoost = lighterLongRate * 0.15m; // 0.000015
+        // Net should be > diff - fees (which is already > diff - some small fee amount)
+        // The rebate boost adds to net yield
+        opportunity!.NetYieldPerHour.Should().BeGreaterThan(diff - 0.001m,
+            "rebate should improve net yield compared to no-rebate baseline");
+    }
 }

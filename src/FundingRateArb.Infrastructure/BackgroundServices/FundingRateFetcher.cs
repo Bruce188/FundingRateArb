@@ -132,6 +132,23 @@ public class FundingRateFetcher : BackgroundService
         var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var assetMap = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
 
+        // Detect Binance funding interval changes
+        if (exchangeMap.TryGetValue("Binance", out var binanceExchange))
+        {
+            var detectedInterval = allRates
+                .Where(r => r.ExchangeName == "Binance" && r.DetectedFundingIntervalHours.HasValue)
+                .Select(r => r.DetectedFundingIntervalHours!.Value)
+                .FirstOrDefault();
+
+            if (detectedInterval > 0 && detectedInterval != binanceExchange.FundingIntervalHours)
+            {
+                _logger.LogWarning(
+                    "Binance funding interval changed from {Old}h to {New}h — updating exchange entity",
+                    binanceExchange.FundingIntervalHours, detectedInterval);
+                binanceExchange.FundingIntervalHours = detectedInterval;
+            }
+        }
+
         // M9: Build snapshot list first, then AddRange once (instead of individual Add calls)
         var now = DateTime.UtcNow;
         var snapshots = new List<FundingRateSnapshot>();
@@ -305,14 +322,20 @@ public class FundingRateFetcher : BackgroundService
                 continue;
             }
 
-            var notional = pos.SizeUsdc * pos.Leverage;
+            // Compute notional per-leg using exchange-specific price reference
+            var longNotional = ComputeNotional(pos, pos.LongEntryPrice, longRate, exchangeById.GetValueOrDefault(pos.LongExchangeId));
+            var shortNotional = ComputeNotional(pos, pos.ShortEntryPrice, shortRate, exchangeById.GetValueOrDefault(pos.ShortExchangeId));
 
             // Compute each leg's funding contribution separately to handle mixed settlement types.
             // Convention: short leg earns funding (positive), long leg pays funding (negative).
             var longFunding = ComputeLegFunding(
-                longRate.RatePerHour, notional, pos.LongExchangeId, exchangeById, now);
+                longRate.RatePerHour, longNotional, pos.LongExchangeId, exchangeById, now);
             var shortFunding = ComputeLegFunding(
-                shortRate.RatePerHour, notional, pos.ShortExchangeId, exchangeById, now);
+                shortRate.RatePerHour, shortNotional, pos.ShortExchangeId, exchangeById, now);
+
+            // Apply exchange rebate on the paying side
+            longFunding = ApplyRebate(longFunding, exchangeById.GetValueOrDefault(pos.LongExchangeId));
+            shortFunding = ApplyRebate(shortFunding, exchangeById.GetValueOrDefault(pos.ShortExchangeId));
 
             // Net funding = short income - long cost
             pos.AccumulatedFunding += shortFunding - longFunding;
@@ -399,6 +422,41 @@ public class FundingRateFetcher : BackgroundService
         _hasSignaled = true;
         _readinessSignal.SignalReady();
         _logger.LogInformation("Funding rate readiness signal fired — BotOrchestrator may proceed");
+    }
+
+    /// <summary>
+    /// Computes the notional value for a position leg using the exchange's configured price reference.
+    /// Oracle-price exchanges (e.g. Hyperliquid, dYdX) use IndexPrice; mark-price exchanges use MarkPrice.
+    /// Falls back to SizeUsdc * Leverage when entry price or snapshot price is unavailable.
+    /// </summary>
+    internal static decimal ComputeNotional(ArbitragePosition pos, decimal entryPrice, FundingRateSnapshot rate, Exchange? exchange)
+    {
+        var fallbackNotional = pos.SizeUsdc * pos.Leverage;
+        if (entryPrice <= 0 || exchange is null)
+            return fallbackNotional;
+
+        var quantity = fallbackNotional / entryPrice;
+        var priceRef = exchange.FundingNotionalPriceType == FundingNotionalPriceType.OraclePrice
+            ? rate.IndexPrice
+            : rate.MarkPrice;
+
+        return priceRef > 0 ? quantity * priceRef : fallbackNotional;
+    }
+
+    /// <summary>
+    /// Applies the exchange's funding rebate to a funding amount.
+    /// Rebate applies when the position is paying funding (funding > 0 = paying).
+    /// </summary>
+    internal decimal ApplyRebate(decimal funding, Exchange? exchange)
+    {
+        if (exchange is null || exchange.FundingRebateRate <= 0 || funding <= 0)
+            return funding;
+
+        var rebateAmount = funding * exchange.FundingRebateRate;
+        _logger.LogDebug(
+            "Funding rebate applied for {Exchange}: raw={Raw:F6}, rebate={Rebate:F6} ({Rate:P0})",
+            exchange.Name, funding, rebateAmount, exchange.FundingRebateRate);
+        return funding * (1 - exchange.FundingRebateRate);
     }
 
     /// <summary>

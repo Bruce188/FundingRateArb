@@ -111,6 +111,20 @@ public class SignalEngine : ISignalEngine
                     var slippagePerHour = config.SlippageBufferBps / 10_000m / amortHours;
                     net -= slippagePerHour;
 
+                    // Apply funding rebate: if the paying leg's exchange offers a rebate, the effective
+                    // funding cost is reduced, improving net yield for the opportunity.
+                    if (longR.Exchange.FundingRebateRate > 0)
+                    {
+                        var rebateBoost = longR.RatePerHour * longR.Exchange.FundingRebateRate;
+                        net += rebateBoost;
+                    }
+                    // Also check short leg — if short rate is negative, the short side pays
+                    if (shortR.Exchange.FundingRebateRate > 0 && shortR.RatePerHour < 0)
+                    {
+                        var rebateBoost = Math.Abs(shortR.RatePerHour) * shortR.Exchange.FundingRebateRate;
+                        net += rebateBoost;
+                    }
+
                     // Compute minutes to next settlement from either leg (use minimum)
                     int? minutesToSettlement = null;
                     var now = DateTime.UtcNow;
@@ -124,6 +138,18 @@ public class SignalEngine : ISignalEngine
                         if (minutesToSettlement == int.MaxValue)
                         {
                             minutesToSettlement = null;
+                        }
+                    }
+
+                    // Adjust for exchange-specific timing deviations (e.g. Aster settles 15s after boundary)
+                    if (minutesToSettlement.HasValue)
+                    {
+                        var longDeviation = longR.Exchange.FundingTimingDeviationSeconds / 60.0;
+                        var shortDeviation = shortR.Exchange.FundingTimingDeviationSeconds / 60.0;
+                        var maxDeviation = (int)Math.Ceiling(Math.Max(longDeviation, shortDeviation));
+                        if (maxDeviation > 0)
+                        {
+                            minutesToSettlement = Math.Max(0, minutesToSettlement.Value - maxDeviation);
                         }
                     }
 

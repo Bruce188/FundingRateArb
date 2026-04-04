@@ -84,6 +84,7 @@ public static class DbSeeder
                 WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
                 FundingInterval = FundingInterval.Hourly,
                 FundingIntervalHours = 1,
+                FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
                 SupportsSubAccounts = true,
                 IsActive = true,
                 Description = "Hyperliquid DEX — EIP-712 wallet signing, USDC collateral"
@@ -95,6 +96,7 @@ public static class DbSeeder
                 WsBaseUrl = "wss://mainnet.zklighter.elliot.ai/stream",
                 FundingInterval = FundingInterval.Hourly,
                 FundingIntervalHours = 1,
+                FundingRebateRate = 0.15m,
                 SupportsSubAccounts = true,
                 IsActive = true,
                 Description = "Lighter DEX — API key + nonce, USDC collateral, zero fees"
@@ -107,6 +109,7 @@ public static class DbSeeder
                 FundingInterval = FundingInterval.EightHourly,
                 FundingIntervalHours = 8,
                 FundingSettlementType = FundingSettlementType.Periodic,
+                FundingTimingDeviationSeconds = 15,
                 SupportsSubAccounts = false,
                 IsActive = true,
                 Description = "Aster DEX — HMAC-SHA256, USDT collateral, 8-hour funding"
@@ -132,6 +135,7 @@ public static class DbSeeder
                 FundingInterval = FundingInterval.Hourly,
                 FundingIntervalHours = 1,
                 FundingSettlementType = FundingSettlementType.Continuous,
+                FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
                 TakerFeeRate = 0.0003m,
                 SupportsSubAccounts = true,
                 IsActive = true,
