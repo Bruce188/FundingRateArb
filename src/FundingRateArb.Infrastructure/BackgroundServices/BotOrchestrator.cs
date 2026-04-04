@@ -6,7 +6,6 @@ using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
-using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -160,7 +159,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                 if (pos.RealizedPnl.Value < 0)
                 {
                     var opKey = $"{pos.UserId}:{pos.AssetId}:{pos.LongExchangeId}:{pos.ShortExchangeId}";
-                    _circuitBreaker.SetCooldown(opKey, DateTime.UtcNow.Add(CircuitBreakerManager.BaseCooldown), 1);
+                    _circuitBreaker.SetCooldown(opKey, DateTime.UtcNow.Add(_circuitBreaker.BaseCooldownDuration), 1);
                 }
             }
         }
@@ -358,8 +357,8 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         // Fetch data-only exchange IDs once per cycle (same for all users)
         var dataOnlyExchangeIds = (await userSettings.GetDataOnlyExchangeIdsAsync()).ToHashSet();
 
-        // Pre-compute circuit-broken exchange IDs once before the user loop
-        var circuitBrokenExchangeIds = _circuitBreaker.GetCircuitBrokenExchangeIds();
+        // Derive circuit-broken exchange IDs from the already-fetched cbStates (avoids redundant dictionary scan)
+        var circuitBrokenExchangeIds = cbStates.Select(cb => cb.ExchangeId).ToHashSet();
 
         // Track known opportunity keys for adaptive candidate dedup (value-based, no reference equality)
         var knownOpportunityKeys = new HashSet<string>(allOpportunities.Select(o => o.OpportunityKey()));
@@ -520,7 +519,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                                 }
 
                                 // Always set cooldown to prevent retry storms, even on failure/exception
-                                _circuitBreaker.SetRotationCooldown(cooldownKey, DateTime.UtcNow.Add(CircuitBreakerManager.RotationCooldownDuration));
+                                _circuitBreaker.SetRotationCooldown(cooldownKey, DateTime.UtcNow.Add(_circuitBreaker.RotationCooldownDuration));
 
                                 // Only count as success if position fully closed
                                 if (positionToClose.Status == PositionStatus.Closed)
@@ -869,7 +868,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                 var existingEntry = _circuitBreaker.GetCooldownEntry(cooldownKey);
                 var failures = existingEntry.Failures + 1;
                 var delay = TimeSpan.FromTicks(
-                    Math.Min(CircuitBreakerManager.BaseCooldown.Ticks * (1L << Math.Min(failures - 1, 4)), CircuitBreakerManager.MaxCooldown.Ticks));
+                    Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
                 _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow + delay, failures);
 
                 // Identify the culpable exchange from error context (used for both cooldown and circuit breaker)

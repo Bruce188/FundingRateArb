@@ -141,6 +141,17 @@ public class CircuitBreakerManagerTests
     }
 
     [Fact]
+    public void RecordCloseResult_ZeroPnl_ResetsCounter()
+    {
+        _sut.RecordCloseResult(-5m, "user1");
+        _sut.RecordCloseResult(-5m, "user1");
+        _sut.UserConsecutiveLosses["user1"].Should().Be(2);
+
+        _sut.RecordCloseResult(0m, "user1");
+        _sut.UserConsecutiveLosses["user1"].Should().Be(0, "zero PnL should reset consecutive losses");
+    }
+
+    [Fact]
     public void RecordCloseResult_IgnoresNullUserId()
     {
         _sut.RecordCloseResult(-10m, null);

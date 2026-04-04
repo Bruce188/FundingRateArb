@@ -213,6 +213,18 @@ public class OpportunityFilterTests
     }
 
     [Fact]
+    public void FilterCandidates_ExcludesAssetExchangeCooledDown_ShortExchange()
+    {
+        var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
+        _circuitBreaker.AssetExchangeCooldowns[(1, 2)] = (3, DateTime.UtcNow.AddMinutes(10)); // cooldown on SHORT exchange
+        var tracker = new SkipReasonTracker();
+
+        var result = _sut.FilterCandidates([opp], new HashSet<string>(), "user1", tracker, out _);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
     public void FilterCandidates_PassesNonCooledDown()
     {
         var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
@@ -266,6 +278,44 @@ public class OpportunityFilterTests
 
         result.Should().BeEmpty();
         tracker.CooldownKeys.Should().Contain("1_1_2");
+    }
+
+    [Fact]
+    public void FindAdaptiveCandidates_ExcludesDataOnlyExchanges()
+    {
+        var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
+        var tracker = new SkipReasonTracker();
+
+        var result = _sut.FindAdaptiveCandidates(
+            [opp],
+            new HashSet<int> { 1, 2 },
+            new HashSet<int> { 2 }, // short exchange is data-only
+            new HashSet<int>(),
+            new HashSet<int> { 1 },
+            new HashSet<string>(),
+            "user1",
+            tracker);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FindAdaptiveCandidates_ExcludesActiveKeys()
+    {
+        var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
+        var tracker = new SkipReasonTracker();
+
+        var result = _sut.FindAdaptiveCandidates(
+            [opp],
+            new HashSet<int> { 1, 2 },
+            new HashSet<int>(),
+            new HashSet<int>(),
+            new HashSet<int> { 1 },
+            new HashSet<string> { "1_1_2" }, // active key matches opportunity
+            "user1",
+            tracker);
+
+        result.Should().BeEmpty();
     }
 
     [Fact]

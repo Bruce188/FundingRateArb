@@ -9,6 +9,10 @@ namespace FundingRateArb.Application.Interfaces;
 /// </summary>
 public interface ICircuitBreakerManager
 {
+    TimeSpan BaseCooldownDuration { get; }
+    TimeSpan MaxCooldownDuration { get; }
+    TimeSpan RotationCooldownDuration { get; }
+
     void SweepExpiredEntries();
     void IncrementExchangeFailure(int exchangeId, BotConfiguration config);
     void IncrementAssetExchangeFailure(int assetId, int exchangeId);
@@ -17,6 +21,7 @@ public interface ICircuitBreakerManager
     void ClearCooldowns();
     HashSet<int> GetCircuitBrokenExchangeIds();
     bool IsOnCooldown(string cooldownKey, out TimeSpan remaining);
+    DateTime? GetCooldownUntil(string cooldownKey);
     (DateTime CooldownUntil, int Failures) GetCooldownEntry(string cooldownKey);
     void SetCooldown(string key, DateTime cooldownUntil, int failures);
     void RemoveCooldown(string key);

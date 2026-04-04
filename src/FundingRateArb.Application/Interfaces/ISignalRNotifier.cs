@@ -28,6 +28,11 @@ public interface ISignalRNotifier
 
     Task PushRebalanceRemovalsAsync(List<(int Id, string UserId)> removals);
 
+    /// <summary>
+    /// Pushes new unread alerts to each user's SignalR group.
+    /// Uses a rolling time window and deduplication set to avoid replaying alerts.
+    /// Not thread-safe — must only be called from the bot cycle (which holds _cycleLock).
+    /// </summary>
     Task PushNewAlertsAsync(IUnitOfWork uow);
 
     Task PushStatusExplanationAsync(string? userId, string message, string severity);

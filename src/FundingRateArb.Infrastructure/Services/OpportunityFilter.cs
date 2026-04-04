@@ -88,9 +88,10 @@ public class OpportunityFilter : IOpportunityFilter
                 var cooldownKey = $"{userId}:{key}";
                 if (_circuitBreaker.IsOnCooldown(cooldownKey, out var remaining))
                 {
+                    var until = _circuitBreaker.GetCooldownUntil(cooldownKey);
                     _logger.LogDebug(
-                        "Skipping {Asset} {Long}/{Short} for user {UserId} — on cooldown for {Remaining}",
-                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, remaining);
+                        "Skipping {Asset} {Long}/{Short} for user {UserId} — on cooldown until {Until}",
+                        opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, until);
                     localCooldownSkips.Add((opp.AssetSymbol, remaining));
                     tracker.CooldownKeys.Add(key);
                     return false;

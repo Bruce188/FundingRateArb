@@ -51,6 +51,10 @@ public class CircuitBreakerManager : ICircuitBreakerManager
     /// <summary>Exposes daily rotation counts for unit testing.</summary>
     internal ConcurrentDictionary<string, (DateOnly Date, int Count)> DailyRotationCounts => _dailyRotationCounts;
 
+    public TimeSpan BaseCooldownDuration => BaseCooldown;
+    public TimeSpan MaxCooldownDuration => MaxCooldown;
+    TimeSpan ICircuitBreakerManager.RotationCooldownDuration => RotationCooldownDuration;
+
     public CircuitBreakerManager(ILogger<CircuitBreakerManager> logger)
     {
         _logger = logger;
@@ -204,6 +208,15 @@ public class CircuitBreakerManager : ICircuitBreakerManager
         }
         remaining = TimeSpan.Zero;
         return false;
+    }
+
+    public DateTime? GetCooldownUntil(string cooldownKey)
+    {
+        if (_failedOpCooldowns.TryGetValue(cooldownKey, out var cd) && DateTime.UtcNow < cd.CooldownUntil)
+        {
+            return cd.CooldownUntil;
+        }
+        return null;
     }
 
     public (DateTime CooldownUntil, int Failures) GetCooldownEntry(string cooldownKey)
