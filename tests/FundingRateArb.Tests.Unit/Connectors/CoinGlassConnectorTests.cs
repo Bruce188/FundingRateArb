@@ -1,6 +1,8 @@
 using System.Net;
 using System.Text;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,6 +16,14 @@ public class CoinGlassConnectorTests
     public CoinGlassConnectorTests()
     {
         CoinGlassConnector.ResetBackoffState();
+    }
+
+    private static ICoinGlassAnalyticsRepository CreateMockAnalyticsRepo()
+    {
+        var mock = new Mock<ICoinGlassAnalyticsRepository>();
+        mock.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
+        return mock.Object;
     }
 
     private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler) CreateConnectorWithHandler(
@@ -38,7 +48,10 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var analyticsRepo = new Mock<ICoinGlassAnalyticsRepository>();
+        analyticsRepo.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
+        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, analyticsRepo.Object);
         return (connector, handler);
     }
 
@@ -373,7 +386,7 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
 
         await sut.GetFundingRatesAsync();
 
@@ -406,7 +419,7 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -468,7 +481,7 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -582,7 +595,7 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
         await sut.GetFundingRatesAsync();
 
         capturedRequest.Should().NotBeNull();
@@ -658,7 +671,7 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
 
         // First call fails — sets backoff
         await connector.GetFundingRatesAsync();
@@ -703,7 +716,7 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance);
+        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
 
         // First call — triggers backoff
         await connector.GetFundingRatesAsync();

@@ -1,0 +1,224 @@
+@model FundingRateArb.Web.ViewModels.ExchangeAnalyticsViewModel
+@{
+    ViewData["Title"] = "Exchange Analytics";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Exchange Analytics</h1>
+    <div>
+        <a asp-area="Admin" asp-controller="Overview" asp-action="Index" class="btn btn-outline-secondary btn-sm">
+            Back to Overview
+        </a>
+    </div>
+</div>
+
+@* Exchange Overview *@
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Exchange Overview</h5>
+        <small class="text-muted">All exchanges reported by CoinGlass</small>
+    </div>
+    <div class="card-body p-0">
+        @if (Model.Exchanges.Count == 0)
+        {
+            <div class="p-4 text-muted text-center">No CoinGlass data available yet. Data will appear after the next fetch cycle.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Exchange</th>
+                            <th class="text-center">Coins</th>
+                            <th class="text-center">Status</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var exch in Model.Exchanges)
+                        {
+                            <tr>
+                                <td class="fw-semibold">@exch.ExchangeName</td>
+                                <td class="text-center">@exch.CoinCount</td>
+                                <td class="text-center">
+                                    @if (exch.StatusBadge == "Active Connector")
+                                    {
+                                        <span class="badge bg-success">Active Connector</span>
+                                    }
+                                    else if (exch.StatusBadge == "Planned")
+                                    {
+                                        <span class="badge bg-info">Planned</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">Available</span>
+                                    }
+                                </td>
+                                <td>@exch.LastSeen.ToString("yyyy-MM-dd HH:mm") UTC</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@* Top Opportunities *@
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Top Opportunities</h5>
+        <small class="text-muted">Cross-exchange spread opportunities sorted by net yield</small>
+    </div>
+    <div class="card-body p-0">
+        @if (Model.TopOpportunities.Count == 0)
+        {
+            <div class="p-4 text-muted text-center">No spread opportunities found.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Long Exchange</th>
+                            <th>Short Exchange</th>
+                            <th class="text-end">Spread/hr</th>
+                            <th class="text-end">Fees/hr</th>
+                            <th class="text-end">Net Yield/hr</th>
+                            <th class="text-end">APR</th>
+                            <th class="text-center">Connector</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var opp in Model.TopOpportunities)
+                        {
+                            <tr>
+                                <td class="fw-semibold">@opp.Symbol</td>
+                                <td>@opp.LongExchange</td>
+                                <td>@opp.ShortExchange</td>
+                                <td class="text-end">@opp.SpreadPerHour.ToString("P6")</td>
+                                <td class="text-end">@opp.EstFeesPerHour.ToString("P6")</td>
+                                <td class="text-end @(opp.NetYieldPerHour > 0 ? "text-success" : "text-danger")">
+                                    @opp.NetYieldPerHour.ToString("P6")
+                                </td>
+                                <td class="text-end @(opp.Apr > 0 ? "text-success" : "text-danger")">
+                                    @opp.Apr.ToString("F1")%
+                                </td>
+                                <td class="text-center">
+                                    @if (opp.ConnectorStatus == "Capturable")
+                                    {
+                                        <span class="badge bg-success">Capturable</span>
+                                    }
+                                    else if (opp.ConnectorStatus == "Partial")
+                                    {
+                                        <span class="badge bg-warning text-dark">Partial</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">None</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@* Rate Comparison *@
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Rate Comparison</h5>
+        <small class="text-muted">Direct connector rates vs CoinGlass data for the same exchange</small>
+    </div>
+    <div class="card-body p-0">
+        @if (Model.RateComparisons.Count == 0)
+        {
+            <div class="p-4 text-muted text-center">No rate comparison data available. Requires both direct connector and CoinGlass data for the same exchange.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-striped table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th class="text-end">Direct Rate/hr</th>
+                            <th class="text-end">CoinGlass Rate/hr</th>
+                            <th class="text-end">Divergence</th>
+                            <th class="text-center">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var comp in Model.RateComparisons)
+                        {
+                            <tr class="@(comp.IsWarning ? "table-warning" : "")">
+                                <td class="fw-semibold">@comp.Symbol</td>
+                                <td>@comp.ExchangeName</td>
+                                <td class="text-end">@comp.DirectRate.ToString("P6")</td>
+                                <td class="text-end">@comp.CoinGlassRate.ToString("P6")</td>
+                                <td class="text-end">@comp.DivergencePercent.ToString("F1")%</td>
+                                <td class="text-center">
+                                    @if (comp.IsWarning)
+                                    {
+                                        <span class="badge bg-warning text-dark">Divergence</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-success">OK</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+@* Discovery Feed *@
+<div class="card shadow-sm mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Discovery Feed</h5>
+        <small class="text-muted">New exchanges and coins discovered in the last 7 days</small>
+    </div>
+    <div class="card-body">
+        @if (Model.DiscoveryEvents.Count == 0)
+        {
+            <div class="text-muted text-center">No discovery events in the last 7 days.</div>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var evt in Model.DiscoveryEvents)
+                {
+                    <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div>
+                            @if (evt.EventType == "NewExchange")
+                            {
+                                <span class="badge bg-primary me-2">New Exchange</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-info me-2">New Coin</span>
+                            }
+                            <strong>@evt.ExchangeName</strong>
+                            @if (!string.IsNullOrEmpty(evt.Symbol))
+                            {
+                                <span class="text-muted ms-1">(@evt.Symbol)</span>
+                            }
+                        </div>
+                        <small class="text-muted">@evt.DiscoveredAt.ToString("yyyy-MM-dd HH:mm") UTC</small>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>

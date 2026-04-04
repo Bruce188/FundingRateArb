@@ -2,7 +2,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -23,6 +25,7 @@ public class CoinGlassConnector : IExchangeConnector
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
+    private readonly ICoinGlassAnalyticsRepository _analyticsRepo;
     private readonly string? _apiKey;
     private static readonly object BackoffLock = new();
     private static int _consecutiveFailures;
@@ -44,7 +47,7 @@ public class CoinGlassConnector : IExchangeConnector
     /// Exchanges that already have dedicated connectors. Rates from these
     /// exchanges are skipped by the aggregator to avoid duplicates.
     /// </summary>
-    private static readonly HashSet<string> DirectConnectorExchanges = new(StringComparer.OrdinalIgnoreCase)
+    internal static readonly HashSet<string> DirectConnectorExchanges = new(StringComparer.OrdinalIgnoreCase)
     {
         "Hyperliquid", "Lighter", "Aster", "Binance"
     };
@@ -53,10 +56,15 @@ public class CoinGlassConnector : IExchangeConnector
     /// Ordered longest-first so compound suffixes (e.g., "USD_PERP") are matched before simple ones.</summary>
     private static readonly string[] SymbolSuffixes = ["/USDT", "/USD", "USDT_PERP", "USD_PERP", "USDT-PERP", "USD-PERP", "-PERP", "_PERP", "USDT", "USD"];
 
-    public CoinGlassConnector(HttpClient httpClient, IConfiguration configuration, ILogger<CoinGlassConnector> logger)
+    public CoinGlassConnector(
+        HttpClient httpClient,
+        IConfiguration configuration,
+        ILogger<CoinGlassConnector> logger,
+        ICoinGlassAnalyticsRepository analyticsRepo)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _analyticsRepo = analyticsRepo;
         _apiKey = configuration["ExchangeConnectors:CoinGlass:ApiKey"];
     }
 
@@ -193,6 +201,94 @@ public class CoinGlassConnector : IExchangeConnector
                 _lastLoggedBackoffLevel = 0;
             }
 
+            // Store unfiltered per-exchange rates for analytics (side-effect, non-blocking)
+            try
+            {
+                var analyticsRates = new List<Domain.Entities.CoinGlassExchangeRate>();
+                foreach (var item in data.Data)
+                {
+                    if (string.IsNullOrEmpty(item.Symbol) || item.FundingRateByExchange is null)
+                        continue;
+
+                    var symbol = NormalizeSymbol(item.Symbol);
+                    foreach (var (exchangeName, exchRate) in item.FundingRateByExchange)
+                    {
+                        if (exchRate?.Rate is null)
+                            continue;
+
+                        var intervalHours = exchRate.IntervalHours > 0 ? exchRate.IntervalHours : 8;
+                        analyticsRates.Add(new Domain.Entities.CoinGlassExchangeRate
+                        {
+                            SnapshotTime = DateTime.UtcNow,
+                            SourceExchange = exchangeName,
+                            Symbol = symbol,
+                            RawRate = exchRate.Rate.Value,
+                            RatePerHour = exchRate.Rate.Value / intervalHours,
+                            IntervalHours = intervalHours,
+                            MarkPrice = exchRate.MarkPrice ?? 0,
+                            IndexPrice = exchRate.IndexPrice ?? 0,
+                            Volume24hUsd = item.Volume24hUsd ?? 0
+                        });
+                    }
+                }
+
+                if (analyticsRates.Count > 0)
+                {
+                    // Discovery detection
+                    var knownPairs = await _analyticsRepo.GetKnownPairsAsync(ct);
+                    var discoveryEvents = new List<CoinGlassDiscoveryEvent>();
+
+                    if (knownPairs.Count == 0)
+                    {
+                        _logger.LogInformation("CoinGlass analytics: first run, skipping discovery detection (no baseline)");
+                    }
+                    else
+                    {
+                        var currentExchanges = analyticsRates.Select(r => r.SourceExchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var knownExchanges = knownPairs.Select(p => p.Exchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                        foreach (var exchange in currentExchanges.Except(knownExchanges, StringComparer.OrdinalIgnoreCase))
+                        {
+                            var coinCount = analyticsRates.Count(r => r.SourceExchange.Equals(exchange, StringComparison.OrdinalIgnoreCase));
+                            _logger.LogWarning("CoinGlass: new exchange discovered: {ExchangeName} with {CoinCount} coins", exchange, coinCount);
+                            discoveryEvents.Add(new CoinGlassDiscoveryEvent
+                            {
+                                EventType = DiscoveryEventType.NewExchange,
+                                ExchangeName = exchange,
+                                DiscoveredAt = DateTime.UtcNow
+                            });
+                        }
+
+                        // New coins on known exchanges
+                        foreach (var rate in analyticsRates)
+                        {
+                            if (!knownPairs.Contains((rate.SourceExchange, rate.Symbol)))
+                            {
+                                if (DirectConnectorExchanges.Contains(rate.SourceExchange))
+                                {
+                                    _logger.LogInformation("CoinGlass: new coin {Symbol} available on {ExchangeName} (has connector)", rate.Symbol, rate.SourceExchange);
+                                }
+                                discoveryEvents.Add(new CoinGlassDiscoveryEvent
+                                {
+                                    EventType = DiscoveryEventType.NewCoin,
+                                    ExchangeName = rate.SourceExchange,
+                                    Symbol = rate.Symbol,
+                                    DiscoveredAt = DateTime.UtcNow
+                                });
+                            }
+                        }
+                    }
+
+                    await _analyticsRepo.SaveSnapshotAsync(analyticsRates, ct);
+                    if (discoveryEvents.Count > 0)
+                        await _analyticsRepo.SaveDiscoveryEventsAsync(discoveryEvents, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "CoinGlass analytics storage failed — continuing with rate data");
+            }
+
             return rates;
 
         } // end using response
@@ -294,10 +390,10 @@ public class CoinGlassConnector : IExchangeConnector
         /// Map of exchange name to funding rate data for this symbol.
         /// </summary>
         [JsonPropertyName("fundingRateByExchange")]
-        public Dictionary<string, CoinGlassExchangeRate?>? FundingRateByExchange { get; set; }
+        public Dictionary<string, CoinGlassExchangeRateDto?>? FundingRateByExchange { get; set; }
     }
 
-    private class CoinGlassExchangeRate
+    private class CoinGlassExchangeRateDto
     {
         [JsonPropertyName("rate")]
         public decimal? Rate { get; set; }
