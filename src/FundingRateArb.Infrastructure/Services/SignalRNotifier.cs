@@ -51,7 +51,7 @@ public class SignalRNotifier : ISignalRNotifier
     public async Task PushDashboardUpdateAsync(
         List<ArbitragePosition> openPositions,
         List<ArbitrageOpportunityDto> opportunities,
-        bool botEnabled,
+        BotOperatingState operatingState,
         int openingCount,
         int needsAttentionCount)
     {
@@ -64,7 +64,8 @@ public class SignalRNotifier : ISignalRNotifier
 
             var dto = new DashboardDto
             {
-                BotEnabled = botEnabled,
+                BotEnabled = operatingState == BotOperatingState.Armed || operatingState == BotOperatingState.Trading,
+                OperatingState = operatingState.ToString(),
                 OpenPositionCount = openPositions.Count,
                 OpeningPositionCount = openingCount,
                 NeedsAttentionCount = needsAttentionCount,

@@ -42,6 +42,7 @@ public class BotOrchestratorMultiUserTests
     private static readonly BotConfiguration EnabledConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         MaxConcurrentPositions = 5,
         TotalCapitalUsdc = 1000m,
         UpdatedByUserId = "admin",
@@ -239,7 +240,7 @@ public class BotOrchestratorMultiUserTests
     [Fact]
     public async Task RunCycle_KillSwitchDisabled_SkipsAllUserCycles()
     {
-        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration { IsEnabled = false });
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration { IsEnabled = false, OperatingState = BotOperatingState.Stopped });
 
         _mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync())
             .ReturnsAsync(new List<string> { UserA });
@@ -564,6 +565,7 @@ public class BotOrchestratorMultiUserTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             DefaultLeverage = 5,
             UpdatedByUserId = "admin",
@@ -635,6 +637,7 @@ public class BotOrchestratorMultiUserTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             DefaultLeverage = 5,
             UpdatedByUserId = "admin",

@@ -4,6 +4,7 @@ using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260404153951_AddBotOperatingState")]
+    partial class AddBotOperatingState
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -163,9 +166,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<DateTime?>("ClosingStartedAt")
                         .HasColumnType("datetime2");
-
-                    b.Property<decimal?>("CurrentDivergencePct")
-                        .HasColumnType("decimal(18,4)");
 
                     b.Property<decimal>("CurrentSpreadPerHour")
                         .HasColumnType("decimal(18,10)");
@@ -342,11 +342,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<int>("DefaultLeverage")
                         .HasColumnType("int");
-
-                    b.Property<decimal>("DivergenceAlertMultiplier")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,4)")
-                        .HasDefaultValue(2.0m);
 
                     b.Property<bool>("DryRunEnabled")
                         .ValueGeneratedOnAdd()
@@ -573,17 +568,7 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<int>("FundingIntervalHours")
                         .HasColumnType("int");
 
-                    b.Property<int>("FundingNotionalPriceType")
-                        .HasColumnType("int");
-
-                    b.Property<decimal>("FundingRebateRate")
-                        .HasPrecision(5, 4)
-                        .HasColumnType("decimal(5,4)");
-
                     b.Property<int>("FundingSettlementType")
-                        .HasColumnType("int");
-
-                    b.Property<int>("FundingTimingDeviationSeconds")
                         .HasColumnType("int");
 
                     b.Property<bool>("IsActive")

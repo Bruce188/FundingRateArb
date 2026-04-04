@@ -68,6 +68,7 @@ public class DashboardController : Controller
             {
                 IsAuthenticated = false,
                 BotEnabled = false, // NB2: never expose bot status to anonymous visitors
+                OperatingState = "Stopped",
                 BestSpread = bestSpreadAnon,
                 Opportunities = anonOpportunities,
                 Diagnostics = null,
@@ -152,7 +153,8 @@ public class DashboardController : Controller
         var vm = new DashboardViewModel
         {
             IsAuthenticated = true,
-            BotEnabled = botConfig?.IsEnabled ?? false,
+            BotEnabled = botConfig?.OperatingState is BotOperatingState.Armed or BotOperatingState.Trading,
+            OperatingState = botConfig?.OperatingState.ToString() ?? "Stopped",
             OpenPositionCount = openPositions.Count,
             OpeningPositionCount = openingCount,
             NeedsAttentionCount = needsAttentionCount,

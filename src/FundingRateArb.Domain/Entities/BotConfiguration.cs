@@ -7,6 +7,7 @@ public class BotConfiguration
 {
     public int Id { get; set; }
     public bool IsEnabled { get; set; }
+    public BotOperatingState OperatingState { get; set; } = BotOperatingState.Stopped;
     public decimal OpenThreshold { get; set; } = 0.0002m;
     public decimal AlertThreshold { get; set; } = 0.0001m;
     public decimal CloseThreshold { get; set; } = -0.00005m;

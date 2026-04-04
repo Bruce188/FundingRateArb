@@ -170,6 +170,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -223,6 +224,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -260,6 +262,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -329,6 +332,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -521,6 +525,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -575,6 +580,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -649,6 +655,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -721,6 +728,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -781,6 +789,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -815,6 +824,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -881,6 +891,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -956,6 +967,7 @@ public class BotOrchestratorTests
         return new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1454,6 +1466,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -1528,6 +1541,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1640,6 +1654,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1736,6 +1751,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1833,6 +1849,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1938,6 +1955,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,

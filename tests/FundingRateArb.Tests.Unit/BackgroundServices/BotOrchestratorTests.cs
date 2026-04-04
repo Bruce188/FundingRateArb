@@ -43,6 +43,7 @@ public class BotOrchestratorTests
     private static readonly BotConfiguration EnabledConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         MaxConcurrentPositions = 1,
         DefaultLeverage = 5,
         UpdatedByUserId = "admin-user-id",
@@ -56,6 +57,7 @@ public class BotOrchestratorTests
     private static readonly BotConfiguration DisabledConfig = new()
     {
         IsEnabled = false,
+        OperatingState = BotOperatingState.Stopped,
     };
 
     private static readonly UserConfiguration EnabledUserConfig = new()
@@ -138,7 +140,7 @@ public class BotOrchestratorTests
             .ReturnsAsync(new List<int>());
 
         // Wire notifier — default all methods to completed tasks
-        _mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<BotOperatingState>(), It.IsAny<int>(), It.IsAny<int>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushPositionUpdatesAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<BotConfiguration>(), It.IsAny<IReadOnlyDictionary<int, ComputedPositionPnl>?>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushPositionRemovalsAsync(It.IsAny<IReadOnlyList<(int, string, int, int, PositionStatus)>>(), It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushRebalanceRemovalsAsync(It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
@@ -278,6 +280,7 @@ public class BotOrchestratorTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 2, // allow more
         });
 
@@ -361,7 +364,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockNotifier.Verify(
-            n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<int>()),
+            n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<BotOperatingState>(), It.IsAny<int>(), It.IsAny<int>()),
             Times.Once);
     }
 
@@ -674,6 +677,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             DailyDrawdownPausePct = 0.05m,
@@ -1194,6 +1198,7 @@ public class BotOrchestratorTests
         var rebalanceConfig = new BotConfiguration
         {
             IsEnabled = false, // Don't enter user cycle
+            OperatingState = BotOperatingState.Stopped,
             RebalanceEnabled = true,
             MaxRebalancesPerCycle = 2,
         };
@@ -1231,6 +1236,7 @@ public class BotOrchestratorTests
     private static readonly BotConfiguration CircuitBreakerConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         MaxConcurrentPositions = 5,
         DefaultLeverage = 5,
         UpdatedByUserId = "admin-user-id",
@@ -1903,6 +1909,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             DefaultLeverage = 5,
             UpdatedByUserId = "admin",
@@ -1991,7 +1998,7 @@ public class BotOrchestratorTests
         _mockNotifier.Verify(n => n.PushDashboardUpdateAsync(
             It.IsAny<List<ArbitragePosition>>(),
             It.IsAny<List<ArbitrageOpportunityDto>>(),
-            It.IsAny<bool>(),
+            It.IsAny<BotOperatingState>(),
             It.IsAny<int>(),
             3), Times.Once);
     }

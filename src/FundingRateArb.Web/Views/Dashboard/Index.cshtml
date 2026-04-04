@@ -62,8 +62,18 @@
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <p class="text-muted small mb-1">Bot Status</p>
-                            <span id="bot-status" class="badge @(Model.BotEnabled ? "bg-success" : "bg-danger") fs-6">
-                                @(Model.BotEnabled ? "RUNNING" : "STOPPED")
+                            @{
+                                var stateColor = Model.OperatingState switch
+                                {
+                                    "Stopped" => "bg-danger",
+                                    "Paused" => "bg-warning",
+                                    "Armed" => "bg-primary",
+                                    "Trading" => "bg-success",
+                                    _ => "bg-secondary"
+                                };
+                            }
+                            <span id="bot-status" class="badge @stateColor fs-6">
+                                @Model.OperatingState.ToUpperInvariant()
                             </span>
                         </div>
                         <div class="text-muted">
