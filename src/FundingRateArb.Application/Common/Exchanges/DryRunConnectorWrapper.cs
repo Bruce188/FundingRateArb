@@ -116,7 +116,7 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
         return new OrderResultDto
         {
             Success = true,
-            FilledQuantity = 0,
+            FilledQuantity = 1_000_000m,
             FilledPrice = fillPrice,
             OrderId = $"DRY-{Guid.NewGuid().ToString("N")[..8]}",
         };

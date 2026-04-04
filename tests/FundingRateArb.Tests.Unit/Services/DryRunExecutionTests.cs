@@ -417,6 +417,144 @@ public class DryRunExecutionTests
             Times.Once);
     }
 
+    // ── NB1 (review-v2): Open dry-run position funding excluded from drawdown ─
+
+    [Fact]
+    public async Task DailyDrawdown_ExcludesOpenDryRunPositionFunding()
+    {
+        var mockScopeFactory = new Mock<IServiceScopeFactory>();
+        var mockScope = new Mock<IServiceScope>();
+        var mockSp = new Mock<IServiceProvider>();
+        mockScopeFactory.Setup(f => f.CreateScope()).Returns(mockScope.Object);
+        mockScope.Setup(s => s.ServiceProvider).Returns(mockSp.Object);
+
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockBotConfig = new Mock<IBotConfigRepository>();
+        var mockPositionRepo = new Mock<IPositionRepository>();
+        var mockAlertRepo = new Mock<IAlertRepository>();
+        var mockExchangeRepo = new Mock<IExchangeRepository>();
+        var mockUserConfigs = new Mock<IUserConfigurationRepository>();
+        var mockSnapshotRepo = new Mock<IOpportunitySnapshotRepository>();
+        var mockSignalEngine = new Mock<ISignalEngine>();
+        var mockPositionSizer = new Mock<IPositionSizer>();
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        var mockExecutionEngine = new Mock<IExecutionEngine>();
+        var mockHealthMonitor = new Mock<IPositionHealthMonitor>();
+        var mockUserSettingsSvc = new Mock<IUserSettingsService>();
+        var mockReadiness = new Mock<IFundingRateReadinessSignal>();
+        var mockHub = new Mock<IHubContext<DashboardHub, IDashboardClient>>();
+        var mockRotation = new Mock<IRotationEvaluator>();
+        var mockLogger = new Mock<ILogger<BotOrchestrator>>();
+
+        mockSp.Setup(sp => sp.GetService(typeof(IUnitOfWork))).Returns(mockUow.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(ISignalEngine))).Returns(mockSignalEngine.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(IPositionSizer))).Returns(mockPositionSizer.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(IBalanceAggregator))).Returns(mockBalanceAggregator.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(IExecutionEngine))).Returns(mockExecutionEngine.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(IPositionHealthMonitor))).Returns(mockHealthMonitor.Object);
+        mockSp.Setup(sp => sp.GetService(typeof(IUserSettingsService))).Returns(mockUserSettingsSvc.Object);
+
+        mockUow.Setup(u => u.BotConfig).Returns(mockBotConfig.Object);
+        mockUow.Setup(u => u.Positions).Returns(mockPositionRepo.Object);
+        mockUow.Setup(u => u.Alerts).Returns(mockAlertRepo.Object);
+        mockUow.Setup(u => u.Exchanges).Returns(mockExchangeRepo.Object);
+        mockUow.Setup(u => u.UserConfigurations).Returns(mockUserConfigs.Object);
+        mockUow.Setup(u => u.OpportunitySnapshots).Returns(mockSnapshotRepo.Object);
+
+        mockExchangeRepo.Setup(e => e.GetAllAsync()).ReturnsAsync(new List<Exchange>());
+        mockAlertRepo.Setup(r => r.GetRecentUnreadAsync(It.IsAny<TimeSpan>())).ReturnsAsync([]);
+        mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(HealthCheckResult.Empty);
+
+        mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            IsEnabled = true, MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m, VolumeFraction = 0.001m,
+            DefaultLeverage = 5, UpdatedByUserId = "admin",
+        });
+
+        mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync()).ReturnsAsync(new List<string> { TestUserId });
+        mockUserSettingsSvc.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId, IsEnabled = true, MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 3,
+            });
+        mockUserSettingsSvc.Setup(s => s.HasValidCredentialsAsync(TestUserId)).ReturnsAsync(true);
+        mockUserSettingsSvc.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2 });
+        mockUserSettingsSvc.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1 });
+        mockUserSettingsSvc.Setup(s => s.GetDataOnlyExchangeIdsAsync())
+            .ReturnsAsync(new List<int>());
+
+        mockReadiness.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
+
+        var mockClients = new Mock<IHubClients<IDashboardClient>>();
+        var mockClient = new Mock<IDashboardClient>();
+        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
+        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
+        mockHub.Setup(h => h.Clients).Returns(mockClients.Object);
+
+        // Open dry-run position with large negative AccumulatedFunding
+        var openDryRun = new ArbitragePosition
+        {
+            Id = 1, UserId = TestUserId, IsDryRun = true,
+            AccumulatedFunding = -500m,
+            Status = PositionStatus.Open,
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+
+        mockPositionRepo.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition> { openDryRun });
+        mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Open)).ReturnsAsync(new List<ArbitragePosition> { openDryRun });
+        mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
+        mockPositionRepo.Setup(p => p.CountByStatusesAsync(It.IsAny<PositionStatus[]>())).ReturnsAsync(1);
+        mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
+
+        // Provide opportunities on different asset/exchange than open dry-run position
+        // so the candidate filtering doesn't exclude it as a duplicate
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 2, AssetSymbol = "BTC",
+            LongExchangeId = 3, LongExchangeName = "ExA",
+            ShortExchangeId = 4, ShortExchangeName = "ExB",
+            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 100m, ShortMarkPrice = 100m,
+        };
+        mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        mockUserSettingsSvc.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2, 3, 4 });
+        mockUserSettingsSvc.Setup(s => s.GetUserEnabledAssetIdsAsync(TestUserId))
+            .ReturnsAsync(new List<int> { 1, 2 });
+
+        mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(),
+                It.IsAny<string>(),
+                It.IsAny<UserConfiguration?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockHub.Object, mockRotation.Object, mockLogger.Object);
+
+        // If open dry-run funding were counted, dailyPnl = -500,
+        // which exceeds drawdown limit of 1000 * 0.05 = 50 → cycle would stop.
+        // With dry-run excluded: dailyPnl = 0, which is fine → cycle should try to open.
+        await sut.RunCycleAsync(CancellationToken.None);
+
+        // Verify ExecutionEngine.OpenPositionAsync was called (meaning drawdown didn't block)
+        mockExecutionEngine.Verify(
+            e => e.OpenPositionAsync(TestUserId, It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
     // ── NB2: IsDryRun mapping assertions ─────────────────────────────────
 
     [Fact]
@@ -447,6 +585,66 @@ public class DryRunExecutionTests
         var dto = pos.ToDetailsDto();
 
         dto.IsDryRun.Should().BeTrue();
+    }
+
+    // ── B1: Reconciliation skip for dry-run positions ──────────────────────
+
+    [Fact]
+    public async Task CheckPositionExists_DryRunPosition_ReturnsTrue()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 1, UserId = TestUserId, AssetId = 1, IsDryRun = true,
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            Status = PositionStatus.Open,
+        };
+
+        var sut = CreateEngine();
+        var result = await sut.CheckPositionExistsOnExchangesAsync(position);
+
+        result.Should().BeTrue();
+
+        // Connectors should never be created for dry-run positions
+        _mockFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CheckPositionsBatch_DryRunPosition_ReturnsBothPresent()
+    {
+        var dryRunPos = new ArbitragePosition
+        {
+            Id = 1, UserId = TestUserId, AssetId = 1, IsDryRun = true,
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            Status = PositionStatus.Open,
+        };
+        var realPos = new ArbitragePosition
+        {
+            Id = 2, UserId = TestUserId, AssetId = 1, IsDryRun = false,
+            LongExchangeId = 1, ShortExchangeId = 2,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            Status = PositionStatus.Open,
+        };
+
+        _mockLongConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockShortConnector.Setup(c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var sut = CreateEngine();
+        var results = await sut.CheckPositionsExistOnExchangesBatchAsync(new[] { dryRunPos, realPos });
+
+        results[dryRunPos.Id].Should().Be(PositionExistsResult.BothPresent);
+        results[realPos.Id].Should().Be(PositionExistsResult.BothPresent);
     }
 
     // ── NB5: Health-monitor close loop — mixed positions ─────────────────

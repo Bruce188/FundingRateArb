@@ -209,4 +209,17 @@ public class DryRunConnectorWrapperTests
         result.Success.Should().BeTrue();
         result.FilledPrice.Should().Be(3000m * 0.999m);
     }
+
+    // ── B2: ClosePositionAsync must return non-zero FilledQuantity ────────
+
+    [Fact]
+    public async Task ClosePositionAsync_ReturnsNonZeroFilledQuantity()
+    {
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeTrue();
+        result.FilledQuantity.Should().BeGreaterThan(0);
+    }
 }
