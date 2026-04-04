@@ -949,6 +949,7 @@ public class ExecutionEngine : IExecutionEngine
             }
 
             position.RealizedPnl = pnl;
+            position.ClosedAt = DateTime.UtcNow;
 
             // Post-close PnL reconciliation (informational — never blocks close)
             try
@@ -962,7 +963,6 @@ public class ExecutionEngine : IExecutionEngine
 
             position.Status = PositionStatus.Closed;
             position.CloseReason = reason;
-            position.ClosedAt = DateTime.UtcNow;
             _uow.Positions.Update(position);
 
             _uow.Alerts.Add(new Alert

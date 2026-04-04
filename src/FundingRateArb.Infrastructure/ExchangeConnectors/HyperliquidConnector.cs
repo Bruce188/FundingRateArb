@@ -458,7 +458,15 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 return null;
             }
 
-            var funding = result.Data
+            var entries = result.Data.ToList();
+            if (entries.Count > 5000)
+            {
+                _logger.LogWarning(
+                    "Hyperliquid returned {Count} funding entries for {Asset} — response may be truncated",
+                    entries.Count, asset);
+            }
+
+            var funding = entries
                 .Where(f => f.Data.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
                 .Sum(f => f.Data.Usdc);
 

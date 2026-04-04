@@ -3507,4 +3507,22 @@ public class ExecutionEngineTests
         position.Status.Should().Be(PositionStatus.Closed);
         position.RealizedPnl.Should().NotBeNull();
     }
+
+    [Fact]
+    public async Task ClosePosition_BothLegsAlreadyClosed_Finalize_DoesNotCallReconciliation()
+    {
+        var position = MakeOpenPosition();
+        position.LongLegClosed = true;
+        position.ShortLegClosed = true;
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closed);
+        _mockReconciliation.Verify(
+            r => r.ReconcileAsync(
+                It.IsAny<ArbitragePosition>(), It.IsAny<string>(),
+                It.IsAny<IExchangeConnector>(), It.IsAny<IExchangeConnector>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

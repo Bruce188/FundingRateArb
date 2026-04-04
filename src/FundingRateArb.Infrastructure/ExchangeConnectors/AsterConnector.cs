@@ -453,12 +453,22 @@ public class AsterConnector : IExchangeConnector, IDisposable
         string symbol, IncomeType incomeType, DateTime from, DateTime to, CancellationToken ct)
     {
         const int pageSize = 1000;
+        const int maxPages = 100;
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
         var cursor = from;
         var total = 0m;
+        var page = 0;
 
         while (true)
         {
+            if (++page > maxPages)
+            {
+                _logger.LogWarning(
+                    "Aster PaginateIncomeHistoryAsync ({IncomeType}, {Symbol}) exceeded {MaxPages} pages — results may be incomplete",
+                    incomeType, symbol, maxPages);
+                break;
+            }
+
             var result = await pipeline.ExecuteAsync(
                 async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
                     symbol, incomeType, cursor, to, limit: pageSize, ct: token),
