@@ -60,11 +60,13 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ArbitragePositionId");
-
                     b.HasIndex("IsRead", "CreatedAt");
 
                     b.HasIndex("UserId", "CreatedAt");
+
+                    b.HasIndex("ArbitragePositionId", "Type", "CreatedAt")
+                        .IsDescending(false, false, true)
+                        .HasDatabaseName("IX_Alerts_PositionId_Type_CreatedAt");
 
                     b.ToTable("Alerts");
                 });
@@ -371,7 +373,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("bit");
 
                     b.Property<int>("FundingFlipExitCycles")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(2);
 
                     b.Property<int>("FundingWindowMinutes")
                         .HasColumnType("int");
@@ -418,7 +422,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasDefaultValue(2);
 
                     b.Property<int>("MinConsecutiveFavorableCycles")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(3);
 
                     b.Property<int>("MinHoldBeforePnlTargetMinutes")
                         .HasColumnType("int");

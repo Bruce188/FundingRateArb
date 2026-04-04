@@ -77,7 +77,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Stablecoin depeg check — before position loop (every 5th cycle; USDCUSDT is slow-moving)
         var stablecoinCritical = false;
-        if (Interlocked.Increment(ref _stablecoinCheckCycle) % 5 == 0)
+        if (unchecked((uint)Interlocked.Increment(ref _stablecoinCheckCycle)) % 5 == 0)
         {
             stablecoinCritical = await CheckStablecoinDepegAsync(config, ct);
         }
@@ -86,6 +86,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // H3: Build a dictionary for O(1) lookup instead of O(N*M) linear scan
         var rateMap = latestRates.ToDictionary(r => (r.ExchangeId, r.AssetId));
+
+        // NB3: Exchange name lookup for null navigation property fallback (cross-stablecoin check)
+        var exchangeNameById = latestRates
+            .Where(r => r.Exchange?.Name is not null)
+            .GroupBy(r => r.ExchangeId)
+            .ToDictionary(g => g.Key, g => g.First().Exchange!.Name);
 
         // Pre-fetch recent alerts for all open positions to avoid N+1 queries in the loop
         var openPositionIds = openPositions.Select(p => p.Id).ToList();
@@ -139,7 +145,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             // Stablecoin depeg: close cross-stablecoin positions when critical
             if (stablecoinCritical)
             {
-                var isCrossStablecoin = (pos.LongExchange?.Name == "Binance") != (pos.ShortExchange?.Name == "Binance");
+                var longExName = pos.LongExchange?.Name ?? exchangeNameById.GetValueOrDefault(pos.LongExchangeId);
+                var shortExName = pos.ShortExchange?.Name ?? exchangeNameById.GetValueOrDefault(pos.ShortExchangeId);
+                var isCrossStablecoin = (longExName == "Binance") != (shortExName == "Binance");
                 if (isCrossStablecoin)
                 {
                     _logger.LogWarning("Closing cross-stablecoin position #{Id}: stablecoin depeg critical", pos.Id);

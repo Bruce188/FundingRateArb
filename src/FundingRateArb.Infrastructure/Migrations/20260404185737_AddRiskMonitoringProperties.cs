@@ -10,6 +10,10 @@ namespace FundingRateArb.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropIndex(
+                name: "IX_Alerts_ArbitragePositionId",
+                table: "Alerts");
+
             migrationBuilder.AddColumn<int>(
                 name: "FundingFlipExitCycles",
                 table: "BotConfigurations",
@@ -37,11 +41,21 @@ namespace FundingRateArb.Infrastructure.Migrations
                 type: "decimal(18,4)",
                 nullable: false,
                 defaultValue: 1.0m);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Alerts_PositionId_Type_CreatedAt",
+                table: "Alerts",
+                columns: new[] { "ArbitragePositionId", "Type", "CreatedAt" },
+                descending: new[] { false, false, true });
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.DropIndex(
+                name: "IX_Alerts_PositionId_Type_CreatedAt",
+                table: "Alerts");
+
             migrationBuilder.DropColumn(
                 name: "FundingFlipExitCycles",
                 table: "BotConfigurations");
@@ -57,6 +71,11 @@ namespace FundingRateArb.Infrastructure.Migrations
             migrationBuilder.DropColumn(
                 name: "StablecoinCriticalThresholdPct",
                 table: "BotConfigurations");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_Alerts_ArbitragePositionId",
+                table: "Alerts",
+                column: "ArbitragePositionId");
         }
     }
 }

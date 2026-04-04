@@ -2,6 +2,7 @@ using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Application.Services;
@@ -66,19 +67,11 @@ public class SignalEngine : ISignalEngine
             }
         }
 
-        // Batch-load recent funding rate history for trend analysis (parallelized)
-        var distinctKeys = rates.Select(r => (r.AssetId, r.ExchangeId)).Distinct().ToList();
-        var from = DateTime.UtcNow.AddHours(-1);
-        var to = DateTime.UtcNow;
-        var historyTasks = distinctKeys.Select(async key =>
-        {
-            var history = await _uow.FundingRates.GetHistoryAsync(
-                key.AssetId, key.ExchangeId, from, to,
-                take: config.MinConsecutiveFavorableCycles);
-            return (key, history);
-        });
-        var historyResults = await Task.WhenAll(historyTasks);
-        var historyLookup = historyResults.ToDictionary(r => r.key, r => r.history);
+        // Lazy-load funding rate history for trend analysis (sequential — DbContext is not thread-safe).
+        // Only queried for pairs that pass volume + break-even filters, avoiding unnecessary DB calls.
+        var historyLookup = new Dictionary<(int AssetId, int ExchangeId), List<FundingRateSnapshot>>();
+        var historyFrom = DateTime.UtcNow.AddHours(-1);
+        var historyTo = DateTime.UtcNow;
 
         var opportunities = new List<ArbitrageOpportunityDto>();
         var netPositiveList = new List<ArbitrageOpportunityDto>();
@@ -250,9 +243,24 @@ public class SignalEngine : ISignalEngine
                         continue;
                     }
 
-                    // Trend analysis: check if funding spread has been favorable for N consecutive snapshots
-                    historyLookup.TryGetValue((longR.AssetId, longR.ExchangeId), out var longHistory);
-                    historyLookup.TryGetValue((shortR.AssetId, shortR.ExchangeId), out var shortHistory);
+                    // Trend analysis: check if funding spread has been favorable for N consecutive snapshots.
+                    // Load history on-demand (only for pairs that pass volume + break-even filters).
+                    var longKey = (longR.AssetId, longR.ExchangeId);
+                    if (!historyLookup.TryGetValue(longKey, out var longHistory))
+                    {
+                        longHistory = await _uow.FundingRates.GetHistoryAsync(
+                            longR.AssetId, longR.ExchangeId, historyFrom, historyTo,
+                            take: config.MinConsecutiveFavorableCycles);
+                        historyLookup[longKey] = longHistory;
+                    }
+                    var shortKey = (shortR.AssetId, shortR.ExchangeId);
+                    if (!historyLookup.TryGetValue(shortKey, out var shortHistory))
+                    {
+                        shortHistory = await _uow.FundingRates.GetHistoryAsync(
+                            shortR.AssetId, shortR.ExchangeId, historyFrom, historyTo,
+                            take: config.MinConsecutiveFavorableCycles);
+                        historyLookup[shortKey] = shortHistory;
+                    }
 
                     if (longHistory is not null && shortHistory is not null
                         && longHistory.Count >= config.MinConsecutiveFavorableCycles
