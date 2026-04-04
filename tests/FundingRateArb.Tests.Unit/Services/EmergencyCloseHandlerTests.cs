@@ -157,6 +157,27 @@ public class EmergencyCloseHandlerTests
     }
 
     [Fact]
+    public void SetEmergencyCloseFees_ZeroFill_AllFeesAreZero()
+    {
+        // Arrange — zero fill quantity
+        var position = new ArbitragePosition { UserId = "user1" };
+        var legResult = new OrderResultDto
+        {
+            Success = true,
+            FilledPrice = 3000m,
+            FilledQuantity = 0m,
+        };
+
+        // Act
+        EmergencyCloseHandler.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
+
+        // Assert — all fee fields are 0 and RealizedPnl is 0
+        position.EntryFeesUsdc.Should().Be(0m);
+        position.ExitFeesUsdc.Should().Be(0m);
+        position.RealizedPnl.Should().Be(0m);
+    }
+
+    [Fact]
     public void SetEmergencyCloseFees_SetsRealizedPnl_ToNegativeFeeTotal()
     {
         // Arrange

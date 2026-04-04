@@ -13,7 +13,6 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
 
     // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
     private readonly ConcurrentDictionary<(string Exchange, string Asset), (int MaxLeverage, DateTime Fetched)> _leverageCache = new();
-    private readonly ConcurrentDictionary<(string Exchange, string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
     public ConnectorLifecycleManager(
         IExchangeConnectorFactory connectorFactory,
@@ -149,13 +148,6 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
         if (maxLev.HasValue)
         {
             _leverageCache[key] = (maxLev.Value, DateTime.UtcNow);
-
-            // NB1: Evict _leverageWarned when it grows too large.
-            // Re-logging a leverage warning is harmless, so a simple clear is acceptable.
-            if (_leverageWarned.Count > 500)
-            {
-                _leverageWarned.Clear();
-            }
         }
 
         return maxLev;
@@ -164,7 +156,7 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
     /// <summary>
     /// Disposes a connector, checking for IAsyncDisposable first, then IDisposable.
     /// </summary>
-    public static async Task DisposeConnectorAsync(IExchangeConnector? connector)
+    internal static async Task DisposeConnectorAsync(IExchangeConnector? connector)
     {
         if (connector is IAsyncDisposable asyncDisposable)
         {

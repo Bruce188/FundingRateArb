@@ -285,15 +285,11 @@ public class PositionCloser : IPositionCloser
                 ? (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity
                 : 0m;
 
-            // Record exit fees
+            // Record exit fees — reuse exchange names resolved at method entry
             var longCloseNotional = longClose.FilledPrice * longClose.FilledQuantity;
             var shortCloseNotional = shortClose.FilledPrice * shortClose.FilledQuantity;
-            var longExName = position.LongExchange?.Name
-                ?? (await _uow.Exchanges.GetByIdAsync(position.LongExchangeId))!.Name;
-            var shortExName = position.ShortExchange?.Name
-                ?? (await _uow.Exchanges.GetByIdAsync(position.ShortExchangeId))!.Name;
-            position.ExitFeesUsdc = (longCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(longExName))
-                                  + (shortCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(shortExName));
+            position.ExitFeesUsdc = (longCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(longExchangeName))
+                                  + (shortCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(shortExchangeName));
 
             // RealizedPnl = price PnL + funding collected - all fees
             var pricePnl = longPnl + shortPnl;

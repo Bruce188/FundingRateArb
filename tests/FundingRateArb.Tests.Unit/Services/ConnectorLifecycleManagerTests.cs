@@ -143,6 +143,105 @@ public class ConnectorLifecycleManagerTests
         disposable.Verify(d => d.Dispose(), Times.Once);
     }
 
+    // ── Factory-returns-null paths (NB4) ────────────────────────────────────
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_ReturnsError_WhenFactoryReturnsNullLongConnector()
+    {
+        // Arrange
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+
+        var mockShort = new Mock<IExchangeConnector>();
+        var shortDisposable = mockShort.As<IDisposable>();
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockShort.Object);
+
+        // Act
+        var (_, _, error) = await _sut.CreateUserConnectorsAsync("user1", "Hyperliquid", "Lighter");
+
+        // Assert — error returned, short connector disposed
+        error.Should().Contain("invalid credentials");
+        shortDisposable.Verify(d => d.Dispose(), Times.Once);
+    }
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_ReturnsError_WhenFactoryReturnsNullShortConnector()
+    {
+        // Arrange
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+
+        var mockLong = new Mock<IExchangeConnector>();
+        var longDisposable = mockLong.As<IDisposable>();
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // Act
+        var (_, _, error) = await _sut.CreateUserConnectorsAsync("user1", "Hyperliquid", "Lighter");
+
+        // Assert — error returned, long connector disposed
+        error.Should().Contain("invalid credentials");
+        longDisposable.Verify(d => d.Dispose(), Times.Once);
+    }
+
+    // ── Short decryption failure disposes long connector (NB5) ────────────
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_DisposesLongConnector_WhenShortDecryptionFails()
+    {
+        // Arrange — long decryption succeeds, short decryption throws
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+
+        var callCount = 0;
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(() =>
+            {
+                callCount++;
+                if (callCount == 1)
+                    return ("key", "secret", "wallet", "pk", (string?)null, (string?)null);
+                throw new InvalidOperationException("Short decryption failed");
+            });
+
+        var mockLong = new Mock<IExchangeConnector>();
+        var longDisposable = mockLong.As<IDisposable>();
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockLong.Object);
+
+        // Act
+        var (_, _, error) = await _sut.CreateUserConnectorsAsync("user1", "Hyperliquid", "Lighter");
+
+        // Assert — long connector disposed after short decryption fails
+        error.Should().NotBeNull();
+        longDisposable.Verify(d => d.Dispose(), Times.Once);
+    }
+
     // ── GetCachedMaxLeverageAsync ──────────────────────────────────────────
 
     [Fact]
@@ -165,6 +264,28 @@ public class ConnectorLifecycleManagerTests
         mockConnector.Verify(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── GetCachedMaxLeverageAsync — null return (NB6) ──────────────────────
+
+    [Fact]
+    public async Task GetCachedMaxLeverageAsync_ReturnsNull_WhenConnectorReturnsNull()
+    {
+        // Arrange — connector returns null (asset not found)
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+        mockConnector
+            .Setup(c => c.GetMaxLeverageAsync("UNKNOWN", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((int?)null);
+
+        // Act — call twice
+        var first = await _sut.GetCachedMaxLeverageAsync(mockConnector.Object, "UNKNOWN", CancellationToken.None);
+        var second = await _sut.GetCachedMaxLeverageAsync(mockConnector.Object, "UNKNOWN", CancellationToken.None);
+
+        // Assert — both null, connector queried twice (no caching of nulls)
+        first.Should().BeNull();
+        second.Should().BeNull();
+        mockConnector.Verify(c => c.GetMaxLeverageAsync("UNKNOWN", It.IsAny<CancellationToken>()), Times.Exactly(2));
+    }
+
     // ── DisposeConnectorAsync ─────────────────────────────────────────────
 
     [Fact]
@@ -184,6 +305,20 @@ public class ConnectorLifecycleManagerTests
         await ConnectorLifecycleManager.DisposeConnectorAsync(mockConnector.Object);
 
         asyncDisposable.Verify(d => d.DisposeAsync(), Times.Once);
+    }
+
+    [Fact]
+    public async Task DisposeConnectorAsync_CallsSyncDispose_WhenNotAsyncDisposable()
+    {
+        // Arrange — connector implements IDisposable only, not IAsyncDisposable
+        var mockConnector = new Mock<IExchangeConnector>();
+        var disposable = mockConnector.As<IDisposable>();
+
+        // Act
+        await ConnectorLifecycleManager.DisposeConnectorAsync(mockConnector.Object);
+
+        // Assert — sync Dispose() called
+        disposable.Verify(d => d.Dispose(), Times.Once);
     }
 
     // ── WrapForDryRun ─────────────────────────────────────────────────────

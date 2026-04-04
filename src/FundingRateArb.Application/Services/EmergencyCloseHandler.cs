@@ -30,7 +30,7 @@ public class EmergencyCloseHandler : IEmergencyCloseHandler
     /// Sets EntryFeesUsdc and RealizedPnl on an emergency-closed position based on the
     /// fees incurred from the one leg that did open and was subsequently closed.
     /// </summary>
-    public static void SetEmergencyCloseFees(
+    internal static void SetEmergencyCloseFees(
         ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
     {
         var legNotional = successfulLeg.FilledPrice * successfulLeg.FilledQuantity;

@@ -195,7 +195,125 @@ public class PositionCloserTests
                 && al.Message!.Contains("Cannot close position"))), Times.Once);
     }
 
-    // ── Both legs already closed ──────────────────────────────────────────
+    // ── Both legs throw (B1) ────────────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_BothLegsThrow_SetsEmergencyClosedAndCreatesAlert()
+    {
+        // Arrange
+        var position = CreateTestPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Long connection reset"));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Short timeout"));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert
+        position.Status.Should().Be(PositionStatus.EmergencyClosed);
+        position.ClosedAt.Should().NotBeNull();
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.Type == AlertType.LegFailed
+                && al.Severity == AlertSeverity.Critical
+                && al.Message!.Contains("BOTH legs"))), Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosePosition_LongLegThrows_MarksShortLegClosedAndStaysInClosing()
+    {
+        // Arrange
+        var position = CreateTestPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Long connection reset"));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(2995m, 0.1m));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert
+        position.ShortLegClosed.Should().BeTrue();
+        position.Status.Should().Be(PositionStatus.Closing);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.Type == AlertType.LegFailed
+                && al.Severity == AlertSeverity.Critical)), Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosePosition_ShortLegThrows_MarksLongLegClosedAndStaysInClosing()
+    {
+        // Arrange
+        var position = CreateTestPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(3005m, 0.1m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Short timeout"));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert
+        position.LongLegClosed.Should().BeTrue();
+        position.Status.Should().Be(PositionStatus.Closing);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            al => al.Type == AlertType.LegFailed
+                && al.Severity == AlertSeverity.Critical)), Times.Once);
+    }
+
+    // ── One leg already closed — retry dispatch (NB3) ────────────────────
+
+    [Fact]
+    public async Task ClosePosition_OnlyShortLegNeedsClosing_DispatchesOnlyShortLeg()
+    {
+        // Arrange — long already closed from prior retry
+        var position = CreateTestPosition(longLegClosed: true);
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(2995m, 0.1m));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert — long connector never called, short called once
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockShortConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()),
+            Times.Once);
+        position.Status.Should().Be(PositionStatus.Closed);
+    }
+
+    [Fact]
+    public async Task ClosePosition_OnlyLongLegNeedsClosing_DispatchesOnlyLongLeg()
+    {
+        // Arrange — short already closed from prior retry
+        var position = CreateTestPosition(shortLegClosed: true);
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(3005m, 0.1m));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert — short connector never called, long called once
+        _mockShortConnector.Verify(
+            c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockLongConnector.Verify(
+            c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
+            Times.Once);
+        position.Status.Should().Be(PositionStatus.Closed);
+    }
+
+    // ── Both legs already closed (N4 — exact PnL assertion) ──────────────
 
     [Fact]
     public async Task ClosePosition_BothLegsAlreadyClosed_CallsFinalizeClosedPosition()
@@ -209,14 +327,18 @@ public class PositionCloserTests
         // Act
         await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
 
-        // Assert — finalized with approximate PnL
+        // Assert — finalized with exact PnL = AccumulatedFunding - EntryFeesUsdc - ExitFeesUsdc
+        var expectedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
         position.Status.Should().Be(PositionStatus.Closed);
-        position.RealizedPnl.Should().NotBeNull();
+        position.RealizedPnl.Should().Be(expectedPnl);
         position.ClosedAt.Should().NotBeNull();
         // No close orders dispatched
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        // Both LegFailed and PositionClosed alerts created
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.Once);
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionClosed)), Times.Once);
     }
 
     // ── Dry-run position ──────────────────────────────────────────────────
