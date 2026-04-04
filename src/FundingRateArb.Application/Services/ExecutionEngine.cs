@@ -16,6 +16,7 @@ public class ExecutionEngine : IExecutionEngine
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IUserSettingsService _userSettings;
+    private readonly IPnlReconciliationService _reconciliation;
     private readonly ILogger<ExecutionEngine> _logger;
 
     // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
@@ -26,11 +27,13 @@ public class ExecutionEngine : IExecutionEngine
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
         IUserSettingsService userSettings,
+        IPnlReconciliationService reconciliation,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
         _userSettings = userSettings;
+        _reconciliation = reconciliation;
         _logger = logger;
     }
 
@@ -946,9 +949,20 @@ public class ExecutionEngine : IExecutionEngine
             }
 
             position.RealizedPnl = pnl;
+            position.ClosedAt = DateTime.UtcNow;
+
+            // Post-close PnL reconciliation (informational — never blocks close)
+            try
+            {
+                await _reconciliation.ReconcileAsync(position, assetSymbol, longConnector, shortConnector, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "PnL reconciliation failed for position #{PositionId} — continuing", position.Id);
+            }
+
             position.Status = PositionStatus.Closed;
             position.CloseReason = reason;
-            position.ClosedAt = DateTime.UtcNow;
             _uow.Positions.Update(position);
 
             _uow.Alerts.Add(new Alert
@@ -1132,6 +1146,7 @@ public class ExecutionEngine : IExecutionEngine
     {
         // NB2: PnL here is approximate — price-based component is lost because
         // legs were closed in separate retries without capturing fill data.
+        // Reconciliation skipped — connectors not available in this fallback path.
         position.RealizedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
         position.Status = PositionStatus.Closed;
         position.CloseReason = reason;

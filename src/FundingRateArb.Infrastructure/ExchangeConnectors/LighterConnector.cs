@@ -1593,6 +1593,18 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
+    public Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        _logger.LogDebug("Lighter does not support PnL queries — reconciliation skipped for {Asset}", asset);
+        return Task.FromResult<decimal?>(null);
+    }
+
+    public Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        _logger.LogDebug("Lighter does not support funding payment queries — reconciliation skipped for {Asset}", asset);
+        return Task.FromResult<decimal?>(null);
+    }
+
     public void Dispose()
     {
         _signer?.Dispose();

@@ -404,6 +404,81 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         return Task.FromResult<DateTime?>(nextHour);
     }
 
+    public async Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.GetUserTradesByTimeAsync(
+                    from, to, aggregateByTime: null, address: _vaultAddress, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Hyperliquid GetUserTradesByTimeAsync failed: {Error}", result.Error?.ToString());
+                return null;
+            }
+
+            var trades = result.Data.ToList();
+            if (trades.Count > 5000)
+            {
+                _logger.LogWarning(
+                    "Hyperliquid returned {Count} trades for {Asset} — response may be truncated",
+                    trades.Count, asset);
+            }
+
+            var pnl = trades
+                .Where(t => t.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase)
+                         || t.ExchangeSymbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                .Sum(t => t.ClosedPnl ?? 0m);
+
+            return pnl;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Hyperliquid GetRealizedPnlAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
+    public async Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetFundingHistoryAsync(
+                    from, to, address: _vaultAddress, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Hyperliquid GetFundingHistoryAsync failed: {Error}", result.Error?.ToString());
+                return null;
+            }
+
+            var entries = result.Data.ToList();
+            if (entries.Count > 5000)
+            {
+                _logger.LogWarning(
+                    "Hyperliquid returned {Count} funding entries for {Asset} — response may be truncated",
+                    entries.Count, asset);
+            }
+
+            var funding = entries
+                .Where(f => f.Data.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                .Sum(f => f.Data.Usdc);
+
+            return funding;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Hyperliquid GetFundingPaymentsAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

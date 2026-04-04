@@ -223,6 +223,7 @@ try
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
+    builder.Services.AddScoped<IPnlReconciliationService, PnlReconciliationService>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
     builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();

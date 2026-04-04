@@ -12,5 +12,6 @@ public enum AlertType
     MarginWarning,
     PriceFeedFailure,
     LeverageReduced,
-    QuantityMismatch
+    QuantityMismatch,
+    PnlDivergence
 }

@@ -41,6 +41,20 @@ public interface IExchangeConnector
         => Task.FromResult<bool?>(null);
 
     /// <summary>
+    /// Returns the exchange-reported realized PnL for the given asset over the time window.
+    /// Returns null if the exchange does not support PnL queries or the API call fails.
+    /// </summary>
+    Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+        => Task.FromResult<decimal?>(null);
+
+    /// <summary>
+    /// Returns the exchange-reported funding payments for the given asset over the time window.
+    /// Returns null if the exchange does not support funding payment queries or the API call fails.
+    /// </summary>
+    Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+        => Task.FromResult<decimal?>(null);
+
+    /// <summary>
     /// Places a market order using a pre-computed quantity instead of computing from sizeUsdc.
     /// Used by ExecutionEngine for delta-neutral quantity coordination.
     /// </summary>

@@ -423,6 +423,77 @@ public class AsterConnector : IExchangeConnector, IDisposable
         return new DateTime(now.Year, now.Month, now.Day, flooredHour, 0, 0, DateTimeKind.Utc).AddHours(8);
     }
 
+    public async Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            return await PaginateIncomeHistoryAsync(asset + "USDT", IncomeType.RealizedPnl, from, to, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Aster GetRealizedPnlAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
+    public async Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            return await PaginateIncomeHistoryAsync(asset + "USDT", IncomeType.FundingFee, from, to, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Aster GetFundingPaymentsAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
+    private async Task<decimal?> PaginateIncomeHistoryAsync(
+        string symbol, IncomeType incomeType, DateTime from, DateTime to, CancellationToken ct)
+    {
+        const int pageSize = 1000;
+        const int maxPages = 100;
+        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        var cursor = from;
+        var total = 0m;
+        var page = 0;
+
+        while (true)
+        {
+            if (++page > maxPages)
+            {
+                _logger.LogWarning(
+                    "Aster PaginateIncomeHistoryAsync ({IncomeType}, {Symbol}) exceeded {MaxPages} pages — results may be incomplete",
+                    incomeType, symbol, maxPages);
+                break;
+            }
+
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                    symbol, incomeType, cursor, to, limit: pageSize, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Aster GetIncomeHistoryAsync ({IncomeType}) failed: {Error}",
+                    incomeType, result.Error?.Message);
+                return null;
+            }
+
+            var entries = result.Data.ToList();
+            total += entries.Sum(i => i.Income);
+
+            if (entries.Count < pageSize)
+                break;
+
+            // Advance cursor past the last entry to fetch the next page
+            cursor = entries[^1].Timestamp.AddMilliseconds(1);
+        }
+
+        return total;
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);
