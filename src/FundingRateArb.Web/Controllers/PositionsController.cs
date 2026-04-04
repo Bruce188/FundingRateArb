@@ -82,10 +82,22 @@ public class PositionsController : Controller
                 if (longExchangeName is not null && shortExchangeName is not null && assetSymbol is not null)
                 {
                     var longConnector = _connectorFactory.GetConnector(longExchangeName);
-                    var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
-                    var longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
-                    var shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                    // Deduplicate: if both legs use the same exchange, call once
+                    Task<MarginStateDto?> longMarginTask;
+                    Task<MarginStateDto?> shortMarginTask;
+                    if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                        shortMarginTask = longMarginTask;
+                    }
+                    else
+                    {
+                        var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+                        longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                        shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                    }
+
                     await Task.WhenAll(longMarginTask, shortMarginTask);
 
                     var longMargin = await longMarginTask;

@@ -1390,4 +1390,56 @@ public class SignalEngineTests
         opp.ReturnOnCapitalPerHour.Should().NotBeNull();
         opp.AprOnCapital.Should().NotBeNull();
     }
+
+    // ── NB3 (review-v2): Zero capital still computes leverage-adjusted metrics ──
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_ZeroCapital_StillComputesMetrics()
+    {
+        // When TotalCapitalUsdc=0, refNotional = 0 * anything = 0
+        // Tier lookup with notional=0 should hit the most lenient tier (first bracket)
+        // Metrics should still be populated using that tier's leverage
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(10); // first tier returns 10x
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 0m,           // zero capital
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().NotBeEmpty();
+        var opp = result[0];
+        // refNotional = 0 * 0.5 * 5 = 0 → tier lookup at notional=0 returns 10x
+        // effectiveLev = min(5, 50, 10) = 5
+        opp.EffectiveLeverage.Should().Be(5);
+        opp.ReturnOnCapitalPerHour.Should().NotBeNull();
+        opp.AprOnCapital.Should().NotBeNull();
+        opp.BreakEvenCycles.Should().BeGreaterThan(0);
+
+        // Verify tier provider was called with notional=0 (zero capital)
+        mockTierProvider.Verify(
+            t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), 0m),
+            Times.AtLeastOnce);
+    }
 }

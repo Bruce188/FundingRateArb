@@ -842,14 +842,24 @@ public class PositionSizerTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10 });
 
+        // Capture the notional argument passed to GetEffectiveMaxLeverage
+        var capturedNotionals = new List<decimal>();
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Callback<string, string, decimal>((_, _, notional) => capturedNotionals.Add(notional))
+            .Returns(int.MaxValue);
+
+        var sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object, mockTierProvider.Object);
+
         // Volume = 100M → liquidity limit = 100K (not binding)
         var opps = MakeOpps((0.001m, 100_000_000m));
-        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-1");
+        var sizes = await sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-1");
 
         // Available capital = min(10000, 100) - 0 = 100, * 1.0 = 100
-        // With leverage=2: notional = 100 * 2 = 200, liquidity = 100000, 200 < 100000 → OK
-        // Size should reflect that capital is allocated at 2x, not 10x
-        sizes[0].Should().BeGreaterThan(0);
-        sizes[0].Should().BeLessThanOrEqualTo(100m);
+        // With MaxLeverageCap=2: effectiveLeverage = min(10, 2) = 2
+        // tentativeNotional = 100 * 2 = 200, NOT 100 * 10 = 1000
+        sizes[0].Should().Be(100m);
+        capturedNotionals.Should().NotBeEmpty();
+        capturedNotionals.Should().AllSatisfy(n => n.Should().Be(200m, "notional should reflect leverage=2 (capped), not leverage=10"));
     }
 }
