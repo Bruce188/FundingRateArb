@@ -22,30 +22,30 @@ public class OpportunityFilterTests
     private static ArbitrageOpportunityDto MakeOpp(
         int assetId = 1, int longExId = 1, int shortExId = 2,
         decimal netYield = 0.001m, string symbol = "ETH") => new()
-    {
-        AssetId = assetId,
-        AssetSymbol = symbol,
-        LongExchangeId = longExId,
-        ShortExchangeId = shortExId,
-        LongExchangeName = $"Exchange{longExId}",
-        ShortExchangeName = $"Exchange{shortExId}",
-        NetYieldPerHour = netYield,
-        SpreadPerHour = netYield,
-        LongVolume24h = 1_000_000m,
-        ShortVolume24h = 1_000_000m,
-        LongMarkPrice = 100m,
-        ShortMarkPrice = 100m,
-    };
+        {
+            AssetId = assetId,
+            AssetSymbol = symbol,
+            LongExchangeId = longExId,
+            ShortExchangeId = shortExId,
+            LongExchangeName = $"Exchange{longExId}",
+            ShortExchangeName = $"Exchange{shortExId}",
+            NetYieldPerHour = netYield,
+            SpreadPerHour = netYield,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m,
+        };
 
     private static UserConfiguration MakeUserConfig(decimal threshold = 0.0001m) => new()
-    {
-        UserId = "test-user",
-        IsEnabled = true,
-        MaxConcurrentPositions = 5,
-        OpenThreshold = threshold,
-        DailyDrawdownPausePct = 0.05m,
-        ConsecutiveLossPause = 3,
-    };
+        {
+            UserId = "test-user",
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            OpenThreshold = threshold,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+        };
 
     // ── FilterUserOpportunities ──────────────────────────────────────────────
 
