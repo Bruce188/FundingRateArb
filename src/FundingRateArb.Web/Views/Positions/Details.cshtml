@@ -36,6 +36,10 @@
                     };
                 }
                 <span class="badge @badgeClass">@pos.Status</span>
+                @if (pos.IsDryRun)
+                {
+                    <span class="badge bg-warning text-dark ms-1">Paper</span>
+                }
             </dd>
 
             <dt class="col-sm-5">Long Exchange</dt>

@@ -54,6 +54,10 @@ else
                                 };
                             }
                             <span class="badge pos-status @badgeClass">@pos.Status</span>
+                            @if (pos.IsDryRun)
+                            {
+                                <span class="badge bg-warning text-dark ms-1">Paper</span>
+                            }
                         </td>
                         <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
                         <td class="text-end pos-spread">@pos.CurrentSpreadPerHour.ToString("P4")</td>

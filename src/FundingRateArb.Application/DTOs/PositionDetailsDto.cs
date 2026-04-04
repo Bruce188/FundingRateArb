@@ -26,4 +26,5 @@ public class PositionDetailsDto
     public DateTime OpenedAt { get; set; }
     public DateTime? ClosedAt { get; set; }
     public string? Notes { get; set; }
+    public bool IsDryRun { get; set; }
 }

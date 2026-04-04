@@ -315,7 +315,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         foreach (var (pos, reason) in healthResult.ToClose)
         {
             await executionEngine.ClosePositionAsync(pos.UserId, pos, reason, ct);
-            if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue)
+            if (pos.Status == PositionStatus.Closed && pos.RealizedPnl.HasValue && !pos.IsDryRun)
             {
                 RecordCloseResult(pos.RealizedPnl.Value, pos.UserId);
                 closedPositionIds.Add((pos.Id, pos.UserId));
@@ -658,7 +658,8 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         // Daily drawdown circuit breaker for this user
         var closedToday = await uow.Positions.GetClosedSinceAsync(DateTime.UtcNow.Date);
         var userClosedToday = closedToday.Where(p => p.UserId == userId).ToList();
-        var dailyPnl = userClosedToday.Sum(p => p.RealizedPnl ?? 0m) + userOpenPositions.Sum(p => p.AccumulatedFunding);
+        var dailyPnl = userClosedToday.Where(p => !p.IsDryRun).Sum(p => p.RealizedPnl ?? 0m)
+                     + userOpenPositions.Where(p => !p.IsDryRun).Sum(p => p.AccumulatedFunding);
         var drawdownLimit = userConfig.TotalCapitalUsdc * userConfig.DailyDrawdownPausePct;
         if (dailyPnl < -drawdownLimit)
         {

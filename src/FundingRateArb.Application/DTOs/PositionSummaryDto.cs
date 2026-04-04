@@ -18,6 +18,7 @@ public class PositionSummaryDto
     public PositionStatus Status { get; set; }
     public DateTime OpenedAt { get; set; }
     public DateTime? ClosedAt { get; set; }
+    public bool IsDryRun { get; set; }
 
     /// <summary>Highest urgency level across all active warning conditions.</summary>
     public WarningLevel WarningLevel { get; set; } = WarningLevel.None;
