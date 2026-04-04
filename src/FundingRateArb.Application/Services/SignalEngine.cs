@@ -111,6 +111,24 @@ public class SignalEngine : ISignalEngine
                     var slippagePerHour = config.SlippageBufferBps / 10_000m / amortHours;
                     net -= slippagePerHour;
 
+                    // Apply funding rebate: if the paying leg's exchange offers a rebate, the effective
+                    // funding cost is reduced, improving net yield for the opportunity.
+                    // Long leg pays when rate > 0; guard prevents incorrect boost when rate is negative.
+                    if (longR.Exchange.FundingRebateRate > 0 && longR.RatePerHour > 0)
+                    {
+                        var effectiveLongRebate = Math.Clamp(longR.Exchange.FundingRebateRate, 0m, 1m);
+                        var rebateBoost = longR.RatePerHour * effectiveLongRebate;
+                        net += rebateBoost;
+                    }
+                    // Short side pays when rate is negative. Rebate reduces that cost,
+                    // which improves net yield (hence +=).
+                    if (shortR.Exchange.FundingRebateRate > 0 && shortR.RatePerHour < 0)
+                    {
+                        var effectiveShortRebate = Math.Clamp(shortR.Exchange.FundingRebateRate, 0m, 1m);
+                        var rebateBoost = Math.Abs(shortR.RatePerHour) * effectiveShortRebate;
+                        net += rebateBoost;
+                    }
+
                     // Compute minutes to next settlement from either leg (use minimum)
                     int? minutesToSettlement = null;
                     var now = DateTime.UtcNow;
@@ -124,6 +142,19 @@ public class SignalEngine : ISignalEngine
                         if (minutesToSettlement == int.MaxValue)
                         {
                             minutesToSettlement = null;
+                        }
+                    }
+
+                    // Adjust for exchange-specific timing deviations (e.g. Aster settles 15s after boundary)
+                    if (minutesToSettlement.HasValue)
+                    {
+                        var longDeviationSec = Math.Clamp(longR.Exchange.FundingTimingDeviationSeconds, 0, 300);
+                        var shortDeviationSec = Math.Clamp(shortR.Exchange.FundingTimingDeviationSeconds, 0, 300);
+                        var maxDeviationSec = Math.Max(longDeviationSec, shortDeviationSec);
+                        var maxDeviationMin = (maxDeviationSec + 59) / 60;
+                        if (maxDeviationMin > 0)
+                        {
+                            minutesToSettlement = Math.Max(0, minutesToSettlement.Value - maxDeviationMin);
                         }
                     }
 
