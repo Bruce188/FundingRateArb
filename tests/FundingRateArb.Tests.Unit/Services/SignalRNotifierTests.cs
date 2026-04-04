@@ -266,4 +266,88 @@ public class SignalRNotifierTests
 
         await act.Should().NotThrowAsync();
     }
+
+    // ── PushNotificationAsync — Exception-swallowing (NB1) ─────────────────
+
+    [Fact]
+    public async Task PushNotificationAsync_SwallowsHubException()
+    {
+        _mockAdminsClient
+            .Setup(c => c.ReceiveNotification(It.IsAny<string>()))
+            .ThrowsAsync(new InvalidOperationException("Hub disconnected"));
+
+        var act = () => _sut.PushNotificationAsync("user1", "test notification");
+
+        await act.Should().NotThrowAsync();
+    }
+
+    // ── PushPositionUpdatesAsync (NB2) ─────────────────────────────────────
+
+    [Fact]
+    public async Task PushPositionUpdatesAsync_SendsToCorrectUserGroup()
+    {
+        var config = new BotConfiguration();
+        var positions = new List<ArbitragePosition>
+        {
+            new() { Id = 1, UserId = "userA", OpenedAt = DateTime.UtcNow },
+            new() { Id = 2, UserId = "userB", OpenedAt = DateTime.UtcNow },
+        };
+
+        await _sut.PushPositionUpdatesAsync(positions, config);
+
+        GetUserClient("userA").Verify(
+            c => c.ReceivePositionUpdate(It.Is<PositionSummaryDto>(dto => dto.Id == 1)),
+            Times.Once);
+        GetUserClient("userB").Verify(
+            c => c.ReceivePositionUpdate(It.Is<PositionSummaryDto>(dto => dto.Id == 2)),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task PushPositionUpdatesAsync_OneFailureDoesNotBlockOthers()
+    {
+        var config = new BotConfiguration();
+        var positions = new List<ArbitragePosition>
+        {
+            new() { Id = 1, UserId = "failUser", OpenedAt = DateTime.UtcNow },
+            new() { Id = 2, UserId = "okUser", OpenedAt = DateTime.UtcNow },
+        };
+
+        // Configure the failUser group to throw
+        var failClient = new Mock<IDashboardClient>();
+        failClient.Setup(c => c.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>()))
+            .ThrowsAsync(new InvalidOperationException("Hub disconnected"));
+        _groupClients["user-failUser"] = failClient;
+
+        await _sut.PushPositionUpdatesAsync(positions, config);
+
+        // okUser should still receive its update despite failUser's exception
+        GetUserClient("okUser").Verify(
+            c => c.ReceivePositionUpdate(It.Is<PositionSummaryDto>(dto => dto.Id == 2)),
+            Times.Once);
+    }
+
+    // ── PushPositionRemovalsAsync — Merge logic (NB3) ──────────────────────
+
+    [Fact]
+    public async Task PushPositionRemovalsAsync_MergesReapedAndClosed()
+    {
+        var reaped = new List<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)>
+        {
+            (10, "userA", 1, 2, PositionStatus.Open),
+        };
+        var closed = new List<(int PositionId, string UserId)>
+        {
+            (20, "userB"),
+        };
+
+        await _sut.PushPositionRemovalsAsync(reaped, closed);
+
+        GetUserClient("userA").Verify(
+            c => c.ReceivePositionRemoval(10),
+            Times.Once);
+        GetUserClient("userB").Verify(
+            c => c.ReceivePositionRemoval(20),
+            Times.Once);
+    }
 }
