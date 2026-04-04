@@ -28,8 +28,8 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     private long _fundingTimeCacheExpiryTicks;
     private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
     private volatile bool _symbolInfoLoaded;
-    private volatile bool _positionModeChecked;
-    private DateTime _symbolInfoFailedUntil = DateTime.MinValue;
+    private int _positionModeChecked;
+    private long _symbolInfoFailedUntilTicks = DateTime.MinValue.Ticks;
 
     public BinanceConnector(
         IBinanceRestClient restClient,
@@ -68,16 +68,24 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         await Task.WhenAll(markPricesTask, tickersTask);
 
         var markPrices = await markPricesTask;
-        var tickers = await tickersTask;
 
         if (!markPrices.Success)
         {
             throw new InvalidOperationException(markPrices.Error?.Message ?? "Unknown error");
         }
 
-        var volumeBySymbol = tickers.Success && tickers.Data is not null
-            ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
-            : new Dictionary<string, decimal>();
+        Dictionary<string, decimal> volumeBySymbol;
+        try
+        {
+            var tickers = await tickersTask;
+            volumeBySymbol = tickers.Success && tickers.Data is not null
+                ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
+                : new Dictionary<string, decimal>();
+        }
+        catch
+        {
+            volumeBySymbol = new Dictionary<string, decimal>();
+        }
 
         return markPrices.Data!
             .Select(mp => new FundingRateDto
@@ -409,13 +417,12 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             }
             Interlocked.Exchange(ref _fundingTimeCacheExpiryTicks, DateTime.UtcNow.AddSeconds(30).Ticks);
 
-            var mp = result.Data.FirstOrDefault(m => m.Symbol == symbol);
-            if (mp is null)
+            if (_fundingTimeCache.TryGetValue(symbol, out var time))
             {
-                return ComputeNextSettlement8h();
+                return time;
             }
 
-            return mp.NextFundingTime;
+            return ComputeNextSettlement8h();
         }
         catch (OperationCanceledException) { throw; }
         catch
@@ -518,7 +525,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         }
 
         // Skip retries for 30s after a failed fetch
-        if (DateTime.UtcNow < _symbolInfoFailedUntil)
+        if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _symbolInfoFailedUntilTicks))
         {
             return;
         }
@@ -561,9 +568,10 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 _symbolInfoLoaded = true;
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _symbolInfoFailedUntil = DateTime.UtcNow.AddSeconds(30);
+            Interlocked.Exchange(ref _symbolInfoFailedUntilTicks, DateTime.UtcNow.AddSeconds(30).Ticks);
             _logger.LogWarning("Failed to fetch exchange info for symbol info lookup: {Error}", ex.Message);
         }
         finally
@@ -572,17 +580,19 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         }
 
         // Position mode validation — outside semaphore to avoid extending critical section
-        if (_symbolInfoLoaded && !_positionModeChecked)
+        if (_symbolInfoLoaded && Interlocked.CompareExchange(ref _positionModeChecked, 1, 0) == 0)
         {
-            _positionModeChecked = true;
             try
             {
-                var positionModeResult = await _restClient.UsdFuturesApi.Account.GetPositionModeAsync(ct: ct);
+                var sdkPipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+                var positionModeResult = await sdkPipeline.ExecuteAsync(
+                    async token => await _restClient.UsdFuturesApi.Account.GetPositionModeAsync(ct: token), ct);
                 if (positionModeResult.Success && positionModeResult.Data.IsHedgeMode)
                 {
                     _logger.LogCritical("Binance account is in hedge mode. Switch to one-way mode for correct operation.");
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex)
             {
                 _logger.LogWarning("Failed to check position mode: {Error}", ex.Message);

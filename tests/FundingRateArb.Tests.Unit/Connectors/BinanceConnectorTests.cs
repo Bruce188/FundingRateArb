@@ -1128,4 +1128,173 @@ public class BinanceConnectorTests
 
         maxLeverage.Should().BeNull("API failure should return null");
     }
+
+    // ── NB4: Leverage guard test ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(126)]
+    [InlineData(200)]
+    public async Task PlaceMarketOrder_InvalidLeverage_ReturnsFailureWithoutCallingApi(int leverage)
+    {
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+
+        var exchangeDataMock = new Mock<IBinanceRestClientUsdFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, leverage);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Invalid leverage");
+
+        tradingMock.Verify(
+            x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "PlaceOrderAsync must not be called when leverage is invalid");
+
+        accountMock.Verify(
+            x => x.ChangeInitialLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "ChangeInitialLeverageAsync must not be called when leverage is invalid");
+    }
+
+    // ── NB5: ClosePosition order-failure path ─────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_ReturnsFailure_WhenCloseOrderFails()
+    {
+        var position = new BinancePositionDetailsUsdt
+        {
+            Symbol = "ETHUSDT",
+            Quantity = 0.5m,
+        };
+
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Insufficient margin"));
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetPositionInformationAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([position]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().NotBeNullOrEmpty("error message must be populated when close order fails");
+    }
+
+    // ── NB6: HasOpenPosition API-failure path ─────────────────────────────────
+
+    [Fact]
+    public async Task HasOpenPosition_WhenApiFails_ReturnsNull()
+    {
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetPositionInformationAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailPositions("API connection error"));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.HasOpenPositionAsync("ETH", Side.Long);
+
+        result.Should().BeNull("API failure should return null");
+    }
+
+    // ── N6: IsEstimatedFillExchange ───────────────────────────────────────────
+
+    [Fact]
+    public void IsEstimatedFillExchange_ReturnsFalse()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        sut.IsEstimatedFillExchange.Should().BeFalse();
+    }
+
+    // ── N7: GetNextFundingTimeAsync tests ─────────────────────────────────────
+
+    [Fact]
+    public async Task GetNextFundingTime_ReturnsTimeFromApi()
+    {
+        var expectedTime = new DateTime(2026, 4, 4, 16, 0, 0, DateTimeKind.Utc);
+        var markPrice = new BinanceFuturesMarkPrice
+        {
+            Symbol = "ETHUSDT",
+            MarkPrice = 3500m,
+            IndexPrice = 3495m,
+            FundingRate = 0.0001m,
+            NextFundingTime = expectedTime,
+        };
+
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.GetNextFundingTimeAsync("ETH");
+
+        result.Should().Be(expectedTime, "should return the NextFundingTime from the API");
+    }
+
+    [Fact]
+    public async Task GetNextFundingTime_WhenApiFails_ReturnsFallbackSettlementTime()
+    {
+        var client = BuildClientWithMarkPrices(FailMarkPrices("API connection error"));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.GetNextFundingTimeAsync("ETH");
+
+        result.Should().NotBeNull("fallback should always return a settlement time");
+
+        // The fallback computes the next 8h boundary (00:00, 08:00, 16:00 UTC)
+        var hour = result!.Value.Hour;
+        (hour % 8).Should().Be(0, "settlement time must be on an 8-hour boundary");
+        result.Value.Minute.Should().Be(0);
+        result.Value.Second.Should().Be(0);
+        result.Value.Should().BeAfter(DateTime.UtcNow, "fallback settlement must be in the future");
+    }
 }
