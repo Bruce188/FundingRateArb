@@ -5,6 +5,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Binance.Net" Version="12.10.0" />
     <PackageReference Include="HyperLiquid.Net" Version="3.10.0" />
     <PackageReference Include="JKorf.Aster.Net" Version="2.8.0" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="8.0.*" />

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Aster.Net.Clients;
+using Binance.Net.Clients;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using HyperLiquid.Net.Clients;
@@ -22,6 +23,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         { "Hyperliquid", typeof(HyperliquidConnector) },
         { "Lighter",     typeof(LighterConnector) },
         { "Aster",       typeof(AsterConnector) },
+        { "Binance",     typeof(BinanceConnector) },
         { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
@@ -110,6 +112,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         {
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey, subAccountAddress),
             "aster" => CreateAsterConnector(apiKey, apiSecret),
+            "binance" => CreateBinanceConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
             "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
@@ -178,6 +181,24 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         var logger = _serviceProvider.GetRequiredService<ILogger<AsterConnector>>();
         var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
         return new AsterConnector(restClient, pipelineProvider, logger, markPriceCache);
+    }
+
+    private BinanceConnector? CreateBinanceConnector(string? apiKey, string? apiSecret)
+    {
+        if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        {
+            return null;
+        }
+
+        var restClient = new BinanceRestClient(options =>
+        {
+            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+        });
+
+        var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<BinanceConnector>>();
+        var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
+        return new BinanceConnector(restClient, pipelineProvider, logger, markPriceCache);
     }
 
     private LighterConnector? CreateLighterConnector(

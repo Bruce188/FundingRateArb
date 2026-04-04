@@ -1,6 +1,7 @@
 using System.Threading.RateLimiting;
 using AspNet.Security.OAuth.GitHub;
 using Azure.Identity;
+using Binance.Net;
 using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Interfaces;
@@ -313,6 +314,15 @@ try
             options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
         }
     });
+    builder.Services.AddBinance(options =>
+    {
+        var apiKey = builder.Configuration["Exchanges:Binance:ApiKey"];
+        var apiSecret = builder.Configuration["Exchanges:Binance:ApiSecret"];
+        if (!string.IsNullOrEmpty(apiKey) && !string.IsNullOrEmpty(apiSecret))
+        {
+            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+        }
+    });
 
     // --- Exchange Connectors ---
     // API credentials come from User Secrets — never appsettings
@@ -354,6 +364,7 @@ try
         options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
     });
     builder.Services.AddScoped<AsterConnector>();
+    builder.Services.AddScoped<BinanceConnector>();
     builder.Services.AddHttpClient<CoinGlassConnector>(client =>
     {
         client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");
