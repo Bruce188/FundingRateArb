@@ -159,11 +159,15 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
     public async Task EnsureTiersCachedAsync(IExchangeConnector connector, string asset, CancellationToken ct)
     {
         if (!_tierProvider.IsStale(connector.ExchangeName, asset))
+        {
             return;
+        }
 
         var tiers = await connector.GetLeverageTiersAsync(asset, ct);
         if (tiers is { Length: > 0 })
+        {
             _tierProvider.UpdateTiers(connector.ExchangeName, asset, tiers);
+        }
     }
 
     /// <summary>

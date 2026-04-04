@@ -22,7 +22,9 @@ public class LeverageTierCache : ILeverageTierProvider
     {
         var key = NormalizeKey(exchangeName, asset);
         if (_cache.TryGetValue(key, out var entry) && !IsExpired(entry.FetchedAtUtc))
+        {
             return Task.FromResult(entry.Tiers);
+        }
 
         return Task.FromResult(Array.Empty<LeverageTier>());
     }
@@ -31,11 +33,15 @@ public class LeverageTierCache : ILeverageTierProvider
     {
         var key = NormalizeKey(exchangeName, asset);
         if (!_cache.TryGetValue(key, out var entry) || entry.Tiers.Length == 0)
+        {
             return int.MaxValue;
+        }
 
         var tier = FindTier(entry.Tiers, notionalUsdc);
         if (tier is not null)
+        {
             return tier.MaxLeverage;
+        }
 
         // Tiers are populated but notional exceeds all defined tiers — fail-safe to most restrictive
         return entry.Tiers.Min(t => t.MaxLeverage);
@@ -45,11 +51,15 @@ public class LeverageTierCache : ILeverageTierProvider
     {
         var key = NormalizeKey(exchangeName, asset);
         if (!_cache.TryGetValue(key, out var entry) || entry.Tiers.Length == 0)
+        {
             return 0m;
+        }
 
         var tier = FindTier(entry.Tiers, notionalUsdc);
         if (tier is not null)
+        {
             return tier.MaintMarginRate;
+        }
 
         // Tiers are populated but notional exceeds all defined tiers — fail-safe to highest margin rate
         return entry.Tiers.Max(t => t.MaintMarginRate);
@@ -67,7 +77,9 @@ public class LeverageTierCache : ILeverageTierProvider
         foreach (var kvp in _cache)
         {
             if (DateTime.UtcNow - kvp.Value.FetchedAtUtc > evictionThreshold)
+            {
                 _cache.TryRemove(kvp.Key, out _);
+            }
         }
     }
 
@@ -75,7 +87,9 @@ public class LeverageTierCache : ILeverageTierProvider
     {
         var key = NormalizeKey(exchangeName, asset);
         if (!_cache.TryGetValue(key, out var entry))
+        {
             return true;
+        }
 
         return IsExpired(entry.FetchedAtUtc);
     }

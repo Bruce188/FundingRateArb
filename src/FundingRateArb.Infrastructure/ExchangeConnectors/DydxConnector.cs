@@ -358,7 +358,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             var ticker = asset + "-USD";
             var marketInfo = await GetMarketInfoAsync(ticker, ct);
             if (marketInfo is null || marketInfo.InitialMarginFraction <= 0)
+            {
                 return null;
+            }
 
             var maxLeverage = (int)(1m / marketInfo.InitialMarginFraction);
             var maintMarginRate = marketInfo.InitialMarginFraction / 2m;

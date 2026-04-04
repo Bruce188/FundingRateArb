@@ -552,13 +552,17 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 ct);
 
             if (!result.Success || result.Data.ExchangeInfo?.Symbols is null)
+            {
                 return null;
+            }
 
             var symbol = result.Data.ExchangeInfo.Symbols
                 .FirstOrDefault(s => s.Name.Equals(asset, StringComparison.OrdinalIgnoreCase));
 
             if (symbol is null || symbol.MaxLeverage <= 0)
+            {
                 return null;
+            }
 
             return new[]
             {

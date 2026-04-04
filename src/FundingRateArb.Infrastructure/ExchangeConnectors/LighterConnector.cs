@@ -1600,7 +1600,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         {
             var market = await GetMarketDetailAsync(asset, ct);
             if (market is null || market.MinInitialMarginFraction <= 0)
+            {
                 return null;
+            }
 
             var maxLeverage = (int)(10_000m / market.MinInitialMarginFraction);
             var maintMarginRate = market.MaintenanceMarginFraction > 0

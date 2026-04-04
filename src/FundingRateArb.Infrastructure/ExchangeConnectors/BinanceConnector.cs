@@ -669,11 +669,15 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 async token => await _restClient.UsdFuturesApi.Account.GetBracketsAsync(symbol, ct: token), ct);
 
             if (!result.Success || result.Data is null)
+            {
                 return null;
+            }
 
             var symbolBracket = result.Data.FirstOrDefault();
             if (symbolBracket?.Brackets is null || symbolBracket.Brackets.Length == 0)
+            {
                 return null;
+            }
 
             return symbolBracket.Brackets
                 .Select(b => new LeverageTier(
@@ -702,11 +706,15 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 async token => await _restClient.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: token), ct);
 
             if (!result.Success)
+            {
                 return null;
+            }
 
             var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol && p.Quantity != 0);
             if (pos is null)
+            {
                 return null;
+            }
 
             var marginUsed = pos.IsolatedMargin;
             var wallet = pos.IsolatedWallet;

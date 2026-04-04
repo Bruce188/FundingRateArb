@@ -1,7 +1,7 @@
-namespace FundingRateArb.Application.Common.Exchanges;
 
 using FundingRateArb.Domain.ValueObjects;
 
+namespace FundingRateArb.Application.Common.Exchanges;
 public interface ILeverageTierProvider
 {
     Task<LeverageTier[]> GetTiersAsync(string exchangeName, string asset, CancellationToken ct = default);

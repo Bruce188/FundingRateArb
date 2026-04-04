@@ -182,7 +182,9 @@ public class PositionSizer : IPositionSizer
         for (int i = 0; i < sizes.Length; i++)
         {
             if (sizes[i] <= 0)
+            {
                 continue;
+            }
 
             var opp = opportunities[i];
             var oppLeverage = effectiveLeverage;
@@ -193,7 +195,9 @@ public class PositionSizer : IPositionSizer
             var shortTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.ShortExchangeName, opp.AssetSymbol, tentativeNotional);
             var tierMax = Math.Min(longTierMax, shortTierMax);
             if (tierMax < oppLeverage && tierMax > 0 && tierMax != int.MaxValue)
+            {
                 oppLeverage = tierMax;
+            }
 
             var minVol = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
             var liquidityLimit = minVol * config.VolumeFraction;

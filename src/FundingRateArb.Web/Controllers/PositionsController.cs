@@ -110,14 +110,18 @@ public class PositionsController : Controller
                     {
                         var longMark = position.LongEntryPrice;
                         if (longMark > 0)
+                        {
                             positionDto.MaxSafeMovePctLong = Math.Abs(longMark - longMargin.LiquidationPrice.Value) / longMark * 100m;
+                        }
                     }
 
                     if (shortMargin?.LiquidationPrice is not null)
                     {
                         var shortMark = position.ShortEntryPrice;
                         if (shortMark > 0)
+                        {
                             positionDto.MaxSafeMovePctShort = Math.Abs(shortMark - shortMargin.LiquidationPrice.Value) / shortMark * 100m;
+                        }
                     }
                 }
             }
