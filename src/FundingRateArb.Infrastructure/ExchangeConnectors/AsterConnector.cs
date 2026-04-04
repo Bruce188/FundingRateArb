@@ -423,6 +423,58 @@ public class AsterConnector : IExchangeConnector, IDisposable
         return new DateTime(now.Year, now.Month, now.Day, flooredHour, 0, 0, DateTimeKind.Utc).AddHours(8);
     }
 
+    public async Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                    symbol, IncomeType.RealizedPnl, from, to, limit: 1000, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Aster GetIncomeHistoryAsync (RealizedPnl) failed: {Error}", result.Error?.Message);
+                return null;
+            }
+
+            return result.Data.Sum(i => i.Income);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Aster GetRealizedPnlAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
+    public async Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                    symbol, IncomeType.FundingFee, from, to, limit: 1000, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Aster GetIncomeHistoryAsync (FundingFee) failed: {Error}", result.Error?.Message);
+                return null;
+            }
+
+            return result.Data.Sum(i => i.Income);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Aster GetFundingPaymentsAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
     public void Dispose()
     {
         GC.SuppressFinalize(this);

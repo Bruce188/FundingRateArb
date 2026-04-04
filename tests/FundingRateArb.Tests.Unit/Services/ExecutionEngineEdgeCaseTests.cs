@@ -24,6 +24,7 @@ public class ExecutionEngineEdgeCaseTests
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IExchangeConnector> _mockLongConnector = new();
     private readonly Mock<IExchangeConnector> _mockShortConnector = new();
+    private readonly Mock<IPnlReconciliationService> _mockReconciliation = new();
     private readonly ExecutionEngine _sut;
 
     private static readonly BotConfiguration DefaultConfig = new()
@@ -108,7 +109,7 @@ public class ExecutionEngineEdgeCaseTests
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
-        _sut = new ExecutionEngine(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        _sut = new ExecutionEngine(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, _mockReconciliation.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>

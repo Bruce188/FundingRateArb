@@ -27,6 +27,21 @@ public class ArbitragePosition
     public PositionStatus Status { get; set; } = PositionStatus.Opening;
     public CloseReason? CloseReason { get; set; }
 
+    /// <summary>PnL reported by the exchange (informational — never overwrites local RealizedPnl).</summary>
+    public decimal? ExchangeReportedPnl { get; set; }
+
+    /// <summary>Percentage divergence between local and exchange PnL: (local - exchange) / |exchange| * 100.</summary>
+    public decimal? PnlDivergence { get; set; }
+
+    /// <summary>Total fees reported by the exchange for this position.</summary>
+    public decimal? ExchangeReportedFees { get; set; }
+
+    /// <summary>Total funding payments reported by the exchange for this position.</summary>
+    public decimal? ExchangeReportedFunding { get; set; }
+
+    /// <summary>When reconciliation was last performed against exchange data.</summary>
+    public DateTime? ReconciledAt { get; set; }
+
     public bool LongLegClosed { get; set; }
     public bool ShortLegClosed { get; set; }
 
