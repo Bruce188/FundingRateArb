@@ -10,6 +10,7 @@ public interface IAlertRepository
     Task<List<Alert>> GetByUserAsync(string userId, bool unreadOnly = false, int skip = 0, int take = 500);
     Task<List<Alert>> GetByPositionAsync(int positionId);
     Task<Alert?> GetRecentAsync(string userId, int? positionId, AlertType type, TimeSpan within);
+    Task<Dictionary<(int PositionId, AlertType Type), Alert>> GetRecentByPositionIdsAsync(IEnumerable<int> positionIds, IEnumerable<AlertType> types, TimeSpan within);
     Task<List<Alert>> GetRecentUnreadAsync(TimeSpan within);
     Task<Dictionary<AlertSeverity, int>> GetSeverityCountsAsync(TimeSpan within);
     void Add(Alert alert);

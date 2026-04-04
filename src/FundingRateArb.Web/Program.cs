@@ -232,6 +232,7 @@ try
     builder.Services.AddScoped<IPositionCloser, PositionCloser>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
+    builder.Services.AddSingleton<IHealthMonitorState, HealthMonitorState>();
     builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
     builder.Services.AddSingleton<IConfigValidator, ConfigValidator>();
     builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();

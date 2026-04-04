@@ -401,6 +401,7 @@ public class OrderPlacementReliabilityTests
             mockRefPrice.Object,
             _monitorExecutionEngine.Object,
             Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
             NullLogger<PositionHealthMonitor>.Instance);
     }
 

@@ -4,6 +4,7 @@ using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260404185737_AddRiskMonitoringProperties")]
+    partial class AddRiskMonitoringProperties
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -391,11 +394,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("decimal(18,4)")
                         .HasDefaultValue(0.50m);
 
-                    b.Property<decimal>("MarginUtilizationAlertPct")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,4)")
-                        .HasDefaultValue(0.70m);
-
                     b.Property<decimal>("MaxCapitalPerPosition")
                         .HasColumnType("decimal(18,4)");
 
@@ -410,11 +408,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<int>("MaxHoldTimeHours")
                         .HasColumnType("int");
-
-                    b.Property<int>("MaxLeverageCap")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(3);
 
                     b.Property<int>("MaxRebalancesPerCycle")
                         .ValueGeneratedOnAdd()
@@ -440,11 +433,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<decimal>("OpenThreshold")
                         .HasColumnType("decimal(18,10)");
-
-                    b.Property<int>("OperatingState")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(0);
 
                     b.Property<int>("PriceFeedFailureCloseThreshold")
                         .HasColumnType("int");

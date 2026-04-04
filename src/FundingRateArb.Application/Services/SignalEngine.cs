@@ -2,6 +2,7 @@ using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Application.Services;
@@ -66,6 +67,19 @@ public class SignalEngine : ISignalEngine
             }
         }
 
+        // Lazy-load funding rate history for trend analysis (sequential — DbContext is not thread-safe).
+        // Only queried for pairs that pass volume + break-even filters, avoiding unnecessary DB calls.
+        var historyLookup = new Dictionary<(int AssetId, int ExchangeId), List<FundingRateSnapshot>>();
+        // Scale lookback by max funding interval across all active exchanges.
+        // Exchanges with 8h intervals (e.g. Aster) need 24h+ for MinConsecutiveFavorableCycles=3.
+        var maxIntervalHours = rates
+            .Where(r => r.Exchange is not null)
+            .Select(r => r.Exchange!.FundingIntervalHours)
+            .DefaultIfEmpty(1)
+            .Max();
+        var historyFrom = DateTime.UtcNow.AddHours(-maxIntervalHours * config.MinConsecutiveFavorableCycles);
+        var historyTo = DateTime.UtcNow;
+
         var opportunities = new List<ArbitrageOpportunityDto>();
         var netPositiveList = new List<ArbitrageOpportunityDto>();
 
@@ -113,8 +127,7 @@ public class SignalEngine : ISignalEngine
                     var slippagePerHour = config.SlippageBufferBps / 10_000m / amortHours;
                     net -= slippagePerHour;
 
-                    // Apply funding rebate: if the paying leg's exchange offers a rebate, the effective
-                    // funding cost is reduced, improving net yield for the opportunity.
+                    // Apply funding rebate BEFORE break-even computation so break-even uses post-rebate net yield.
                     // Long leg pays when rate > 0; guard prevents incorrect boost when rate is negative.
                     if (longR.Exchange.FundingRebateRate > 0 && longR.RatePerHour > 0)
                     {
@@ -130,6 +143,10 @@ public class SignalEngine : ISignalEngine
                         var rebateBoost = Math.Abs(shortR.RatePerHour) * effectiveShortRebate;
                         net += rebateBoost;
                     }
+
+                    // Break-even analysis: hours to recover entry costs from post-rebate net yield
+                    var totalEntryCost = (longFee + shortFee) + (config.SlippageBufferBps / 10_000m);
+                    var breakEvenHours = net > 0 ? totalEntryCost / net : (decimal?)null;
 
                     // Compute minutes to next settlement from either leg (use minimum)
                     int? minutesToSettlement = null;
@@ -200,6 +217,7 @@ public class SignalEngine : ISignalEngine
                             ? Math.Min(longPred.Confidence, shortPred.Confidence)
                             : null,
                         PredictedTrend = shortPred?.TrendDirection,
+                        BreakEvenHours = breakEvenHours,
                     };
 
                     // Compute leverage-adjusted metrics when tier data is available
@@ -223,6 +241,59 @@ public class SignalEngine : ISignalEngine
                                 dto.BreakEvenCycles = entrySpreadCost / (net * effectiveLev);
                             }
                         }
+                    }
+
+                    // Break-even filter: skip opportunities that take too long to recover entry costs
+                    if (breakEvenHours.HasValue && breakEvenHours.Value > config.BreakevenHoursMax)
+                    {
+                        diagnostics.PairsFilteredByBreakeven++;
+                        continue;
+                    }
+
+                    // Trend analysis: check if funding spread has been favorable for N consecutive snapshots.
+                    // Load history on-demand (only for pairs that pass volume + break-even filters).
+                    var longKey = (longR.AssetId, longR.ExchangeId);
+                    if (!historyLookup.TryGetValue(longKey, out var longHistory))
+                    {
+                        longHistory = await _uow.FundingRates.GetHistoryAsync(
+                            longR.AssetId, longR.ExchangeId, historyFrom, historyTo,
+                            take: config.MinConsecutiveFavorableCycles);
+                        historyLookup[longKey] = longHistory;
+                    }
+                    var shortKey = (shortR.AssetId, shortR.ExchangeId);
+                    if (!historyLookup.TryGetValue(shortKey, out var shortHistory))
+                    {
+                        shortHistory = await _uow.FundingRates.GetHistoryAsync(
+                            shortR.AssetId, shortR.ExchangeId, historyFrom, historyTo,
+                            take: config.MinConsecutiveFavorableCycles);
+                        historyLookup[shortKey] = shortHistory;
+                    }
+
+                    if (longHistory is not null && shortHistory is not null
+                        && longHistory.Count >= config.MinConsecutiveFavorableCycles
+                        && shortHistory.Count >= config.MinConsecutiveFavorableCycles)
+                    {
+                        var allFavorable = true;
+                        for (int k = 0; k < config.MinConsecutiveFavorableCycles; k++)
+                        {
+                            if (k < longHistory.Count && k < shortHistory.Count)
+                            {
+                                if (shortHistory[k].RatePerHour - longHistory[k].RatePerHour <= 0)
+                                {
+                                    allFavorable = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!allFavorable)
+                        {
+                            dto.TrendUnconfirmed = true;
+                        }
+                    }
+                    else
+                    {
+                        // Not enough history — mark as unconfirmed
+                        dto.TrendUnconfirmed = true;
                     }
 
                     if (net >= config.OpenThreshold)

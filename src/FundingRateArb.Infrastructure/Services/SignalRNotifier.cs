@@ -99,6 +99,7 @@ public class SignalRNotifier : ISignalRNotifier
                     dto.UnifiedPnl = pnl.UnifiedPnl;
                     dto.UnrealizedPnl = pnl.UnifiedPnl; // backward compat for JS reading unrealizedPnl
                     dto.DivergencePct = pnl.DivergencePct;
+                    dto.CollateralImbalancePct = pnl.CollateralImbalancePct;
                 }
 
                 await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);

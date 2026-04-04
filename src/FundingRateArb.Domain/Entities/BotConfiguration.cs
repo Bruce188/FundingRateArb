@@ -132,6 +132,22 @@ public class BotConfiguration
     [Range(0.5, 10.0)]
     public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;
 
+    /// <summary>Consecutive snapshots with positive funding spread required before entry.</summary>
+    [Range(1, 20)]
+    public int MinConsecutiveFavorableCycles { get; set; } = 3;
+
+    /// <summary>Consecutive negative-spread cycles before triggering FundingFlipped close.</summary>
+    [Range(1, 20)]
+    public int FundingFlipExitCycles { get; set; } = 2;
+
+    /// <summary>USDT/USDC spread percentage at which to issue a warning alert.</summary>
+    [Range(0.0, 5.0)]
+    public decimal StablecoinAlertThresholdPct { get; set; } = 0.3m;
+
+    /// <summary>USDT/USDC spread percentage at which to close cross-stablecoin positions.</summary>
+    [Range(0.0, 10.0)]
+    public decimal StablecoinCriticalThresholdPct { get; set; } = 1.0m;
+
     /// <summary>Enable dry-run (paper trading) mode globally.</summary>
     public bool DryRunEnabled { get; set; }
 

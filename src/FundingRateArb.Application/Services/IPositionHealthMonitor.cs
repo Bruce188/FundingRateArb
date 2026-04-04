@@ -32,4 +32,4 @@ public record HealthCheckResult(
 /// <summary>
 /// PnL values computed during health check for a single position.
 /// </summary>
-public record ComputedPositionPnl(decimal ExchangePnl, decimal UnifiedPnl, decimal DivergencePct);
+public record ComputedPositionPnl(decimal ExchangePnl, decimal UnifiedPnl, decimal DivergencePct, decimal? CollateralImbalancePct = null);

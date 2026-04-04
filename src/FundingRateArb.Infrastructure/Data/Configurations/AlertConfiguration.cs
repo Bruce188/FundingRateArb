@@ -24,5 +24,10 @@ public class AlertConfiguration : IEntityTypeConfiguration<Alert>
 
         builder.HasIndex(a => new { a.UserId, a.CreatedAt });
         builder.HasIndex(a => new { a.IsRead, a.CreatedAt });
+
+        // Composite index for GetRecentByPositionIdsAsync performance
+        builder.HasIndex(a => new { a.ArbitragePositionId, a.Type, a.CreatedAt })
+            .HasDatabaseName("IX_Alerts_PositionId_Type_CreatedAt")
+            .IsDescending(false, false, true);
     }
 }
