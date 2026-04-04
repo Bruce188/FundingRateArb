@@ -8,6 +8,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Services;
+using FundingRateArb.Web.Areas.Admin.Controllers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -308,11 +309,20 @@ public class ArmingStateTests
             .Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
+        BotConfiguration? capturedConfig = null;
+        mockBotConfig.Setup(b => b.GetActiveTrackedAsync())
+            .ReturnsAsync(() =>
+            {
+                capturedConfig = new BotConfiguration { Id = 1, OperatingState = BotOperatingState.Armed };
+                return capturedConfig;
+            });
+
         await sut.RunCycleAsync(CancellationToken.None);
 
-        // Verify that GetActiveTrackedAsync was called (to fetch tracked config for state update)
+        // NB7: Verify actual state value written
+        capturedConfig.Should().NotBeNull();
+        capturedConfig!.OperatingState.Should().Be(BotOperatingState.Trading);
         mockBotConfig.Verify(b => b.GetActiveTrackedAsync(), Times.Once);
-        // Verify cache was invalidated (state was persisted)
         mockBotConfig.Verify(b => b.InvalidateCache(), Times.Once);
     }
 
@@ -325,9 +335,19 @@ public class ArmingStateTests
         mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
 
+        BotConfiguration? capturedConfig = null;
+        mockBotConfig.Setup(b => b.GetActiveTrackedAsync())
+            .ReturnsAsync(() =>
+            {
+                capturedConfig = new BotConfiguration { Id = 1, OperatingState = BotOperatingState.Trading };
+                return capturedConfig;
+            });
+
         await sut.RunCycleAsync(CancellationToken.None);
 
-        // Verify tracked config was fetched for state transition
+        // NB7: Verify actual state value written
+        capturedConfig.Should().NotBeNull();
+        capturedConfig!.OperatingState.Should().Be(BotOperatingState.Armed);
         mockBotConfig.Verify(b => b.GetActiveTrackedAsync(), Times.Once);
         mockBotConfig.Verify(b => b.InvalidateCache(), Times.Once);
     }
@@ -349,5 +369,131 @@ public class ArmingStateTests
 
         // GetActiveTrackedAsync should NOT be called since no transition should occur
         mockBotConfig.Verify(b => b.GetActiveTrackedAsync(), Times.Never);
+    }
+
+    // ── NB8: Trading stays when open (non-opening) positions exist ──────────
+
+    [Fact]
+    public async Task TradingToArmed_DoesNotTransition_WhenOpenPositionsExist()
+    {
+        var (sut, mockBotConfig, mockPositions, _, _) = CreateOrchestrator(BotOperatingState.Trading);
+
+        // Non-empty open positions, empty opening — should NOT transition
+        mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>
+        {
+            new() { Id = 1, UserId = TestUserId, Status = PositionStatus.Open }
+        });
+        mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
+
+        await sut.RunCycleAsync(CancellationToken.None);
+
+        // GetActiveTrackedAsync should NOT be called — still has open positions
+        mockBotConfig.Verify(b => b.GetActiveTrackedAsync(), Times.Never);
+    }
+
+    // ── B3: Paused state gating path ────────────────────────────────────────
+
+    [Fact]
+    public async Task RunCycle_WhenPaused_SkipsPositionOpening_ButPushesDashboard()
+    {
+        var (sut, _, mockPositions, mockExecEngine, mockNotifier) = CreateOrchestrator(BotOperatingState.Paused);
+
+        mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        await sut.RunCycleAsync(CancellationToken.None);
+
+        // Dashboard push should still happen (monitoring continues)
+        mockNotifier.Verify(n => n.PushDashboardUpdateAsync(
+            It.IsAny<List<ArbitragePosition>>(),
+            It.IsAny<List<ArbitrageOpportunityDto>>(),
+            BotOperatingState.Paused,
+            It.IsAny<int>(),
+            It.IsAny<int>()), Times.Once);
+
+        // Position opening should NOT happen
+        mockExecEngine.Verify(e => e.OpenPositionAsync(
+            It.IsAny<string>(),
+            It.IsAny<ArbitrageOpportunityDto>(),
+            It.IsAny<decimal>(),
+            It.IsAny<UserConfiguration?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+
+        // Status explanation should use "warning" severity and mention "paused"
+        mockNotifier.Verify(n => n.PushStatusExplanationAsync(
+            null,
+            It.Is<string>(msg => msg.Contains("paused", StringComparison.OrdinalIgnoreCase)),
+            "warning"), Times.Once);
+    }
+
+    // ── NB6: Transition error paths ─────────────────────────────────────────
+
+    [Fact]
+    public async Task TradingToArmed_WhenSaveFails_ContinuesCycleWithoutCrash()
+    {
+        var (sut, mockBotConfig, mockPositions, _, _) = CreateOrchestrator(BotOperatingState.Trading);
+
+        mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+        mockPositions.Setup(p => p.GetByStatusAsync(PositionStatus.Opening)).ReturnsAsync(new List<ArbitragePosition>());
+
+        // Make GetActiveTrackedAsync throw to simulate failure
+        mockBotConfig.Setup(b => b.GetActiveTrackedAsync())
+            .ThrowsAsync(new InvalidOperationException("DB error"));
+
+        var act = () => sut.RunCycleAsync(CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task ArmedToTrading_WhenSaveFails_ContinuesCycleWithoutCrash()
+    {
+        var (sut, mockBotConfig, mockPositions, mockExecEngine, _) = CreateOrchestrator(BotOperatingState.Armed);
+
+        mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        mockExecEngine
+            .Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+
+        // Make GetActiveTrackedAsync throw to simulate failure
+        mockBotConfig.Setup(b => b.GetActiveTrackedAsync())
+            .ThrowsAsync(new InvalidOperationException("DB error"));
+
+        var act = () => sut.RunCycleAsync(CancellationToken.None);
+
+        await act.Should().NotThrowAsync();
+    }
+
+    // ── B2: SetState(Trading) rejection ─────────────────────────────────────
+
+    [Fact]
+    public async Task SetState_WhenTradingRequested_RejectsWithRedirect()
+    {
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockBotConfig = new Mock<IBotConfigRepository>();
+        var mockConfigValidator = new Mock<IConfigValidator>();
+        var logger = NullLogger<BotConfigController>.Instance;
+
+        var config = new BotConfiguration
+        {
+            Id = 1,
+            OperatingState = BotOperatingState.Armed,
+        };
+        mockBotConfig.Setup(b => b.GetActiveTrackedAsync()).ReturnsAsync(config);
+        mockUow.Setup(u => u.BotConfig).Returns(mockBotConfig.Object);
+
+        var controller = new BotConfigController(mockUow.Object, mockConfigValidator.Object, logger);
+        controller.TempData = new Microsoft.AspNetCore.Mvc.ViewFeatures.TempDataDictionary(
+            new Microsoft.AspNetCore.Http.DefaultHttpContext(),
+            Mock.Of<Microsoft.AspNetCore.Mvc.ViewFeatures.ITempDataProvider>());
+
+        var result = await controller.SetState(BotOperatingState.Trading);
+
+        // Should redirect to Index
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.RedirectToActionResult>()
+            .Which.ActionName.Should().Be("Index");
+
+        // SaveAsync should never be called — rejection means no persistence
+        mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

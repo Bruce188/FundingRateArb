@@ -327,6 +327,34 @@ public class SignalRNotifierTests
             Times.Once);
     }
 
+    // ── PushDashboardUpdateAsync — OperatingState to BotEnabled derivation (NB9) ──
+
+    [Theory]
+    [InlineData(BotOperatingState.Stopped, false, "Stopped")]
+    [InlineData(BotOperatingState.Paused, false, "Paused")]
+    [InlineData(BotOperatingState.Armed, true, "Armed")]
+    [InlineData(BotOperatingState.Trading, true, "Trading")]
+    public async Task PushDashboardUpdate_MapsOperatingStateToDto_AllStates(
+        BotOperatingState state, bool expectedBotEnabled, string expectedStateName)
+    {
+        DashboardDto? captured = null;
+        _mockMarketDataClient
+            .Setup(c => c.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
+            .Callback<DashboardDto>(dto => captured = dto)
+            .Returns(Task.CompletedTask);
+
+        await _sut.PushDashboardUpdateAsync(
+            new List<ArbitragePosition>(),
+            new List<ArbitrageOpportunityDto>(),
+            operatingState: state,
+            openingCount: 0,
+            needsAttentionCount: 0);
+
+        captured.Should().NotBeNull();
+        captured!.BotEnabled.Should().Be(expectedBotEnabled);
+        captured.OperatingState.Should().Be(expectedStateName);
+    }
+
     // ── PushPositionRemovalsAsync — Merge logic (NB3) ──────────────────────
 
     [Fact]

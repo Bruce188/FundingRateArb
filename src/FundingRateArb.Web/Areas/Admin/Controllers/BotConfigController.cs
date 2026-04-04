@@ -81,9 +81,9 @@ public class BotConfigController : Controller
 
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
-        config.IsEnabled = model.IsEnabled;
-        config.OperatingState = model.OperatingState;
-        config.IsEnabled = model.OperatingState != BotOperatingState.Stopped;
+        // NB2/NB4: Do not set OperatingState from the form — only SetState can change it.
+        // Derive IsEnabled from the DB-persisted OperatingState.
+        config.IsEnabled = config.OperatingState != BotOperatingState.Stopped;
         config.OpenThreshold = model.OpenThreshold!.Value;
         config.CloseThreshold = model.CloseThreshold!.Value;
         config.AlertThreshold = model.AlertThreshold!.Value;
@@ -141,13 +141,20 @@ public class BotConfigController : Controller
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> SetState(BotOperatingState newState)
     {
+        // B1: Validate enum value is defined
+        if (!Enum.IsDefined(typeof(BotOperatingState), newState))
+        {
+            TempData["Error"] = "Invalid operating state value.";
+            return RedirectToAction(nameof(Index));
+        }
+
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
         var oldState = config.OperatingState;
 
         // Validate: Trading is automatic-only (set by orchestrator)
         if (newState == BotOperatingState.Trading)
         {
-            TempData["Success"] = "Trading state is set automatically when a position opens. Use Armed instead.";
+            TempData["Success"] = "Note: Trading state is set automatically when a position opens. Use Armed instead.";
             return RedirectToAction(nameof(Index));
         }
 
@@ -171,10 +178,24 @@ public class BotConfigController : Controller
     [HttpPost, ValidateAntiForgeryToken]
     public async Task<IActionResult> Toggle()
     {
-        var config = await _uow.BotConfig.GetActiveAsync();
-        var newState = config.OperatingState == BotOperatingState.Stopped
+        var config = await _uow.BotConfig.GetActiveTrackedAsync();
+        var oldState = config.OperatingState;
+        var newState = oldState == BotOperatingState.Stopped
             ? BotOperatingState.Armed
             : BotOperatingState.Stopped;
-        return await SetState(newState);
+
+        config.OperatingState = newState;
+        config.IsEnabled = newState != BotOperatingState.Stopped;
+        config.LastUpdatedAt = DateTime.UtcNow;
+        config.UpdatedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "system";
+
+        await _uow.SaveAsync();
+        _uow.BotConfig.InvalidateCache();
+
+        _logger.LogWarning("Admin toggle: {OldState} -> {NewState} for BotConfiguration {Id} by {AdminUserId}",
+            oldState, newState, config.Id, config.UpdatedByUserId);
+
+        TempData["Success"] = $"Bot state changed: {oldState} -> {newState}";
+        return RedirectToAction(nameof(Index));
     }
 }

@@ -202,9 +202,7 @@ public class BotConfigControllerTests
     [Fact]
     public async Task Toggle_WhenArmed_StopsBot()
     {
-        var readConfig = new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed };
         var trackedConfig = new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed };
-        _mockBotConfigRepo.Setup(r => r.GetActiveAsync()).ReturnsAsync(readConfig);
         _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(trackedConfig);
         _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
 
@@ -214,16 +212,14 @@ public class BotConfigControllerTests
         trackedConfig.IsEnabled.Should().BeFalse();
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be("Index");
-        _mockBotConfigRepo.Verify(r => r.Update(trackedConfig), Times.Once);
+        // N4: Toggle uses tracked entities directly — no explicit Update() needed
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task Toggle_WhenStopped_ArmsBot()
     {
-        var readConfig = new BotConfiguration { IsEnabled = false, OperatingState = BotOperatingState.Stopped };
         var trackedConfig = new BotConfiguration { IsEnabled = false, OperatingState = BotOperatingState.Stopped };
-        _mockBotConfigRepo.Setup(r => r.GetActiveAsync()).ReturnsAsync(readConfig);
         _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(trackedConfig);
         _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
 

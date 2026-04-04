@@ -37,9 +37,24 @@
         </div>
         <form asp-action="SetState" method="post" class="d-inline d-flex align-items-center gap-2">
             <select name="newState" class="form-select form-select-sm" style="width: auto;">
-                <option value="Stopped" selected="@(Model.OperatingState == BotOperatingState.Stopped ? "selected" : null)">Stopped</option>
-                <option value="Armed" selected="@(Model.OperatingState == BotOperatingState.Armed ? "selected" : null)">Armed</option>
-                <option value="Paused" selected="@(Model.OperatingState == BotOperatingState.Paused ? "selected" : null)">Paused</option>
+                @{
+                    var states = new[] {
+                        (Value: "Stopped", Label: "Stopped", Match: BotOperatingState.Stopped),
+                        (Value: "Armed", Label: "Armed", Match: BotOperatingState.Armed),
+                        (Value: "Paused", Label: "Paused", Match: BotOperatingState.Paused)
+                    };
+                }
+                @foreach (var s in states)
+                {
+                    if (Model.OperatingState == s.Match)
+                    {
+                        <option value="@s.Value" selected="selected">@s.Label</option>
+                    }
+                    else
+                    {
+                        <option value="@s.Value">@s.Label</option>
+                    }
+                }
             </select>
             <button type="submit" class="btn btn-sm btn-outline-@stateColor">Set State</button>
         </form>
@@ -57,7 +72,6 @@
 @* ── Main configuration form ── *@
 <form asp-action="Index" method="post">
     <input asp-for="IsEnabled" type="hidden" value="@(Model.OperatingState != BotOperatingState.Stopped)" />
-    <input asp-for="OperatingState" type="hidden" />
     <div asp-validation-summary="ModelOnly" class="alert alert-danger" role="alert"></div>
 
     <div class="accordion" id="configAccordion">

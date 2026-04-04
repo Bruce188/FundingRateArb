@@ -235,16 +235,24 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
             && allOpenPositions.Count == 0
             && allOpeningPositions.Count == 0)
         {
+            // Update local reference first so rest of cycle sees new state even if save fails
+            globalConfig.OperatingState = BotOperatingState.Armed;
             try
             {
                 var trackedConfig = await uow.BotConfig.GetActiveTrackedAsync();
-                trackedConfig.OperatingState = BotOperatingState.Armed;
-                trackedConfig.LastUpdatedAt = DateTime.UtcNow;
-                uow.BotConfig.Update(trackedConfig);
-                await uow.SaveAsync(ct);
-                uow.BotConfig.InvalidateCache();
-                globalConfig.OperatingState = BotOperatingState.Armed;
-                _logger.LogWarning("State transition: Trading -> Armed (all positions closed)");
+                // NB3: Verify admin hasn't changed state mid-cycle
+                if (trackedConfig.OperatingState != BotOperatingState.Trading)
+                {
+                    globalConfig.OperatingState = trackedConfig.OperatingState;
+                }
+                else
+                {
+                    trackedConfig.OperatingState = BotOperatingState.Armed;
+                    trackedConfig.LastUpdatedAt = DateTime.UtcNow;
+                    await uow.SaveAsync(ct);
+                    uow.BotConfig.InvalidateCache();
+                    _logger.LogWarning("State transition: Trading -> Armed (all positions closed)");
+                }
             }
             catch (Exception ex)
             {
@@ -356,17 +364,15 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         await _notifier.PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.OperatingState,
             allOpeningPositions.Count, needsAttentionCount);
 
-        // Step 4: Gate — skip position opening if not Armed or Trading
-        if (globalConfig.OperatingState == BotOperatingState.Stopped)
+        // Step 4: Gate — skip position opening if not Armed or Trading (allowlist)
+        if (globalConfig.OperatingState != BotOperatingState.Armed
+            && globalConfig.OperatingState != BotOperatingState.Trading)
         {
-            _logger.LogDebug("Bot is stopped (monitoring only). Skipping position opening.");
-            await _notifier.PushStatusExplanationAsync(null, "Bot is stopped — arm in Admin > Bot Config to enable trading", "danger");
-            return;
-        }
-        if (globalConfig.OperatingState == BotOperatingState.Paused)
-        {
-            _logger.LogDebug("Bot is paused. Monitoring continues but no new positions.");
-            await _notifier.PushStatusExplanationAsync(null, "Bot is paused — resume in Admin > Bot Config", "warning");
+            var label = globalConfig.OperatingState == BotOperatingState.Paused ? "paused" : "stopped";
+            var style = globalConfig.OperatingState == BotOperatingState.Paused ? "warning" : "danger";
+            _logger.LogDebug("Bot is {State}. Skipping position opening.", globalConfig.OperatingState);
+            await _notifier.PushStatusExplanationAsync(null,
+                $"Bot is {label} — change state in Admin > Bot Config", style);
             return;
         }
 
@@ -826,17 +832,24 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                 // Armed -> Trading: automatic on first successful position open
                 if (ctx.GlobalConfig.OperatingState == BotOperatingState.Armed)
                 {
+                    // Update local reference first so rest of cycle sees new state even if save fails
+                    ctx.GlobalConfig.OperatingState = BotOperatingState.Trading;
                     try
                     {
                         var trackedConfig = await ctx.Uow.BotConfig.GetActiveTrackedAsync();
-                        trackedConfig.OperatingState = BotOperatingState.Trading;
-                        trackedConfig.LastUpdatedAt = DateTime.UtcNow;
-                        ctx.Uow.BotConfig.Update(trackedConfig);
-                        await ctx.Uow.SaveAsync(ct);
-                        ctx.Uow.BotConfig.InvalidateCache();
-                        // Update local reference so rest of cycle sees new state
-                        ctx.GlobalConfig.OperatingState = BotOperatingState.Trading;
-                        _logger.LogWarning("State transition: Armed -> Trading (position opened for {Asset})", opp.AssetSymbol);
+                        // NB3: Verify admin hasn't changed state mid-cycle
+                        if (trackedConfig.OperatingState != BotOperatingState.Armed)
+                        {
+                            ctx.GlobalConfig.OperatingState = trackedConfig.OperatingState;
+                        }
+                        else
+                        {
+                            trackedConfig.OperatingState = BotOperatingState.Trading;
+                            trackedConfig.LastUpdatedAt = DateTime.UtcNow;
+                            await ctx.Uow.SaveAsync(ct);
+                            ctx.Uow.BotConfig.InvalidateCache();
+                            _logger.LogWarning("State transition: Armed -> Trading (position opened for {Asset})", opp.AssetSymbol);
+                        }
                     }
                     catch (Exception ex)
                     {
