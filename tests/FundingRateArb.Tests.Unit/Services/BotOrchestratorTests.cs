@@ -170,6 +170,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -223,6 +224,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -260,6 +262,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -329,6 +332,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.EqualSpread,
             AllocationTopN = 2,
@@ -521,6 +525,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -575,6 +580,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -649,6 +655,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -721,6 +728,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -781,6 +789,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -815,6 +824,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -843,7 +853,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 [(posToClose, CloseReason.SpreadCollapsed)],
-                []));
+                [],
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // Execution engine mutates the position on close
         _mockExecutionEngine.Setup(e => e.ClosePositionAsync(TestUserId, posToClose, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
@@ -880,6 +891,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -955,6 +967,7 @@ public class BotOrchestratorTests
         return new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1453,6 +1466,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 1,
@@ -1475,7 +1489,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reaped));
+                reaped,
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // Mock the position lookup for emergency close
         var reapedPos = new ArbitragePosition
@@ -1526,6 +1541,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1638,6 +1654,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1734,6 +1751,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1831,6 +1849,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,
@@ -1936,6 +1955,7 @@ public class BotOrchestratorTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             AllocationStrategy = AllocationStrategy.Concentrated,
             AllocationTopN = 3,

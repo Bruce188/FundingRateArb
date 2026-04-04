@@ -7,6 +7,7 @@ public class BotConfiguration
 {
     public int Id { get; set; }
     public bool IsEnabled { get; set; }
+    public BotOperatingState OperatingState { get; set; } = BotOperatingState.Stopped;
     public decimal OpenThreshold { get; set; } = 0.0002m;
     public decimal AlertThreshold { get; set; } = 0.0001m;
     public decimal CloseThreshold { get; set; } = -0.00005m;
@@ -126,6 +127,10 @@ public class BotConfiguration
     /// <summary>Number of bot cycles between exchange position reconciliation checks.</summary>
     [Range(1, 100)]
     public int ReconciliationIntervalCycles { get; set; } = 10;
+
+    /// <summary>Alert when price divergence exceeds this multiple of entry spread cost. Default 2.0.</summary>
+    [Range(0.5, 10.0)]
+    public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;
 
     /// <summary>Enable dry-run (paper trading) mode globally.</summary>
     public bool DryRunEnabled { get; set; }

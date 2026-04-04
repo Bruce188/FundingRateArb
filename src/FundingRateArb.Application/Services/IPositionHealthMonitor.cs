@@ -15,13 +15,21 @@ public interface IPositionHealthMonitor
 }
 
 /// <summary>
-/// Result of a health monitor cycle: positions that need closing and positions that were reaped.
+/// Result of a health monitor cycle: positions that need closing, positions that were reaped,
+/// and computed PnL values for each open position.
 /// </summary>
 public record HealthCheckResult(
     IReadOnlyList<(ArbitragePosition Position, CloseReason Reason)> ToClose,
-    IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)> ReapedPositions)
+    IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)> ReapedPositions,
+    IReadOnlyDictionary<int, ComputedPositionPnl> ComputedPnl)
 {
     public static readonly HealthCheckResult Empty = new(
         Array.Empty<(ArbitragePosition, CloseReason)>(),
-        Array.Empty<(int, string, int, int, PositionStatus)>());
+        Array.Empty<(int, string, int, int, PositionStatus)>(),
+        new Dictionary<int, ComputedPositionPnl>());
 }
+
+/// <summary>
+/// PnL values computed during health check for a single position.
+/// </summary>
+public record ComputedPositionPnl(decimal ExchangePnl, decimal UnifiedPnl, decimal DivergencePct);

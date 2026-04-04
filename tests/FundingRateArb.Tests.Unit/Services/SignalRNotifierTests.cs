@@ -186,7 +186,7 @@ public class SignalRNotifierTests
         await _sut.PushDashboardUpdateAsync(
             new List<ArbitragePosition>(),
             new List<ArbitrageOpportunityDto>(),
-            botEnabled: true,
+            operatingState: BotOperatingState.Armed,
             openingCount: 0,
             needsAttentionCount: 0);
 
@@ -219,7 +219,7 @@ public class SignalRNotifierTests
             new() { SpreadPerHour = 0.007m },
         };
 
-        await _sut.PushDashboardUpdateAsync(positions, opportunities, true, 1, 0);
+        await _sut.PushDashboardUpdateAsync(positions, opportunities, BotOperatingState.Armed, 1, 0);
 
         captured.Should().NotBeNull();
         captured!.TotalPnl.Should().Be(13.75m);
@@ -325,6 +325,34 @@ public class SignalRNotifierTests
         GetUserClient("okUser").Verify(
             c => c.ReceivePositionUpdate(It.Is<PositionSummaryDto>(dto => dto.Id == 2)),
             Times.Once);
+    }
+
+    // ── PushDashboardUpdateAsync — OperatingState to BotEnabled derivation (NB9) ──
+
+    [Theory]
+    [InlineData(BotOperatingState.Stopped, false, "Stopped")]
+    [InlineData(BotOperatingState.Paused, false, "Paused")]
+    [InlineData(BotOperatingState.Armed, true, "Armed")]
+    [InlineData(BotOperatingState.Trading, true, "Trading")]
+    public async Task PushDashboardUpdate_MapsOperatingStateToDto_AllStates(
+        BotOperatingState state, bool expectedBotEnabled, string expectedStateName)
+    {
+        DashboardDto? captured = null;
+        _mockMarketDataClient
+            .Setup(c => c.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
+            .Callback<DashboardDto>(dto => captured = dto)
+            .Returns(Task.CompletedTask);
+
+        await _sut.PushDashboardUpdateAsync(
+            new List<ArbitragePosition>(),
+            new List<ArbitrageOpportunityDto>(),
+            operatingState: state,
+            openingCount: 0,
+            needsAttentionCount: 0);
+
+        captured.Should().NotBeNull();
+        captured!.BotEnabled.Should().Be(expectedBotEnabled);
+        captured.OperatingState.Should().Be(expectedStateName);
     }
 
     // ── PushPositionRemovalsAsync — Merge logic (NB3) ──────────────────────

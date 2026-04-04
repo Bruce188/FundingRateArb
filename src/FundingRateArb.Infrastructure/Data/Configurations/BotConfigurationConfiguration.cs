@@ -1,4 +1,5 @@
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,6 +10,10 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
     public void Configure(EntityTypeBuilder<BotConfiguration> builder)
     {
         builder.HasKey(b => b.Id);
+
+        builder.Property(b => b.OperatingState)
+            .HasConversion<int>()
+            .HasDefaultValue(BotOperatingState.Stopped);
 
         builder.Property(b => b.OpenThreshold).HasColumnType("decimal(18,10)");
         builder.Property(b => b.AlertThreshold).HasColumnType("decimal(18,10)");
@@ -30,6 +35,7 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.EmergencyCloseSpreadThreshold).HasColumnType("decimal(18,6)").HasDefaultValue(-0.001m);
         builder.Property(b => b.LiquidationWarningPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.50m);
         builder.Property(b => b.ReconciliationIntervalCycles).HasDefaultValue(10);
+        builder.Property(b => b.DivergenceAlertMultiplier).HasColumnType("decimal(18,4)").HasDefaultValue(2.0m);
         builder.Property(b => b.DryRunEnabled).HasDefaultValue(false);
         builder.Property(b => b.MaxLeverageCap).HasDefaultValue(3);
         builder.Property(b => b.MarginUtilizationAlertPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.70m);

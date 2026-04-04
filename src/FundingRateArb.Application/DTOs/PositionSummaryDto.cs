@@ -14,6 +14,16 @@ public class PositionSummaryDto
     public decimal CurrentSpreadPerHour { get; set; }
     public decimal AccumulatedFunding { get; set; }
     public decimal UnrealizedPnl { get; set; }
+
+    /// <summary>Per-exchange PnL using each exchange's own mark price (margin reference).</summary>
+    public decimal ExchangePnl { get; set; }
+
+    /// <summary>Unified PnL using single reference price (true strategy performance).</summary>
+    public decimal UnifiedPnl { get; set; }
+
+    /// <summary>Cross-exchange price divergence percentage.</summary>
+    public decimal DivergencePct { get; set; }
+
     public decimal? RealizedPnl { get; set; }
     public PositionStatus Status { get; set; }
     public DateTime OpenedAt { get; set; }

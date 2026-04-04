@@ -50,6 +50,14 @@ public class ExecutionEngine : IExecutionEngine
         var config = await _uow.BotConfig.GetActiveAsync();
         userConfig ??= await _userSettings.GetOrCreateConfigAsync(userId);
 
+        // Defense-in-depth: reject orders unless bot is Armed or Trading
+        if (config.OperatingState != BotOperatingState.Armed && config.OperatingState != BotOperatingState.Trading)
+        {
+            _logger.LogWarning("Order rejected in state {State} for {Asset} — defense-in-depth guard",
+                config.OperatingState, opp.AssetSymbol);
+            return (false, $"Order rejected: bot operating state is {config.OperatingState}, not Armed or Trading");
+        }
+
         // B6: Absolute order size cap
         if (sizeUsdc > MaxSingleOrderUsdc)
         {

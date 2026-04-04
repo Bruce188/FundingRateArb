@@ -5,6 +5,7 @@ using FundingRateArb.Application.Extensions;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
+
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Hubs;
@@ -50,7 +51,7 @@ public class SignalRNotifier : ISignalRNotifier
     public async Task PushDashboardUpdateAsync(
         List<ArbitragePosition> openPositions,
         List<ArbitrageOpportunityDto> opportunities,
-        bool botEnabled,
+        BotOperatingState operatingState,
         int openingCount,
         int needsAttentionCount)
     {
@@ -63,7 +64,8 @@ public class SignalRNotifier : ISignalRNotifier
 
             var dto = new DashboardDto
             {
-                BotEnabled = botEnabled,
+                BotEnabled = operatingState == BotOperatingState.Armed || operatingState == BotOperatingState.Trading,
+                OperatingState = operatingState.ToString(),
                 OpenPositionCount = openPositions.Count,
                 OpeningPositionCount = openingCount,
                 NeedsAttentionCount = needsAttentionCount,
@@ -79,13 +81,26 @@ public class SignalRNotifier : ISignalRNotifier
         }
     }
 
-    public async Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions, BotConfiguration config)
+    public async Task PushPositionUpdatesAsync(
+        List<ArbitragePosition> openPositions,
+        BotConfiguration config,
+        IReadOnlyDictionary<int, ComputedPositionPnl>? computedPnl = null)
     {
         var tasks = openPositions.Select(async pos =>
         {
             try
             {
                 var dto = MapPositionToDto(pos, config);
+
+                // Apply computed PnL values from health monitor (B1 fix)
+                if (computedPnl is not null && computedPnl.TryGetValue(pos.Id, out var pnl))
+                {
+                    dto.ExchangePnl = pnl.ExchangePnl;
+                    dto.UnifiedPnl = pnl.UnifiedPnl;
+                    dto.UnrealizedPnl = pnl.UnifiedPnl; // backward compat for JS reading unrealizedPnl
+                    dto.DivergencePct = pnl.DivergencePct;
+                }
+
                 await _hubContext.Clients.Group($"user-{pos.UserId}").ReceivePositionUpdate(dto);
             }
             catch (Exception ex)

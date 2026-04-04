@@ -60,6 +60,7 @@ public class LeverageTierBehaviorTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 10,
             MaxLeverageCap = 50,
             UpdatedByUserId = "admin-user-id",
@@ -166,6 +167,7 @@ public class LeverageTierBehaviorTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 10,
             MaxLeverageCap = 3,
             UpdatedByUserId = "admin-user-id",

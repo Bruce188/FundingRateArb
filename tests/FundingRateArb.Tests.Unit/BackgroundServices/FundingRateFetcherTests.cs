@@ -752,22 +752,18 @@ public class FundingRateFetcherTests
     public void ComputeLegFunding_ContinuousExchange_ReturnsProRata()
     {
         // Continuous exchange: funding = notional * rate / 60
-        var exchangeById = new Dictionary<int, Exchange>
+        var exchange = new Exchange
         {
-            [1] = new Exchange
-            {
-                Id = 1,
-                Name = "Hyperliquid",
-                FundingSettlementType = FundingSettlementType.Continuous,
-                FundingIntervalHours = 1,
-            }
+            Id = 1,
+            Name = "Hyperliquid",
+            FundingSettlementType = FundingSettlementType.Continuous,
+            FundingIntervalHours = 1,
         };
 
         var result = _sut.ComputeLegFunding(
             ratePerHour: 0.0005m,
             notional: 1000m,
-            exchangeId: 1,
-            exchangeById: exchangeById,
+            exchange: exchange,
             now: DateTime.UtcNow);
 
         // 1000 * 0.0005 / 60 = 0.008333...
@@ -778,22 +774,18 @@ public class FundingRateFetcherTests
     public void ComputeLegFunding_PeriodicExchange_FirstCycle_ReturnsZero()
     {
         // First cycle for a periodic exchange: no prior reference, returns 0
-        var exchangeById = new Dictionary<int, Exchange>
+        var exchange = new Exchange
         {
-            [3] = new Exchange
-            {
-                Id = 3,
-                Name = "Aster",
-                FundingSettlementType = FundingSettlementType.Periodic,
-                FundingIntervalHours = 8,
-            }
+            Id = 3,
+            Name = "Aster",
+            FundingSettlementType = FundingSettlementType.Periodic,
+            FundingIntervalHours = 8,
         };
 
         var result = _sut.ComputeLegFunding(
             ratePerHour: 0.0005m,
             notional: 1000m,
-            exchangeId: 3,
-            exchangeById: exchangeById,
+            exchange: exchange,
             now: DateTime.UtcNow);
 
         result.Should().Be(0m, "first cycle should return zero to avoid double-counting");
@@ -803,15 +795,12 @@ public class FundingRateFetcherTests
     public void ComputeLegFunding_PeriodicExchange_NoBoundaryCrossed_ReturnsZero()
     {
         // Periodic exchange: both last cycle and now are in the same settlement window
-        var exchangeById = new Dictionary<int, Exchange>
+        var exchange = new Exchange
         {
-            [3] = new Exchange
-            {
-                Id = 3,
-                Name = "Aster",
-                FundingSettlementType = FundingSettlementType.Periodic,
-                FundingIntervalHours = 8,
-            }
+            Id = 3,
+            Name = "Aster",
+            FundingSettlementType = FundingSettlementType.Periodic,
+            FundingIntervalHours = 8,
         };
 
         // Simulate a previous cycle at 01:00 — settlement window is 00:00-08:00
@@ -822,8 +811,7 @@ public class FundingRateFetcherTests
         var result = sut.ComputeLegFunding(
             ratePerHour: 0.0005m,
             notional: 1000m,
-            exchangeId: 3,
-            exchangeById: exchangeById,
+            exchange: exchange,
             now: new DateTime(2026, 3, 22, 2, 0, 0, DateTimeKind.Utc));
 
         result.Should().Be(0m, "no settlement boundary was crossed");
@@ -833,15 +821,12 @@ public class FundingRateFetcherTests
     public void ComputeLegFunding_PeriodicExchange_BoundaryCrossed_ReturnsFullInterval()
     {
         // Periodic exchange: settlement boundary crossed between last cycle and now
-        var exchangeById = new Dictionary<int, Exchange>
+        var exchange = new Exchange
         {
-            [3] = new Exchange
-            {
-                Id = 3,
-                Name = "Aster",
-                FundingSettlementType = FundingSettlementType.Periodic,
-                FundingIntervalHours = 8,
-            }
+            Id = 3,
+            Name = "Aster",
+            FundingSettlementType = FundingSettlementType.Periodic,
+            FundingIntervalHours = 8,
         };
 
         // Last cycle at 07:59 (settlement window 00:00-08:00)
@@ -852,8 +837,7 @@ public class FundingRateFetcherTests
         var result = sut.ComputeLegFunding(
             ratePerHour: 0.0005m,
             notional: 1000m,
-            exchangeId: 3,
-            exchangeById: exchangeById,
+            exchange: exchange,
             now: new DateTime(2026, 3, 22, 8, 1, 0, DateTimeKind.Utc));
 
         // Full interval payment = notional * ratePerHour * intervalHours = 1000 * 0.0005 * 8 = 4.0
@@ -923,10 +907,9 @@ public class FundingRateFetcherTests
     }
 
     [Fact]
-    public void ComputeLegFunding_UnknownExchange_ReturnsZero()
+    public void ComputeLegFunding_NullExchange_ReturnsZero()
     {
-        var exchangeById = new Dictionary<int, Exchange>();
-        var result = _sut.ComputeLegFunding(0.0005m, 1000m, 999, exchangeById, DateTime.UtcNow);
+        var result = _sut.ComputeLegFunding(0.0005m, 1000m, null, DateTime.UtcNow);
         result.Should().Be(0m);
     }
 
@@ -957,6 +940,585 @@ public class FundingRateFetcherTests
         _mockReadinessSignal.Verify(r => r.SignalReady(), Times.Once);
 
         await _sut.StopAsync(CancellationToken.None);
+    }
+
+    // ── Per-exchange funding accuracy tests ────────────────────────────────
+
+    [Fact]
+    public void ComputeNotional_OraclePriceExchange_UsesIndexPrice()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5, LongEntryPrice = 3000m };
+        var rate = new FundingRateSnapshot { IndexPrice = 3100m, MarkPrice = 3050m };
+        var exchange = new Exchange
+        {
+            Id = 1,
+            Name = "Hyperliquid",
+            FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
+        };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, pos.LongEntryPrice, rate, exchange);
+
+        // quantity = 500 / 3000 = 0.16667, notional = 0.16667 * 3100 (IndexPrice) = 516.67
+        var expected = (100m * 5m / 3000m) * 3100m;
+        result.Should().BeApproximately(expected, 0.01m);
+    }
+
+    [Fact]
+    public void ComputeNotional_MarkPriceExchange_UsesMarkPrice()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5, LongEntryPrice = 3000m };
+        var rate = new FundingRateSnapshot { IndexPrice = 3100m, MarkPrice = 3050m };
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingNotionalPriceType = FundingNotionalPriceType.MarkPrice,
+        };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, pos.LongEntryPrice, rate, exchange);
+
+        // quantity = 500 / 3000 = 0.16667, notional = 0.16667 * 3050 (MarkPrice) = 508.33
+        var expected = (100m * 5m / 3000m) * 3050m;
+        result.Should().BeApproximately(expected, 0.01m);
+    }
+
+    [Fact]
+    public void ApplyRebate_PayingLegWithRebate_ReducesFundingBy15Percent()
+    {
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingRebateRate = 0.15m,
+        };
+
+        // Positive funding, isPaying=true → rebate applies
+        var rawFunding = 1.0m;
+        var result = _sut.ApplyRebate(rawFunding, exchange, isPaying: true);
+
+        // 1.0 * (1 - 0.15) = 0.85
+        result.Should().Be(0.85m);
+    }
+
+    [Fact]
+    public void ApplyRebate_EarningLeg_NoRebateApplied()
+    {
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingRebateRate = 0.15m,
+        };
+
+        // Negative funding, isPaying=false → rebate should not apply
+        var result = _sut.ApplyRebate(-1.0m, exchange, isPaying: false);
+        result.Should().Be(-1.0m);
+    }
+
+    [Fact]
+    public void ApplyRebate_NoRebateExchange_ReturnsSameValue()
+    {
+        var exchange = new Exchange
+        {
+            Id = 1,
+            Name = "Hyperliquid",
+            FundingRebateRate = 0m,
+        };
+
+        var result = _sut.ApplyRebate(1.0m, exchange, isPaying: true);
+        result.Should().Be(1.0m);
+    }
+
+    [Fact]
+    public async Task FetchAll_BinanceIntervalChanged_PersistsToTrackedEntity()
+    {
+        // Arrange: Binance exchange with 8h interval, but API returns 4h
+        var binanceExchange = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var trackedBinance = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var exchangesWithBinance = new List<Exchange>(Exchanges) { binanceExchange };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithBinance);
+        _mockExchanges.Setup(e => e.GetByNameAsync("Binance")).ReturnsAsync(trackedBinance);
+
+        // Mock a Binance connector
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new()
+                {
+                    ExchangeName = "Binance",
+                    Symbol = "ETH",
+                    RatePerHour = 0.0001m,
+                    RawRate = 0.0004m,
+                    MarkPrice = 3000m,
+                    DetectedFundingIntervalHours = 4,
+                }
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        // Act
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: tracked entity should be updated from 8h to 4h and persisted
+        trackedBinance.FundingIntervalHours.Should().Be(4);
+        _mockExchanges.Verify(e => e.Update(trackedBinance), Times.Once);
+        _mockExchanges.Verify(e => e.InvalidateCache(), Times.Once);
+    }
+
+    [Fact]
+    public void DefaultExchange_FundingNotionalPriceType_IsMarkPrice()
+    {
+        var exchange = new Exchange();
+        exchange.FundingNotionalPriceType.Should().Be(FundingNotionalPriceType.MarkPrice);
+    }
+
+    [Fact]
+    public void DefaultExchange_FundingRebateRate_IsZero()
+    {
+        var exchange = new Exchange();
+        exchange.FundingRebateRate.Should().Be(0m);
+    }
+
+    [Fact]
+    public void DefaultExchange_FundingTimingDeviationSeconds_IsZero()
+    {
+        var exchange = new Exchange();
+        exchange.FundingTimingDeviationSeconds.Should().Be(0);
+    }
+
+    // ── Review findings: ComputeNotional fallback paths (B4) ──────────────────
+
+    [Fact]
+    public void ComputeNotional_ZeroEntryPrice_ReturnsFallbackNotional()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5 };
+        var rate = new FundingRateSnapshot { IndexPrice = 3100m, MarkPrice = 3050m };
+        var exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, 0m, rate, exchange);
+
+        result.Should().Be(500m, "zero entry price should return SizeUsdc * Leverage as fallback");
+    }
+
+    [Fact]
+    public void ComputeNotional_NullExchange_ReturnsFallbackNotional()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5 };
+        var rate = new FundingRateSnapshot { IndexPrice = 3100m, MarkPrice = 3050m };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, 3000m, rate, null);
+
+        result.Should().Be(500m, "null exchange should return SizeUsdc * Leverage as fallback");
+    }
+
+    [Fact]
+    public void ComputeNotional_ZeroSnapshotPrice_ReturnsFallbackNotional()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5, LongEntryPrice = 3000m };
+        var rate = new FundingRateSnapshot { IndexPrice = 0m, MarkPrice = 0m };
+        var exchange = new Exchange { Id = 2, Name = "Lighter", FundingNotionalPriceType = FundingNotionalPriceType.MarkPrice };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, pos.LongEntryPrice, rate, exchange);
+
+        result.Should().Be(500m, "zero snapshot price should return SizeUsdc * Leverage as fallback");
+    }
+
+    // ── Review findings: Integration test for per-leg notional (B5) ─────────
+
+    [Fact]
+    public async Task UpdateAccumulatedFunding_WithOracleAndMarkPriceLegs_UsesCorrectPricePerLeg()
+    {
+        // Hyperliquid (OraclePrice) long + Lighter (MarkPrice) short
+        // Distinct IndexPrice vs MarkPrice to verify correct price is used per leg
+        var exchangesWithPriceTypes = new List<Exchange>
+        {
+            new()
+            {
+                Id = 1, Name = "Hyperliquid", IsActive = true,
+                FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
+                FundingSettlementType = FundingSettlementType.Continuous,
+                FundingIntervalHours = 1,
+            },
+            new()
+            {
+                Id = 2, Name = "Lighter", IsActive = true,
+                FundingNotionalPriceType = FundingNotionalPriceType.MarkPrice,
+                FundingSettlementType = FundingSettlementType.Continuous,
+                FundingIntervalHours = 1,
+            },
+            new() { Id = 3, Name = "Aster", IsActive = true },
+        };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithPriceTypes);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 1,   // Hyperliquid (OraclePrice → IndexPrice)
+            ShortExchangeId = 2,  // Lighter (MarkPrice → MarkPrice)
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            AccumulatedFunding = 0m,
+            Status = PositionStatus.Open,
+        };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        // IndexPrice = 3200, MarkPrice = 3100 — different to verify which is used
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0002m, IndexPrice = 3200m, MarkPrice = 3100m },
+                new() { ExchangeId = 2, AssetId = 1, RatePerHour = 0.001m, IndexPrice = 3200m, MarkPrice = 3100m },
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Long (Hyperliquid/OraclePrice): quantity = 500/3000 = 0.16667, notional = 0.16667 * 3200 = 533.33
+        // Short (Lighter/MarkPrice): quantity = 500/3000 = 0.16667, notional = 0.16667 * 3100 = 516.67
+        // longFunding = 533.33 * 0.0002 / 60 = 0.001778
+        // shortFunding = 516.67 * 0.001 / 60 = 0.008611
+        // accumulated = 0.008611 - 0.001778 = 0.006833
+        var expectedLongNotional = (100m * 5m / 3000m) * 3200m;
+        var expectedShortNotional = (100m * 5m / 3000m) * 3100m;
+        var expectedLong = expectedLongNotional * 0.0002m / 60m;
+        var expectedShort = expectedShortNotional * 0.001m / 60m;
+        var expected = expectedShort - expectedLong;
+
+        pos.AccumulatedFunding.Should().BeApproximately(expected, 0.0001m,
+            "per-leg notional should use IndexPrice for Hyperliquid (Oracle) and MarkPrice for Lighter");
+    }
+
+    // ── Review findings: ApplyRebate edge cases (NB6, N8) ──────────────────
+
+    [Fact]
+    public void ApplyRebate_NullExchange_ReturnsFundingUnchanged()
+    {
+        var result = _sut.ApplyRebate(1.0m, null, isPaying: true);
+        result.Should().Be(1.0m, "null exchange should return funding unchanged");
+    }
+
+    [Fact]
+    public void ApplyRebate_ZeroFunding_ReturnsZero()
+    {
+        var exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0.15m };
+        var result = _sut.ApplyRebate(0m, exchange, isPaying: true);
+        result.Should().Be(0m, "zero funding should return zero");
+    }
+
+    // ── Review findings: Binance interval unchanged no-op (NB8) ─────────────
+
+    [Fact]
+    public async Task FetchAll_BinanceIntervalUnchanged_DoesNotModifyExchangeEntity()
+    {
+        // Arrange: Binance exchange with 8h interval, API also returns 8h (no change)
+        var binanceExchange = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var exchangesWithBinance = new List<Exchange>(Exchanges) { binanceExchange };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithBinance);
+
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new()
+                {
+                    ExchangeName = "Binance", Symbol = "ETH",
+                    RatePerHour = 0.0001m, RawRate = 0.0008m, MarkPrice = 3000m,
+                    DetectedFundingIntervalHours = 8,
+                }
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        // Act
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: no update or cache invalidation when interval hasn't changed
+        _mockExchanges.Verify(e => e.Update(It.IsAny<Exchange>()), Times.Never);
+        _mockExchanges.Verify(e => e.InvalidateCache(), Times.Never);
+        binanceExchange.FundingIntervalHours.Should().Be(8);
+    }
+
+    // ── Review-v2: ApplyRebate sign convention tests (B1) ──────────────────
+
+    [Fact]
+    public void ApplyRebate_ShortLegEarning_RebateNotApplied()
+    {
+        // Short exchange with rebate, ratePerHour > 0 means short leg earns — rebate must NOT apply
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingRebateRate = 0.15m,
+        };
+
+        // isPaying=false because short leg earns when rate > 0
+        var result = _sut.ApplyRebate(0.5m, exchange, isPaying: false);
+        result.Should().Be(0.5m, "rebate must not apply when the leg is earning (not paying)");
+    }
+
+    [Fact]
+    public void ApplyRebate_ShortLegPaying_RebateApplied()
+    {
+        // Short exchange with rebate, ratePerHour < 0 means short leg pays — rebate IS applied
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingRebateRate = 0.15m,
+        };
+
+        // isPaying=true because short leg pays when rate < 0
+        // Funding value for a paying short leg could be negative (convention varies),
+        // but with the isPaying flag it works for any sign. Test with positive value:
+        var result = _sut.ApplyRebate(1.0m, exchange, isPaying: true);
+        result.Should().Be(0.85m, "rebate of 15% should reduce paying leg funding from 1.0 to 0.85");
+    }
+
+    // ── Review-v2: Integration test with rebate on paying leg (NB3) ────────────
+
+    [Fact]
+    public async Task UpdateAccumulatedFunding_WithRebateOnPayingLeg_ReducesFundingCost()
+    {
+        // Lighter (rebate=0.15) as long leg, ratePerHour > 0 (long pays)
+        var exchangesWithRebate = new List<Exchange>
+        {
+            new()
+            {
+                Id = 2, Name = "Lighter", IsActive = true,
+                FundingRebateRate = 0.15m,
+                FundingNotionalPriceType = FundingNotionalPriceType.MarkPrice,
+                FundingSettlementType = FundingSettlementType.Continuous,
+                FundingIntervalHours = 1,
+            },
+            new()
+            {
+                Id = 1, Name = "Hyperliquid", IsActive = true,
+                FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
+                FundingSettlementType = FundingSettlementType.Continuous,
+                FundingIntervalHours = 1,
+            },
+            new() { Id = 3, Name = "Aster", IsActive = true },
+        };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithRebate);
+
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            AssetId = 1,
+            LongExchangeId = 2,   // Lighter (rebate=0.15, pays when rate > 0)
+            ShortExchangeId = 1,  // Hyperliquid
+            SizeUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            AccumulatedFunding = 0m,
+            Status = PositionStatus.Open,
+        };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        // ratePerHour > 0 means long leg pays
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 2, AssetId = 1, RatePerHour = 0.001m, MarkPrice = 3000m, IndexPrice = 3000m },
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0002m, MarkPrice = 3000m, IndexPrice = 3000m },
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Hyperliquid", "ETH"));
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Long (Lighter): notional = 500, longFunding = 500 * 0.001 / 60 = 0.008333
+        // Long is paying (rate > 0), rebate = 15%: longFunding after rebate = 0.008333 * 0.85 = 0.007083
+        // Short (Hyperliquid): notional = 500, shortFunding = 500 * 0.0002 / 60 = 0.001667
+        // Short is NOT paying (rate > 0 means short earns), no rebate applied
+        // accumulated = shortFunding - longFunding = 0.001667 - 0.007083 = -0.005416
+        var longNotional = 100m * 5m; // entry == mark, so notional is straightforward
+        var rawLong = longNotional * 0.001m / 60m;
+        var rebatedLong = rawLong * (1m - 0.15m);
+        var shortFunding = longNotional * 0.0002m / 60m;
+        var expected = shortFunding - rebatedLong;
+
+        pos.AccumulatedFunding.Should().BeApproximately(expected, 0.0001m,
+            "long leg funding should be reduced by 15% rebate since Lighter pays when rate > 0");
+    }
+
+    // ── Review-v2: Binance invalid interval rejection (NB4) ──────────────────
+
+    [Fact]
+    public async Task FetchAll_BinanceInvalidInterval_DoesNotUpdate()
+    {
+        // Arrange: Binance with 8h interval, API returns invalid interval=6
+        var binanceExchange = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var exchangesWithBinance = new List<Exchange>(Exchanges) { binanceExchange };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithBinance);
+
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new()
+                {
+                    ExchangeName = "Binance", Symbol = "ETH",
+                    RatePerHour = 0.0001m, RawRate = 0.0006m, MarkPrice = 3000m,
+                    DetectedFundingIntervalHours = 6, // Invalid — not in {4, 8}
+                }
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: invalid interval=6 rejected, no update
+        _mockExchanges.Verify(e => e.Update(It.IsAny<Exchange>()), Times.Never);
+        _mockExchanges.Verify(e => e.InvalidateCache(), Times.Never);
+        binanceExchange.FundingIntervalHours.Should().Be(8);
+    }
+
+    // ── Review-v2: ApplyRebate clamp above 1.0 (N5) ─────────────────────────
+
+    [Fact]
+    public void ApplyRebate_RateAboveOne_ClampedToFullRebate()
+    {
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            FundingRebateRate = 1.5m, // Above valid range
+        };
+
+        var result = _sut.ApplyRebate(1.0m, exchange, isPaying: true);
+        result.Should().Be(0m, "rebate rate > 1.0 should be clamped to 1.0, resulting in zero funding");
+    }
+
+    // ── Review-v2: Negative entry price fallback (N6) ────────────────────────
+
+    [Fact]
+    public void ComputeNotional_NegativeEntryPrice_ReturnsFallbackNotional()
+    {
+        var pos = new ArbitragePosition { SizeUsdc = 100m, Leverage = 5 };
+        var rate = new FundingRateSnapshot { IndexPrice = 3100m, MarkPrice = 3050m };
+        var exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice };
+
+        var result = FundingRateFetcher.ComputeNotional(pos, -100m, rate, exchange);
+
+        result.Should().Be(500m, "negative entry price should return SizeUsdc * Leverage as fallback");
+    }
+
+    // ── Review-v2: All-null Binance intervals no-op (N7) ─────────────────────
+
+    [Fact]
+    public async Task FetchAll_BinanceAllNullIntervals_DoesNotUpdate()
+    {
+        // Arrange: Binance with 8h interval, all rates have null DetectedFundingIntervalHours
+        var binanceExchange = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var exchangesWithBinance = new List<Exchange>(Exchanges) { binanceExchange };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchangesWithBinance);
+
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new()
+                {
+                    ExchangeName = "Binance", Symbol = "ETH",
+                    RatePerHour = 0.0001m, RawRate = 0.0008m, MarkPrice = 3000m,
+                    DetectedFundingIntervalHours = null, // No interval detected
+                },
+                new()
+                {
+                    ExchangeName = "Binance", Symbol = "BTC",
+                    RatePerHour = 0.00005m, RawRate = 0.0004m, MarkPrice = 60000m,
+                    DetectedFundingIntervalHours = null, // No interval detected
+                }
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: no interval detected, no update
+        _mockExchanges.Verify(e => e.GetByNameAsync(It.IsAny<string>()), Times.Never);
+        _mockExchanges.Verify(e => e.Update(It.IsAny<Exchange>()), Times.Never);
+        _mockExchanges.Verify(e => e.InvalidateCache(), Times.Never);
+        binanceExchange.FundingIntervalHours.Should().Be(8);
     }
 
     /// <summary>

@@ -8,6 +8,10 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
+    var lastUpdateTime = null;
+    var staleTimer = null;
+    var STALE_THRESHOLD_MS = 120000; // 2 minutes
+
     // Dynamic decimal formatting for small prices
     function formatPrice(price) {
         if (price === 0) return "$0.00";
@@ -17,10 +21,28 @@
     }
 
     connection.on("ReceiveDashboardUpdate", function (data) {
+        // Track last update for staleness detection
+        lastUpdateTime = Date.now();
+        var staleIndicator = document.getElementById("stale-indicator");
+        if (staleIndicator) {
+            staleIndicator.style.display = "none";
+        }
+        var lastUpdateEl = document.getElementById("last-update-time");
+        if (lastUpdateEl) {
+            lastUpdateEl.textContent = new Date().toLocaleTimeString();
+        }
+        if (staleTimer) clearTimeout(staleTimer);
+        staleTimer = setTimeout(function () {
+            var indicator = document.getElementById("stale-indicator");
+            if (indicator) indicator.style.display = "";
+        }, STALE_THRESHOLD_MS);
+
         var botStatus = document.getElementById("bot-status");
         if (botStatus) {
-            botStatus.textContent = data.botEnabled ? "RUNNING" : "STOPPED";
-            botStatus.className = "badge " + (data.botEnabled ? "bg-success" : "bg-danger");
+            var state = (data.operatingState || "Stopped").toUpperCase();
+            var colorMap = { "STOPPED": "bg-danger", "PAUSED": "bg-warning", "ARMED": "bg-primary", "TRADING": "bg-success" };
+            botStatus.textContent = state;
+            botStatus.className = "badge " + (colorMap[state] || "bg-secondary");
         }
 
         var openPositions = document.getElementById("open-positions");
@@ -37,7 +59,10 @@
             var count = data.needsAttentionCount || 0;
             needsAttention.textContent = count;
             var badge = document.getElementById("needs-attention-badge");
-            if (badge) badge.style.display = count > 0 ? "" : "none";
+            if (badge) {
+                badge.classList.remove("text-warning", "text-success");
+                badge.classList.add(count > 0 ? "text-warning" : "text-success");
+            }
         }
 
         var bestSpread = document.getElementById("best-spread");
@@ -79,9 +104,7 @@
         var tr = document.createElement("tr");
         tr.id = "position-" + position.id;
         var spread = position.currentSpreadPerHour ?? 0;
-        var pnl = position.unrealizedPnl ?? 0;
         var spreadClass = spread >= 0 ? "text-success" : "text-danger";
-        var pnlClass = pnl >= 0 ? "text-success" : "text-danger";
 
         var tdAsset = document.createElement("td");
         var strong = document.createElement("strong");
@@ -107,10 +130,32 @@
         tdSpread.textContent = (spread * 100).toFixed(6) + "%";
         tr.appendChild(tdSpread);
 
-        var tdPnl = document.createElement("td");
-        tdPnl.className = "position-pnl " + pnlClass;
-        tdPnl.textContent = "$" + pnl.toFixed(2);
-        tr.appendChild(tdPnl);
+        var unifiedPnl = position.unifiedPnl ?? 0;
+        var exchangePnl = position.exchangePnl ?? 0;
+        var funding = position.accumulatedFunding ?? 0;
+
+        var tdStrategyPnl = document.createElement("td");
+        tdStrategyPnl.className = "position-pnl " + (unifiedPnl >= 0 ? "text-success" : "text-danger");
+        tdStrategyPnl.textContent = "$" + unifiedPnl.toFixed(4);
+        tr.appendChild(tdStrategyPnl);
+
+        var tdExchPnl = document.createElement("td");
+        tdExchPnl.className = "position-exchange-pnl " + (exchangePnl >= 0 ? "text-success" : "text-danger");
+        var divergence = position.divergencePct ?? 0;
+        var exchTextNode = document.createTextNode("$" + exchangePnl.toFixed(4) + " ");
+        tdExchPnl.appendChild(exchTextNode);
+        var badge = document.createElement("span");
+        badge.className = "badge bg-info ms-1 divergence-badge";
+        badge.title = "Price divergence";
+        badge.textContent = divergence.toFixed(2) + "%";
+        badge.style.display = divergence > 0.01 ? "" : "none";
+        tdExchPnl.appendChild(badge);
+        tr.appendChild(tdExchPnl);
+
+        var tdFunding = document.createElement("td");
+        tdFunding.className = funding >= 0 ? "text-success" : "text-danger";
+        tdFunding.textContent = "$" + funding.toFixed(4);
+        tr.appendChild(tdFunding);
 
         var tdTime = document.createElement("td");
         if (position.openedAt) {
@@ -159,6 +204,27 @@
         detailDiv.textContent = "Size: $" + (position.sizeUsdc ?? 0).toFixed(2) + " | Spread: " + (spread * 100).toFixed(6) + "%/hr";
         body.appendChild(detailDiv);
 
+        var pnlDiv = document.createElement("div");
+        pnlDiv.className = "small";
+        var cardUnified = position.unifiedPnl ?? 0;
+        var cardExch = position.exchangePnl ?? 0;
+
+        var stratLabel = document.createTextNode("Strategy: ");
+        pnlDiv.appendChild(stratLabel);
+        var stratSpan = document.createElement("span");
+        stratSpan.className = cardUnified >= 0 ? "text-success" : "text-danger";
+        stratSpan.textContent = "$" + cardUnified.toFixed(4);
+        pnlDiv.appendChild(stratSpan);
+
+        var sep = document.createTextNode(" | Exch: ");
+        pnlDiv.appendChild(sep);
+        var exchSpan = document.createElement("span");
+        exchSpan.className = cardExch >= 0 ? "text-success" : "text-danger";
+        exchSpan.textContent = "$" + cardExch.toFixed(4);
+        pnlDiv.appendChild(exchSpan);
+
+        body.appendChild(pnlDiv);
+
         card.appendChild(body);
         return card;
     }
@@ -172,9 +238,28 @@
         if (positionRow) {
             var pnlEl = positionRow.querySelector(".position-pnl");
             if (pnlEl) {
-                var pnl = position.unrealizedPnl ?? 0;
-                pnlEl.textContent = "$" + pnl.toFixed(2);
-                pnlEl.className = "position-pnl " + (pnl >= 0 ? "text-success" : "text-danger");
+                var uPnl = position.unifiedPnl ?? 0;
+                pnlEl.textContent = "$" + uPnl.toFixed(4);
+                pnlEl.className = "position-pnl " + (uPnl >= 0 ? "text-success" : "text-danger");
+            }
+            var exchPnlEl = positionRow.querySelector(".position-exchange-pnl");
+            if (exchPnlEl) {
+                var ePnl = position.exchangePnl ?? 0;
+                var div = position.divergencePct ?? 0;
+                exchPnlEl.className = "position-exchange-pnl " + (ePnl >= 0 ? "text-success" : "text-danger");
+
+                // Update text node without destroying child elements
+                var textNode = exchPnlEl.firstChild;
+                if (textNode && textNode.nodeType === 3) {
+                    textNode.textContent = "$" + ePnl.toFixed(4) + " ";
+                }
+
+                // Reuse pre-created badge, toggle visibility
+                var dbadge = exchPnlEl.querySelector(".divergence-badge");
+                if (dbadge) {
+                    dbadge.textContent = div.toFixed(2) + "%";
+                    dbadge.style.display = div > 0.01 ? "" : "none";
+                }
             }
             var spreadEl = positionRow.querySelector(".position-spread");
             if (spreadEl) {
@@ -520,6 +605,11 @@
             statusArea.textContent = message;
             statusArea.style.display = "block";
         }
+    });
+
+    // Clear stale timer on connection close
+    connection.onclose(function () {
+        if (staleTimer) clearTimeout(staleTimer);
     });
 
     // Retry Now button

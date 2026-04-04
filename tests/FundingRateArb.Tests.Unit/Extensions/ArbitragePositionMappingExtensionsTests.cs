@@ -89,7 +89,10 @@ public class ArbitragePositionMappingExtensionsTests
         dto.EntrySpreadPerHour.Should().Be(0.001m);
         dto.CurrentSpreadPerHour.Should().Be(0.0008m);
         dto.AccumulatedFunding.Should().Be(12.5m);
-        dto.UnrealizedPnl.Should().Be(12.5m);
+        dto.UnrealizedPnl.Should().Be(0m); // set by caller with live computed value
+        dto.ExchangePnl.Should().Be(0m);
+        dto.UnifiedPnl.Should().Be(0m);
+        dto.DivergencePct.Should().Be(0m);
         dto.RealizedPnl.Should().Be(25.75m);
         dto.Status.Should().Be(PositionStatus.Open);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
@@ -115,15 +118,40 @@ public class ArbitragePositionMappingExtensionsTests
     }
 
     [Fact]
-    public void ToSummaryDto_UnrealizedPnl_MirrorsAccumulatedFunding()
+    public void ToSummaryDto_PnlFieldsDefaultToZero_SetByCaller()
     {
         var pos = CreatePositionWithNavigationProperties();
         pos.AccumulatedFunding = 99.99m;
 
         var dto = pos.ToSummaryDto();
 
-        dto.UnrealizedPnl.Should().Be(99.99m);
+        // PnL fields default to 0 — computed live by health monitor and set by caller
+        dto.UnrealizedPnl.Should().Be(0m);
+        dto.ExchangePnl.Should().Be(0m);
+        dto.UnifiedPnl.Should().Be(0m);
         dto.AccumulatedFunding.Should().Be(99.99m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_IncludesDivergencePct()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.CurrentDivergencePct = 0.15m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.DivergencePct.Should().Be(0.15m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_NullDivergence_DefaultsToZero()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.CurrentDivergencePct = null;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.DivergencePct.Should().Be(0m);
     }
 
     [Fact]

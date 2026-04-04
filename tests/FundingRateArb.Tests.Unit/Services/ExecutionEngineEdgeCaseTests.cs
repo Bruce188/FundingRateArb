@@ -30,6 +30,7 @@ public class ExecutionEngineEdgeCaseTests
     private static readonly BotConfiguration DefaultConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         DefaultLeverage = 5,
         MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",

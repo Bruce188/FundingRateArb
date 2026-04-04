@@ -30,6 +30,7 @@ public class ExecutionEngineTests
     private static readonly BotConfiguration DefaultConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         DefaultLeverage = 5,
         MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",
@@ -636,6 +637,7 @@ public class ExecutionEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(new BotConfiguration
             {
+                OperatingState = BotOperatingState.Armed,
                 DefaultLeverage = 0,
                 MaxCapitalPerPosition = DefaultConfig.MaxCapitalPerPosition,
                 TotalCapitalUsdc = DefaultConfig.TotalCapitalUsdc,
@@ -3182,6 +3184,7 @@ public class ExecutionEngineTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             MaxLeverageCap = 50,
             ForceConcurrentExecution = true,
@@ -3301,7 +3304,7 @@ public class ExecutionEngineTests
         _mockLongConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(50000m);
         _mockShortConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(50000m);
 
-        var config = new BotConfiguration { IsEnabled = true, DefaultLeverage = 1, UpdatedByUserId = "admin" };
+        var config = new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed, DefaultLeverage = 1, UpdatedByUserId = "admin" };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 1m, ct: CancellationToken.None);
@@ -3432,6 +3435,7 @@ public class ExecutionEngineTests
         var config = new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             MaxLeverageCap = 50,
             ForceConcurrentExecution = true,

@@ -43,6 +43,14 @@
     </div>
 }
 
+@if (Model.IsAuthenticated)
+{
+    <div class="d-flex align-items-center gap-2 mb-2 small text-muted">
+        <span>Last update: <span id="last-update-time">--:--:--</span></span>
+        <span id="stale-indicator" class="badge bg-warning text-dark" style="display:none">Stale</span>
+    </div>
+}
+
 <!-- KPI Cards -->
 <div class="row mb-4">
     @if (Model.IsAuthenticated)
@@ -54,8 +62,18 @@
                     <div class="d-flex justify-content-between align-items-start">
                         <div>
                             <p class="text-muted small mb-1">Bot Status</p>
-                            <span id="bot-status" class="badge @(Model.BotEnabled ? "bg-success" : "bg-danger") fs-6">
-                                @(Model.BotEnabled ? "RUNNING" : "STOPPED")
+                            @{
+                                var stateColor = Model.OperatingState switch
+                                {
+                                    "Stopped" => "bg-danger",
+                                    "Paused" => "bg-warning",
+                                    "Armed" => "bg-primary",
+                                    "Trading" => "bg-success",
+                                    _ => "bg-secondary"
+                                };
+                            }
+                            <span id="bot-status" class="badge @stateColor fs-6">
+                                @Model.OperatingState.ToUpperInvariant()
                             </span>
                         </div>
                         <div class="text-muted">
@@ -79,8 +97,8 @@
                             <h4 class="mb-0"><span id="open-positions">@Model.OpenPositionCount</span></h4>
                             <small class="text-muted">
                                 <span id="opening-positions">@Model.OpeningPositionCount</span> opening
-                                <span id="needs-attention-badge" style="@(Model.NeedsAttentionCount > 0 ? "" : "display:none")">
-                                    | <span class="text-warning" id="needs-attention">@Model.NeedsAttentionCount</span> needs attention
+                                <span id="needs-attention-badge" class="@(Model.NeedsAttentionCount > 0 ? "text-warning" : "text-success")">
+                                    | <span id="needs-attention">@Model.NeedsAttentionCount</span> needs attention
                                 </span>
                             </small>
                         </div>
@@ -429,8 +447,18 @@
                                             }
                                         </span>
                                     </div>
-                                    <small class="text-muted">@pos.LongExchangeName &rarr; @pos.ShortExchangeName</small>
+                                    <small class="text-muted">
+                                        @pos.LongExchangeName &rarr; @pos.ShortExchangeName
+                                        @if (pos.DivergencePct > 0.01m)
+                                        {
+                                            <span class="badge bg-info ms-1" title="Price divergence">@pos.DivergencePct.ToString("F2")%</span>
+                                        }
+                                    </small>
                                     <div class="small">Size: $@pos.SizeUsdc.ToString("F2") | Spread: @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%/hr</div>
+                                    <div class="small">
+                                        Strategy: <span class="@(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">$@pos.UnifiedPnl.ToString("F4")</span>
+                                        | Exch: <span class="@(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">$@pos.ExchangePnl.ToString("F4")</span>
+                                    </div>
                                     @if (pos.AccumulatedFunding != 0)
                                     {
                                         <div class="small">Funding: $@pos.AccumulatedFunding.ToString("F4")</div>
@@ -462,7 +490,9 @@
                                     <th>Size (USDC)</th>
                                     <th>Entry Spread/hr</th>
                                     <th>Current Spread/hr</th>
-                                    <th>Accumulated Funding</th>
+                                    <th>Strategy PnL</th>
+                                    <th>Exch. PnL</th>
+                                    <th>Funding</th>
                                     @if (Model.AdaptiveHoldEnabled)
                                     {
                                         <th>PnL Target</th>
@@ -502,7 +532,13 @@
                                         <td class="position-spread @(pos.CurrentSpreadPerHour >= 0 ? "text-success" : "text-danger")">
                                             @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%
                                         </td>
-                                        <td class="position-pnl text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        <td class="position-pnl @(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">$@pos.UnifiedPnl.ToString("F4")</td>
+                                        <td class="position-exchange-pnl @(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">
+                                            $@pos.ExchangePnl.ToString("F4")
+                                            <span class="badge bg-info ms-1 divergence-badge" title="Price divergence"
+                                                  style="@(pos.DivergencePct > 0.01m ? "" : "display:none")">@pos.DivergencePct.ToString("F2")%</span>
+                                        </td>
+                                        <td class="@(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">$@pos.AccumulatedFunding.ToString("F4")</td>
                                         @if (Model.AdaptiveHoldEnabled)
                                         {
                                             <td>

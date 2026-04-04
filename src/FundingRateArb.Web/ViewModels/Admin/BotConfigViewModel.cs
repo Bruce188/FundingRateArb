@@ -8,6 +8,9 @@ public class BotConfigViewModel
     [Display(Name = "Bot Enabled")]
     public bool IsEnabled { get; set; }
 
+    [Display(Name = "Operating State")]
+    public BotOperatingState OperatingState { get; set; }
+
     [Required, Range(0.0001, 0.1), Display(Name = "Open Threshold (%/hour)")]
     public decimal? OpenThreshold { get; set; }
 

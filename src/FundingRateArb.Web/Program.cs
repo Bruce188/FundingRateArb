@@ -422,6 +422,7 @@ try
     // --- WebSocket Market Data Streaming ---
     builder.Services.AddSingleton<MarketDataCache>();
     builder.Services.AddSingleton<IMarketDataCache>(sp => sp.GetRequiredService<MarketDataCache>());
+    builder.Services.AddSingleton<IReferencePriceProvider, ReferencePriceProvider>();
     builder.Services.AddSingleton<AsterMarketDataStream>();
     builder.Services.AddSingleton<HyperliquidMarketDataStream>();
     builder.Services.AddSingleton<LighterWebSocketClient>();

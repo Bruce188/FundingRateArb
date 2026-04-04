@@ -3,6 +3,7 @@ using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
@@ -40,6 +41,7 @@ public class OrderPlacementReliabilityTests
     private static readonly BotConfiguration DefaultConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         DefaultLeverage = 5,
         MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",
@@ -388,10 +390,15 @@ public class OrderPlacementReliabilityTests
         _monitorPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>()))
             .ReturnsAsync([]);
 
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Returns(0m);
+
         return new PositionHealthMonitor(
             _monitorUow.Object,
             _monitorFactory.Object,
             marketDataCache ?? new Mock<IMarketDataCache>().Object,
+            mockRefPrice.Object,
             _monitorExecutionEngine.Object,
             Mock.Of<ILeverageTierProvider>(),
             NullLogger<PositionHealthMonitor>.Instance);

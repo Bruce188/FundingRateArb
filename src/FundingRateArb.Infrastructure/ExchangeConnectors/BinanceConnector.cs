@@ -65,6 +65,12 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetMarkPricesAsync(token), ct).AsTask();
         var tickersTask = pipeline.ExecuteAsync(
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
+        // fundingInfoTask runs concurrently but is NOT in Task.WhenAll to prevent
+        // its timeout from crashing the entire fetch (B2 fix). Consumed separately below.
+        var fundingInfoTask = pipeline.ExecuteAsync(
+            async token => await _restClient.UsdFuturesApi.ExchangeData.GetFundingInfoAsync(token), ct)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
 
         await Task.WhenAll(markPricesTask, tickersTask);
 
@@ -84,22 +90,47 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 : new Dictionary<string, decimal>();
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to fetch Binance tickers; falling back to empty volume map");
             volumeBySymbol = new Dictionary<string, decimal>();
         }
 
+        // Build funding interval lookup from the dedicated funding info endpoint
+        Dictionary<string, int> intervalBySymbol;
+        try
+        {
+            var fundingInfo = await fundingInfoTask;
+            intervalBySymbol = fundingInfo.Success && fundingInfo.Data is not null
+                ? fundingInfo.Data
+                    .Where(fi => fi.FundingIntervalHours > 0)
+                    .DistinctBy(fi => fi.Symbol)
+                    .ToDictionary(fi => fi.Symbol, fi => fi.FundingIntervalHours)
+                : new Dictionary<string, int>();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch Binance funding info; falling back to default intervals");
+            intervalBySymbol = new Dictionary<string, int>();
+        }
+
         return markPrices.Data!
-            .Select(mp => new FundingRateDto
+            .Select(mp =>
             {
-                ExchangeName = ExchangeName,
-                Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
-                RawRate = mp.FundingRate ?? 0m,
-                RatePerHour = (mp.FundingRate ?? 0m) / 8m, // 8-hour rate normalised to per-hour
-                MarkPrice = mp.MarkPrice,
-                IndexPrice = mp.IndexPrice,
-                Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
-                NextSettlementUtc = mp.NextFundingTime,
+                var intervalHours = intervalBySymbol.GetValueOrDefault(mp.Symbol, 8);
+                return new FundingRateDto
+                {
+                    ExchangeName = ExchangeName,
+                    Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
+                    RawRate = mp.FundingRate ?? 0m,
+                    RatePerHour = (mp.FundingRate ?? 0m) / intervalHours,
+                    MarkPrice = mp.MarkPrice,
+                    IndexPrice = mp.IndexPrice,
+                    Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                    NextSettlementUtc = mp.NextFundingTime,
+                    DetectedFundingIntervalHours = intervalBySymbol.TryGetValue(mp.Symbol, out var detected) ? detected : null,
+                };
             })
             .ToList();
     }
