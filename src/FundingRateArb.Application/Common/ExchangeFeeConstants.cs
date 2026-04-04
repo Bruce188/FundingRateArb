@@ -12,6 +12,7 @@ public static class ExchangeFeeConstants
         "Lighter" => 0m,
         "Aster" => 0.0004m,
         "Binance" => 0.0005m,
+        "dYdX" => 0.0003m,
         _ => 0.0005m,
     };
 }

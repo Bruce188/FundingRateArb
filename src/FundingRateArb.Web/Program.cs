@@ -365,6 +365,29 @@ try
     });
     builder.Services.AddScoped<AsterConnector>();
     builder.Services.AddScoped<BinanceConnector>();
+    builder.Services.AddHttpClient("DydxIndexer", client =>
+    {
+        client.BaseAddress = new Uri("https://indexer.dydx.trade/v4/");
+        client.Timeout = TimeSpan.FromSeconds(30);
+    }).AddStandardResilienceHandler(options =>
+    {
+        options.Retry.MaxRetryAttempts = 3;
+        options.Retry.Delay = TimeSpan.FromSeconds(1);
+        options.Retry.BackoffType = DelayBackoffType.Exponential;
+        options.Retry.UseJitter = true;
+        options.CircuitBreaker.FailureRatio = 0.5;
+        options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
+        options.CircuitBreaker.MinimumThroughput = 5;
+        options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(30);
+        options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(10);
+        options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
+    });
+    builder.Services.AddHttpClient("DydxValidator", client =>
+    {
+        client.BaseAddress = new Uri("https://dydx-rpc.publicnode.com/");
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
+    builder.Services.AddScoped<DydxConnector>();
     builder.Services.AddHttpClient<CoinGlassConnector>(client =>
     {
         client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");
