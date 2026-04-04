@@ -1178,4 +1178,49 @@ public class SignalEngineTests
         // Assert: with high spread, opportunity passes even with slippage buffer
         result.Should().HaveCount(1);
     }
+
+    // ── Partial rate data tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_OnlyOneExchangeHasRates_ReturnsEmpty()
+    {
+        // Only 1 exchange returns rates for ETH — no pair can be formed
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0010m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetOpportunities_TwoOfThreeExchanges_ReturnsOnePair()
+    {
+        // 3 exchanges exist, but only 2 return rates for ETH → exactly 1 pair
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            // Aster (exchange 3) has no rate data for ETH
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].AssetSymbol.Should().Be("ETH");
+        result[0].LongExchangeName.Should().Be("Hyperliquid");
+        result[0].ShortExchangeName.Should().Be("Lighter");
+    }
 }

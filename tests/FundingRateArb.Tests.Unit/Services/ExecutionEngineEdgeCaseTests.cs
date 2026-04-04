@@ -436,6 +436,42 @@ public class ExecutionEngineEdgeCaseTests
         _mockLongConnector.Verify(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── Test: Close-leg one throws, one succeeds ───────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_OneLegThrows_OneLegSucceeds_StaysClosingWithLegFlag()
+    {
+        var position = MakeOpenPosition();
+
+        // Long leg succeeds
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3000m, 0.1m));
+
+        // Short leg throws
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Short exchange unreachable"));
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.Manual);
+
+        // Position should stay in Closing (not EmergencyClosed) — partial failure
+        position.Status.Should().Be(PositionStatus.Closing);
+
+        // Long leg was successful
+        position.LongLegClosed.Should().BeTrue();
+
+        // Short leg failed
+        position.ShortLegClosed.Should().BeFalse();
+
+        // A LegFailed alert should have been created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Critical)),
+            Times.Once);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private ArbitragePosition MakeOpenPosition(decimal longEntry = 3000m, decimal shortEntry = 3001m) =>

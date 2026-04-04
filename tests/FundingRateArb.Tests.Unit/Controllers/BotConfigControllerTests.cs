@@ -198,4 +198,34 @@ public class BotConfigControllerTests
             .Errors.Should().ContainSingle()
             .Which.ErrorMessage.Should().Contain("must not exceed");
     }
+
+    [Fact]
+    public async Task Toggle_FlipsBotEnabled_AndRedirects()
+    {
+        var config = new BotConfiguration { IsEnabled = true };
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
+
+        var result = await _controller.Toggle();
+
+        config.IsEnabled.Should().BeFalse();
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("Index");
+        _mockBotConfigRepo.Verify(r => r.Update(config), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Toggle_WhenDisabled_EnablesBot()
+    {
+        var config = new BotConfiguration { IsEnabled = false };
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
+
+        var result = await _controller.Toggle();
+
+        config.IsEnabled.Should().BeTrue();
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("Index");
+    }
 }
