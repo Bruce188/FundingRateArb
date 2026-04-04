@@ -92,7 +92,7 @@ public class DryRunExecutionTests
         new() { Success = true, OrderId = orderId, FilledPrice = price, FilledQuantity = qty };
 
     private ExecutionEngine CreateEngine() =>
-        new(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        new(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, Mock.Of<IPnlReconciliationService>(), NullLogger<ExecutionEngine>.Instance);
 
     // ── ExecutionEngine dry-run tests ─────────────────────────────────────
 
