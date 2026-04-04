@@ -78,10 +78,27 @@ public class BinanceConnectorTests
             HttpStatusCode.OK, null, null, null, null, null, null, null, null,
             null, null, ResultDataSource.Server, data, null);
 
+    private static WebCallResult<BinanceUsdFuturesAccountBalance[]> FailBalances(string message)
+        => new WebCallResult<BinanceUsdFuturesAccountBalance[]>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
+
     private static WebCallResult<BinanceFuturesInitialLeverageChangeResult> SuccessLeverage()
         => new WebCallResult<BinanceFuturesInitialLeverageChangeResult>(
             HttpStatusCode.OK, null, null, null, null, null, null, null, null,
             null, null, ResultDataSource.Server, new BinanceFuturesInitialLeverageChangeResult(), null);
+
+    private static WebCallResult<BinanceFuturesInitialLeverageChangeResult> FailLeverage(string message)
+        => new WebCallResult<BinanceFuturesInitialLeverageChangeResult>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
+
+    private static WebCallResult<BinanceFuturesSymbolBracket[]> SuccessBrackets(BinanceFuturesSymbolBracket[] data)
+        => new WebCallResult<BinanceFuturesSymbolBracket[]>(
+            HttpStatusCode.OK, null, null, null, null, null, null, null, null,
+            null, null, ResultDataSource.Server, data, null);
+
+    private static WebCallResult<BinanceFuturesSymbolBracket[]> FailBrackets(string message)
+        => new WebCallResult<BinanceFuturesSymbolBracket[]>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
 
     /// <summary>
     /// Creates a successful WebCallResult wrapping an array of BinancePositionDetailsUsdt objects.
@@ -665,5 +682,450 @@ public class BinanceConnectorTests
                 It.IsAny<int?>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    // ── B1: PlaceMarketOrder guard tests ──────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_MarkPriceZero_ReturnsFailure()
+    {
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 0m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero", "mark price zero guard must trigger");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_ZeroQuantity_ReturnsFailure()
+    {
+        // sizeUsdc = 0 → quantity = 0
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 0m, leverage: 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero", "zero quantity guard must trigger");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_BelowMinNotional_ReturnsFailure()
+    {
+        // sizeUsdc=3.5, leverage=1, markPrice=3500 → quantity = Math.Round(3.5/3500, 3, ToZero) = 0.001
+        // notional = 0.001 * 3500 = 3.5 < $5
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, sizeUsdc: 3.5m, leverage: 1);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("minimum", "notional below $5 guard must trigger");
+    }
+
+    // ── B2: SetLeverage failure aborts order ──────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_WhenSetLeverageFails_AbortsOrder()
+    {
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }));
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.ChangeInitialLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailLeverage("leverage limit exceeded"));
+
+        var exchangeDataMock = new Mock<IBinanceRestClientUsdFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 10);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("leverage");
+
+        tradingMock.Verify(
+            x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "PlaceOrderAsync must not be called when leverage set fails");
+    }
+
+    // ── B3: ClosePositionAsync error paths ────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_ReturnsFailure_WhenNoPositionFound()
+    {
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetPositionInformationAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("No open position");
+    }
+
+    [Fact]
+    public async Task ClosePosition_ReturnsFailure_WhenGetPositionsFails()
+    {
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetPositionInformationAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailPositions("API connection error"));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Failed to fetch");
+    }
+
+    // ── B4: GetAvailableBalanceAsync tests ────────────────────────────────────
+
+    [Fact]
+    public async Task GetAvailableBalance_ReturnsCorrectBalance()
+    {
+        var balance = new BinanceUsdFuturesAccountBalance { Asset = "USDT", AvailableBalance = 250.75m };
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessBalances([balance]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var available = await sut.GetAvailableBalanceAsync();
+
+        available.Should().Be(250.75m);
+    }
+
+    [Fact]
+    public async Task GetAvailableBalance_WhenApiFails_ThrowsInvalidOperationException()
+    {
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailBalances("Balance fetch failed"));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var act = () => sut.GetAvailableBalanceAsync();
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task GetAvailableBalance_ReturnsOnlyUsdtBalance()
+    {
+        var balances = new[]
+        {
+            new BinanceUsdFuturesAccountBalance { Asset = "USDT", AvailableBalance = 100m },
+            new BinanceUsdFuturesAccountBalance { Asset = "BTC", AvailableBalance = 50m },
+            new BinanceUsdFuturesAccountBalance { Asset = "ETH", AvailableBalance = 25m },
+        };
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessBalances(balances));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var available = await sut.GetAvailableBalanceAsync();
+
+        available.Should().Be(100m, "only USDT balance should be counted");
+    }
+
+    // ── NB7: ClosePosition Short side ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_Short_PlacesBuyOrderWithReduceOnly()
+    {
+        var position = new BinancePositionDetailsUsdt
+        {
+            Symbol = "ETHUSDT",
+            Quantity = -0.5m, // negative = Short
+        };
+
+        OrderSide? capturedSide = null;
+        bool? capturedReduceOnly = null;
+        decimal? capturedQuantity = null;
+
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+            {
+                capturedSide = (OrderSide)invocation.Arguments[1];
+                capturedQuantity = (decimal?)invocation.Arguments[3];
+                capturedReduceOnly = (bool?)invocation.Arguments[7];
+            }))
+            .ReturnsAsync(SuccessOrder(new BinanceUsdFuturesOrder { Id = 4 }));
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetPositionInformationAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([position]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Short);
+
+        result.Success.Should().BeTrue();
+        capturedSide.Should().Be(OrderSide.Buy, "closing a Short requires a Buy");
+        capturedReduceOnly.Should().BeTrue("close orders must be reduce-only");
+        capturedQuantity.Should().Be(0.5m, "must use Math.Abs of negative quantity");
+    }
+
+    // ── NB8: GetMarkPriceAsync tests ──────────────────────────────────────────
+
+    [Fact]
+    public async Task GetMarkPrice_ReturnsCorrectPrice()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([
+            MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m),
+        ]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var price = await sut.GetMarkPriceAsync("ETH");
+
+        price.Should().Be(3500m);
+    }
+
+    [Fact]
+    public async Task GetMarkPrice_WhenAssetNotFound_ThrowsKeyNotFoundException()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([
+            MakeMarkPrice("BTCUSDT", 65000m, 64980m, 0.0001m),
+        ]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var act = () => sut.GetMarkPriceAsync("NONEXISTENT");
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    // ── NB9: GetFundingRatesAsync edge cases ──────────────────────────────────
+
+    [Fact]
+    public async Task GetFundingRates_WhenEmptyResponse_ReturnsEmptyList()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetFundingRates_SymbolNormalization_OnlyStripsSuffix()
+    {
+        // "USTCUSDT" should become "USTC", not "U" (non-greedy stripping)
+        var markPrice = MakeMarkPrice("USTCUSDT", 1.5m, 1.49m, fundingRate: 0.0008m);
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates[0].Symbol.Should().Be("USTC", "only the trailing USDT suffix should be stripped");
+    }
+
+    // ── NB10: Short side mapping ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_MapsShortSideToSdkSell()
+    {
+        OrderSide? capturedSide = null;
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+            {
+                capturedSide = (OrderSide)invocation.Arguments[1];
+            }))
+            .ReturnsAsync(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }));
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.ChangeInitialLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+
+        var exchangeDataMock = new Mock<IBinanceRestClientUsdFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        await sut.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5);
+
+        capturedSide.Should().Be(OrderSide.Sell, "Side.Short must map to OrderSide.Sell");
+    }
+
+    // ── N5: IDisposable, GetMaxLeverage tests ─────────────────────────────────
+
+    [Fact]
+    public void BinanceConnector_ImplementsIDisposable()
+    {
+        typeof(BinanceConnector).Should().Implement<IDisposable>();
+    }
+
+    [Fact]
+    public void BinanceConnector_Dispose_DoesNotThrow()
+    {
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var act = () => sut.Dispose();
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public async Task GetMaxLeverage_ReturnsMaxFromBrackets()
+    {
+        var bracket = new BinanceFuturesSymbolBracket
+        {
+            Symbol = "ETHUSDT",
+            Brackets = [
+                new BinanceFuturesBracket { InitialLeverage = 50 },
+                new BinanceFuturesBracket { InitialLeverage = 125 },
+                new BinanceFuturesBracket { InitialLeverage = 75 },
+            ],
+        };
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBracketsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessBrackets([bracket]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var maxLeverage = await sut.GetMaxLeverageAsync("ETH");
+
+        maxLeverage.Should().Be(125, "should return the maximum leverage from all brackets");
+    }
+
+    [Fact]
+    public async Task GetMaxLeverage_WhenApiFails_ReturnsNull()
+    {
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBracketsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailBrackets("API failure"));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var maxLeverage = await sut.GetMaxLeverageAsync("ETH");
+
+        maxLeverage.Should().BeNull("API failure should return null");
     }
 }

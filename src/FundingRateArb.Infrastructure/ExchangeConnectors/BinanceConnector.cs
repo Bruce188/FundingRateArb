@@ -24,8 +24,12 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     private readonly IMarkPriceCache _markPriceCache;
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
+    private readonly ConcurrentDictionary<string, DateTime?> _fundingTimeCache = new();
+    private long _fundingTimeCacheExpiryTicks;
     private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
     private volatile bool _symbolInfoLoaded;
+    private volatile bool _positionModeChecked;
+    private DateTime _symbolInfoFailedUntil = DateTime.MinValue;
 
     public BinanceConnector(
         IBinanceRestClient restClient,
@@ -72,7 +76,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         }
 
         var volumeBySymbol = tickers.Success && tickers.Data is not null
-            ? tickers.Data.ToDictionary(t => t.Symbol, t => t.QuoteVolume)
+            ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
             : new Dictionary<string, decimal>();
 
         return markPrices.Data!
@@ -98,6 +102,11 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     public async Task<OrderResultDto> PlaceMarketOrderAsync(
         string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default)
     {
+        if (leverage < 1 || leverage > 125)
+        {
+            return new OrderResultDto { Success = false, Error = $"Invalid leverage {leverage} (must be 1-125)" };
+        }
+
         var symbol = asset + "USDT";
         var orderSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
 
@@ -131,7 +140,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             : RoundToTickSize(markPrice * 0.995m, tickSize);
 
         // Abort order if ChangeInitialLeverageAsync fails
-        var leverageResult = await _restClient.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: ct);
+        var sdkPipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        var leverageResult = await sdkPipeline.ExecuteAsync(
+            async token => await _restClient.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: token), ct);
         if (!leverageResult.Success)
         {
             return new OrderResultDto
@@ -182,6 +193,11 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
         string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
     {
+        if (leverage < 1 || leverage > 125)
+        {
+            return new OrderResultDto { Success = false, Error = $"Invalid leverage {leverage} (must be 1-125)" };
+        }
+
         var symbol = asset + "USDT";
         var orderSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
 
@@ -213,7 +229,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             ? RoundToTickSize(markPrice * 1.005m, tickSize)
             : RoundToTickSize(markPrice * 0.995m, tickSize);
 
-        var leverageResult = await _restClient.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: ct);
+        var sdkPipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        var leverageResult = await sdkPipeline.ExecuteAsync(
+            async token => await _restClient.UsdFuturesApi.Account.ChangeInitialLeverageAsync(symbol, leverage, ct: token), ct);
         if (!leverageResult.Success)
         {
             return new OrderResultDto
@@ -367,6 +385,14 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         try
         {
             var symbol = asset + "USDT";
+
+            // Use cached funding times when available (populated alongside mark prices)
+            if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _fundingTimeCacheExpiryTicks) &&
+                _fundingTimeCache.TryGetValue(symbol, out var cachedTime))
+            {
+                return cachedTime;
+            }
+
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
                 async t => await _restClient.UsdFuturesApi.ExchangeData.GetMarkPricesAsync(t), ct);
@@ -376,6 +402,13 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 return ComputeNextSettlement8h();
             }
 
+            // Cache all funding times with a short TTL
+            foreach (var item in result.Data)
+            {
+                _fundingTimeCache[item.Symbol] = item.NextFundingTime;
+            }
+            Interlocked.Exchange(ref _fundingTimeCacheExpiryTicks, DateTime.UtcNow.AddSeconds(30).Ticks);
+
             var mp = result.Data.FirstOrDefault(m => m.Symbol == symbol);
             if (mp is null)
             {
@@ -384,6 +417,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
 
             return mp.NextFundingTime;
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return ComputeNextSettlement8h();
@@ -400,6 +434,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
 
     public void Dispose()
     {
+        _symbolInfoLock.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -445,6 +480,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             // The first bracket (lowest notional) has the highest allowed leverage
             return symbolBracket.Brackets.Max(b => b.InitialLeverage);
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return null;
@@ -477,6 +513,12 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     {
         // Double-checked locking to prevent duplicate exchange-info fetches on cold start
         if (_symbolInfoLoaded)
+        {
+            return;
+        }
+
+        // Skip retries for 30s after a failed fetch
+        if (DateTime.UtcNow < _symbolInfoFailedUntil)
         {
             return;
         }
@@ -516,23 +558,35 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                     }
                 }
 
-                // Position mode validation
-                var positionModeResult = await _restClient.UsdFuturesApi.Account.GetPositionModeAsync(ct: ct);
-                if (positionModeResult.Success && positionModeResult.Data.IsHedgeMode)
-                {
-                    _logger.LogError("Binance account is in hedge mode. Switch to one-way mode for correct operation.");
-                }
-
                 _symbolInfoLoaded = true;
             }
         }
         catch (Exception ex)
         {
+            _symbolInfoFailedUntil = DateTime.UtcNow.AddSeconds(30);
             _logger.LogWarning("Failed to fetch exchange info for symbol info lookup: {Error}", ex.Message);
         }
         finally
         {
             _symbolInfoLock.Release();
+        }
+
+        // Position mode validation — outside semaphore to avoid extending critical section
+        if (_symbolInfoLoaded && !_positionModeChecked)
+        {
+            _positionModeChecked = true;
+            try
+            {
+                var positionModeResult = await _restClient.UsdFuturesApi.Account.GetPositionModeAsync(ct: ct);
+                if (positionModeResult.Success && positionModeResult.Data.IsHedgeMode)
+                {
+                    _logger.LogCritical("Binance account is in hedge mode. Switch to one-way mode for correct operation.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to check position mode: {Error}", ex.Message);
+            }
         }
     }
 
@@ -554,6 +608,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 ((side == Side.Long && p.Quantity > 0) || (side == Side.Short && p.Quantity < 0)));
             return pos != null;
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             return null;
