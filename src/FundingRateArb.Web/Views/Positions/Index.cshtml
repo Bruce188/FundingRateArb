@@ -31,7 +31,10 @@ else
                     <th>Status</th>
                     <th class="text-end">Size (USDC)</th>
                     <th class="text-end">Spread/hr</th>
-                    <th class="text-end">Accumulated Funding</th>
+                    <th class="text-end">Strategy PnL</th>
+                    <th class="text-end">Exch. PnL</th>
+                    <th class="text-end">Divergence</th>
+                    <th class="text-end">Funding</th>
                     <th>Opened</th>
                     <th>Actions</th>
                 </tr>
@@ -61,6 +64,22 @@ else
                         </td>
                         <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
                         <td class="text-end pos-spread">@pos.CurrentSpreadPerHour.ToString("P4")</td>
+                        <td class="position-pnl text-end @(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">
+                            $@pos.UnifiedPnl.ToString("F4")
+                        </td>
+                        <td class="position-exchange-pnl text-end @(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">
+                            $@pos.ExchangePnl.ToString("F4")
+                        </td>
+                        <td class="text-end">
+                            @if (pos.DivergencePct > 0.01m)
+                            {
+                                <span class="badge bg-info">@pos.DivergencePct.ToString("F2")%</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">&mdash;</span>
+                            }
+                        </td>
                         <td class="pos-funding text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
                             @pos.AccumulatedFunding.ToString("F4")
                         </td>

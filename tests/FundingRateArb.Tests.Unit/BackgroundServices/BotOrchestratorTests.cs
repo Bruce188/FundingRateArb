@@ -141,7 +141,7 @@ public class BotOrchestratorTests
 
         // Wire notifier — default all methods to completed tasks
         _mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<BotOperatingState>(), It.IsAny<int>(), It.IsAny<int>())).Returns(Task.CompletedTask);
-        _mockNotifier.Setup(n => n.PushPositionUpdatesAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<BotConfiguration>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushPositionUpdatesAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<BotConfiguration>(), It.IsAny<IReadOnlyDictionary<int, ComputedPositionPnl>?>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushPositionRemovalsAsync(It.IsAny<IReadOnlyList<(int, string, int, int, PositionStatus)>>(), It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushRebalanceRemovalsAsync(It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
         _mockNotifier.Setup(n => n.PushNewAlertsAsync(It.IsAny<IUnitOfWork>())).Returns(Task.CompletedTask);
@@ -348,7 +348,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         _mockNotifier.Verify(
-            n => n.PushPositionUpdatesAsync(It.Is<List<ArbitragePosition>>(l => l.Count == 1), It.IsAny<BotConfiguration>()),
+            n => n.PushPositionUpdatesAsync(It.Is<List<ArbitragePosition>>(l => l.Count == 1), It.IsAny<BotConfiguration>(), It.IsAny<IReadOnlyDictionary<int, ComputedPositionPnl>?>()),
             Times.Once);
     }
 
@@ -971,7 +971,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 new[] { (pos, CloseReason.SpreadCollapsed) },
-                Array.Empty<(int, string, int, int, PositionStatus)>()));
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // After ClosePositionAsync, position stays in Closing (partial fill)
         _mockExecEngine.Setup(e => e.ClosePositionAsync(It.IsAny<string>(), pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
@@ -1089,7 +1090,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reapedPositions));
+                reapedPositions,
+                new Dictionary<int, ComputedPositionPnl>()));
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
@@ -1120,7 +1122,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 new[] { (pos, CloseReason.SpreadCollapsed) },
-                Array.Empty<(int, string, int, int, PositionStatus)>()));
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
         _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
             .Callback(() =>
             {
@@ -1665,7 +1668,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reapedPositions));
+                reapedPositions,
+                new Dictionary<int, ComputedPositionPnl>()));
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
@@ -2012,7 +2016,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reapedPositions));
+                reapedPositions,
+                new Dictionary<int, ComputedPositionPnl>()));
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
@@ -2035,7 +2040,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reapedPositions));
+                reapedPositions,
+                new Dictionary<int, ComputedPositionPnl>()));
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))

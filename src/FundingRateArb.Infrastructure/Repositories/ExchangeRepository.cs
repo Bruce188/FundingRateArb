@@ -62,6 +62,9 @@ public class ExchangeRepository : IExchangeRepository
         IsActive = src.IsActive,
         IsDataOnly = src.IsDataOnly,
         TakerFeeRate = src.TakerFeeRate,
+        FundingNotionalPriceType = src.FundingNotionalPriceType,
+        FundingRebateRate = src.FundingRebateRate,
+        FundingTimingDeviationSeconds = src.FundingTimingDeviationSeconds,
         Description = src.Description,
     };
 }

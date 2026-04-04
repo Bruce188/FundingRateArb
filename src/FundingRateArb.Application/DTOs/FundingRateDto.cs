@@ -15,4 +15,10 @@ public class FundingRateDto
     /// Used for settlement-aware funding accumulation on periodic exchanges (e.g. Aster).
     /// </summary>
     public DateTime? NextSettlementUtc { get; set; }
+
+    /// <summary>
+    /// Detected funding interval in hours from the exchange API (if available).
+    /// Used by FundingRateFetcher to detect interval changes (e.g. Binance 8h to 4h).
+    /// </summary>
+    public int? DetectedFundingIntervalHours { get; set; }
 }

@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
@@ -1222,5 +1223,357 @@ public class SignalEngineTests
         result[0].AssetSymbol.Should().Be("ETH");
         result[0].LongExchangeName.Should().Be("Hyperliquid");
         result[0].ShortExchangeName.Should().Be("Lighter");
+    }
+
+    // ── Per-exchange funding accuracy tests ────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_AsterTimingDeviation_ReducesMinutesToSettlement()
+    {
+        // Arrange: Aster exchange with 15s timing deviation
+        // Use a settlement far enough in the future that clock drift won't affect truncation
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = 0.0001m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 15 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        // First test: with deviation (Aster has 15s)
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 60 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Settlement 30 minutes from now (large enough to avoid truncation edge)
+        var nextSettlement = now.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        var resultWithDeviation = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppWithDeviation = resultWithDeviation.Opportunities.Concat(resultWithDeviation.AllNetPositive).FirstOrDefault();
+        oppWithDeviation.Should().NotBeNull();
+
+        // Now test without deviation — set both exchanges to 0
+        var ratesNoDeviation = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m, MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m, MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(ratesNoDeviation);
+        var resultNoDeviation = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppNoDeviation = resultNoDeviation.Opportunities.Concat(resultNoDeviation.AllNetPositive).FirstOrDefault();
+        oppNoDeviation.Should().NotBeNull();
+
+        // The deviation should reduce minutes by ceil(15/60) = 1 minute
+        oppWithDeviation!.MinutesToNextSettlement.Should().Be(
+            oppNoDeviation!.MinutesToNextSettlement!.Value - 1,
+            "15s timing deviation should reduce minutes-to-settlement by 1 (ceil(15/60))");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_LighterRebate_IncreasesNetYield()
+    {
+        // Arrange: Lighter (long, pays funding) has 15% rebate
+        var now = DateTime.UtcNow;
+        var lighterLongRate = 0.0001m;
+        var hyperliquidShortRate = 0.0010m;
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2,
+                AssetId = 1,
+                RatePerHour = lighterLongRate,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0.15m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = hyperliquidShortRate,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingRebateRate = 0m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.00001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: net yield should include the rebate boost
+        // Without rebate: spread = 0.0009, fees ~ 0, net = 0.0009 - fees
+        // With rebate: net += longRate * 0.15 = 0.0001 * 0.15 = 0.000015
+        var opportunity = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opportunity.Should().NotBeNull();
+
+        // Compute expected: spread - feePerHour + rebateBoost
+        var spread = hyperliquidShortRate - lighterLongRate; // 0.0009
+        var lighterFee = 0m * 2; // Lighter has no fallback fee
+        var hyperliquidFee = ExchangeFeeConstants.GetTakerFeeRate("Hyperliquid") * 2;
+        var expectedFeePerHour = (lighterFee + hyperliquidFee) / 12m;
+        var rebateBoost = lighterLongRate * 0.15m; // 0.000015
+        var expectedNet = spread - expectedFeePerHour + rebateBoost;
+
+        opportunity!.NetYieldPerHour.Should().BeApproximately(expectedNet, 0.000001m,
+            "rebate should improve net yield by longRate * rebateRate");
+    }
+
+    // ── Review findings: B3 — long-leg negative rate with rebate ────────────
+
+    [Fact]
+    public async Task GetOpportunities_LongLegNegativeRate_RebateDoesNotReduceNetYield()
+    {
+        // Arrange: long leg has negative rate (earning, not paying). Rebate must NOT apply.
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2, AssetId = 1,
+                RatePerHour = -0.0005m, // negative rate on Lighter (long leg earns)
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0.15m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingRebateRate = 0m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.00001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opp.Should().NotBeNull();
+
+        // Without rebate guard: net would incorrectly get a negative boost (-0.0005 * 0.15 = -0.000075)
+        // With guard: long rate < 0 so rebate is skipped, net is unaffected
+        var diff = 0.0010m - (-0.0005m); // 0.0015
+        opp!.NetYieldPerHour.Should().BeGreaterThan(diff - 0.001m,
+            "rebate should NOT reduce net yield when long leg rate is negative");
+    }
+
+    // ── Review findings: NB2 — short-leg negative rate with rebate ──────────
+
+    [Fact]
+    public async Task GetOpportunities_ShortLegNegativeRateWithRebate_BoostsNetYield()
+    {
+        // For short-leg rebate to fire: shortR.RatePerHour < 0 and shortR.Exchange.FundingRebateRate > 0
+        // shortR is the leg with the HIGHER rate. Both rates negative, higher = less negative.
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1,
+                RatePerHour = -0.0010m, // very negative (long leg, lower rate)
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingRebateRate = 0m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2, AssetId = 1,
+                RatePerHour = -0.0002m, // less negative (short leg, higher rate)
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0.15m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        // Use very low threshold to capture all opportunities
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = -1m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var resultWithRebate = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppWithRebate = resultWithRebate.Opportunities.Concat(resultWithRebate.AllNetPositive).FirstOrDefault();
+        oppWithRebate.Should().NotBeNull();
+
+        // Now compare without rebate
+        var ratesNoRebate = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1,
+                RatePerHour = -0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingRebateRate = 0m },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2, AssetId = 1,
+                RatePerHour = -0.0002m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingRebateRate = 0m }, // no rebate
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(ratesNoRebate);
+        var resultNoRebate = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppNoRebate = resultNoRebate.Opportunities.Concat(resultNoRebate.AllNetPositive).FirstOrDefault();
+        oppNoRebate.Should().NotBeNull();
+
+        // shortR = -0.0002 (Lighter). Rebate boost = abs(-0.0002) * 0.15 = 0.00003
+        var expectedBoost = Math.Abs(-0.0002m) * 0.15m;
+        var netDiff = oppWithRebate!.NetYieldPerHour - oppNoRebate!.NetYieldPerHour;
+        netDiff.Should().BeApproximately(expectedBoost, 0.000001m,
+            "short-leg rebate should boost net yield by abs(shortRate) * rebateRate");
+    }
+
+    // ── Review findings: NB7 — timing deviation clamps to zero ──────────────
+
+    [Fact]
+    public async Task GetOpportunities_TimingDeviationClampsToZero_WhenDeviationExceedsMinutes()
+    {
+        // Arrange: deviation 120s (~2 min) but minutesToSettlement is only 1 min → clamp to 0
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 120 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                FundingWindowMinutes = 60,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Settlement in 1 minute from now, deviation is 120s = 2 min → clamps to 0
+        var nextSettlement = now.AddMinutes(1);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opp.Should().NotBeNull();
+
+        // minutesToSettlement should be clamped to 0 (not negative)
+        opp!.MinutesToNextSettlement.Should().Be(0,
+            "deviation exceeding minutes-to-settlement should clamp to 0");
+
+        // With minutesToSettlement = 0 and FundingWindowMinutes = 60, funding window boost should apply
+        opp.BoostedNetYieldPerHour.Should().BeGreaterThan(opp.NetYieldPerHour,
+            "funding window boost should apply when minutesToSettlement is clamped to 0");
+    }
+
+    // ── Review-v2: Timing deviation 600s capped at 300s (NB5) ───────────────
+
+    [Fact]
+    public async Task GetOpportunities_TimingDeviation600s_CappedAt300s()
+    {
+        // Arrange: deviation=600s on Aster, settlement 10 min away.
+        // 600s should be capped to 300s = 5 min reduction, NOT 10 min.
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 600 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                FundingWindowMinutes = 60,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Settlement in 10+ minutes (add 30s buffer for test execution time and int truncation)
+        var nextSettlement = now.AddMinutes(10).AddSeconds(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opp.Should().NotBeNull();
+
+        // 600s capped to 300s ��� ceil(300/60) = 5 min reduction
+        // 10 - 5 = 5 minutes remaining (not 0 which would happen without cap)
+        opp!.MinutesToNextSettlement.Should().Be(5,
+            "600s deviation should be capped at 300s (5 min), reducing 10 min settlement to 5 min");
     }
 }

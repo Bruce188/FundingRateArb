@@ -128,6 +128,10 @@ public class BotConfiguration
     [Range(1, 100)]
     public int ReconciliationIntervalCycles { get; set; } = 10;
 
+    /// <summary>Alert when price divergence exceeds this multiple of entry spread cost. Default 2.0.</summary>
+    [Range(0.5, 10.0)]
+    public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;
+
     /// <summary>Enable dry-run (paper trading) mode globally.</summary>
     public bool DryRunEnabled { get; set; }
 

@@ -260,8 +260,8 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
             }
         }
 
-        // Push per-user position updates with warning computation (always, regardless of bot state)
-        await _notifier.PushPositionUpdatesAsync(allOpenPositions, globalConfig);
+        // Push per-user position updates with warning computation and computed PnL (always, regardless of bot state)
+        await _notifier.PushPositionUpdatesAsync(allOpenPositions, globalConfig, healthResult.ComputedPnl);
         await _notifier.PushNewAlertsAsync(uow);
 
         // Step 2: Compute + push opportunities globally (always, regardless of bot state)

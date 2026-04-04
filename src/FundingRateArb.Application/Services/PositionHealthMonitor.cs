@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using Microsoft.Extensions.Logging;
@@ -13,6 +14,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IMarketDataCache _marketDataCache;
+    private readonly IReferencePriceProvider _referencePriceProvider;
     private readonly IExecutionEngine _executionEngine;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
@@ -22,12 +24,14 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         IUnitOfWork uow,
         IExchangeConnectorFactory connectorFactory,
         IMarketDataCache marketDataCache,
+        IReferencePriceProvider referencePriceProvider,
         IExecutionEngine executionEngine,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
         _connectorFactory = connectorFactory;
         _marketDataCache = marketDataCache;
+        _referencePriceProvider = referencePriceProvider;
         _executionEngine = executionEngine;
         _logger = logger;
     }
@@ -53,7 +57,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                allReaped);
+                allReaped,
+                new Dictionary<int, ComputedPositionPnl>());
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
@@ -64,6 +69,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // C-PH1: Collect positions that need closing; call SaveAsync ONCE after the loop
         var toClose = new List<(ArbitragePosition Position, CloseReason Reason)>();
+        var computedPnl = new Dictionary<int, ComputedPositionPnl>();
 
         foreach (var pos in openPositions)
         {
@@ -146,6 +152,67 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
                 var unrealizedPnl = longPnl + shortPnl;
 
+                // Unified PnL: both legs valued against single reference price
+                var unifiedPrice = _referencePriceProvider.GetUnifiedPrice(assetSymbol, longExchangeName, shortExchangeName);
+                decimal unifiedUnrealizedPnl;
+                if (unifiedPrice > 0)
+                {
+                    var unifiedLongPnl = (unifiedPrice - pos.LongEntryPrice) * estimatedQty;
+                    var unifiedShortPnl = (pos.ShortEntryPrice - unifiedPrice) * estimatedQty;
+                    unifiedUnrealizedPnl = unifiedLongPnl + unifiedShortPnl;
+                }
+                else
+                {
+                    // Unified price unavailable (data feed gap) — fall back to per-exchange PnL
+                    _logger.LogWarning(
+                        "Unified price unavailable for {Asset} ({Long}/{Short}), falling back to per-exchange PnL",
+                        assetSymbol, longExchangeName, shortExchangeName);
+                    unifiedUnrealizedPnl = unrealizedPnl;
+                }
+
+                // Price divergence tracking
+                if (unifiedPrice > 0)
+                {
+                    var newDivergencePct = Math.Abs(currentLongMark - currentShortMark) / unifiedPrice * 100m;
+                    if (pos.CurrentDivergencePct is null ||
+                        Math.Abs(pos.CurrentDivergencePct.Value - newDivergencePct) >= 0.0001m)
+                    {
+                        pos.CurrentDivergencePct = newDivergencePct;
+                    }
+
+                    // Alert if divergence exceeds threshold
+                    var entryMid = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+                    var entrySpreadCostPct = entryMid > 0
+                        ? Math.Abs(pos.ShortEntryPrice - pos.LongEntryPrice) / entryMid * 100m
+                        : 0m;
+                    var divergenceThreshold = config.DivergenceAlertMultiplier * entrySpreadCostPct;
+
+                    if (pos.CurrentDivergencePct > divergenceThreshold && divergenceThreshold > 0)
+                    {
+                        var recentDivAlert = await _uow.Alerts.GetRecentAsync(
+                            pos.UserId, pos.Id, AlertType.SpreadWarning, TimeSpan.FromHours(1));
+                        if (recentDivAlert is null)
+                        {
+                            _uow.Alerts.Add(new Alert
+                            {
+                                UserId = pos.UserId,
+                                ArbitragePositionId = pos.Id,
+                                Type = AlertType.SpreadWarning,
+                                Severity = AlertSeverity.Warning,
+                                Message = $"Price divergence warning: {assetSymbol} " +
+                                          $"{longExchangeName}/{shortExchangeName} " +
+                                          $"divergence={pos.CurrentDivergencePct:F2}% (threshold={divergenceThreshold:F2}%)",
+                            });
+                        }
+                    }
+                }
+
+                // Track computed PnL for downstream DTO population
+                computedPnl[pos.Id] = new ComputedPositionPnl(
+                    ExchangePnl: unrealizedPnl,
+                    UnifiedPnl: unifiedUnrealizedPnl,
+                    DivergencePct: pos.CurrentDivergencePct ?? 0m);
+
                 // Calculate liquidation prices and distance
                 var minLiquidationDistance = ComputeLiquidationDistance(
                     pos, currentLongMark, currentShortMark);
@@ -153,16 +220,19 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
                 // Determine close reason (priority: stop-loss > liquidation > PnL target > max hold > spread collapsed)
-                var reason = DetermineCloseReason(pos, config, unrealizedPnl, hoursOpen, spread, minLiquidationDistance);
+                // Intentional: all close reasons including PnlTargetReached use unified PnL (strategy-level profit
+                // target, not per-exchange margin impact). This ensures consistent close logic against a single
+                // reference price, avoiding false triggers from cross-exchange price divergence.
+                var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance);
 
                 if (reason.HasValue)
                 {
                     _logger.LogWarning(
                         "Auto-closing position #{PositionId}: {Asset} " +
                         "reason={CloseReason}, spread={Spread}/hour, " +
-                        "hoursOpen={HoursOpen:F1}, unrealizedPnl={UnrealizedPnl:F2}",
+                        "hoursOpen={HoursOpen:F1}, unrealizedPnl={UnrealizedPnl:F2}, unifiedPnl={UnifiedPnl:F2}",
                         pos.Id, assetSymbol, reason.Value,
-                        spread, hoursOpen, unrealizedPnl);
+                        spread, hoursOpen, unrealizedPnl, unifiedUnrealizedPnl);
 
                     toClose.Add((pos, reason.Value));
                     continue; // skip alert check — position will be closed
@@ -238,7 +308,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);
 
-        return new HealthCheckResult(toClose, allReaped);
+        return new HealthCheckResult(toClose, allReaped, computedPnl);
     }
 
     private async Task RetryClosingPositionsAsync(IReadOnlyList<ArbitragePosition> positions, CancellationToken ct)
