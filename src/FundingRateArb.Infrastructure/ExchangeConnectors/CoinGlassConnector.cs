@@ -46,7 +46,7 @@ public class CoinGlassConnector : IExchangeConnector
     /// </summary>
     private static readonly HashSet<string> DirectConnectorExchanges = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Hyperliquid", "Lighter", "Aster"
+        "Hyperliquid", "Lighter", "Aster", "Binance"
     };
 
     /// <summary>Common symbol suffixes to strip during normalization.

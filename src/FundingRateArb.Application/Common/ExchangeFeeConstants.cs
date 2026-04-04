@@ -11,6 +11,7 @@ public static class ExchangeFeeConstants
         "Hyperliquid" => 0.00045m,
         "Lighter" => 0m,
         "Aster" => 0.0004m,
+        "Binance" => 0.0005m,
         _ => 0.0005m,
     };
 }

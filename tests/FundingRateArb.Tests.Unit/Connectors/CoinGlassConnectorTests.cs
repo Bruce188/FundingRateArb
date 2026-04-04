@@ -58,15 +58,15 @@ public class CoinGlassConnectorTests
                     "symbol": "BTCUSDT",
                     "volume24hUsd": 50000000,
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "indexPrice": 64990, "intervalHours": 8 },
-                        "Bybit": { "rate": 0.00008, "markPrice": 65010, "indexPrice": 64995, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "indexPrice": 64990, "intervalHours": 8 },
+                        "OKX": { "rate": 0.00008, "markPrice": 65010, "indexPrice": 64995, "intervalHours": 8 }
                     }
                 },
                 {
                     "symbol": "ETHUSDT",
                     "volume24hUsd": 25000000,
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.00005, "markPrice": 3500, "indexPrice": 3499, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.00005, "markPrice": 3500, "indexPrice": 3499, "intervalHours": 8 }
                     }
                 }
             ]
@@ -105,7 +105,8 @@ public class CoinGlassConnectorTests
                         "Hyperliquid": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 1 },
                         "Lighter": { "rate": 0.00008, "markPrice": 65000, "intervalHours": 1 },
                         "Aster": { "rate": 0.00007, "markPrice": 65000, "intervalHours": 8 },
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                        "Binance": { "rate": 0.00006, "markPrice": 65000, "intervalHours": 8 },
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                     }
                 }
             ]
@@ -120,7 +121,7 @@ public class CoinGlassConnectorTests
         var sut = CreateConnector(response);
         var rates = await sut.GetFundingRatesAsync();
 
-        // Only Binance should come through; Hyperliquid, Lighter, Aster are filtered
+        // Only Bybit should come through; Hyperliquid, Lighter, Aster, Binance are filtered
         rates.Should().HaveCount(1);
         rates[0].ExchangeName.Should().Be("CoinGlass");
     }
@@ -245,7 +246,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0008, "markPrice": 65000, "intervalHours": 0 }
+                        "Bybit": { "rate": 0.0008, "markPrice": 65000, "intervalHours": 0 }
                     }
                 }
             ]
@@ -315,7 +316,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "{{inputSymbol}}",
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                     }
                 }
             ]
@@ -424,7 +425,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                     }
                 }
             ]
@@ -487,7 +488,7 @@ public class CoinGlassConnectorTests
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
                         "OKX": null,
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                     }
                 }
             ]
@@ -502,7 +503,7 @@ public class CoinGlassConnectorTests
         var sut = CreateConnector(response);
         var rates = await sut.GetFundingRatesAsync();
 
-        // Only Binance should produce a rate; OKX with null value is silently skipped
+        // Only Bybit should produce a rate; OKX with null value is silently skipped
         rates.Should().HaveCount(1);
         rates[0].RawRate.Should().Be(0.0001m);
     }
@@ -519,7 +520,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0008, "markPrice": 65000, "intervalHours": -1 }
+                        "Bybit": { "rate": 0.0008, "markPrice": 65000, "intervalHours": -1 }
                     }
                 }
             ]
@@ -550,7 +551,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                     }
                 }
             ]
@@ -638,7 +639,7 @@ public class CoinGlassConnectorTests
                             {
                                 "symbol": "BTCUSDT",
                                 "fundingRateByExchange": {
-                                    "Binance": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
+                                    "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 8 }
                                 }
                             }
                         ]

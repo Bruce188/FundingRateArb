@@ -113,6 +113,19 @@ public static class DbSeeder
             },
             new Exchange
             {
+                Name = "Binance",
+                ApiBaseUrl = "https://fapi.binance.com",
+                WsBaseUrl = "wss://fstream.binance.com",
+                FundingInterval = FundingInterval.EightHourly,
+                FundingIntervalHours = 8,
+                FundingSettlementType = FundingSettlementType.Periodic,
+                TakerFeeRate = 0.0005m,
+                SupportsSubAccounts = false,
+                IsActive = true,
+                Description = "Binance Futures — HMAC-SHA256, USDT collateral, 8-hour funding"
+            },
+            new Exchange
+            {
                 Name = "CoinGlass",
                 ApiBaseUrl = "https://open-api-v3.coinglass.com",
                 WsBaseUrl = "",
