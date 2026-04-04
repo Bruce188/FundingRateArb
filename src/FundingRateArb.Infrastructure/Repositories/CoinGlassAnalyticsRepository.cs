@@ -19,7 +19,10 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
 
     public async Task SaveSnapshotAsync(List<CoinGlassExchangeRate> rates, CancellationToken ct = default)
     {
-        if (rates.Count == 0) return;
+        if (rates.Count == 0)
+        {
+            return;
+        }
 
         // Truncate to hour for dedup
         var snapshotHour = new DateTime(
@@ -45,7 +48,9 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
         {
             // Normalize SnapshotTime to hour boundary for unique index enforcement
             foreach (var rate in rates)
+            {
                 rate.SnapshotTime = snapshotHour;
+            }
 
             await _context.CoinGlassExchangeRates.AddRangeAsync(rates, ct);
             await _context.SaveChangesAsync(ct);
@@ -70,7 +75,9 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
             .MaxAsync(r => (DateTime?)r.SnapshotTime, ct);
 
         if (latestTime is null)
+        {
             return [];
+        }
 
         // Get all rates from that snapshot hour
         var hourStart = new DateTime(
@@ -105,7 +112,10 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
 
     public async Task SaveDiscoveryEventsAsync(List<CoinGlassDiscoveryEvent> events, CancellationToken ct = default)
     {
-        if (events.Count == 0) return;
+        if (events.Count == 0)
+        {
+            return;
+        }
 
         await _context.CoinGlassDiscoveryEvents.AddRangeAsync(events, ct);
         await _context.SaveChangesAsync(ct);

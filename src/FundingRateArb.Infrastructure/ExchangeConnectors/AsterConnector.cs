@@ -485,7 +485,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             total += entries.Sum(i => i.Income);
 
             if (entries.Count < pageSize)
+            {
                 break;
+            }
 
             // Advance cursor past the last entry to fetch the next page
             cursor = entries[^1].Timestamp.AddMilliseconds(1);

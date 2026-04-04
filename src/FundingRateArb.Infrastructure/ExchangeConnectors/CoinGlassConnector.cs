@@ -208,13 +208,17 @@ public class CoinGlassConnector : IExchangeConnector
                 foreach (var item in data.Data)
                 {
                     if (string.IsNullOrEmpty(item.Symbol) || item.FundingRateByExchange is null)
+                    {
                         continue;
+                    }
 
                     var symbol = NormalizeSymbol(item.Symbol);
                     foreach (var (exchangeName, exchRate) in item.FundingRateByExchange)
                     {
                         if (exchRate?.Rate is null)
+                        {
                             continue;
+                        }
 
                         var intervalHours = exchRate.IntervalHours > 0 ? exchRate.IntervalHours : 8;
                         analyticsRates.Add(new Domain.Entities.CoinGlassExchangeRate
@@ -281,7 +285,9 @@ public class CoinGlassConnector : IExchangeConnector
 
                     await _analyticsRepo.SaveSnapshotAsync(analyticsRates, ct);
                     if (discoveryEvents.Count > 0)
+                    {
                         await _analyticsRepo.SaveDiscoveryEventsAsync(discoveryEvents, ct);
+                    }
                 }
             }
             catch (Exception ex)
