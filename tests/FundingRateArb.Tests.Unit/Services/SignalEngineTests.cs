@@ -2105,4 +2105,71 @@ public class SignalEngineTests
         allOpps.Should().NotBeEmpty();
         allOpps[0].TrendUnconfirmed.Should().BeTrue("insufficient history snapshots");
     }
+
+    // ── Review-v6: Trend analysis lookback scales by exchange funding interval ──
+
+    [Fact]
+    public async Task TrendAnalysis_LongIntervalExchange_ScalesLookback()
+    {
+        // Arrange: Aster has FundingIntervalHours=8. With MinConsecutiveFavorableCycles=3,
+        // the lookback should span at least 24 hours (8 * 3), not just 1 hour.
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingIntervalHours = 1 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingIntervalHours = 8 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            MinConsecutiveFavorableCycles = 3,
+            BreakevenHoursMax = 100, // don't filter by break-even
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Track the 'from' parameter passed to GetHistoryAsync
+        DateTime? capturedFrom = null;
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+                It.IsAny<int>(), It.IsAny<int>(),
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(),
+                It.IsAny<int>(), It.IsAny<int>()))
+            .Callback<int, int, DateTime, DateTime, int, int>((_, _, from, _, _, _) =>
+            {
+                capturedFrom ??= from;
+            })
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.001m },
+            });
+
+        // Act
+        await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: lookback should span at least 24 hours (8h interval * 3 cycles)
+        capturedFrom.Should().NotBeNull("GetHistoryAsync should have been called");
+        var lookbackHours = (DateTime.UtcNow - capturedFrom!.Value).TotalHours;
+        lookbackHours.Should().BeGreaterOrEqualTo(24.0,
+            "max exchange interval (8h) * MinConsecutiveFavorableCycles (3) = 24h minimum lookback");
+    }
 }

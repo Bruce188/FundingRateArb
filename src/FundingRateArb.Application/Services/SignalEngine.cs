@@ -70,7 +70,14 @@ public class SignalEngine : ISignalEngine
         // Lazy-load funding rate history for trend analysis (sequential — DbContext is not thread-safe).
         // Only queried for pairs that pass volume + break-even filters, avoiding unnecessary DB calls.
         var historyLookup = new Dictionary<(int AssetId, int ExchangeId), List<FundingRateSnapshot>>();
-        var historyFrom = DateTime.UtcNow.AddHours(-1);
+        // Scale lookback by max funding interval across all active exchanges.
+        // Exchanges with 8h intervals (e.g. Aster) need 24h+ for MinConsecutiveFavorableCycles=3.
+        var maxIntervalHours = rates
+            .Where(r => r.Exchange is not null)
+            .Select(r => r.Exchange!.FundingIntervalHours)
+            .DefaultIfEmpty(1)
+            .Max();
+        var historyFrom = DateTime.UtcNow.AddHours(-maxIntervalHours * config.MinConsecutiveFavorableCycles);
         var historyTo = DateTime.UtcNow;
 
         var opportunities = new List<ArbitrageOpportunityDto>();

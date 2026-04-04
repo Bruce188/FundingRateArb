@@ -66,7 +66,7 @@ public class PositionHealthMonitorTests
 
         _sut = new PositionHealthMonitor(_mockUow.Object,
             _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
-            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(),
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), new HealthMonitorState(),
             NullLogger<PositionHealthMonitor>.Instance);
     }
 
@@ -3009,5 +3009,84 @@ public class PositionHealthMonitorTests
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
             al.Message.Contains("Collateral imbalance"))), Times.Never,
             "zero margin should not trigger collateral imbalance alert or divide-by-zero");
+    }
+
+    // ── Review-v6: FundingFlipped state persists across cycles (singleton) ─────
+
+    [Fact]
+    public async Task FundingFlipped_StatePersistedAcrossCycles()
+    {
+        // Arrange: shared singleton state survives between CheckAndActAsync calls.
+        // Use a spread that is slightly negative (triggers FundingFlipped counter)
+        // but NOT below CloseThreshold or EmergencyCloseSpreadThreshold (so SpreadCollapsed
+        // doesn't pre-empt FundingFlipped). Position is freshly opened to avoid MinHoldTimeHours.
+        var sharedState = new HealthMonitorState();
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m, // spread -0.0001 is above this
+            EmergencyCloseSpreadThreshold = -0.01m,
+            AlertThreshold = -0.01m, // suppress spread alerts
+            StopLossPct = 0.50m, // generous stop-loss — won't trigger
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 24, // position opened 30min ago → won't trigger SpreadCollapsed
+            FundingFlipExitCycles = 2,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition(openedAt: DateTime.UtcNow.AddMinutes(-30));
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        // Mildly negative spread: -0.0001 (above CloseThreshold of -0.001)
+        SetupLatestRates(longRate: 0.0002m, shortRate: 0.0001m); // spread = -0.0001
+        SetupMarkPrices();
+
+        // Create two separate PositionHealthMonitor instances (simulating scoped resolution),
+        // both sharing the same singleton state.
+        var sut1 = new PositionHealthMonitor(_mockUow.Object,
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), sharedState,
+            NullLogger<PositionHealthMonitor>.Instance);
+        var sut2 = new PositionHealthMonitor(_mockUow.Object,
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), sharedState,
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        // Act — Cycle 1: first negative spread (count = 1, threshold = 2 → no close yet)
+        var result1 = await sut1.CheckAndActAsync();
+        result1.ToClose.Should().BeEmpty("first negative cycle should not trigger FundingFlipped");
+
+        // Act — Cycle 2: second negative spread (count = 2, threshold = 2 → should close)
+        var result2 = await sut2.CheckAndActAsync();
+        result2.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.FundingFlipped,
+            "FundingFlipped should fire after 2 consecutive negative cycles via singleton state");
+    }
+
+    // ── Review-v6: Collateral imbalance uses unified PnL ───────────────────────
+
+    [Fact]
+    public async Task CollateralImbalance_UsesUnifiedPnl()
+    {
+        // Arrange: per-exchange prices diverge significantly but unified price is balanced.
+        // Without the fix, per-exchange PnL would trigger a spurious imbalance alert.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m, marginUsdc: 200m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+
+        // Divergent per-exchange prices: long mark dropped, short mark rose
+        SetupMarkPrices(longMark: 2800m, shortMark: 3200m);
+        // But unified price (e.g. index) shows balanced at 3000
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        // With unified price = 3000, entry = 3000:
+        // unifiedLongPnl = (3000 - 3000) * qty = 0
+        // unifiedShortPnl = (3000 - 3000) * qty = 0
+        // imbalance = |0 - 0| = 0 → no alert
+
+        await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Message.Contains("Collateral imbalance"))), Times.Never,
+            "unified price shows balanced PnL — no spurious imbalance alert");
     }
 }

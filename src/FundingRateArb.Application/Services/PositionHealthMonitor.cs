@@ -12,18 +12,17 @@ namespace FundingRateArb.Application.Services;
 
 public class PositionHealthMonitor : IPositionHealthMonitor
 {
+    private const string BinanceExchangeName = "Binance";
+
     private readonly IUnitOfWork _uow;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IMarketDataCache _marketDataCache;
     private readonly IReferencePriceProvider _referencePriceProvider;
     private readonly IExecutionEngine _executionEngine;
     private readonly ILeverageTierProvider _tierProvider;
+    private readonly IHealthMonitorState _state;
     private readonly ILogger<PositionHealthMonitor> _logger;
-    private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
-    private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
     private readonly ConcurrentDictionary<int, DateTime> _recentMarginAlerts = new();
-    private readonly ConcurrentDictionary<int, int> _negativeFundingCycles = new();
-    private int _stablecoinCheckCycle = -1;
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -32,6 +31,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         IReferencePriceProvider referencePriceProvider,
         IExecutionEngine executionEngine,
         ILeverageTierProvider tierProvider,
+        IHealthMonitorState state,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
@@ -40,6 +40,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         _referencePriceProvider = referencePriceProvider;
         _executionEngine = executionEngine;
         _tierProvider = tierProvider;
+        _state = state;
         _logger = logger;
     }
 
@@ -63,9 +64,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         if (openPositions.Count == 0)
         {
             // Clean up all tracking dictionaries when no positions are open
-            _negativeFundingCycles.Clear();
-            _priceFetchFailures.Clear();
-            _zeroPriceCheckCounts.Clear();
+            _state.NegativeFundingCycles.Clear();
+            _state.PriceFetchFailures.Clear();
+            _state.ZeroPriceCheckCounts.Clear();
 
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
@@ -77,7 +78,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Stablecoin depeg check — before position loop (every 5th cycle; USDCUSDT is slow-moving)
         var stablecoinCritical = false;
-        if (unchecked((uint)Interlocked.Increment(ref _stablecoinCheckCycle)) % 5 == 0)
+        if (_state.ShouldCheckStablecoin(5))
         {
             stablecoinCritical = await CheckStablecoinDepegAsync(config, ct);
         }
@@ -135,11 +136,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             // Track consecutive negative funding cycles for FundingFlipped close
             if (spread < 0)
             {
-                _negativeFundingCycles.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
+                _state.NegativeFundingCycles.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
             }
             else
             {
-                _negativeFundingCycles.TryRemove(pos.Id, out _);
+                _state.NegativeFundingCycles.TryRemove(pos.Id, out _);
             }
 
             // Stablecoin depeg: close cross-stablecoin positions when critical
@@ -147,7 +148,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             {
                 var longExName = pos.LongExchange?.Name ?? exchangeNameById.GetValueOrDefault(pos.LongExchangeId);
                 var shortExName = pos.ShortExchange?.Name ?? exchangeNameById.GetValueOrDefault(pos.ShortExchangeId);
-                var isCrossStablecoin = (longExName == "Binance") != (shortExName == "Binance");
+                var isCrossStablecoin = (longExName == BinanceExchangeName) != (shortExName == BinanceExchangeName);
                 if (isCrossStablecoin)
                 {
                     _logger.LogWarning("Closing cross-stablecoin position #{Id}: stablecoin depeg critical", pos.Id);
@@ -158,7 +159,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
             {
-                var checkCount = _zeroPriceCheckCounts.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
+                var checkCount = _state.ZeroPriceCheckCounts.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
                 if (_logger.IsEnabled(LogLevel.Critical))
                 {
                     _logger.LogCritical(
@@ -176,12 +177,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     }
                     toClose.Add((pos, CloseReason.StopLoss));
                     // NB6: Reset to 0 instead of removing — if close fails, next cycle restarts at 1
-                    _zeroPriceCheckCounts[pos.Id] = 0;
+                    _state.ZeroPriceCheckCounts[pos.Id] = 0;
                 }
                 continue;
             }
             // Clean up tracking for positions that now have valid prices
-            _zeroPriceCheckCounts.TryRemove(pos.Id, out _);
+            _state.ZeroPriceCheckCounts.TryRemove(pos.Id, out _);
 
             try
             {
@@ -209,19 +210,41 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
                 var unrealizedPnl = longPnl + shortPnl;
 
-                // Collateral imbalance monitoring
+                // Unified PnL: both legs valued against single reference price
+                var unifiedPrice = _referencePriceProvider.GetUnifiedPrice(assetSymbol, longExchangeName, shortExchangeName);
+                decimal unifiedUnrealizedPnl;
+                decimal unifiedLongPnl, unifiedShortPnl;
+                if (unifiedPrice > 0)
+                {
+                    unifiedLongPnl = (unifiedPrice - pos.LongEntryPrice) * estimatedQty;
+                    unifiedShortPnl = (pos.ShortEntryPrice - unifiedPrice) * estimatedQty;
+                    unifiedUnrealizedPnl = unifiedLongPnl + unifiedShortPnl;
+                }
+                else
+                {
+                    // Unified price unavailable (data feed gap) — fall back to per-exchange PnL
+                    _logger.LogWarning(
+                        "Unified price unavailable for {Asset} ({Long}/{Short}), falling back to per-exchange PnL",
+                        assetSymbol, longExchangeName, shortExchangeName);
+                    unifiedUnrealizedPnl = unrealizedPnl;
+                    unifiedLongPnl = longPnl;
+                    unifiedShortPnl = shortPnl;
+                }
+
+                // Collateral imbalance monitoring — uses unified PnL to avoid
+                // spurious alerts from cross-exchange price divergence
                 var marginPerLeg = pos.MarginUsdc / 2m;
                 decimal? collateralImbalancePct = null;
                 if (marginPerLeg > 0)
                 {
-                    var longUtil = Math.Abs(longPnl) / marginPerLeg;
-                    var shortUtil = Math.Abs(shortPnl) / marginPerLeg;
+                    var longUtil = Math.Abs(unifiedLongPnl) / marginPerLeg;
+                    var shortUtil = Math.Abs(unifiedShortPnl) / marginPerLeg;
                     collateralImbalancePct = Math.Abs(longUtil - shortUtil);
 
                     if (collateralImbalancePct > 0.30m)
                     {
-                        var winningExchange = longPnl > shortPnl ? longExchangeName : shortExchangeName;
-                        var losingExchange = longPnl > shortPnl ? shortExchangeName : longExchangeName;
+                        var winningExchange = unifiedLongPnl > unifiedShortPnl ? longExchangeName : shortExchangeName;
+                        var losingExchange = unifiedLongPnl > unifiedShortPnl ? shortExchangeName : longExchangeName;
 
                         var hasRecentImbalanceAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
                         if (!hasRecentImbalanceAlert)
@@ -237,24 +260,6 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                             });
                         }
                     }
-                }
-
-                // Unified PnL: both legs valued against single reference price
-                var unifiedPrice = _referencePriceProvider.GetUnifiedPrice(assetSymbol, longExchangeName, shortExchangeName);
-                decimal unifiedUnrealizedPnl;
-                if (unifiedPrice > 0)
-                {
-                    var unifiedLongPnl = (unifiedPrice - pos.LongEntryPrice) * estimatedQty;
-                    var unifiedShortPnl = (pos.ShortEntryPrice - unifiedPrice) * estimatedQty;
-                    unifiedUnrealizedPnl = unifiedLongPnl + unifiedShortPnl;
-                }
-                else
-                {
-                    // Unified price unavailable (data feed gap) — fall back to per-exchange PnL
-                    _logger.LogWarning(
-                        "Unified price unavailable for {Asset} ({Long}/{Short}), falling back to per-exchange PnL",
-                        assetSymbol, longExchangeName, shortExchangeName);
-                    unifiedUnrealizedPnl = unrealizedPnl;
                 }
 
                 // Price divergence tracking
@@ -310,7 +315,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // Intentional: all close reasons including PnlTargetReached use unified PnL (strategy-level profit
                 // target, not per-exchange margin impact). This ensures consistent close logic against a single
                 // reference price, avoiding false triggers from cross-exchange price divergence.
-                _negativeFundingCycles.TryGetValue(pos.Id, out var flipCount);
+                _state.NegativeFundingCycles.TryGetValue(pos.Id, out var flipCount);
                 var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance, flipCount);
 
                 if (reason.HasValue)
@@ -369,11 +374,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     }
                 }
 
-                _priceFetchFailures.TryRemove(pos.Id, out _);
+                _state.PriceFetchFailures.TryRemove(pos.Id, out _);
             }
             catch (Exception ex)
             {
-                var failures = _priceFetchFailures.AddOrUpdate(pos.Id, 1, (_, v) => v + 1);
+                var failures = _state.PriceFetchFailures.AddOrUpdate(pos.Id, 1, (_, v) => v + 1);
                 _logger.LogWarning(ex, "Failed to check health for position #{Id} ({Failures} consecutive): {Message}",
                     pos.Id, failures, ex.Message);
 
@@ -396,9 +401,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Clean up stale tracking entries for positions no longer open
         var openIds = new HashSet<int>(openPositions.Select(p => p.Id));
-        foreach (var key in _negativeFundingCycles.Keys)
+        foreach (var key in _state.NegativeFundingCycles.Keys)
             if (!openIds.Contains(key))
-                _negativeFundingCycles.TryRemove(key, out _);
+                _state.NegativeFundingCycles.TryRemove(key, out _);
 
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);
@@ -740,7 +745,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         try
         {
-            var binance = _connectorFactory.GetConnector("Binance");
+            var binance = _connectorFactory.GetConnector(BinanceExchangeName);
             var price = await binance.GetMarkPriceAsync("USDCUSDT", ct);
             if (price <= 0) return false;
 
