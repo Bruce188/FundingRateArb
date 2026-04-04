@@ -855,6 +855,14 @@ public class ExecutionEngine : IExecutionEngine
             var longClose = longCloseTask.Result;
             var shortClose = shortCloseTask.Result;
 
+            // Dry-run wrapper returns FilledQuantity=0 (can't know position qty).
+            // Override with actual stored quantities for correct PnL/fee/partial-fill calculations.
+            if (position.IsDryRun)
+            {
+                longClose.FilledQuantity = position.LongFilledQuantity ?? 0m;
+                shortClose.FilledQuantity = position.ShortFilledQuantity ?? 0m;
+            }
+
             // Track successful legs — persist even on partial failure for retry
             if (longClose.Success && needLongClose)
             {

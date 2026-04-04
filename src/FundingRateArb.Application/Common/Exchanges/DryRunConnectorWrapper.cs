@@ -116,7 +116,7 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
         return new OrderResultDto
         {
             Success = true,
-            FilledQuantity = 1_000_000m,
+            FilledQuantity = 0m, // Wrapper can't know position quantity; ExecutionEngine overrides for PnL calc
             FilledPrice = fillPrice,
             OrderId = $"DRY-{Guid.NewGuid().ToString("N")[..8]}",
         };

@@ -210,16 +210,39 @@ public class DryRunConnectorWrapperTests
         result.FilledPrice.Should().Be(3000m * 0.999m);
     }
 
-    // ── B2: ClosePositionAsync must return non-zero FilledQuantity ────────
+    // ── ClosePositionAsync returns 0 FilledQuantity (engine overrides) ────
 
     [Fact]
-    public async Task ClosePositionAsync_ReturnsNonZeroFilledQuantity()
+    public async Task ClosePositionAsync_ReturnsZeroFilledQuantity_EngineOverrides()
     {
         var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
 
         var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
         result.Success.Should().BeTrue();
-        result.FilledQuantity.Should().BeGreaterThan(0);
+        result.FilledQuantity.Should().Be(0m); // ExecutionEngine overrides with actual position quantity
+    }
+
+    // ── NB1: Verification methods ────────────────────────────────────────
+
+    [Fact]
+    public async Task CapturePositionSnapshotAsync_ReturnsEmptyDictionary()
+    {
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await ((IPositionVerifiable)sut).CapturePositionSnapshotAsync();
+
+        result.Should().NotBeNull();
+        result!.Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CheckPositionExistsAsync_ReturnsTrue()
+    {
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await ((IPositionVerifiable)sut).CheckPositionExistsAsync("ETH", Side.Long);
+
+        result.Should().Be(true);
     }
 }
