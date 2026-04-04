@@ -38,14 +38,14 @@ public class OpportunityFilterTests
         };
 
     private static UserConfiguration MakeUserConfig(decimal threshold = 0.0001m) => new()
-        {
-            UserId = "test-user",
-            IsEnabled = true,
-            MaxConcurrentPositions = 5,
-            OpenThreshold = threshold,
-            DailyDrawdownPausePct = 0.05m,
-            ConsecutiveLossPause = 3,
-        };
+    {
+        UserId = "test-user",
+        IsEnabled = true,
+        MaxConcurrentPositions = 5,
+        OpenThreshold = threshold,
+        DailyDrawdownPausePct = 0.05m,
+        ConsecutiveLossPause = 3,
+    };
 
     // ── FilterUserOpportunities ──────────────────────────────────────────────
 
