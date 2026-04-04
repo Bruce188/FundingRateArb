@@ -227,6 +227,9 @@ try
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
     builder.Services.AddScoped<IPnlReconciliationService, PnlReconciliationService>();
+    builder.Services.AddScoped<IConnectorLifecycleManager, ConnectorLifecycleManager>();
+    builder.Services.AddScoped<IEmergencyCloseHandler, EmergencyCloseHandler>();
+    builder.Services.AddScoped<IPositionCloser, PositionCloser>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
     builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
