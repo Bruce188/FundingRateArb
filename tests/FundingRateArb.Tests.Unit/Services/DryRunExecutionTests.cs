@@ -91,8 +91,17 @@ public class DryRunExecutionTests
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
         new() { Success = true, OrderId = orderId, FilledPrice = price, FilledQuantity = qty };
 
-    private ExecutionEngine CreateEngine() =>
-        new(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, Mock.Of<IPnlReconciliationService>(), NullLogger<ExecutionEngine>.Instance);
+    private ExecutionEngine CreateEngine()
+    {
+        var connectorLifecycle = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+        var emergencyClose = new EmergencyCloseHandler(
+            _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
+        var positionCloser = new PositionCloser(
+            _mockUow.Object, connectorLifecycle, Mock.Of<IPnlReconciliationService>(), NullLogger<PositionCloser>.Instance);
+
+        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+    }
 
     // ── ExecutionEngine dry-run tests ─────────────────────────────────────
 

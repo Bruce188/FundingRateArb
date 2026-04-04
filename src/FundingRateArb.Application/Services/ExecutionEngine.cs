@@ -13,27 +13,28 @@ public class ExecutionEngine : IExecutionEngine
 {
     private const decimal MaxSingleOrderUsdc = 10_000m;
 
-    private readonly IUnitOfWork _uow;
-    private readonly IExchangeConnectorFactory _connectorFactory;
-    private readonly IUserSettingsService _userSettings;
-    private readonly IPnlReconciliationService _reconciliation;
-    private readonly ILogger<ExecutionEngine> _logger;
-
-    // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
-    private readonly ConcurrentDictionary<(string Exchange, string Asset), (int MaxLeverage, DateTime Fetched)> _leverageCache = new();
     private readonly ConcurrentDictionary<(string Exchange, string Asset, int MaxLeverage), byte> _leverageWarned = new();
+
+    private readonly IUnitOfWork _uow;
+    private readonly IConnectorLifecycleManager _connectorLifecycle;
+    private readonly IEmergencyCloseHandler _emergencyClose;
+    private readonly IPositionCloser _positionCloser;
+    private readonly IUserSettingsService _userSettings;
+    private readonly ILogger<ExecutionEngine> _logger;
 
     public ExecutionEngine(
         IUnitOfWork uow,
-        IExchangeConnectorFactory connectorFactory,
+        IConnectorLifecycleManager connectorLifecycle,
+        IEmergencyCloseHandler emergencyClose,
+        IPositionCloser positionCloser,
         IUserSettingsService userSettings,
-        IPnlReconciliationService reconciliation,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
-        _connectorFactory = connectorFactory;
+        _connectorLifecycle = connectorLifecycle;
+        _emergencyClose = emergencyClose;
+        _positionCloser = positionCloser;
         _userSettings = userSettings;
-        _reconciliation = reconciliation;
         _logger = logger;
     }
 
@@ -59,7 +60,7 @@ public class ExecutionEngine : IExecutionEngine
 
         // Create user-specific connectors using the user's exchange credentials
 #pragma warning disable CA1859 // Variable type may be reassigned to DryRunConnectorWrapper
-        var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
+        var (longConnector, shortConnector, credError) = await _connectorLifecycle.CreateUserConnectorsAsync(
             userId, opp.LongExchangeName, opp.ShortExchangeName);
 #pragma warning restore CA1859
         if (credError is not null)
@@ -71,8 +72,7 @@ public class ExecutionEngine : IExecutionEngine
         var isDryRun = config.DryRunEnabled || userConfig!.DryRunEnabled;
         if (isDryRun)
         {
-            longConnector = new DryRunConnectorWrapper(longConnector, _logger);
-            shortConnector = new DryRunConnectorWrapper(shortConnector, _logger);
+            (longConnector, shortConnector) = _connectorLifecycle.WrapForDryRun(longConnector, shortConnector);
             _logger.LogInformation("[DRY-RUN] Opening position for {Asset} — simulated fills", opp.AssetSymbol);
         }
 
@@ -94,8 +94,8 @@ public class ExecutionEngine : IExecutionEngine
             }
             try
             {
-                var longMaxTask = GetCachedMaxLeverageAsync(longConnector, opp.AssetSymbol, ct);
-                var shortMaxTask = GetCachedMaxLeverageAsync(shortConnector, opp.AssetSymbol, ct);
+                var longMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(longConnector, opp.AssetSymbol, ct);
+                var shortMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(shortConnector, opp.AssetSymbol, ct);
                 await Task.WhenAll(longMaxTask, shortMaxTask);
 
                 var longMax = longMaxTask.Result;
@@ -366,12 +366,12 @@ public class ExecutionEngine : IExecutionEngine
                             _logger.LogWarning(
                                 "Could not determine position state on {Exchange} for {Asset} — falling back to emergency close",
                                 firstExchangeName, opp.AssetSymbol);
-                            var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                            var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                             position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                             position.ClosedAt = DateTime.UtcNow;
                             if (!neverExisted)
                             {
-                                SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                                EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                             }
                             _uow.Positions.Update(position);
                             _uow.Alerts.Add(new Alert
@@ -405,12 +405,12 @@ public class ExecutionEngine : IExecutionEngine
                 {
                     _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
                         opp.AssetSymbol, secondExchangeName);
-                    var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -430,12 +430,12 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
                         opp.AssetSymbol, secondExchangeName, secondResult.Error);
-                    var neverExisted = await TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
+                    var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -480,19 +480,19 @@ public class ExecutionEngine : IExecutionEngine
                     var allNeverExisted = true;
                     if (!longTask.IsFaulted && longTask.IsCompletedSuccessfully && longTask.Result.Success)
                     {
-                        var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        var neverExistedLong = await _emergencyClose.TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
-                            SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
+                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
                             allNeverExisted = false;
                         }
                     }
                     if (!shortTask.IsFaulted && shortTask.IsCompletedSuccessfully && shortTask.Result.Success)
                     {
-                        var neverExistedShort = await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        var neverExistedShort = await _emergencyClose.TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                         if (!neverExistedShort)
                         {
-                            SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
+                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
                             allNeverExisted = false;
                         }
                     }
@@ -522,19 +522,19 @@ public class ExecutionEngine : IExecutionEngine
                     var concurrentNeverExisted = true;
                     if (longResult.Success && !shortResult.Success)
                     {
-                        var neverExistedLong = await TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                        var neverExistedLong = await _emergencyClose.TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
-                            SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
                     else if (!longResult.Success && shortResult.Success)
                     {
-                        var neverExistedShort = await TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                        var neverExistedShort = await _emergencyClose.TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                         if (!neverExistedShort)
                         {
-                            SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
@@ -674,682 +674,14 @@ public class ExecutionEngine : IExecutionEngine
         } // end try
         finally
         {
-            await DisposeConnectorAsync(longConnector);
-            await DisposeConnectorAsync(shortConnector);
+            await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
+            await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
         }
     }
 
     public async Task ClosePositionAsync(string userId, ArbitragePosition position, CloseReason reason, CancellationToken ct = default)
     {
-        // Resolve exchange names (use nav property if loaded, else query DB)
-        var longExchangeName = position.LongExchange?.Name
-            ?? (await _uow.Exchanges.GetByIdAsync(position.LongExchangeId))!.Name;
-        var shortExchangeName = position.ShortExchange?.Name
-            ?? (await _uow.Exchanges.GetByIdAsync(position.ShortExchangeId))!.Name;
-        var assetSymbol = position.Asset?.Symbol
-            ?? (await _uow.Assets.GetByIdAsync(position.AssetId))!.Symbol;
-
-        // Create user-specific connectors using the user's exchange credentials
-#pragma warning disable CA1859 // Variable type may be reassigned to DryRunConnectorWrapper
-        var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
-            userId, longExchangeName, shortExchangeName);
-#pragma warning restore CA1859
-        if (credError is not null)
-        {
-            _logger.LogError("Cannot close position #{PositionId} for user {UserId}: {Error}", position.Id, userId, credError);
-            _uow.Alerts.Add(new Alert
-            {
-                UserId = userId,
-                ArbitragePositionId = position.Id,
-                Type = AlertType.LegFailed,
-                Severity = AlertSeverity.Critical,
-                Message = $"Cannot close position for {assetSymbol}: {TruncateError(credError)}. Manual intervention required.",
-            });
-            await _uow.SaveAsync(ct);
-            return;
-        }
-
-        // Wrap connectors for dry-run positions (simulated close fills)
-        if (position.IsDryRun)
-        {
-            longConnector = new DryRunConnectorWrapper(longConnector, _logger);
-            shortConnector = new DryRunConnectorWrapper(shortConnector, _logger);
-            _logger.LogInformation("[DRY-RUN] Closing position #{PositionId}", position.Id);
-        }
-
-        try
-        {
-
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation(
-                    "Closing position #{PositionId}: {Asset} reason={Reason}",
-                    position.Id, assetSymbol, reason);
-            }
-
-            // Only update Closing status on first close attempt (not on retry).
-            // Preserve EmergencyClosed status — it indicates exchange drift and should not be overwritten.
-            if (position.Status != PositionStatus.Closing && position.Status != PositionStatus.EmergencyClosed)
-            {
-                position.Status = PositionStatus.Closing;
-                position.ClosingStartedAt = DateTime.UtcNow;
-            }
-            _uow.Positions.Update(position);
-            await _uow.SaveAsync(ct);
-
-            // Skip already-closed legs on retry
-            var needLongClose = !position.LongLegClosed;
-            var needShortClose = !position.ShortLegClosed;
-
-            // Both legs already closed — just finalize
-            if (!needLongClose && !needShortClose)
-            {
-                _logger.LogInformation("Position #{PositionId} both legs already closed — finalizing", position.Id);
-                await FinalizeClosedPositionAsync(position, reason, longExchangeName, shortExchangeName, assetSymbol, ct);
-                return;
-            }
-
-            // Dispatch only the legs that need closing
-            Task<OrderResultDto> longCloseTask;
-            Task<OrderResultDto> shortCloseTask;
-
-            if (needLongClose && needShortClose)
-            {
-                longCloseTask = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
-                shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
-            }
-            else if (needLongClose)
-            {
-                longCloseTask = longConnector.ClosePositionAsync(assetSymbol, Side.Long, ct);
-                shortCloseTask = Task.FromResult(new OrderResultDto { Success = true, FilledPrice = 0, FilledQuantity = 0 });
-            }
-            else
-            {
-                longCloseTask = Task.FromResult(new OrderResultDto { Success = true, FilledPrice = 0, FilledQuantity = 0 });
-                shortCloseTask = shortConnector.ClosePositionAsync(assetSymbol, Side.Short, ct);
-            }
-
-            try
-            {
-                await Task.WhenAll(longCloseTask, shortCloseTask);
-            }
-            catch
-            {
-                // Inspect each leg independently to determine which failed
-                var longFailed = longCloseTask.IsFaulted;
-                var shortFailed = shortCloseTask.IsFaulted;
-
-                if (longFailed && shortFailed)
-                {
-                    var longEx = longCloseTask.Exception?.GetBaseException();
-                    var shortEx = shortCloseTask.Exception?.GetBaseException();
-
-                    if (_logger.IsEnabled(LogLevel.Critical))
-                    {
-                        _logger.LogCritical(longEx,
-                            "CLOSE FAILED — long leg threw for position #{PositionId} {Asset}: {Message}",
-                            position.Id, assetSymbol, longEx?.Message);
-                        _logger.LogCritical(shortEx,
-                            "CLOSE FAILED — short leg threw for position #{PositionId} {Asset}: {Message}",
-                            position.Id, assetSymbol, shortEx?.Message);
-                    }
-
-                    position.Status = PositionStatus.EmergencyClosed;
-                    position.ClosedAt = DateTime.UtcNow;
-                    _uow.Positions.Update(position);
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = position.UserId,
-                        ArbitragePositionId = position.Id,
-                        Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"Close failed on BOTH legs for {assetSymbol}. " +
-                                             $"Long error: {TruncateError(longEx?.Message, 900)}. Short error: {TruncateError(shortEx?.Message, 900)}. " +
-                                             "Manual intervention required.",
-                    });
-                    await _uow.SaveAsync(ct);
-                    return;
-                }
-
-                // Exactly one leg failed — mark the successful leg as closed, leave in Closing for retry
-                if (!longFailed && needLongClose)
-                {
-                    var longResult = longCloseTask.IsCompletedSuccessfully ? longCloseTask.Result : null;
-                    if (longResult?.Success == true)
-                    {
-                        position.LongLegClosed = true;
-                    }
-                }
-                if (!shortFailed && needShortClose)
-                {
-                    var shortResult = shortCloseTask.IsCompletedSuccessfully ? shortCloseTask.Result : null;
-                    if (shortResult?.Success == true)
-                    {
-                        position.ShortLegClosed = true;
-                    }
-                }
-
-                var failedLegName = longFailed ? "long" : "short";
-                var failedEx = longFailed
-                    ? longCloseTask.Exception?.GetBaseException()
-                    : shortCloseTask.Exception?.GetBaseException();
-
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical(failedEx,
-                        "CLOSE PARTIALLY FAILED — {FailedLeg} leg threw for position #{PositionId} {Asset}: {Message}",
-                        failedLegName, position.Id, assetSymbol, failedEx?.Message);
-                }
-
-                _uow.Positions.Update(position);
-                _uow.Alerts.Add(new Alert
-                {
-                    UserId = position.UserId,
-                    ArbitragePositionId = position.Id,
-                    Type = AlertType.LegFailed,
-                    Severity = AlertSeverity.Critical,
-                    Message = $"Close partially failed: {failedLegName} leg failed for {assetSymbol}. " +
-                                          $"Error: {TruncateError(failedEx?.Message)}. Manual intervention required.",
-                });
-                await _uow.SaveAsync(ct);
-                return;
-            }
-
-            var longClose = longCloseTask.Result;
-            var shortClose = shortCloseTask.Result;
-
-            // Dry-run wrapper returns FilledQuantity=0 (can't know position qty).
-            // Override with actual stored quantities for correct PnL/fee/partial-fill calculations.
-            if (position.IsDryRun)
-            {
-                longClose.FilledQuantity = position.LongFilledQuantity ?? 0m;
-                shortClose.FilledQuantity = position.ShortFilledQuantity ?? 0m;
-            }
-
-            // Track successful legs — persist even on partial failure for retry
-            if (longClose.Success && needLongClose)
-            {
-                position.LongLegClosed = true;
-            }
-            if (shortClose.Success && needShortClose)
-            {
-                position.ShortLegClosed = true;
-            }
-
-            if (!longClose.Success || !shortClose.Success)
-            {
-                var longCloseError = longClose.Success ? null : longClose.Error;
-                var shortCloseError = shortClose.Success ? null : shortClose.Error;
-
-                _logger.LogError(
-                    "CLOSE FAILURE — position #{PositionId}: {Asset} Long={LongStatus} Short={ShortStatus}",
-                    position.Id, assetSymbol,
-                    longClose.Success ? "OK" : $"FAILED: {longCloseError}",
-                    shortClose.Success ? "OK" : $"FAILED: {shortCloseError}");
-
-                if (!longClose.Success && !shortClose.Success)
-                {
-                    position.Status = PositionStatus.EmergencyClosed;
-                    position.ClosedAt = DateTime.UtcNow;
-                    _uow.Positions.Update(position);
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = position.UserId,
-                        ArbitragePositionId = position.Id,
-                        Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"CLOSE FAILED both legs: {assetSymbol} " +
-                                             $"Long={TruncateError(longCloseError, 900)} Short={TruncateError(shortCloseError, 900)}. " +
-                                             "Manual intervention required.",
-                    });
-                }
-                else
-                {
-                    // One leg succeeded, one failed — save leg flags and leave in Closing for retry
-                    _uow.Positions.Update(position);
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = position.UserId,
-                        ArbitragePositionId = position.Id,
-                        Type = AlertType.LegFailed,
-                        Severity = AlertSeverity.Critical,
-                        Message = $"PARTIAL CLOSE FAILURE: {assetSymbol} " +
-                                             (longClose.Success
-                                                 ? $"Long=closed @ {longClose.FilledPrice:F4} "
-                                                 : $"Long=FAILED: {TruncateError(longCloseError, 900)} ") +
-                                             (shortClose.Success
-                                                 ? $"Short=closed @ {shortClose.FilledPrice:F4}. "
-                                                 : $"Short=FAILED: {TruncateError(shortCloseError, 900)}. ") +
-                                             "Will retry failed leg next cycle.",
-                    });
-                }
-
-                await _uow.SaveAsync(ct);
-                return;
-            }
-
-            // Both legs succeeded this round — compute PnL
-            // For legs that were already closed in a prior round (needLongClose=false or needShortClose=false),
-            // use zero for that leg's PnL contribution since it was already accounted for.
-            var longPnl = needLongClose
-                ? (longClose.FilledPrice - position.LongEntryPrice) * longClose.FilledQuantity
-                : 0m;
-            var shortPnl = needShortClose
-                ? (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity
-                : 0m;
-
-            // Record exit fees
-            var longCloseNotional = longClose.FilledPrice * longClose.FilledQuantity;
-            var shortCloseNotional = shortClose.FilledPrice * shortClose.FilledQuantity;
-            var longExName = position.LongExchange?.Name
-                ?? (await _uow.Exchanges.GetByIdAsync(position.LongExchangeId))!.Name;
-            var shortExName = position.ShortExchange?.Name
-                ?? (await _uow.Exchanges.GetByIdAsync(position.ShortExchangeId))!.Name;
-            position.ExitFeesUsdc = (longCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(longExName))
-                                  + (shortCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(shortExName));
-
-            // RealizedPnl = price PnL + funding collected - all fees
-            var pricePnl = longPnl + shortPnl;
-            var pnl = pricePnl + position.AccumulatedFunding
-                     - position.EntryFeesUsdc - position.ExitFeesUsdc;
-
-            // Check for partial fills (only for legs that were actually dispatched this round)
-            var avgEntryPrice = (position.LongEntryPrice + position.ShortEntryPrice) / 2m;
-            if (avgEntryPrice > 0 && needLongClose && needShortClose)
-            {
-                var expectedQty = position.SizeUsdc * position.Leverage / avgEntryPrice;
-                var longFillRatio = expectedQty > 0 ? longClose.FilledQuantity / expectedQty : 1m;
-                var shortFillRatio = expectedQty > 0 ? shortClose.FilledQuantity / expectedQty : 1m;
-
-                if (longFillRatio < 0.95m || shortFillRatio < 0.95m)
-                {
-                    position.Status = PositionStatus.Closing;
-                    position.Notes = $"Partial close: long={longFillRatio:P0}, short={shortFillRatio:P0}. Retry next cycle.";
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = position.UserId,
-                        ArbitragePositionId = position.Id,
-                        Type = AlertType.SpreadWarning,
-                        Severity = AlertSeverity.Warning,
-                        Message = $"Partial close on {position.Asset?.Symbol ?? "unknown"}: long filled {longFillRatio:P0}, short filled {shortFillRatio:P0}. Position remains in Closing status.",
-                    });
-                    await _uow.SaveAsync(ct);
-                    return;
-                }
-            }
-
-            position.RealizedPnl = pnl;
-            position.ClosedAt = DateTime.UtcNow;
-
-            // Post-close PnL reconciliation (informational — never blocks close)
-            try
-            {
-                await _reconciliation.ReconcileAsync(position, assetSymbol, longConnector, shortConnector, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "PnL reconciliation failed for position #{PositionId} — continuing", position.Id);
-            }
-
-            position.Status = PositionStatus.Closed;
-            position.CloseReason = reason;
-            _uow.Positions.Update(position);
-
-            _uow.Alerts.Add(new Alert
-            {
-                UserId = position.UserId,
-                ArbitragePositionId = position.Id,
-                Type = AlertType.PositionClosed,
-                Severity = AlertSeverity.Info,
-                Message = $"Position closed: {assetSymbol} reason={reason} PnL={pnl:F4} USDC",
-            });
-
-            await _uow.SaveAsync(ct);
-
-        } // end try
-        finally
-        {
-            await DisposeConnectorAsync(longConnector);
-            await DisposeConnectorAsync(shortConnector);
-        }
-    }
-
-    /// <summary>
-    /// Creates user-specific exchange connectors for the long and short exchanges
-    /// using the user's stored API credentials.
-    /// </summary>
-    /// <remarks>
-    /// Optimization opportunity: when the orchestrator processes N positions for the same user
-    /// in one cycle, this method is called N times with redundant credential lookups and connector
-    /// initializations. A per-cycle cache keyed by (userId, exchangeName) would avoid repeated work.
-    /// </remarks>
-    private async Task<(IExchangeConnector Long, IExchangeConnector Short, string? Error)> CreateUserConnectorsAsync(
-        string userId, string longExchangeName, string shortExchangeName)
-    {
-        // N1: Guard against null/empty userId — legacy records or admin-initiated operations
-        // could pass null, leading to silent failures in credential lookup
-        if (string.IsNullOrEmpty(userId))
-        {
-            _logger.LogError("CreateUserConnectorsAsync called with null/empty userId for {LongExchange}/{ShortExchange}",
-                longExchangeName, shortExchangeName);
-            return (null!, null!, "User ID is required for credential-based connector creation");
-        }
-
-        var credentials = await _userSettings.GetActiveCredentialsAsync(userId);
-
-        var longCred = credentials.FirstOrDefault(c =>
-            string.Equals(c.Exchange?.Name, longExchangeName, StringComparison.OrdinalIgnoreCase));
-        var shortCred = credentials.FirstOrDefault(c =>
-            string.Equals(c.Exchange?.Name, shortExchangeName, StringComparison.OrdinalIgnoreCase));
-
-        if (longCred is null)
-        {
-            _logger.LogWarning("No credentials found for {Exchange} (user {UserId})", longExchangeName, userId);
-            return (null!, null!, $"No credentials found for {longExchangeName}");
-        }
-
-        if (shortCred is null)
-        {
-            _logger.LogWarning("No credentials found for {Exchange} (user {UserId})", shortExchangeName, userId);
-            return (null!, null!, $"No credentials found for {shortExchangeName}");
-        }
-
-        // NB4: Decrypt credentials in tightly scoped blocks to minimize plaintext lifetime in memory.
-        // Create connectors immediately after decryption so credentials don't linger.
-        IExchangeConnector? longConnector = null;
-        IExchangeConnector? shortConnector = null;
-
-        try
-        {
-            // Decrypt + create long connector in tight scope
-            {
-                var longDecrypted = DecryptAndCreateConnectorArgs(longCred, longExchangeName, userId);
-                if (longDecrypted.Error is not null)
-                {
-                    return (null!, null!, longDecrypted.Error);
-                }
-
-                longConnector = await _connectorFactory.CreateForUserAsync(
-                    longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
-                    longDecrypted.WalletAddress, longDecrypted.PrivateKey,
-                    longDecrypted.SubAccountAddress, longDecrypted.ApiKeyIndex);
-            }
-
-            // Decrypt + create short connector in tight scope
-            {
-                var shortDecrypted = DecryptAndCreateConnectorArgs(shortCred, shortExchangeName, userId);
-                if (shortDecrypted.Error is not null)
-                {
-                    await DisposeConnectorAsync(longConnector);
-                    return (null!, null!, shortDecrypted.Error);
-                }
-
-                shortConnector = await _connectorFactory.CreateForUserAsync(
-                    shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
-                    shortDecrypted.WalletAddress, shortDecrypted.PrivateKey,
-                    shortDecrypted.SubAccountAddress, shortDecrypted.ApiKeyIndex);
-            }
-        }
-        catch (Exception ex)
-        {
-            // NB6: If CreateForUserAsync throws (not returns null), ensure cleanup
-            _logger.LogError(ex, "Failed to create connector for user {UserId}", userId);
-            await DisposeConnectorAsync(longConnector);
-            await DisposeConnectorAsync(shortConnector);
-            return (null!, null!, "Exchange connection failed");
-        }
-
-        if (longConnector is null)
-        {
-            await DisposeConnectorAsync(shortConnector);
-            _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", longExchangeName, userId);
-            return (null!, null!, $"Could not create connector for {longExchangeName} — invalid credentials");
-        }
-
-        if (shortConnector is null)
-        {
-            await DisposeConnectorAsync(longConnector);
-            _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", shortExchangeName, userId);
-            return (null!, null!, $"Could not create connector for {shortExchangeName} — invalid credentials");
-        }
-
-        return (longConnector, shortConnector, null);
-    }
-
-    /// <summary>
-    /// Decrypts credential and returns the raw values needed for connector creation.
-    /// Isolates decryption in its own scope to minimize plaintext credential lifetime.
-    /// Note: .NET strings are immutable — decrypted credentials persist in memory until GC.
-    /// This is an inherent platform limitation; SecureString is deprecated and not supported by exchange SDKs.
-    /// </summary>
-    private (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? SubAccountAddress, string? ApiKeyIndex, string? Error) DecryptAndCreateConnectorArgs(
-        UserExchangeCredential cred, string exchangeName, string userId)
-    {
-        try
-        {
-            var decrypted = _userSettings.DecryptCredential(cred);
-            return (decrypted.ApiKey, decrypted.ApiSecret, decrypted.WalletAddress, decrypted.PrivateKey, decrypted.SubAccountAddress, decrypted.ApiKeyIndex, null);
-        }
-        catch (Exception ex)
-        {
-            // N2: Log only the exception type name, not the full exception which may contain cryptographic metadata
-            _logger.LogError("Failed to decrypt credentials for {Exchange} (user {UserId}): {ExceptionType}",
-                exchangeName, userId, ex.GetType().Name);
-            return (null, null, null, null, null, null, "Credential validation failed");
-        }
-    }
-
-    // NB4: Concurrent callers may trigger redundant fetches on cache miss — accepted
-    // because duplicate writes produce the same value and the cost is bounded by the 1-hour TTL.
-    private async Task<int?> GetCachedMaxLeverageAsync(IExchangeConnector connector, string asset, CancellationToken ct)
-    {
-        var key = (connector.ExchangeName, asset);
-        if (_leverageCache.TryGetValue(key, out var cached) && cached.Fetched > DateTime.UtcNow.AddMinutes(-60))
-        {
-            return cached.MaxLeverage;
-        }
-
-        var maxLev = await connector.GetMaxLeverageAsync(asset, ct);
-        if (maxLev.HasValue)
-        {
-            _leverageCache[key] = (maxLev.Value, DateTime.UtcNow);
-
-            // NB1: Evict _leverageWarned when it grows too large.
-            // Re-logging a leverage warning is harmless, so a simple clear is acceptable.
-            if (_leverageWarned.Count > 500)
-            {
-                _leverageWarned.Clear();
-            }
-        }
-
-        return maxLev;
-    }
-
-    /// <summary>
-    /// Finalizes a position where both legs are already marked as closed (retry edge case).
-    /// Since leg close data was not captured in prior rounds, uses accumulated funding minus fees as PnL.
-    /// </summary>
-    private async Task FinalizeClosedPositionAsync(
-        ArbitragePosition position, CloseReason reason,
-        string longExchangeName, string shortExchangeName, string assetSymbol,
-        CancellationToken ct)
-    {
-        // NB2: PnL here is approximate — price-based component is lost because
-        // legs were closed in separate retries without capturing fill data.
-        // Reconciliation skipped — connectors not available in this fallback path.
-        position.RealizedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
-        position.Status = PositionStatus.Closed;
-        position.CloseReason = reason;
-        position.ClosedAt = DateTime.UtcNow;
-        _uow.Positions.Update(position);
-
-        _logger.LogCritical(
-            "Position #{Id} finalized without price-based PnL or exit fees (legs closed in prior retries). " +
-            "RealizedPnl={Pnl:F4} is approximate: funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4} (exit fees likely 0 — unrecorded)",
-            position.Id, position.RealizedPnl, position.AccumulatedFunding, position.EntryFeesUsdc, position.ExitFeesUsdc);
-
-        _uow.Alerts.Add(new Alert
-        {
-            UserId = position.UserId,
-            ArbitragePositionId = position.Id,
-            Type = AlertType.LegFailed,
-            Severity = AlertSeverity.Critical,
-            Message = $"Position #{position.Id} closed without price-based PnL (legs closed in separate retries). " +
-                      $"RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
-        });
-
-        _uow.Alerts.Add(new Alert
-        {
-            UserId = position.UserId,
-            ArbitragePositionId = position.Id,
-            Type = AlertType.PositionClosed,
-            Severity = AlertSeverity.Info,
-            Message = $"Position closed (finalized): {assetSymbol} reason={reason} PnL={position.RealizedPnl:F4} USDC",
-        });
-
-        await _uow.SaveAsync(ct);
-    }
-
-    /// <summary>
-    /// Disposes a connector, checking for IAsyncDisposable first, then IDisposable.
-    /// </summary>
-    private static async Task DisposeConnectorAsync(IExchangeConnector? connector)
-    {
-        if (connector is IAsyncDisposable asyncDisposable)
-        {
-            await asyncDisposable.DisposeAsync();
-        }
-        else
-        {
-            (connector as IDisposable)?.Dispose();
-        }
-    }
-
-    /// <summary>
-    /// Sets EntryFeesUsdc and RealizedPnl on an emergency-closed position based on the
-    /// fees incurred from the one leg that did open and was subsequently closed.
-    /// </summary>
-    private static void SetEmergencyCloseFees(
-        ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
-    {
-        var legNotional = successfulLeg.FilledPrice * successfulLeg.FilledQuantity;
-        var feeRate = ExchangeFeeConstants.GetTakerFeeRate(exchangeName);
-        var entryFee = legNotional * feeRate;
-        var exitFee = legNotional * feeRate; // emergency close at roughly the same price
-        position.EntryFeesUsdc = entryFee;
-        position.ExitFeesUsdc = exitFee;
-        position.RealizedPnl = -(entryFee + exitFee); // net loss from fees
-    }
-
-    private static readonly string[] NoPositionPatterns =
-        ["no open position", "position not found", "does not exist", "no position"];
-
-    private static readonly string[] RetryableClosePatterns =
-        ["timeout", "rate limit", "HTTP 429", "HTTP 503", "HTTP 502", "server error",
-         "connection refused", "connection reset", "network unreachable", "transient"];
-
-    private static bool IsNoPositionError(string? error)
-    {
-        if (string.IsNullOrEmpty(error))
-        {
-            return false;
-        }
-        return NoPositionPatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static bool IsRetryableCloseError(string? error)
-    {
-        if (string.IsNullOrEmpty(error))
-        {
-            return false;
-        }
-        return RetryableClosePatterns.Any(p => error.Contains(p, StringComparison.OrdinalIgnoreCase));
-    }
-
-    /// <summary>
-    /// Attempts to emergency-close a position with retries. Returns true if the position
-    /// was confirmed to never have existed (no circuit breaker penalty needed).
-    /// </summary>
-    private async Task<bool> TryEmergencyCloseWithRetryAsync(
-        IExchangeConnector connector, string asset, Side side, string userId, CancellationToken ct)
-    {
-        const int maxAttempts = 5;
-        int[] backoffMs = [2000, 4000, 8000, 16000, 30000];
-        var legName = side == Side.Long ? "long" : "short";
-
-        for (int attempt = 0; attempt < maxAttempts; attempt++)
-        {
-            try
-            {
-                var closeResult = await connector.ClosePositionAsync(asset, side, CancellationToken.None);
-                if (closeResult.Success)
-                {
-                    return false;
-                }
-
-                // Position never existed — stop immediately, no retries needed
-                if (IsNoPositionError(closeResult.Error))
-                {
-                    if (_logger.IsEnabled(LogLevel.Information))
-                    {
-                        _logger.LogInformation(
-                            "Emergency close skipped — position never opened for {Asset} on {Leg} leg",
-                            asset, legName);
-                    }
-                    return true;
-                }
-
-                if (attempt < maxAttempts - 1
-                    && IsRetryableCloseError(closeResult.Error))
-                {
-                    _logger.LogWarning(
-                        "Emergency close attempt {Attempt}/{Max} failed (retryable error), retrying in {Delay}ms: {Asset} Error={Error}",
-                        attempt + 1, maxAttempts, backoffMs[attempt], asset, closeResult.Error);
-                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
-                    continue;
-                }
-
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical("EMERGENCY CLOSE FAILED after {Attempts} attempts: {Asset} {Leg} Error={Error}",
-                        attempt + 1, asset, legName, closeResult.Error);
-                }
-                _uow.Alerts.Add(new Alert
-                {
-                    UserId = userId,
-                    Type = AlertType.LegFailed,
-                    Severity = AlertSeverity.Critical,
-                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset}: {TruncateError(closeResult.Error)}. Manual intervention required.",
-                });
-                return false;
-            }
-            catch (Exception ex)
-            {
-                if (attempt < maxAttempts - 1)
-                {
-                    _logger.LogWarning(ex,
-                        "Emergency close attempt {Attempt}/{Max} threw for {Leg} leg: {Asset}, retrying in {Delay}ms",
-                        attempt + 1, maxAttempts, legName, asset, backoffMs[attempt]);
-                    await Task.Delay(backoffMs[attempt], CancellationToken.None);
-                    continue;
-                }
-
-                if (_logger.IsEnabled(LogLevel.Critical))
-                {
-                    _logger.LogCritical(ex, "EMERGENCY CLOSE THREW for {Leg} leg: {Asset}", legName, asset);
-                }
-                _uow.Alerts.Add(new Alert
-                {
-                    UserId = userId,
-                    Type = AlertType.LegFailed,
-                    Severity = AlertSeverity.Critical,
-                    Message = $"EMERGENCY CLOSE FAILED — {legName} leg {asset} threw: {TruncateError(ex.Message)}. Manual intervention required.",
-                });
-                return false;
-            }
-        }
-
-        return false;
+        await _positionCloser.ClosePositionAsync(userId, position, reason, ct);
     }
 
     public async Task<bool?> CheckPositionExistsOnExchangesAsync(ArbitragePosition position, CancellationToken ct = default)
@@ -1373,7 +705,7 @@ public class ExecutionEngine : IExecutionEngine
         IExchangeConnector? shortConnector = null;
         try
         {
-            var (l, s, error) = await CreateUserConnectorsAsync(position.UserId, longExchangeName, shortExchangeName);
+            var (l, s, error) = await _connectorLifecycle.CreateUserConnectorsAsync(position.UserId, longExchangeName, shortExchangeName);
             if (error is not null)
             {
                 _logger.LogWarning("Cannot reconcile position #{Id}: {Error}", position.Id, error);
@@ -1412,8 +744,8 @@ public class ExecutionEngine : IExecutionEngine
         }
         finally
         {
-            await DisposeConnectorAsync(longConnector);
-            await DisposeConnectorAsync(shortConnector);
+            await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
+            await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
         }
     }
 
@@ -1440,7 +772,7 @@ public class ExecutionEngine : IExecutionEngine
             IExchangeConnector? shortConnector = null;
             try
             {
-                var (l, s, error) = await CreateUserConnectorsAsync(group.Key.UserId, group.Key.LongExchange, group.Key.ShortExchange);
+                var (l, s, error) = await _connectorLifecycle.CreateUserConnectorsAsync(group.Key.UserId, group.Key.LongExchange, group.Key.ShortExchange);
                 if (error is not null)
                 {
                     _logger.LogWarning("Cannot reconcile positions for {UserId}/{LongExchange}/{ShortExchange}: {Error}",
@@ -1509,8 +841,8 @@ public class ExecutionEngine : IExecutionEngine
             }
             finally
             {
-                await DisposeConnectorAsync(longConnector);
-                await DisposeConnectorAsync(shortConnector);
+                await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
+                await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
             }
         }
 

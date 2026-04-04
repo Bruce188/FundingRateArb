@@ -120,7 +120,14 @@ public class OrderPlacementReliabilityTests
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
-        _engine = new ExecutionEngine(_mockUow.Object, _mockFactory.Object, _mockUserSettings.Object, _mockReconciliation.Object, NullLogger<ExecutionEngine>.Instance);
+        var connectorLifecycle = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+        var emergencyClose = new EmergencyCloseHandler(
+            _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
+        var positionCloser = new PositionCloser(
+            _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
+
+        _engine = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
