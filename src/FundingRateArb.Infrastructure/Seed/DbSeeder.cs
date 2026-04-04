@@ -126,6 +126,19 @@ public static class DbSeeder
             },
             new Exchange
             {
+                Name = "dYdX",
+                ApiBaseUrl = "https://indexer.dydx.trade/v4",
+                WsBaseUrl = "",
+                FundingInterval = FundingInterval.Hourly,
+                FundingIntervalHours = 1,
+                FundingSettlementType = FundingSettlementType.Continuous,
+                TakerFeeRate = 0.0003m,
+                SupportsSubAccounts = true,
+                IsActive = true,
+                Description = "dYdX v4 — Cosmos appchain, USDC collateral, hourly funding"
+            },
+            new Exchange
+            {
                 Name = "CoinGlass",
                 ApiBaseUrl = "https://open-api-v3.coinglass.com",
                 WsBaseUrl = "",

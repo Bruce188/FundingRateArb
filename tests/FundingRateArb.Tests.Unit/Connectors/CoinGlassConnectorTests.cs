@@ -288,7 +288,7 @@ public class CoinGlassConnectorTests
                 {
                     "symbol": "BTCUSDT",
                     "fundingRateByExchange": {
-                        "dYdX": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 1 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 65000, "intervalHours": 1 }
                     }
                 }
             ]

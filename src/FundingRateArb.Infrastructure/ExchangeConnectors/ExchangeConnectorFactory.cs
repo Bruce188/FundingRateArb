@@ -24,6 +24,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         { "Lighter",     typeof(LighterConnector) },
         { "Aster",       typeof(AsterConnector) },
         { "Binance",     typeof(BinanceConnector) },
+        { "dYdX",        typeof(DydxConnector) },
         { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
@@ -114,6 +115,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             "aster" => CreateAsterConnector(apiKey, apiSecret),
             "binance" => CreateBinanceConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
+            "dydx" => CreateDydxConnector(privateKey),
             "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
         };
@@ -260,6 +262,22 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var logger = _serviceProvider.GetRequiredService<ILogger<LighterConnector>>();
         return new LighterConnector(httpClient, logger, userConfig);
+    }
+
+    // privateKey field stores BIP39 mnemonic for dYdX
+    private DydxConnector? CreateDydxConnector(string? mnemonic)
+    {
+        if (string.IsNullOrEmpty(mnemonic))
+            return null;
+
+        var signer = new Dydx.DydxSigner(mnemonic);
+        var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();
+        var indexerClient = httpClientFactory.CreateClient("DydxIndexer");
+        var validatorClient = httpClientFactory.CreateClient("DydxValidator");
+        var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
+        var logger = _serviceProvider.GetRequiredService<ILogger<DydxConnector>>();
+        var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
+        return new DydxConnector(indexerClient, validatorClient, signer, pipelineProvider, logger, markPriceCache);
     }
 
     /// <summary>
