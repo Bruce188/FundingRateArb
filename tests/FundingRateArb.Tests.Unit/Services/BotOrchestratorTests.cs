@@ -3,15 +3,15 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
-using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
-using FundingRateArb.Infrastructure.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
@@ -37,9 +37,10 @@ public class BotOrchestratorTests
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
-    private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
+    private readonly Mock<ISignalRNotifier> _mockNotifier = new();
     private readonly Mock<ILogger<BotOrchestrator>> _mockLogger = new();
     private readonly Mock<IRotationEvaluator> _mockRotationEvaluator = new();
+    private readonly CircuitBreakerManager _circuitBreaker;
     private readonly BotOrchestrator _sut;
 
     public BotOrchestratorTests()
@@ -117,17 +118,15 @@ public class BotOrchestratorTests
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        // Stub SignalR hub context
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
+        _circuitBreaker = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        var opportunityFilter = new OpportunityFilter(_circuitBreaker, NullLogger<OpportunityFilter>.Instance);
 
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,
-            _mockHubContext.Object,
+            _mockNotifier.Object,
+            _circuitBreaker,
+            opportunityFilter,
             _mockRotationEvaluator.Object,
             _mockLogger.Object);
     }
@@ -278,7 +277,7 @@ public class BotOrchestratorTests
 
         // Place the opportunity on cooldown (simulating a previous failure)
         var cooldownKey = $"{TestUserId}:{opp.AssetId}_{opp.LongExchangeId}_{opp.ShortExchangeId}";
-        _sut.FailedOpCooldowns[cooldownKey] = (DateTime.UtcNow.AddMinutes(10), 1);
+        _circuitBreaker.FailedOpCooldowns[cooldownKey] = (DateTime.UtcNow.AddMinutes(10), 1);
 
         _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -302,11 +301,11 @@ public class BotOrchestratorTests
     [Fact]
     public void ClearCooldowns_EmptiesDictionary()
     {
-        _sut.FailedOpCooldowns["test_key"] = (DateTime.UtcNow.AddMinutes(30), 3);
+        _circuitBreaker.FailedOpCooldowns["test_key"] = (DateTime.UtcNow.AddMinutes(30), 3);
 
         _sut.ClearCooldowns();
 
-        _sut.FailedOpCooldowns.Should().BeEmpty();
+        _circuitBreaker.FailedOpCooldowns.Should().BeEmpty();
     }
 
     [Fact]
@@ -409,7 +408,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(currentSpread: 0.001m);
         var dto = new PositionSummaryDto();
 
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.None);
         dto.WarningTypes.Should().BeEmpty();
@@ -422,7 +421,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(currentSpread: 0.00005m); // below alertThreshold
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Warning);
         dto.WarningTypes.Should().Contain(WarningType.SpreadRisk);
@@ -435,7 +434,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(currentSpread: -0.0001m); // below closeThreshold
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Critical);
         dto.WarningTypes.Should().Contain(WarningType.SpreadRisk);
@@ -449,7 +448,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(openedAt: DateTime.UtcNow.AddHours(-58));
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Warning);
         dto.WarningTypes.Should().Contain(WarningType.TimeBased);
@@ -463,7 +462,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(openedAt: DateTime.UtcNow.AddHours(-69));
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Critical);
         dto.WarningTypes.Should().Contain(WarningType.TimeBased);
@@ -477,7 +476,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(marginUsdc: 100m, accumulatedFunding: -11m);
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Warning);
         dto.WarningTypes.Should().Contain(WarningType.Loss);
@@ -491,7 +490,7 @@ public class BotOrchestratorTests
         var pos = MakePosition(marginUsdc: 100m, accumulatedFunding: -14m);
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Critical);
         dto.WarningTypes.Should().Contain(WarningType.Loss);
@@ -507,7 +506,7 @@ public class BotOrchestratorTests
             openedAt: DateTime.UtcNow.AddHours(-69));
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningLevel.Should().Be(WarningLevel.Critical);
         dto.WarningTypes.Should().Contain(WarningType.SpreadRisk);
@@ -869,7 +868,7 @@ public class BotOrchestratorTests
 
         // Verify cooldown was applied
         var cooldownKey = $"{TestUserId}:1:1:2";
-        _sut.FailedOpCooldowns.ContainsKey(cooldownKey).Should().BeTrue(
+        _circuitBreaker.FailedOpCooldowns.ContainsKey(cooldownKey).Should().BeTrue(
             "negative PnL close should apply cooldown to the opportunity key");
     }
 
@@ -971,21 +970,9 @@ public class BotOrchestratorTests
     private void SetupStatusCapture(out List<(string Message, string Severity)> captured)
     {
         var capturedMessages = new List<(string, string)>();
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>()))
-            .Callback<string, string>((msg, sev) => capturedMessages.Add((msg, sev)))
+        _mockNotifier.Setup(n => n.PushStatusExplanationAsync(It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<string?, string, string>((_, msg, sev) => capturedMessages.Add((msg, sev)))
             .Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveBalanceUpdate(It.IsAny<BalanceSnapshotDto>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        mockClients.Setup(c => c.All).Returns(mockClient.Object);
-        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
         captured = capturedMessages;
     }
 
@@ -1007,7 +994,7 @@ public class BotOrchestratorTests
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
 
         // Set circuit breaker for Lighter (id=2) broken until 10 minutes from now
-        _sut.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(10));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(10));
 
         _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -1117,10 +1104,10 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Aster (3) should be circuit-broken
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken");
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken");
 
         // Lighter (2) should NOT be circuit-broken
-        _sut.ExchangeCircuitBreaker.Should().NotContainKey(2, "Lighter should NOT be circuit-broken on Aster margin error");
+        _circuitBreaker.ExchangeCircuitBreaker.Should().NotContainKey(2, "Lighter should NOT be circuit-broken on Aster margin error");
     }
 
     [Fact]
@@ -1170,8 +1157,8 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Both should be circuit-broken (safe fallback)
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(2, "Lighter should be circuit-broken on generic margin error");
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken on generic margin error");
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(2, "Lighter should be circuit-broken on generic margin error");
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(3, "Aster should be circuit-broken on generic margin error");
     }
 
     [Theory]
@@ -1264,21 +1251,9 @@ public class BotOrchestratorTests
     public async Task CircuitBreakerState_IncludedInOpportunityResult()
     {
         OpportunityResultDto? capturedResult = null;
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>()))
+        _mockNotifier.Setup(n => n.PushOpportunityUpdateAsync(It.IsAny<OpportunityResultDto>()))
             .Callback<OpportunityResultDto>(r => capturedResult = r)
             .Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
-        mockClient.Setup(d => d.ReceiveBalanceUpdate(It.IsAny<BalanceSnapshotDto>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        mockClients.Setup(c => c.All).Returns(mockClient.Object);
-        _mockHubContext.Setup(h => h.Clients).Returns(mockClients.Object);
 
         var config = MakeEnabledConfig();
         config.IsEnabled = false; // disable to skip user loop
@@ -1290,7 +1265,7 @@ public class BotOrchestratorTests
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
 
         // Set circuit breaker for Lighter (id=2)
-        _sut.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(15));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (config.ExchangeCircuitBreakerThreshold, DateTime.UtcNow.AddMinutes(15));
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -1629,12 +1604,12 @@ public class BotOrchestratorTests
             Times.Once);
 
         var cooldownKey = $"{TestUserId}:2:1:3";
-        _sut.RotationCooldowns.Should().ContainKey(cooldownKey);
+        _circuitBreaker.RotationCooldowns.Should().ContainKey(cooldownKey);
 
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        _sut.DailyRotationCounts.Should().ContainKey(TestUserId);
-        _sut.DailyRotationCounts[TestUserId].Count.Should().Be(1);
-        _sut.DailyRotationCounts[TestUserId].Date.Should().Be(today);
+        _circuitBreaker.DailyRotationCounts.Should().ContainKey(TestUserId);
+        _circuitBreaker.DailyRotationCounts[TestUserId].Count.Should().Be(1);
+        _circuitBreaker.DailyRotationCounts[TestUserId].Date.Should().Be(today);
     }
 
     // ── B4: Daily cap enforcement test ─────────────────────────
@@ -1718,7 +1693,7 @@ public class BotOrchestratorTests
             .Returns(recommendation);
 
         // Pre-populate daily rotation count at max
-        _sut.DailyRotationCounts[TestUserId] = (DateOnly.FromDateTime(DateTime.UtcNow), 2);
+        _circuitBreaker.DailyRotationCounts[TestUserId] = (DateOnly.FromDateTime(DateTime.UtcNow), 2);
 
         _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -1815,7 +1790,7 @@ public class BotOrchestratorTests
 
         // Pre-populate cooldown for the replacement opportunity with a future timestamp
         var cooldownKey = $"{TestUserId}:2:1:3";
-        _sut.RotationCooldowns[cooldownKey] = DateTime.UtcNow.AddMinutes(10);
+        _circuitBreaker.RotationCooldowns[cooldownKey] = DateTime.UtcNow.AddMinutes(10);
 
         _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -1929,10 +1904,10 @@ public class BotOrchestratorTests
 
         // Cooldown should still be set (prevents retry storms)
         var cooldownKey = $"{TestUserId}:2:1:3";
-        _sut.RotationCooldowns.Should().ContainKey(cooldownKey);
+        _circuitBreaker.RotationCooldowns.Should().ContainKey(cooldownKey);
 
         // Daily count should NOT be incremented (close did not fully succeed)
-        _sut.DailyRotationCounts.Should().NotContainKey(TestUserId);
+        _circuitBreaker.DailyRotationCounts.Should().NotContainKey(TestUserId);
     }
 
     // ── NB3-v5: Day boundary reset — yesterday's count resets ──
@@ -2033,7 +2008,7 @@ public class BotOrchestratorTests
             .ReturnsAsync(0);
 
         // Pre-seed daily count from yesterday at cap
-        _sut.DailyRotationCounts[TestUserId] = (DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)), 5);
+        _circuitBreaker.DailyRotationCounts[TestUserId] = (DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)), 5);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -2044,7 +2019,7 @@ public class BotOrchestratorTests
 
         // Daily count should be reset to today with count = 1
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        _sut.DailyRotationCounts[TestUserId].Date.Should().Be(today);
-        _sut.DailyRotationCounts[TestUserId].Count.Should().Be(1);
+        _circuitBreaker.DailyRotationCounts[TestUserId].Date.Should().Be(today);
+        _circuitBreaker.DailyRotationCounts[TestUserId].Count.Should().Be(1);
     }
 }

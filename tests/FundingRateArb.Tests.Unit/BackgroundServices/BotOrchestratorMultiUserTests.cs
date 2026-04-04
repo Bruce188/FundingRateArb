@@ -2,13 +2,12 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
-using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
-using FundingRateArb.Infrastructure.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -35,10 +34,9 @@ public class BotOrchestratorMultiUserTests
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
-    private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
-    private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
-    private readonly Mock<IDashboardClient> _mockGroupClient = new();
+    private readonly Mock<ISignalRNotifier> _mockNotifier = new();
     private readonly Mock<IRotationEvaluator> _mockRotationEvaluator = new();
+    private readonly CircuitBreakerManager _circuitBreaker;
     private readonly BotOrchestrator _sut;
 
     private static readonly BotConfiguration EnabledConfig = new()
@@ -87,26 +85,21 @@ public class BotOrchestratorMultiUserTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
-        _mockHubClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockGroupClient.Object);
-        _mockGroupClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
             .ReturnsAsync(new List<int>());
 
+        _circuitBreaker = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        var opportunityFilter = new OpportunityFilter(_circuitBreaker, NullLogger<OpportunityFilter>.Instance);
+
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,
-            _mockHubContext.Object,
+            _mockNotifier.Object,
+            _circuitBreaker,
+            opportunityFilter,
             _mockRotationEvaluator.Object,
             NullLogger<BotOrchestrator>.Instance);
     }
@@ -217,8 +210,8 @@ public class BotOrchestratorMultiUserTests
             e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
             Times.Never);
 
-        // Status explanation should be pushed to user's group
-        _mockHubClients.Verify(c => c.Group($"user-{UserA}"), Times.AtLeastOnce);
+        // Status explanation should be pushed via notifier
+        _mockNotifier.Verify(n => n.PushStatusExplanationAsync(UserA, It.IsAny<string>(), It.IsAny<string>()), Times.AtLeastOnce);
     }
 
     // ── No enabled users means no user cycles ──────────────────────────────────
@@ -310,12 +303,12 @@ public class BotOrchestratorMultiUserTests
         // Cooldowns should be keyed per-user
         var keyA = $"{UserA}:1_1_2";
         var keyB = $"{UserB}:1_1_2";
-        _sut.FailedOpCooldowns.ContainsKey(keyA).Should().BeTrue("user A's failure should register a cooldown");
-        _sut.FailedOpCooldowns.ContainsKey(keyB).Should().BeTrue("user B's failure should register a cooldown");
+        _circuitBreaker.FailedOpCooldowns.ContainsKey(keyA).Should().BeTrue("user A's failure should register a cooldown");
+        _circuitBreaker.FailedOpCooldowns.ContainsKey(keyB).Should().BeTrue("user B's failure should register a cooldown");
 
         // Expire only user A's cooldown
-        var entryA = _sut.FailedOpCooldowns[keyA];
-        _sut.FailedOpCooldowns[keyA] = (DateTime.UtcNow.AddMinutes(-1), entryA.Failures);
+        var entryA = _circuitBreaker.FailedOpCooldowns[keyA];
+        _circuitBreaker.FailedOpCooldowns[keyA] = (DateTime.UtcNow.AddMinutes(-1), entryA.Failures);
 
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
@@ -339,13 +332,13 @@ public class BotOrchestratorMultiUserTests
         _sut.RecordCloseResult(-5m, UserA);
         _sut.RecordCloseResult(-5m, UserB);
 
-        _sut.UserConsecutiveLosses[UserA].Should().Be(2);
-        _sut.UserConsecutiveLosses[UserB].Should().Be(1);
+        _circuitBreaker.UserConsecutiveLosses[UserA].Should().Be(2);
+        _circuitBreaker.UserConsecutiveLosses[UserB].Should().Be(1);
 
         // Positive PnL resets only that user's counter
         _sut.RecordCloseResult(10m, UserA);
-        _sut.UserConsecutiveLosses[UserA].Should().Be(0);
-        _sut.UserConsecutiveLosses[UserB].Should().Be(1, "user B's counter should not be affected by user A's reset");
+        _circuitBreaker.UserConsecutiveLosses[UserA].Should().Be(0);
+        _circuitBreaker.UserConsecutiveLosses[UserB].Should().Be(1, "user B's counter should not be affected by user A's reset");
     }
 
     // ── User failure does not block other users ─────────────────────────────────
@@ -462,17 +455,12 @@ public class BotOrchestratorMultiUserTests
 
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var statusSentToUserGroup = false;
-        _mockGroupClient
-            .Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>()))
-            .Callback(() => statusSentToUserGroup = true)
-            .Returns(Task.CompletedTask);
-
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        statusSentToUserGroup.Should().BeTrue(
-            "status explanations for per-user gates must be sent to the user's SignalR group");
-        _mockHubClients.Verify(c => c.Group($"user-{UserA}"), Times.AtLeastOnce);
+        _mockNotifier.Verify(
+            n => n.PushStatusExplanationAsync(UserA, It.IsAny<string>(), It.IsAny<string>()),
+            Times.AtLeastOnce,
+            "status explanations for per-user gates must be sent via notifier");
     }
 
     // ── DataOnlyExchangeIds fetched once per cycle, not per user ─────────────────
@@ -521,7 +509,7 @@ public class BotOrchestratorMultiUserTests
     {
         _sut.RecordCloseResult(-10m, null);
 
-        _sut.UserConsecutiveLosses.Should().BeEmpty(
+        _circuitBreaker.UserConsecutiveLosses.Should().BeEmpty(
             "RecordCloseResult with null userId should not create any entries");
     }
 
@@ -627,7 +615,7 @@ public class BotOrchestratorMultiUserTests
     public async Task CircuitBreaker_IsGlobalNotPerUser()
     {
         // Pre-seed circuit breaker for exchange 2 (simulating UserA's failures)
-        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
 
         // Setup UserB — the circuit breaker should block them too
         var opp = new ArbitrageOpportunityDto
