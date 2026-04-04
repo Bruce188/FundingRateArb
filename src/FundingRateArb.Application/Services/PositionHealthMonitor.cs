@@ -402,8 +402,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // Clean up stale tracking entries for positions no longer open
         var openIds = new HashSet<int>(openPositions.Select(p => p.Id));
         foreach (var key in _state.NegativeFundingCycles.Keys)
+        {
             if (!openIds.Contains(key))
+            {
                 _state.NegativeFundingCycles.TryRemove(key, out _);
+            }
+        }
 
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);
@@ -747,7 +751,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             var binance = _connectorFactory.GetConnector(BinanceExchangeName);
             var price = await binance.GetMarkPriceAsync("USDCUSDT", ct);
-            if (price <= 0) return false;
+            if (price <= 0)
+            {
+                return false;
+            }
 
             var spreadPct = Math.Abs(1.0m - price) * 100m;
             _logger.LogDebug("Stablecoin USDCUSDT spread: {SpreadPct:F4}%", spreadPct);
