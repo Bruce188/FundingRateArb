@@ -63,6 +63,7 @@ public class BotConfigRepository : IBotConfigRepository
     {
         Id = src.Id,
         IsEnabled = src.IsEnabled,
+        OperatingState = src.OperatingState,
         OpenThreshold = src.OpenThreshold,
         AlertThreshold = src.AlertThreshold,
         CloseThreshold = src.CloseThreshold,

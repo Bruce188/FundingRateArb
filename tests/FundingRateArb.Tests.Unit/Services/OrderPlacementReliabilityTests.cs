@@ -40,6 +40,7 @@ public class OrderPlacementReliabilityTests
     private static readonly BotConfiguration DefaultConfig = new()
     {
         IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
         DefaultLeverage = 5,
         UpdatedByUserId = "admin-user-id",
         StopLossPct = 0.15m,

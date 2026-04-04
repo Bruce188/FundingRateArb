@@ -230,6 +230,28 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         // Hoist Opening positions query once per cycle (shared across all users)
         var allOpeningPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
 
+        // Trading -> Armed: automatic when all positions close
+        if (globalConfig.OperatingState == BotOperatingState.Trading
+            && allOpenPositions.Count == 0
+            && allOpeningPositions.Count == 0)
+        {
+            try
+            {
+                var trackedConfig = await uow.BotConfig.GetActiveTrackedAsync();
+                trackedConfig.OperatingState = BotOperatingState.Armed;
+                trackedConfig.LastUpdatedAt = DateTime.UtcNow;
+                uow.BotConfig.Update(trackedConfig);
+                await uow.SaveAsync(ct);
+                uow.BotConfig.InvalidateCache();
+                globalConfig.OperatingState = BotOperatingState.Armed;
+                _logger.LogWarning("State transition: Trading -> Armed (all positions closed)");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to transition Trading -> Armed");
+            }
+        }
+
         // Push per-user position updates with warning computation (always, regardless of bot state)
         await _notifier.PushPositionUpdatesAsync(allOpenPositions, globalConfig);
         await _notifier.PushNewAlertsAsync(uow);
@@ -331,14 +353,20 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
 
         // Step 3: Push global dashboard KPI update (includes opening and needs-attention counts)
         var needsAttentionCount = await uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
-        await _notifier.PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.IsEnabled,
+        await _notifier.PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.OperatingState,
             allOpeningPositions.Count, needsAttentionCount);
 
-        // Step 4: Gate — skip position opening if global kill switch is off
-        if (!globalConfig.IsEnabled)
+        // Step 4: Gate — skip position opening if not Armed or Trading
+        if (globalConfig.OperatingState == BotOperatingState.Stopped)
         {
-            _logger.LogDebug("Bot is disabled (kill switch). Skipping cycle.");
-            await _notifier.PushStatusExplanationAsync(null, "Bot is disabled — enable in Settings or Admin > Bot Config", "danger");
+            _logger.LogDebug("Bot is stopped (monitoring only). Skipping position opening.");
+            await _notifier.PushStatusExplanationAsync(null, "Bot is stopped — arm in Admin > Bot Config to enable trading", "danger");
+            return;
+        }
+        if (globalConfig.OperatingState == BotOperatingState.Paused)
+        {
+            _logger.LogDebug("Bot is paused. Monitoring continues but no new positions.");
+            await _notifier.PushStatusExplanationAsync(null, "Bot is paused — resume in Admin > Bot Config", "warning");
             return;
         }
 
@@ -794,6 +822,27 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                 var msg = $"Opened position: {opp.AssetSymbol} {opp.LongExchangeName}/{opp.ShortExchangeName}";
                 await _notifier.PushNotificationAsync(userId, msg);
                 await _notifier.PushNewAlertsAsync(ctx.Uow);
+
+                // Armed -> Trading: automatic on first successful position open
+                if (ctx.GlobalConfig.OperatingState == BotOperatingState.Armed)
+                {
+                    try
+                    {
+                        var trackedConfig = await ctx.Uow.BotConfig.GetActiveTrackedAsync();
+                        trackedConfig.OperatingState = BotOperatingState.Trading;
+                        trackedConfig.LastUpdatedAt = DateTime.UtcNow;
+                        ctx.Uow.BotConfig.Update(trackedConfig);
+                        await ctx.Uow.SaveAsync(ct);
+                        ctx.Uow.BotConfig.InvalidateCache();
+                        // Update local reference so rest of cycle sees new state
+                        ctx.GlobalConfig.OperatingState = BotOperatingState.Trading;
+                        _logger.LogWarning("State transition: Armed -> Trading (position opened for {Asset})", opp.AssetSymbol);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Failed to transition Armed -> Trading");
+                    }
+                }
             }
             else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
                                        || error.Contains("balance", StringComparison.OrdinalIgnoreCase)))

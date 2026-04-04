@@ -6,6 +6,7 @@ public class DashboardViewModel
 {
     public bool IsAuthenticated { get; set; }
     public bool BotEnabled { get; set; }
+    public string OperatingState { get; set; } = "Stopped";
     public int OpenPositionCount { get; set; }
     public int OpeningPositionCount { get; set; }
     public int NeedsAttentionCount { get; set; }

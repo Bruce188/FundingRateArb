@@ -16,7 +16,7 @@ public interface ISignalRNotifier
     Task PushDashboardUpdateAsync(
         List<ArbitragePosition> openPositions,
         List<ArbitrageOpportunityDto> opportunities,
-        bool botEnabled,
+        BotOperatingState operatingState,
         int openingCount,
         int needsAttentionCount);
 

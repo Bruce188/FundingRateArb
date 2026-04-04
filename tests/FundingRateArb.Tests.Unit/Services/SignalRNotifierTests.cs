@@ -186,7 +186,7 @@ public class SignalRNotifierTests
         await _sut.PushDashboardUpdateAsync(
             new List<ArbitragePosition>(),
             new List<ArbitrageOpportunityDto>(),
-            botEnabled: true,
+            operatingState: BotOperatingState.Armed,
             openingCount: 0,
             needsAttentionCount: 0);
 
@@ -219,7 +219,7 @@ public class SignalRNotifierTests
             new() { SpreadPerHour = 0.007m },
         };
 
-        await _sut.PushDashboardUpdateAsync(positions, opportunities, true, 1, 0);
+        await _sut.PushDashboardUpdateAsync(positions, opportunities, BotOperatingState.Armed, 1, 0);
 
         captured.Should().NotBeNull();
         captured!.TotalPnl.Should().Be(13.75m);

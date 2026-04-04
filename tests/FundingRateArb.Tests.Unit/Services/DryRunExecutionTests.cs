@@ -110,6 +110,7 @@ public class DryRunExecutionTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             DryRunEnabled = true,
             UpdatedByUserId = "admin",
@@ -137,6 +138,7 @@ public class DryRunExecutionTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             DryRunEnabled = false,
             UpdatedByUserId = "admin",
@@ -162,6 +164,7 @@ public class DryRunExecutionTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             DryRunEnabled = false,
             UpdatedByUserId = "admin",
@@ -197,6 +200,7 @@ public class DryRunExecutionTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             DryRunEnabled = false,
             UpdatedByUserId = "admin",
@@ -248,6 +252,7 @@ public class DryRunExecutionTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
             DryRunEnabled = false,
             UpdatedByUserId = "admin",
@@ -371,6 +376,7 @@ public class DryRunExecutionTests
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -531,6 +537,7 @@ public class DryRunExecutionTests
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,
@@ -833,6 +840,7 @@ public class DryRunExecutionTests
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
             IsEnabled = true,
+            OperatingState = BotOperatingState.Armed,
             MaxConcurrentPositions = 5,
             TotalCapitalUsdc = 1000m,
             MaxCapitalPerPosition = 0.5m,

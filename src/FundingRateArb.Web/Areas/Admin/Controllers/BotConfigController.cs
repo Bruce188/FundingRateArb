@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels.Admin;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -29,6 +30,7 @@ public class BotConfigController : Controller
         var model = new BotConfigViewModel
         {
             IsEnabled = config.IsEnabled,
+            OperatingState = config.OperatingState,
             OpenThreshold = config.OpenThreshold,
             CloseThreshold = config.CloseThreshold,
             AlertThreshold = config.AlertThreshold,
@@ -80,6 +82,8 @@ public class BotConfigController : Controller
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
 
         config.IsEnabled = model.IsEnabled;
+        config.OperatingState = model.OperatingState;
+        config.IsEnabled = model.OperatingState != BotOperatingState.Stopped;
         config.OpenThreshold = model.OpenThreshold!.Value;
         config.CloseThreshold = model.CloseThreshold!.Value;
         config.AlertThreshold = model.AlertThreshold!.Value;
@@ -135,10 +139,20 @@ public class BotConfigController : Controller
     }
 
     [HttpPost, ValidateAntiForgeryToken]
-    public async Task<IActionResult> Toggle()
+    public async Task<IActionResult> SetState(BotOperatingState newState)
     {
         var config = await _uow.BotConfig.GetActiveTrackedAsync();
-        config.IsEnabled = !config.IsEnabled;
+        var oldState = config.OperatingState;
+
+        // Validate: Trading is automatic-only (set by orchestrator)
+        if (newState == BotOperatingState.Trading)
+        {
+            TempData["Success"] = "Trading state is set automatically when a position opens. Use Armed instead.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        config.OperatingState = newState;
+        config.IsEnabled = newState != BotOperatingState.Stopped;
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "system";
 
@@ -146,11 +160,21 @@ public class BotConfigController : Controller
         await _uow.SaveAsync();
         _uow.BotConfig.InvalidateCache();
 
-        _logger.LogWarning("Admin {Action}: {EntityType} {EntityId} by {AdminUserId}",
-            config.IsEnabled ? "Enabled" : "Disabled", "BotConfiguration", config.Id, User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "unknown");
+        _logger.LogWarning("Admin state change: {OldState} -> {NewState} for BotConfiguration {Id} by {AdminUserId}",
+            oldState, newState, config.Id, config.UpdatedByUserId);
 
-        var status = config.IsEnabled ? "enabled" : "disabled";
-        TempData["Success"] = $"Bot {status} successfully.";
+        TempData["Success"] = $"Bot state changed: {oldState} -> {newState}";
         return RedirectToAction(nameof(Index));
+    }
+
+    // Backwards-compatible toggle endpoint
+    [HttpPost, ValidateAntiForgeryToken]
+    public async Task<IActionResult> Toggle()
+    {
+        var config = await _uow.BotConfig.GetActiveAsync();
+        var newState = config.OperatingState == BotOperatingState.Stopped
+            ? BotOperatingState.Armed
+            : BotOperatingState.Stopped;
+        return await SetState(newState);
     }
 }

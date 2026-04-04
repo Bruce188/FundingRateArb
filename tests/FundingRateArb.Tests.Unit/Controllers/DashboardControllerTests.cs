@@ -131,7 +131,7 @@ public class DashboardControllerTests
     {
         // Arrange
         _mockBotConfigRepo.Setup(r => r.GetActiveAsync())
-            .ReturnsAsync(new BotConfiguration { IsEnabled = true });
+            .ReturnsAsync(new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed });
 
         // Act
         var result = await _controller.Index();

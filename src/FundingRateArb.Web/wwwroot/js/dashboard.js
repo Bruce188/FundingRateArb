@@ -19,8 +19,10 @@
     connection.on("ReceiveDashboardUpdate", function (data) {
         var botStatus = document.getElementById("bot-status");
         if (botStatus) {
-            botStatus.textContent = data.botEnabled ? "RUNNING" : "STOPPED";
-            botStatus.className = "badge " + (data.botEnabled ? "bg-success" : "bg-danger");
+            var state = (data.operatingState || "Stopped").toUpperCase();
+            var colorMap = { "STOPPED": "bg-danger", "PAUSED": "bg-warning", "ARMED": "bg-primary", "TRADING": "bg-success" };
+            botStatus.textContent = state;
+            botStatus.className = "badge " + (colorMap[state] || "bg-secondary");
         }
 
         var openPositions = document.getElementById("open-positions");

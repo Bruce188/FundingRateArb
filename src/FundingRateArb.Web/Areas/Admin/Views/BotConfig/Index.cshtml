@@ -18,36 +18,46 @@
     </div>
 }
 
-@* ── Kill Switch (always visible, prominent) ── *@
-<div class="card mb-3 border-@(Model.IsEnabled ? "success" : "danger") shadow-sm">
+@* ── Operating State Control (always visible, prominent) ── *@
+@{
+    var stateColor = Model.OperatingState switch
+    {
+        BotOperatingState.Stopped => "danger",
+        BotOperatingState.Paused => "warning",
+        BotOperatingState.Armed => "primary",
+        BotOperatingState.Trading => "success",
+        _ => "secondary"
+    };
+}
+<div class="card mb-3 border-@stateColor shadow-sm">
     <div class="card-body d-flex justify-content-between align-items-center py-2">
         <div>
-            <strong class="fs-5">Kill Switch</strong>
-            @if (Model.IsEnabled)
-            {
-                <span class="badge bg-success fs-6 ms-2">RUNNING</span>
-            }
-            else
-            {
-                <span class="badge bg-danger fs-6 ms-2">STOPPED</span>
-            }
+            <strong class="fs-5">Operating State</strong>
+            <span class="badge bg-@stateColor fs-6 ms-2">@Model.OperatingState.ToString().ToUpperInvariant()</span>
         </div>
-        <form asp-action="Toggle" method="post" class="d-inline">
-            @if (Model.IsEnabled)
-            {
-                <button type="submit" class="btn btn-danger">Stop Bot</button>
-            }
-            else
-            {
-                <button type="submit" class="btn btn-success">Enable Bot</button>
-            }
+        <form asp-action="SetState" method="post" class="d-inline d-flex align-items-center gap-2">
+            <select name="newState" class="form-select form-select-sm" style="width: auto;">
+                <option value="Stopped" selected="@(Model.OperatingState == BotOperatingState.Stopped ? "selected" : null)">Stopped</option>
+                <option value="Armed" selected="@(Model.OperatingState == BotOperatingState.Armed ? "selected" : null)">Armed</option>
+                <option value="Paused" selected="@(Model.OperatingState == BotOperatingState.Paused ? "selected" : null)">Paused</option>
+            </select>
+            <button type="submit" class="btn btn-sm btn-outline-@stateColor">Set State</button>
         </form>
+    </div>
+    <div class="card-footer bg-transparent py-1">
+        <small class="text-muted">
+            <strong>Stopped:</strong> monitoring only &middot;
+            <strong>Armed:</strong> ready to trade &middot;
+            <strong>Trading:</strong> auto (position open) &middot;
+            <strong>Paused:</strong> emergency hold
+        </small>
     </div>
 </div>
 
 @* ── Main configuration form ── *@
 <form asp-action="Index" method="post">
-    <input asp-for="IsEnabled" type="hidden" />
+    <input asp-for="IsEnabled" type="hidden" value="@(Model.OperatingState != BotOperatingState.Stopped)" />
+    <input asp-for="OperatingState" type="hidden" />
     <div asp-validation-summary="ModelOnly" class="alert alert-danger" role="alert"></div>
 
     <div class="accordion" id="configAccordion">

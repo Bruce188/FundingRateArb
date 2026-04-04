@@ -200,31 +200,37 @@ public class BotConfigControllerTests
     }
 
     [Fact]
-    public async Task Toggle_FlipsBotEnabled_AndRedirects()
+    public async Task Toggle_WhenArmed_StopsBot()
     {
-        var config = new BotConfiguration { IsEnabled = true };
-        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        var readConfig = new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed };
+        var trackedConfig = new BotConfiguration { IsEnabled = true, OperatingState = BotOperatingState.Armed };
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync()).ReturnsAsync(readConfig);
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(trackedConfig);
         _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
 
         var result = await _controller.Toggle();
 
-        config.IsEnabled.Should().BeFalse();
+        trackedConfig.OperatingState.Should().Be(BotOperatingState.Stopped);
+        trackedConfig.IsEnabled.Should().BeFalse();
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be("Index");
-        _mockBotConfigRepo.Verify(r => r.Update(config), Times.Once);
+        _mockBotConfigRepo.Verify(r => r.Update(trackedConfig), Times.Once);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
-    public async Task Toggle_WhenDisabled_EnablesBot()
+    public async Task Toggle_WhenStopped_ArmsBot()
     {
-        var config = new BotConfiguration { IsEnabled = false };
-        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        var readConfig = new BotConfiguration { IsEnabled = false, OperatingState = BotOperatingState.Stopped };
+        var trackedConfig = new BotConfiguration { IsEnabled = false, OperatingState = BotOperatingState.Stopped };
+        _mockBotConfigRepo.Setup(r => r.GetActiveAsync()).ReturnsAsync(readConfig);
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(trackedConfig);
         _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
 
         var result = await _controller.Toggle();
 
-        config.IsEnabled.Should().BeTrue();
+        trackedConfig.OperatingState.Should().Be(BotOperatingState.Armed);
+        trackedConfig.IsEnabled.Should().BeTrue();
         var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
         redirect.ActionName.Should().Be("Index");
     }

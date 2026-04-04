@@ -1,4 +1,5 @@
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -9,6 +10,10 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
     public void Configure(EntityTypeBuilder<BotConfiguration> builder)
     {
         builder.HasKey(b => b.Id);
+
+        builder.Property(b => b.OperatingState)
+            .HasConversion<int>()
+            .HasDefaultValue(BotOperatingState.Stopped);
 
         builder.Property(b => b.OpenThreshold).HasColumnType("decimal(18,10)");
         builder.Property(b => b.AlertThreshold).HasColumnType("decimal(18,10)");
