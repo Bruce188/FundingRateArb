@@ -23,6 +23,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
     private readonly ConcurrentDictionary<int, DateTime> _recentMarginAlerts = new();
     private readonly ConcurrentDictionary<int, int> _negativeFundingCycles = new();
+    private int _stablecoinCheckCycle = -1;
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -61,6 +62,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         var openPositions = await _uow.Positions.GetOpenTrackedAsync();
         if (openPositions.Count == 0)
         {
+            // Clean up all tracking dictionaries when no positions are open
+            _negativeFundingCycles.Clear();
+            _priceFetchFailures.Clear();
+            _zeroPriceCheckCounts.Clear();
+
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
                 allReaped,
@@ -69,13 +75,24 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         var config = await _uow.BotConfig.GetActiveAsync();
 
-        // Stablecoin depeg check — before position loop
-        var stablecoinCritical = await CheckStablecoinDepegAsync(config, ct);
+        // Stablecoin depeg check — before position loop (every 5th cycle; USDCUSDT is slow-moving)
+        var stablecoinCritical = false;
+        if (Interlocked.Increment(ref _stablecoinCheckCycle) % 5 == 0)
+        {
+            stablecoinCritical = await CheckStablecoinDepegAsync(config, ct);
+        }
 
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
 
         // H3: Build a dictionary for O(1) lookup instead of O(N*M) linear scan
         var rateMap = latestRates.ToDictionary(r => (r.ExchangeId, r.AssetId));
+
+        // Pre-fetch recent alerts for all open positions to avoid N+1 queries in the loop
+        var openPositionIds = openPositions.Select(p => p.Id).ToList();
+        var recentAlerts = await _uow.Alerts.GetRecentByPositionIdsAsync(
+            openPositionIds,
+            new[] { AlertType.MarginWarning, AlertType.SpreadWarning },
+            TimeSpan.FromHours(4));
 
         // C-PH1: Collect positions that need closing; call SaveAsync ONCE after the loop
         var toClose = new List<(ArbitragePosition Position, CloseReason Reason)>();
@@ -122,12 +139,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             // Stablecoin depeg: close cross-stablecoin positions when critical
             if (stablecoinCritical)
             {
-                var isCrossStablecoin = (pos.LongExchange?.Name == "Binance") != (pos.ShortExchange?.Name == "Binance")
-                    && (pos.LongExchange?.Name == "Binance" || pos.ShortExchange?.Name == "Binance");
+                var isCrossStablecoin = (pos.LongExchange?.Name == "Binance") != (pos.ShortExchange?.Name == "Binance");
                 if (isCrossStablecoin)
                 {
                     _logger.LogWarning("Closing cross-stablecoin position #{Id}: stablecoin depeg critical", pos.Id);
-                    toClose.Add((pos, CloseReason.Manual));
+                    toClose.Add((pos, CloseReason.StablecoinDepeg));
                     continue;
                 }
             }
@@ -199,9 +215,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                         var winningExchange = longPnl > shortPnl ? longExchangeName : shortExchangeName;
                         var losingExchange = longPnl > shortPnl ? shortExchangeName : longExchangeName;
 
-                        var recentImbalanceAlert = await _uow.Alerts.GetRecentAsync(
-                            pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(4));
-                        if (recentImbalanceAlert is null)
+                        var hasRecentImbalanceAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
+                        if (!hasRecentImbalanceAlert)
                         {
                             _uow.Alerts.Add(new Alert
                             {
@@ -253,9 +268,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
                     if (pos.CurrentDivergencePct > divergenceThreshold && divergenceThreshold > 0)
                     {
-                        var recentDivAlert = await _uow.Alerts.GetRecentAsync(
-                            pos.UserId, pos.Id, AlertType.SpreadWarning, TimeSpan.FromHours(1));
-                        if (recentDivAlert is null)
+                        var hasRecentDivAlert = recentAlerts.ContainsKey((pos.Id, AlertType.SpreadWarning));
+                        if (!hasRecentDivAlert)
                         {
                             _uow.Alerts.Add(new Alert
                             {
@@ -275,7 +289,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 computedPnl[pos.Id] = new ComputedPositionPnl(
                     ExchangePnl: unrealizedPnl,
                     UnifiedPnl: unifiedUnrealizedPnl,
-                    DivergencePct: pos.CurrentDivergencePct ?? 0m);
+                    DivergencePct: pos.CurrentDivergencePct ?? 0m,
+                    CollateralImbalancePct: collateralImbalancePct);
 
                 // Calculate liquidation prices and distance
                 var minLiquidationDistance = ComputeLiquidationDistance(
@@ -306,10 +321,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // Liquidation early warning at 2x threshold
                 if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationWarningPct * 2m)
                 {
-                    var recentLiqAlert = await _uow.Alerts.GetRecentAsync(
-                        pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(1));
+                    var hasRecentLiqAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
 
-                    if (recentLiqAlert is null)
+                    if (!hasRecentLiqAlert)
                     {
                         _uow.Alerts.Add(new Alert
                         {
@@ -330,10 +344,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // Alert if spread below alert threshold (but above close threshold)
                 if (spread < config.AlertThreshold)
                 {
-                    var recentAlert = await _uow.Alerts.GetRecentAsync(
-                        pos.UserId, pos.Id, AlertType.SpreadWarning, TimeSpan.FromHours(1));
+                    var hasRecentSpreadAlert = recentAlerts.ContainsKey((pos.Id, AlertType.SpreadWarning));
 
-                    if (recentAlert is null)
+                    if (!hasRecentSpreadAlert)
                     {
                         _uow.Alerts.Add(new Alert
                         {
@@ -372,6 +385,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
             }
         }
+
+        // Clean up stale tracking entries for positions no longer open
+        var openIds = new HashSet<int>(openPositions.Select(p => p.Id));
+        foreach (var key in _negativeFundingCycles.Keys)
+            if (!openIds.Contains(key))
+                _negativeFundingCycles.TryRemove(key, out _);
 
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);

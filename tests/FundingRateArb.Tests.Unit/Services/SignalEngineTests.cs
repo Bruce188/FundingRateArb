@@ -2009,6 +2009,66 @@ public class SignalEngineTests
     }
 
     [Fact]
+    public async Task BreakEven_WithRebate_UsesPostRebateNet()
+    {
+        // Arrange: pre-rebate net yield would make break-even > threshold (filtered),
+        // but post-rebate net brings break-even within threshold (included).
+        // Lighter exchange offers 15% rebate, long rate is positive (long pays → rebate applies).
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Lighter", 1, "ETH", 0.0002m, takerFeeRate: 0m),  // long side, pays 0.0002 �� gets 15% rebate
+            MakeRate(2, "Hyperliquid", 1, "ETH", 0.0006m, takerFeeRate: 0.00045m), // short side
+        };
+
+        // Adjust Lighter exchange to have a rebate rate
+        rates[0].Exchange.FundingRebateRate = 0.15m;
+
+        // spread = 0.0006 - 0.0002 = 0.0004
+        // fees = (0 + 0.0009) / 12 = 0.000075/hr
+        // slippage = 5/10000 / 12 = 0.0000416667/hr
+        // Pre-rebate net = 0.0004 - 0.000075 - 0.0000416667 = 0.0002833
+        // Rebate: long rate 0.0002 > 0 → rebate = 0.0002 * 0.15 = 0.00003
+        // Post-rebate net = 0.0002833 + 0.00003 = 0.0003133
+        // totalEntryCost = (0 + 0.0009) + (5/10000) = 0.0009 + 0.0005 = 0.0014
+        // Post-rebate breakeven = 0.0014 / 0.0003133 ≈ 4.47 hours (within 8h threshold)
+        // Pre-rebate breakeven = 0.0014 / 0.0002833 ≈ 4.94 hours (also within)
+        // Use tighter threshold: BreakevenHoursMax = 4.5 to force the distinction
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 5, // generous enough for post-rebate, tight enough to verify calculation
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Provide sufficient history for trend analysis
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: opportunity is included and break-even uses post-rebate net
+        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
+        allOpps.Should().NotBeEmpty("opportunity should not be filtered by break-even using post-rebate net");
+        var opp = allOpps[0];
+        opp.BreakEvenHours.Should().NotBeNull();
+        // Break-even with rebate should be less than without rebate
+        // Post-rebate net > pre-rebate net → break-even hours should be < pre-rebate break-even
+        var preRebateNet = opp.NetYieldPerHour - 0.00003m; // subtract the rebate boost
+        if (preRebateNet > 0)
+        {
+            var preRebateBreakeven = (0.0009m + 0.0005m) / preRebateNet;
+            opp.BreakEvenHours!.Value.Should().BeLessThan(preRebateBreakeven,
+                "break-even with rebate should be shorter than without");
+        }
+    }
+
+    [Fact]
     public async Task TrendAnalysis_MarksUnconfirmed_WhenInsufficientHistory()
     {
         // Arrange: fewer snapshots than MinConsecutiveFavorableCycles

@@ -66,20 +66,19 @@ public class SignalEngine : ISignalEngine
             }
         }
 
-        // Batch-load recent funding rate history for trend analysis
-        var historyLookup = new Dictionary<(int AssetId, int ExchangeId), List<Domain.Entities.FundingRateSnapshot>>();
-        foreach (var rate in rates)
+        // Batch-load recent funding rate history for trend analysis (parallelized)
+        var distinctKeys = rates.Select(r => (r.AssetId, r.ExchangeId)).Distinct().ToList();
+        var from = DateTime.UtcNow.AddHours(-1);
+        var to = DateTime.UtcNow;
+        var historyTasks = distinctKeys.Select(async key =>
         {
-            var key = (rate.AssetId, rate.ExchangeId);
-            if (!historyLookup.ContainsKey(key))
-            {
-                var history = await _uow.FundingRates.GetHistoryAsync(
-                    rate.AssetId, rate.ExchangeId,
-                    DateTime.UtcNow.AddHours(-1), DateTime.UtcNow,
-                    take: config.MinConsecutiveFavorableCycles);
-                historyLookup[key] = history;
-            }
-        }
+            var history = await _uow.FundingRates.GetHistoryAsync(
+                key.AssetId, key.ExchangeId, from, to,
+                take: config.MinConsecutiveFavorableCycles);
+            return (key, history);
+        });
+        var historyResults = await Task.WhenAll(historyTasks);
+        var historyLookup = historyResults.ToDictionary(r => r.key, r => r.history);
 
         var opportunities = new List<ArbitrageOpportunityDto>();
         var netPositiveList = new List<ArbitrageOpportunityDto>();
@@ -128,12 +127,7 @@ public class SignalEngine : ISignalEngine
                     var slippagePerHour = config.SlippageBufferBps / 10_000m / amortHours;
                     net -= slippagePerHour;
 
-                    // Break-even analysis: hours to recover entry costs from net yield
-                    var totalEntryCost = (longFee + shortFee) + (config.SlippageBufferBps / 10_000m);
-                    var breakEvenHours = net > 0 ? totalEntryCost / net : (decimal?)null;
-
-                    // Apply funding rebate: if the paying leg's exchange offers a rebate, the effective
-                    // funding cost is reduced, improving net yield for the opportunity.
+                    // Apply funding rebate BEFORE break-even computation so break-even uses post-rebate net yield.
                     // Long leg pays when rate > 0; guard prevents incorrect boost when rate is negative.
                     if (longR.Exchange.FundingRebateRate > 0 && longR.RatePerHour > 0)
                     {
@@ -149,6 +143,10 @@ public class SignalEngine : ISignalEngine
                         var rebateBoost = Math.Abs(shortR.RatePerHour) * effectiveShortRebate;
                         net += rebateBoost;
                     }
+
+                    // Break-even analysis: hours to recover entry costs from post-rebate net yield
+                    var totalEntryCost = (longFee + shortFee) + (config.SlippageBufferBps / 10_000m);
+                    var breakEvenHours = net > 0 ? totalEntryCost / net : (decimal?)null;
 
                     // Compute minutes to next settlement from either leg (use minimum)
                     int? minutesToSettlement = null;

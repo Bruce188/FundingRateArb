@@ -55,6 +55,11 @@ public class PositionHealthMonitorTests
         _mockPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>()))
             .ReturnsAsync([]);
 
+        // Default: no recent alerts (batch pre-fetch returns empty)
+        _mockAlerts.Setup(a => a.GetRecentByPositionIdsAsync(
+            It.IsAny<IEnumerable<int>>(), It.IsAny<IEnumerable<AlertType>>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync(new Dictionary<(int, AlertType), Alert>());
+
         // Default: unified price returns 0 → fallback to per-exchange PnL (preserves existing test behavior)
         _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(0m);
@@ -222,15 +227,19 @@ public class PositionHealthMonitorTests
         SetupLatestRates(longRate: 0.0003m, shortRate: 0.00035m); // spread low
         SetupMarkPrices();
 
-        // Recent alert exists
-        _mockAlerts.Setup(a => a.GetRecentAsync(
-            It.IsAny<string>(), It.IsAny<int?>(), AlertType.SpreadWarning, It.IsAny<TimeSpan>()))
-            .ReturnsAsync(new Alert
+        // Recent alert exists (batch pre-fetch returns it)
+        var existingAlert = new Alert
+        {
+            UserId = "admin-user-id",
+            Type = AlertType.SpreadWarning,
+            CreatedAt = DateTime.UtcNow.AddMinutes(-30),
+            Message = "test",
+        };
+        _mockAlerts.Setup(a => a.GetRecentByPositionIdsAsync(
+            It.IsAny<IEnumerable<int>>(), It.IsAny<IEnumerable<AlertType>>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync(new Dictionary<(int, AlertType), Alert>
             {
-                UserId = "admin-user-id",
-                Type = AlertType.SpreadWarning,
-                CreatedAt = DateTime.UtcNow.AddMinutes(-30),
-                Message = "test",
+                { (pos.Id, AlertType.SpreadWarning), existingAlert },
             });
 
         await _sut.CheckAndActAsync();
@@ -2574,9 +2583,12 @@ public class PositionHealthMonitorTests
             .Returns(3000m);
 
         // Return existing recent alert — dedup should suppress new alert creation
-        _mockAlerts.Setup(a => a.GetRecentAsync(
-            It.IsAny<string>(), It.IsAny<int?>(), AlertType.SpreadWarning, It.IsAny<TimeSpan>()))
-            .ReturnsAsync(new Alert { Id = 999, Type = AlertType.SpreadWarning });
+        _mockAlerts.Setup(a => a.GetRecentByPositionIdsAsync(
+            It.IsAny<IEnumerable<int>>(), It.IsAny<IEnumerable<AlertType>>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync(new Dictionary<(int, AlertType), Alert>
+            {
+                { (pos.Id, AlertType.SpreadWarning), new Alert { Id = 999, Type = AlertType.SpreadWarning } },
+            });
 
         await _sut.CheckAndActAsync();
 
@@ -2853,9 +2865,9 @@ public class PositionHealthMonitorTests
         var result = await _sut.CheckAndActAsync();
 
         // Assert: cross-stablecoin position closed, same-stablecoin position NOT closed
-        result.ToClose.Should().Contain(r => r.Position.Id == 1 && r.Reason == CloseReason.Manual,
+        result.ToClose.Should().Contain(r => r.Position.Id == 1 && r.Reason == CloseReason.StablecoinDepeg,
             "cross-stablecoin position should be closed on critical depeg");
-        result.ToClose.Should().NotContain(r => r.Position.Id == 2 && r.Reason == CloseReason.Manual,
+        result.ToClose.Should().NotContain(r => r.Position.Id == 2 && r.Reason == CloseReason.StablecoinDepeg,
             "same-stablecoin position should NOT be closed");
     }
 
@@ -2888,7 +2900,114 @@ public class PositionHealthMonitorTests
         var result = await _sut.CheckAndActAsync();
 
         // Assert: no false positive close from failed price fetch
-        result.ToClose.Should().NotContain(r => r.Reason == CloseReason.Manual,
+        result.ToClose.Should().NotContain(r => r.Reason == CloseReason.StablecoinDepeg,
             "price fetch failure should not trigger stablecoin close");
+    }
+
+    // ── Review v4 tests ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task StablecoinDepeg_UsesStablecoinDepegCloseReason()
+    {
+        // Arrange: USDCUSDT at 0.98 → 2% spread → critical
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0.98m);
+        mockBinance.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockFactory.Setup(f => f.GetConnector("Binance")).Returns(mockBinance.Object);
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            StablecoinCriticalThresholdPct = 1.0m,
+            FundingFlipExitCycles = 100,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        pos.LongExchange = new Exchange { Id = 1, Name = "Binance" };
+        pos.LongExchangeId = 1;
+        pos.ShortExchange = new Exchange { Id = 2, Name = "Hyperliquid" };
+        pos.ShortExchangeId = 2;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m, MarkPrice = 3000m,
+                    Exchange = new Exchange { Id = 1, Name = "Binance" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+                new() { ExchangeId = 2, AssetId = 1, RatePerHour = 0.0006m, MarkPrice = 3001m,
+                    Exchange = new Exchange { Id = 2, Name = "Hyperliquid" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+            });
+        SetupMarkPrices();
+
+        // Act
+        var result = await _sut.CheckAndActAsync();
+
+        // Assert: CloseReason is StablecoinDepeg, not Manual
+        result.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.StablecoinDepeg,
+            "stablecoin depeg close should use StablecoinDepeg reason, not Manual");
+    }
+
+    [Fact]
+    public async Task NegativeFundingCycles_CleanedAfterPositionClose()
+    {
+        // Arrange: position with negative spread (builds up counter)
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0006m, shortRate: 0.0001m); // negative spread
+        SetupMarkPrices();
+
+        // First call — builds up negative funding cycle counter
+        await _sut.CheckAndActAsync();
+
+        // Now remove the position (simulating it was closed)
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        // Second call — no open positions, counter should be cleaned
+        var result = await _sut.CheckAndActAsync();
+
+        // Re-add the position (simulating a new position with the same ID)
+        var newPos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([newPos]);
+        SetupLatestRates(longRate: 0.0006m, shortRate: 0.0001m); // negative spread again
+        SetupMarkPrices();
+
+        // Third call — counter should start from 1, not continue from previous
+        // If not cleaned, it would have accumulated 2+ cycles. With FundingFlipExitCycles=2,
+        // a non-cleaned counter would cause an immediate close on this first negative cycle.
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.01m, // very low to prevent SpreadCollapsed
+            FundingFlipExitCycles = 2, // would trigger if counter wasn't cleaned
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var result3 = await _sut.CheckAndActAsync();
+
+        // Assert: position should NOT be closed (only 1 negative cycle, threshold is 2)
+        result3.ToClose.Should().NotContain(r => r.Reason == CloseReason.FundingFlipped,
+            "counter should have been cleaned; only 1 negative cycle after cleanup");
+    }
+
+    [Fact]
+    public async Task CollateralImbalance_ZeroMargin_NoAlert()
+    {
+        // Arrange: position with MarginUsdc = 0 — should not divide by zero or create alert
+        var pos = MakeOpenPosition(marginUsdc: 0m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2500m, shortMark: 3500m); // extreme divergence
+
+        await _sut.CheckAndActAsync();
+
+        // Assert: no collateral imbalance alert (marginPerLeg = 0 → skip)
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Message.Contains("Collateral imbalance"))), Times.Never,
+            "zero margin should not trigger collateral imbalance alert or divide-by-zero");
     }
 }

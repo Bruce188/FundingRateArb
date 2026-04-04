@@ -13,5 +13,6 @@ public enum CloseReason
     ExchangeDrift,
     LiquidationRisk,
     Rotation,
-    FundingFlipped
+    FundingFlipped,
+    StablecoinDepeg
 }

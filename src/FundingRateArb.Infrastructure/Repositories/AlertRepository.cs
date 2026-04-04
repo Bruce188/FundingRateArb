@@ -49,6 +49,27 @@ public class AlertRepository : IAlertRepository
             .FirstOrDefaultAsync();
     }
 
+    public async Task<Dictionary<(int PositionId, AlertType Type), Alert>> GetRecentByPositionIdsAsync(
+        IEnumerable<int> positionIds, IEnumerable<AlertType> types, TimeSpan within)
+    {
+        var cutoff = DateTime.UtcNow - within;
+        var posIds = positionIds.ToList();
+        var typeList = types.ToList();
+
+        var alerts = await _context.Alerts
+            .Where(a => a.ArbitragePositionId.HasValue
+                        && posIds.Contains(a.ArbitragePositionId.Value)
+                        && typeList.Contains(a.Type)
+                        && a.CreatedAt >= cutoff)
+            .OrderByDescending(a => a.CreatedAt)
+            .ToListAsync();
+
+        // Keep only the most recent alert per (positionId, type)
+        return alerts
+            .GroupBy(a => (a.ArbitragePositionId!.Value, a.Type))
+            .ToDictionary(g => g.Key, g => g.First());
+    }
+
     public async Task<List<Alert>> GetRecentUnreadAsync(TimeSpan within)
     {
         var cutoff = DateTime.UtcNow - within;
