@@ -9,6 +9,7 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
 {
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IUserSettingsService _userSettings;
+    private readonly ILeverageTierProvider _tierProvider;
     private readonly ILogger<ConnectorLifecycleManager> _logger;
 
     // Per-asset leverage limit cache to avoid redundant API calls within a trading cycle
@@ -17,10 +18,12 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
     public ConnectorLifecycleManager(
         IExchangeConnectorFactory connectorFactory,
         IUserSettingsService userSettings,
+        ILeverageTierProvider tierProvider,
         ILogger<ConnectorLifecycleManager> logger)
     {
         _connectorFactory = connectorFactory;
         _userSettings = userSettings;
+        _tierProvider = tierProvider;
         _logger = logger;
     }
 
@@ -151,6 +154,16 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
         }
 
         return maxLev;
+    }
+
+    public async Task EnsureTiersCachedAsync(IExchangeConnector connector, string asset, CancellationToken ct)
+    {
+        if (!_tierProvider.IsStale(connector.ExchangeName, asset))
+            return;
+
+        var tiers = await connector.GetLeverageTiersAsync(asset, ct);
+        if (tiers is { Length: > 0 })
+            _tierProvider.UpdateTiers(connector.ExchangeName, asset, tiers);
     }
 
     /// <summary>

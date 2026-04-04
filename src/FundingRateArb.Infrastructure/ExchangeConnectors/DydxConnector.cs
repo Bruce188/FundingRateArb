@@ -3,6 +3,7 @@ using System.Text.Json;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using FundingRateArb.Infrastructure.ExchangeConnectors.Dydx;
 using Microsoft.Extensions.Logging;
 using Polly;
@@ -348,6 +349,36 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         }
 
         return (int)(1m / marketInfo.InitialMarginFraction);
+    }
+
+    public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var ticker = asset + "-USD";
+            var marketInfo = await GetMarketInfoAsync(ticker, ct);
+            if (marketInfo is null || marketInfo.InitialMarginFraction <= 0)
+                return null;
+
+            var maxLeverage = (int)(1m / marketInfo.InitialMarginFraction);
+            var maintMarginRate = marketInfo.InitialMarginFraction / 2m;
+
+            return new[]
+            {
+                new LeverageTier(0m, decimal.MaxValue, maxLeverage, maintMarginRate)
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    {
+        // dYdX indexer does not expose per-position margin/liquidation fields
+        return Task.FromResult<MarginStateDto?>(null);
     }
 
     /// <inheritdoc />

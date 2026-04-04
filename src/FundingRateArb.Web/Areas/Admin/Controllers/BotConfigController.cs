@@ -56,7 +56,9 @@ public class BotConfigController : Controller
             AdaptiveHoldEnabled = config.AdaptiveHoldEnabled,
             RebalanceEnabled = config.RebalanceEnabled,
             RebalanceMinImprovement = config.RebalanceMinImprovement,
-            MaxRebalancesPerCycle = config.MaxRebalancesPerCycle
+            MaxRebalancesPerCycle = config.MaxRebalancesPerCycle,
+            MaxLeverageCap = config.MaxLeverageCap,
+            MarginUtilizationAlertPct = config.MarginUtilizationAlertPct
         };
 
         return View(model);
@@ -108,6 +110,8 @@ public class BotConfigController : Controller
         config.RebalanceEnabled = model.RebalanceEnabled;
         config.RebalanceMinImprovement = model.RebalanceMinImprovement!.Value;
         config.MaxRebalancesPerCycle = model.MaxRebalancesPerCycle!.Value;
+        config.MaxLeverageCap = model.MaxLeverageCap;
+        config.MarginUtilizationAlertPct = model.MarginUtilizationAlertPct;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)

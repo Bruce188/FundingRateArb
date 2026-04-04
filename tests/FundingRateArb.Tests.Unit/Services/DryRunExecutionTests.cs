@@ -93,13 +93,14 @@ public class DryRunExecutionTests
     private ExecutionEngine CreateEngine()
     {
         var connectorLifecycle = new ConnectorLifecycleManager(
-            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+            _mockFactory.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
         var emergencyClose = new EmergencyCloseHandler(
             _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, Mock.Of<IPnlReconciliationService>(), NullLogger<PositionCloser>.Instance);
 
-        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
     }
 
     // ── ExecutionEngine dry-run tests ─────────────────────────────────────

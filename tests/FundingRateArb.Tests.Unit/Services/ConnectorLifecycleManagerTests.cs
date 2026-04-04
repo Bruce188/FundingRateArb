@@ -17,6 +17,7 @@ public class ConnectorLifecycleManagerTests
     {
         _sut = new ConnectorLifecycleManager(
             _mockFactory.Object, _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
             NullLogger<ConnectorLifecycleManager>.Instance);
     }
 

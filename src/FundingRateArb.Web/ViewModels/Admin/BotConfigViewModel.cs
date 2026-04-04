@@ -94,4 +94,10 @@ public class BotConfigViewModel
 
     [Required, Range(1, 20), Display(Name = "Max Rebalances Per Cycle")]
     public int? MaxRebalancesPerCycle { get; set; } = 2;
+
+    [Required, Range(1, 50), Display(Name = "Max Leverage Cap")]
+    public int MaxLeverageCap { get; set; } = 3;
+
+    [Required, Range(0.1, 0.95), Display(Name = "Margin Utilization Alert (%)")]
+    public decimal MarginUtilizationAlertPct { get; set; } = 0.70m;
 }

@@ -121,13 +121,14 @@ public class OrderPlacementReliabilityTests
             .ReturnsAsync(SuccessOrder());
 
         var connectorLifecycle = new ConnectorLifecycleManager(
-            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+            _mockFactory.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
         var emergencyClose = new EmergencyCloseHandler(
             _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _engine = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        _engine = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
@@ -391,6 +392,7 @@ public class OrderPlacementReliabilityTests
             _monitorFactory.Object,
             marketDataCache ?? new Mock<IMarketDataCache>().Object,
             _monitorExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
             NullLogger<PositionHealthMonitor>.Instance);
     }
 

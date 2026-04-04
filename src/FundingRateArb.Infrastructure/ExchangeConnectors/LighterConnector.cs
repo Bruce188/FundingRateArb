@@ -4,6 +4,7 @@ using System.Text.Json;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using FundingRateArb.Infrastructure.ExchangeConnectors.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -1591,6 +1592,37 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         {
             return null;
         }
+    }
+
+    public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var market = await GetMarketDetailAsync(asset, ct);
+            if (market is null || market.MinInitialMarginFraction <= 0)
+                return null;
+
+            var maxLeverage = (int)(10_000m / market.MinInitialMarginFraction);
+            var maintMarginRate = market.MaintenanceMarginFraction > 0
+                ? market.MaintenanceMarginFraction / 10_000m
+                : 1m / maxLeverage;
+
+            return new[]
+            {
+                new LeverageTier(0m, decimal.MaxValue, maxLeverage, maintMarginRate)
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    {
+        // Lighter position endpoints do not expose margin/liquidation details
+        return Task.FromResult<MarginStateDto?>(null);
     }
 
     public Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)

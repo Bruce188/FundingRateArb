@@ -5,6 +5,7 @@ using Binance.Net.Interfaces.Clients.UsdFuturesApi;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Registry;
@@ -623,6 +624,74 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         catch (OperationCanceledException) { throw; }
         catch
         {
+            return null;
+        }
+    }
+
+    public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.UsdFuturesApi.Account.GetBracketsAsync(symbol, ct: token), ct);
+
+            if (!result.Success || result.Data is null)
+                return null;
+
+            var symbolBracket = result.Data.FirstOrDefault();
+            if (symbolBracket?.Brackets is null || symbolBracket.Brackets.Length == 0)
+                return null;
+
+            return symbolBracket.Brackets
+                .Select(b => new LeverageTier(
+                    (decimal)b.Floor,
+                    (decimal)b.Cap,
+                    b.InitialLeverage,
+                    b.MaintenanceMarginRatio))
+                .OrderBy(t => t.NotionalFloor)
+                .ToArray();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.UsdFuturesApi.Account.GetPositionInformationAsync(symbol, ct: token), ct);
+
+            if (!result.Success)
+                return null;
+
+            var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol && p.Quantity != 0);
+            if (pos is null)
+                return null;
+
+            var marginUsed = pos.IsolatedMargin;
+            var wallet = pos.IsolatedWallet;
+
+            return new MarginStateDto
+            {
+                MarginUsed = marginUsed,
+                MarginAvailable = wallet > marginUsed ? wallet - marginUsed : 0m,
+                LiquidationPrice = pos.LiquidationPrice,
+                MarginUtilizationPct = wallet > 0 ? marginUsed / wallet : 0m
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch margin state for {Asset}: {Error}", asset, ex.Message);
             return null;
         }
     }

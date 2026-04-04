@@ -137,6 +137,14 @@ public class BotConfiguration
     /// </summary>
     public bool ForceConcurrentExecution { get; set; }
 
+    /// <summary>Hard ceiling on effective leverage across all exchanges. Overrides exchange-reported max.</summary>
+    [Range(1, 50)]
+    public int MaxLeverageCap { get; set; } = 50;
+
+    /// <summary>Fraction of margin utilization that triggers an alert (e.g. 0.70 = 70%).</summary>
+    [Range(0.1, 0.95)]
+    public decimal MarginUtilizationAlertPct { get; set; } = 0.70m;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

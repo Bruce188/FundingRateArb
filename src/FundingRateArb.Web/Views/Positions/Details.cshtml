@@ -111,6 +111,42 @@
             }
         </dl>
 
+        @if (pos.LongMarginUtilizationPct.HasValue || pos.ShortMarginUtilizationPct.HasValue)
+        {
+            <h5 class="mt-3">Margin Utilization</h5>
+            <dl class="row">
+                @if (pos.LongMarginUtilizationPct.HasValue)
+                {
+                    <dt class="col-sm-5">Long Margin Util.</dt>
+                    <dd class="col-sm-7 @(pos.LongMarginUtilizationPct >= 0.70m ? "text-danger" : "")">
+                        @(pos.LongMarginUtilizationPct.Value.ToString("P1"))
+                    </dd>
+                    @if (pos.MaxSafeMovePctLong.HasValue)
+                    {
+                        <dt class="col-sm-5">Long Max Safe Move</dt>
+                        <dd class="col-sm-7">@(pos.MaxSafeMovePctLong.Value.ToString("F2"))%</dd>
+                    }
+                }
+                @if (pos.ShortMarginUtilizationPct.HasValue)
+                {
+                    <dt class="col-sm-5">Short Margin Util.</dt>
+                    <dd class="col-sm-7 @(pos.ShortMarginUtilizationPct >= 0.70m ? "text-danger" : "")">
+                        @(pos.ShortMarginUtilizationPct.Value.ToString("P1"))
+                    </dd>
+                    @if (pos.MaxSafeMovePctShort.HasValue)
+                    {
+                        <dt class="col-sm-5">Short Max Safe Move</dt>
+                        <dd class="col-sm-7">@(pos.MaxSafeMovePctShort.Value.ToString("F2"))%</dd>
+                    }
+                }
+                @if (pos.CyclesUntilLiquidation.HasValue)
+                {
+                    <dt class="col-sm-5">Cycles to Liquidation</dt>
+                    <dd class="col-sm-7">@(pos.CyclesUntilLiquidation.Value.ToString("F1"))</dd>
+                }
+            </dl>
+        }
+
         @if (!string.IsNullOrEmpty(pos.Notes))
         {
             <h5 class="mt-3">Notes</h5>

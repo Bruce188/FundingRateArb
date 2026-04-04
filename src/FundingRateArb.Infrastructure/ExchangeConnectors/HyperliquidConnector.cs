@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using HyperLiquid.Net.Enums;
 using HyperLiquid.Net.Interfaces.Clients;
 using Microsoft.Extensions.Logging;
@@ -541,6 +542,43 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     /// (position genuinely doesn't exist if qty is 0). apiConfirmed=false means the
     /// API call failed or returned an unexpected result (transient — allow retry).
     /// </summary>
+    public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAndTickersAsync(token),
+                ct);
+
+            if (!result.Success || result.Data.ExchangeInfo?.Symbols is null)
+                return null;
+
+            var symbol = result.Data.ExchangeInfo.Symbols
+                .FirstOrDefault(s => s.Name.Equals(asset, StringComparison.OrdinalIgnoreCase));
+
+            if (symbol is null || symbol.MaxLeverage <= 0)
+                return null;
+
+            return new[]
+            {
+                new LeverageTier(0m, decimal.MaxValue, symbol.MaxLeverage, 1m / symbol.MaxLeverage)
+            };
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    {
+        // Hyperliquid clearinghouse state is not easily accessible through the typed SDK
+        return Task.FromResult<MarginStateDto?>(null);
+    }
+
     private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)
     {
         try

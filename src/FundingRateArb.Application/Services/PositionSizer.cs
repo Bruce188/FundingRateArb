@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
@@ -11,13 +12,15 @@ public class PositionSizer : IPositionSizer
     private readonly IYieldCalculator _yieldCalculator;
     private readonly IBalanceAggregator _balanceAggregator;
     private readonly IUserSettingsService _userSettings;
+    private readonly ILeverageTierProvider _tierProvider;
 
-    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator, IBalanceAggregator balanceAggregator, IUserSettingsService userSettings)
+    public PositionSizer(IUnitOfWork uow, IYieldCalculator yieldCalculator, IBalanceAggregator balanceAggregator, IUserSettingsService userSettings, ILeverageTierProvider tierProvider)
     {
         _uow = uow;
         _yieldCalculator = yieldCalculator;
         _balanceAggregator = balanceAggregator;
         _userSettings = userSettings;
+        _tierProvider = tierProvider;
     }
 
     public async Task<decimal[]> CalculateBatchSizesAsync(
@@ -34,11 +37,10 @@ public class PositionSizer : IPositionSizer
 
         var config = await _uow.BotConfig.GetActiveAsync();
         userConfig ??= await _userSettings.GetOrCreateConfigAsync(userId);
-        var effectiveLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
-        if (effectiveLeverage < 1)
-        {
-            effectiveLeverage = 1;
-        }
+        var effectiveLeverage = Math.Min(
+            userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage,
+            config.MaxLeverageCap);
+        effectiveLeverage = Math.Max(effectiveLeverage, 1);
         var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
         var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
 
@@ -176,14 +178,29 @@ public class PositionSizer : IPositionSizer
         }
 
         // C2: Cap each position by its liquidity limit (compare notional, not margin)
+        // Also check tier-based leverage per opportunity
         for (int i = 0; i < sizes.Length; i++)
         {
-            var minVol = Math.Min(opportunities[i].LongVolume24h, opportunities[i].ShortVolume24h);
+            if (sizes[i] <= 0)
+                continue;
+
+            var opp = opportunities[i];
+            var oppLeverage = effectiveLeverage;
+
+            // Check if tier data constrains leverage for this opportunity's notional
+            var tentativeNotional = sizes[i] * oppLeverage;
+            var longTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.LongExchangeName, opp.AssetSymbol, tentativeNotional);
+            var shortTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.ShortExchangeName, opp.AssetSymbol, tentativeNotional);
+            var tierMax = Math.Min(longTierMax, shortTierMax);
+            if (tierMax < oppLeverage && tierMax != int.MaxValue)
+                oppLeverage = tierMax;
+
+            var minVol = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);
             var liquidityLimit = minVol * config.VolumeFraction;
-            var notional = sizes[i] * effectiveLeverage;
+            var notional = sizes[i] * oppLeverage;
             if (notional > liquidityLimit)
             {
-                sizes[i] = liquidityLimit / effectiveLeverage;
+                sizes[i] = liquidityLimit / oppLeverage;
             }
         }
 

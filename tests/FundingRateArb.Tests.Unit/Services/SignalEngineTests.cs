@@ -1223,4 +1223,122 @@ public class SignalEngineTests
         result[0].LongExchangeName.Should().Be("Hyperliquid");
         result[0].ShortExchangeName.Should().Be("Lighter");
     }
+
+    // ── Leverage-adjusted metrics ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_PopulatesBreakEvenCycles()
+    {
+        // Arrange: tier provider returns 5x effective leverage for both exchanges
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(20); // high enough that config leverage (5x) is the binding constraint
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        // Config: DefaultLeverage=5, MaxLeverageCap=50, capital=10000, MaxCapitalPerPosition=0.5
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Spread = 0.0010 - 0.0001 = 0.0009/hr
+        // Fees: Hyperliquid taker=0.00035*2=0.0007, Lighter taker=0*2=0
+        // feePerHour = (0.0007 + 0) / 24 = 0.00002917
+        // net ~ 0.0009 - 0.00002917 = 0.0008708/hr
+        // effectiveLeverage = min(5, 50, 20) = 5
+        // BreakEvenCycles = entrySpreadCost / (net * leverage)
+        //   entrySpreadCost = longFee + shortFee = 0.0007 + 0
+        //   BreakEvenCycles = 0.0007 / (0.0008708 * 5) ~ 0.1608
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Act
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        opp.EffectiveLeverage.Should().Be(5);
+        opp.ReturnOnCapitalPerHour.Should().BeGreaterThan(0);
+        opp.AprOnCapital.Should().BeGreaterThan(0);
+        opp.BreakEvenCycles.Should().BeGreaterThan(0).And.BeLessThan(1m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_AprOnCapitalIncludesLeverage()
+    {
+        // Verify AprOnCapital = NetYieldPerHour * effectiveLeverage * 24 * 365 * 100
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(int.MaxValue); // no tier constraint
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 3,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        opp.EffectiveLeverage.Should().Be(3);
+        // AprOnCapital should be roughly 3x the base AnnualizedYield
+        var baseApr = opp.AnnualizedYield * 100m;
+        opp.AprOnCapital.Should().BeApproximately(baseApr * 3m, 1m);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WithoutTierProvider_LeavesLeverageFieldsNull()
+    {
+        // The default _sut has no tier provider
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].EffectiveLeverage.Should().BeNull();
+        result[0].ReturnOnCapitalPerHour.Should().BeNull();
+        result[0].AprOnCapital.Should().BeNull();
+        result[0].BreakEvenCycles.Should().BeNull();
+    }
 }

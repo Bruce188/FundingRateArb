@@ -115,13 +115,14 @@ public class ExecutionEngineTests
             .ReturnsAsync(SuccessOrder());
 
         var connectorLifecycle = new ConnectorLifecycleManager(
-            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+            _mockFactory.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
         var emergencyClose = new EmergencyCloseHandler(
             _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
@@ -1290,10 +1291,10 @@ public class ExecutionEngineTests
     }
 
     [Fact]
-    public async Task OpenPosition_BothExchangesClampLeverage_BothAlertsShowOriginalLeverage()
+    public async Task OpenPosition_BothExchangesClampLeverage_AlertShowsOriginalAndFinalLeverage()
     {
         // Configured leverage = 5x, long max = 3x, short max = 2x
-        // Both alerts should say "from 5x" (original), not "from 3x" (intermediate)
+        // A single alert should show "from 5x to 2x" (min of both exchange limits)
         _mockLongConnector
             .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
             .ReturnsAsync(3);
@@ -1312,13 +1313,7 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeTrue();
 
-        // Both alerts should reference the original configured leverage (5x)
-        _mockAlerts.Verify(
-            a => a.Add(It.Is<Alert>(al =>
-                al.Type == AlertType.LeverageReduced &&
-                al.Message!.Contains("from 5x to 3x"))),
-            Times.Once);
-
+        // Unified alert: reduced from original to most restrictive exchange limit
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Type == AlertType.LeverageReduced &&

@@ -4,6 +4,7 @@ using Aster.Net.Interfaces.Clients;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Registry;
@@ -648,6 +649,74 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
         catch
         {
+            return null;
+        }
+    }
+
+    public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token), ct);
+
+            if (!result.Success || result.Data is null)
+                return null;
+
+            var symbolBracket = result.Data.FirstOrDefault();
+            if (symbolBracket?.Brackets is null || symbolBracket.Brackets.Length == 0)
+                return null;
+
+            return symbolBracket.Brackets
+                .Select(b => new LeverageTier(
+                    (decimal)b.Floor,
+                    (decimal)b.Cap,
+                    b.InitialLeverage,
+                    b.MaintenanceMarginRatio))
+                .OrderBy(t => t.NotionalFloor)
+                .ToArray();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    {
+        try
+        {
+            var symbol = asset + "USDT";
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+
+            if (!result.Success)
+                return null;
+
+            var pos = result.Data?.FirstOrDefault(p => p.Symbol == symbol && p.PositionAmount != 0);
+            if (pos is null)
+                return null;
+
+            var marginUsed = pos.InitialMargin;
+            var marginAvailable = pos.MaintenanceMargin > 0
+                ? marginUsed - pos.MaintenanceMargin
+                : 0m;
+
+            return new MarginStateDto
+            {
+                MarginUsed = marginUsed,
+                MarginAvailable = marginAvailable,
+                LiquidationPrice = pos.LiquidationPrice,
+                MarginUtilizationPct = marginUsed > 0 ? pos.MaintenanceMargin / marginUsed : 0m
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch margin state for {Asset}: {Error}", asset, ex.Message);
             return null;
         }
     }

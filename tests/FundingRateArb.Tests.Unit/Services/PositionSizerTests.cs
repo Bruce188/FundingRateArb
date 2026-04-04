@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
@@ -40,7 +41,7 @@ public class PositionSizerTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object);
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue));
     }
 
     private static ArbitrageOpportunityDto DefaultOpp(

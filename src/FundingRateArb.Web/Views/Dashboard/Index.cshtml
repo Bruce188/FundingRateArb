@@ -230,6 +230,9 @@
                                 <th>Net Yield/hr</th>
                                 <th>Predicted</th>
                                 <th>APR</th>
+                                <th>Lev</th>
+                                <th>ROC APR</th>
+                                <th>BE Cyc</th>
                                 <th>Next</th>
                             </tr>
                         </thead>
@@ -239,7 +242,7 @@
                             @if (Model.Opportunities.Count == 0)
                             {
                                 <tr>
-                                    <td colspan="9" class="text-center py-4">
+                                    <td colspan="12" class="text-center py-4">
                                         @if (Model.Diagnostics is not null)
                                         {
                                             var dx = Model.Diagnostics;
@@ -333,6 +336,38 @@
                                             @if (constrained)
                                             {
                                                 <span class="ms-1" title="Position size limited by liquidity">&#9888;</span>
+                                            }
+                                        </td>
+                                        <td class="text-muted small">
+                                            @if (opp.EffectiveLeverage.HasValue)
+                                            {
+                                                @(opp.EffectiveLeverage.Value + "x")
+                                            }
+                                            else
+                                            {
+                                                <span>&mdash;</span>
+                                            }
+                                        </td>
+                                        <td class="small">
+                                            @if (opp.AprOnCapital.HasValue)
+                                            {
+                                                var rocClass = opp.AprOnCapital.Value > 100m ? "text-success fw-bold"
+                                                    : opp.AprOnCapital.Value > 50m ? "text-warning fw-bold" : "";
+                                                <span class="@rocClass">@(opp.AprOnCapital.Value.ToString("F0"))%</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-muted">&mdash;</span>
+                                            }
+                                        </td>
+                                        <td class="text-muted small">
+                                            @if (opp.BreakEvenCycles.HasValue)
+                                            {
+                                                @(opp.BreakEvenCycles.Value.ToString("F1"))
+                                            }
+                                            else
+                                            {
+                                                <span>&mdash;</span>
                                             }
                                         </td>
                                         <td class="text-muted small">

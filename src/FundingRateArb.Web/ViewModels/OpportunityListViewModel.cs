@@ -12,6 +12,9 @@ public class OpportunityListViewModel
     /// <summary>Fraction of 24h volume used for liquidity sizing.</summary>
     public decimal VolumeFraction { get; set; }
 
+    /// <summary>Hard ceiling on leverage from admin config.</summary>
+    public int MaxLeverageCap { get; set; }
+
     /// <summary>Returns true when the opportunity would be volume-constrained.</summary>
     public bool IsVolumeConstrained(ArbitrageOpportunityDto opp)
     {

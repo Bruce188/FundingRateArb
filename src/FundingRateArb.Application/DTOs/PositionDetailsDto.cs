@@ -27,4 +27,11 @@ public class PositionDetailsDto
     public DateTime? ClosedAt { get; set; }
     public string? Notes { get; set; }
     public bool IsDryRun { get; set; }
+
+    // Margin utilization fields (populated when margin state is available)
+    public decimal? LongMarginUtilizationPct { get; set; }
+    public decimal? ShortMarginUtilizationPct { get; set; }
+    public decimal? MaxSafeMovePctLong { get; set; }
+    public decimal? MaxSafeMovePctShort { get; set; }
+    public decimal? CyclesUntilLiquidation { get; set; }
 }

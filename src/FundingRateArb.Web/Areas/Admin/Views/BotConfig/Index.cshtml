@@ -178,6 +178,18 @@
                             <div class="form-text">Max fraction of capital on any single exchange (e.g. 0.7 = 70%)</div>
                             <span asp-validation-for="MaxExposurePerExchange" class="text-danger"></span>
                         </div>
+                        <div class="col-md-4">
+                            <label asp-for="MaxLeverageCap" class="form-label"></label>
+                            <input asp-for="MaxLeverageCap" class="form-control" type="number" min="1" max="50" />
+                            <div class="form-text">Hard ceiling on leverage regardless of exchange limits</div>
+                            <span asp-validation-for="MaxLeverageCap" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="MarginUtilizationAlertPct" class="form-label"></label>
+                            <input asp-for="MarginUtilizationAlertPct" class="form-control" type="number" step="any" min="0.1" max="0.95" />
+                            <div class="form-text">Alert when margin utilization exceeds this fraction (e.g. 0.70 = 70%)</div>
+                            <span asp-validation-for="MarginUtilizationAlertPct" class="text-danger"></span>
+                        </div>
                     </div>
                 </div>
             </div>
