@@ -8,6 +8,10 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
+    var lastUpdateTime = null;
+    var staleTimer = null;
+    var STALE_THRESHOLD_MS = 120000; // 2 minutes
+
     // Dynamic decimal formatting for small prices
     function formatPrice(price) {
         if (price === 0) return "$0.00";
@@ -17,6 +21,22 @@
     }
 
     connection.on("ReceiveDashboardUpdate", function (data) {
+        // Track last update for staleness detection
+        lastUpdateTime = Date.now();
+        var staleIndicator = document.getElementById("stale-indicator");
+        if (staleIndicator) {
+            staleIndicator.style.display = "none";
+        }
+        var lastUpdateEl = document.getElementById("last-update-time");
+        if (lastUpdateEl) {
+            lastUpdateEl.textContent = new Date().toLocaleTimeString();
+        }
+        if (staleTimer) clearTimeout(staleTimer);
+        staleTimer = setTimeout(function () {
+            var indicator = document.getElementById("stale-indicator");
+            if (indicator) indicator.style.display = "";
+        }, STALE_THRESHOLD_MS);
+
         var botStatus = document.getElementById("bot-status");
         if (botStatus) {
             botStatus.textContent = data.botEnabled ? "RUNNING" : "STOPPED";
@@ -37,7 +57,11 @@
             var count = data.needsAttentionCount || 0;
             needsAttention.textContent = count;
             var badge = document.getElementById("needs-attention-badge");
-            if (badge) badge.style.display = count > 0 ? "" : "none";
+            if (badge) {
+                badge.className = count > 0
+                    ? "text-warning"
+                    : "text-success";
+            }
         }
 
         var bestSpread = document.getElementById("best-spread");

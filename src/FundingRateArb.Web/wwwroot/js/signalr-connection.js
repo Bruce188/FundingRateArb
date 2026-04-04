@@ -120,6 +120,16 @@
             status.className = "badge bg-success";
             status.textContent = "Live";
         }
+        connection.invoke("RejoinGroups")
+            .then(function () {
+                return connection.invoke("RequestFullUpdate");
+            })
+            .catch(function (err) {
+                console.error("Reconnection recovery failed:", err);
+                if (err.toString().indexOf("Authentication required") !== -1) {
+                    window.location.href = "/Identity/Account/Login";
+                }
+            });
     });
 
     connection.onclose(function () {

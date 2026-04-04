@@ -43,6 +43,14 @@
     </div>
 }
 
+@if (Model.IsAuthenticated)
+{
+    <div class="d-flex align-items-center gap-2 mb-2 small text-muted">
+        <span>Last update: <span id="last-update-time">--:--:--</span></span>
+        <span id="stale-indicator" class="badge bg-warning text-dark" style="display:none">Stale</span>
+    </div>
+}
+
 <!-- KPI Cards -->
 <div class="row mb-4">
     @if (Model.IsAuthenticated)
@@ -79,8 +87,8 @@
                             <h4 class="mb-0"><span id="open-positions">@Model.OpenPositionCount</span></h4>
                             <small class="text-muted">
                                 <span id="opening-positions">@Model.OpeningPositionCount</span> opening
-                                <span id="needs-attention-badge" style="@(Model.NeedsAttentionCount > 0 ? "" : "display:none")">
-                                    | <span class="text-warning" id="needs-attention">@Model.NeedsAttentionCount</span> needs attention
+                                <span id="needs-attention-badge" class="@(Model.NeedsAttentionCount > 0 ? "text-warning" : "text-success")">
+                                    | <span id="needs-attention">@Model.NeedsAttentionCount</span> needs attention
                                 </span>
                             </small>
                         </div>
