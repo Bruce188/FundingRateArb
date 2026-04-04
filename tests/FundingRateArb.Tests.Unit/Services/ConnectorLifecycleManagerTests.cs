@@ -224,7 +224,9 @@ public class ConnectorLifecycleManagerTests
             {
                 callCount++;
                 if (callCount == 1)
+                {
                     return ("key", "secret", "wallet", "pk", (string?)null, (string?)null);
+                }
                 throw new InvalidOperationException("Short decryption failed");
             });
 
