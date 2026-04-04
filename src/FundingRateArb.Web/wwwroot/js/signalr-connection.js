@@ -114,12 +114,28 @@
         }
     });
 
+    var _lastFullUpdate = 0;
+
     connection.onreconnected(function () {
         var status = document.getElementById("connection-status");
         if (status) {
             status.className = "badge bg-success";
             status.textContent = "Live";
         }
+        connection.invoke("RejoinGroups")
+            .then(function () {
+                if (Date.now() - _lastFullUpdate < 10000) return;
+                return connection.invoke("RequestFullUpdate")
+                    .then(function () { _lastFullUpdate = Date.now(); });
+            })
+            .catch(function (err) {
+                console.error("Reconnection recovery failed:", err);
+                if (err.toString().indexOf("Authentication required") !== -1) {
+                    window.location.href = "/Identity/Account/Login";
+                } else if (window.appSignalR && window.appSignalR.showToast) {
+                    window.appSignalR.showToast("Reconnected but data refresh failed.", "text-bg-warning", 5000);
+                }
+            });
     });
 
     connection.onclose(function () {
