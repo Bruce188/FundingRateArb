@@ -98,7 +98,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         foreach (var (_, market) in markets)
         {
             if (!market.Status.Equals("ACTIVE", StringComparison.OrdinalIgnoreCase))
+            {
                 continue;
+            }
 
             var rate = market.NextFundingRate ?? 0m;
             var symbol = market.Ticker.EndsWith("-USD")
@@ -128,11 +130,15 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
         var markPrice = await GetMarkPriceAsync(asset, ct);
         if (markPrice <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+        }
 
         var marketInfo = await GetMarketInfoAsync(ticker, ct);
         if (marketInfo is null)
+        {
             return new OrderResultDto { Success = false, Error = $"Market info not found for {ticker}" };
+        }
 
         var quantity = Math.Round(
             sizeUsdc * leverage / markPrice,
@@ -140,11 +146,15 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             MidpointRounding.ToZero);
 
         if (quantity <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Calculated quantity is zero for {asset} (size={sizeUsdc}, leverage={leverage}, mark={markPrice})" };
+        }
 
         var notional = quantity * markPrice;
         if (notional < 1m)
+        {
             return new OrderResultDto { Success = false, Error = $"Order notional ${notional:F2} below minimum" };
+        }
 
         return await PlaceOrderInternalAsync(asset, side, quantity, markPrice, marketInfo, ct);
     }
@@ -157,11 +167,15 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
         var markPrice = await GetMarkPriceAsync(asset, ct);
         if (markPrice <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Mark price is zero or negative for {asset}" };
+        }
 
         var marketInfo = await GetMarketInfoAsync(ticker, ct);
         if (marketInfo is null)
+        {
             return new OrderResultDto { Success = false, Error = $"Market info not found for {ticker}" };
+        }
 
         var roundedQuantity = Math.Round(
             quantity,
@@ -169,7 +183,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             MidpointRounding.ToZero);
 
         if (roundedQuantity <= 0)
+        {
             return new OrderResultDto { Success = false, Error = $"Rounded quantity is zero for {asset} (quantity={quantity})" };
+        }
 
         return await PlaceOrderInternalAsync(asset, side, roundedQuantity, markPrice, marketInfo, ct);
     }
@@ -190,7 +206,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
         var marketInfo = await GetMarketInfoAsync(ticker, ct);
         if (marketInfo is null)
+        {
             return new OrderResultDto { Success = false, Error = $"Market info not found for {ticker}" };
+        }
 
         // Fetch position from Indexer
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
@@ -213,7 +231,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             p.Side.Equals(expectedSide, StringComparison.OrdinalIgnoreCase));
 
         if (position is null)
+        {
             return new OrderResultDto { Success = false, Error = $"No open {side} position for {ticker}" };
+        }
 
         var quantity = Math.Abs(position.Size);
         var markPrice = await GetMarkPriceAsync(asset, ct);
@@ -323,7 +343,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         var ticker = asset + "-USD";
         var marketInfo = await GetMarketInfoAsync(ticker, ct);
         if (marketInfo is null || marketInfo.InitialMarginFraction <= 0)
+        {
             return null;
+        }
 
         return (int)(1m / marketInfo.InitialMarginFraction);
     }
@@ -432,19 +454,27 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     {
         // Reset cache after 1-hour TTL
         if (_marketInfoLoaded && DateTime.UtcNow.Ticks > Interlocked.Read(ref _marketInfoExpiryTicks))
+        {
             _marketInfoLoaded = false;
+        }
 
         if (_marketInfoLoaded)
+        {
             return;
+        }
 
         if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _marketInfoFailedUntilTicks))
+        {
             return;
+        }
 
         await _marketInfoLock.WaitAsync(ct);
         try
         {
             if (_marketInfoLoaded)
+            {
                 return;
+            }
 
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var resp = await pipeline.ExecuteAsync(async token =>
@@ -474,7 +504,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private async Task<uint> GetCurrentBlockHeightAsync(CancellationToken ct)
     {
         if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _blockHeightExpiryTicks))
+        {
             return (uint)Interlocked.Read(ref _cachedBlockHeight);
+        }
 
         try
         {
@@ -501,7 +533,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private async Task<(ulong AccountNumber, ulong Sequence)> GetAccountSequenceAsync(CancellationToken ct)
     {
         if (_accountInfoCached)
+        {
             return (_cachedAccountNumber, (ulong)Interlocked.Read(ref _cachedSequence));
+        }
 
         var (accountNumber, sequence) = await RequireSigner().GetAccountInfoAsync(_validatorClient, ct);
         _cachedAccountNumber = accountNumber;
@@ -513,7 +547,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private void IncrementSequence()
     {
         if (_accountInfoCached)
+        {
             Interlocked.Increment(ref _cachedSequence);
+        }
     }
 
     internal static ulong ToQuantums(decimal quantity, int atomicResolution)
@@ -525,13 +561,20 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private static decimal RoundToTickSize(decimal price, decimal tickSize)
     {
         if (tickSize <= 0)
+        {
             return Math.Round(price, 2, MidpointRounding.AwayFromZero);
+        }
+
         return Math.Round(price / tickSize, 0, MidpointRounding.AwayFromZero) * tickSize;
     }
 
     private static int GetDecimalPlaces(decimal stepSize)
     {
-        if (stepSize <= 0) return 0;
+        if (stepSize <= 0)
+        {
+            return 0;
+        }
+
         int places = 0;
         while (stepSize < 1m && places < 18)
         {

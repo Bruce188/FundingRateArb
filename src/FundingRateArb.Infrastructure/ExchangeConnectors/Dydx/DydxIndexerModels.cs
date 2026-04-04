@@ -211,12 +211,18 @@ public sealed class StringNullableDecimalConverter : JsonConverter<decimal?>
     public override decimal? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType == JsonTokenType.Null)
+        {
             return null;
+        }
+
         if (reader.TokenType == JsonTokenType.String)
         {
             var str = reader.GetString();
             if (string.IsNullOrEmpty(str))
+            {
                 return null;
+            }
+
             return decimal.TryParse(str, System.Globalization.NumberStyles.Any,
                 System.Globalization.CultureInfo.InvariantCulture, out var val) ? val : null;
         }
@@ -226,9 +232,13 @@ public sealed class StringNullableDecimalConverter : JsonConverter<decimal?>
     public override void Write(Utf8JsonWriter writer, decimal? value, JsonSerializerOptions options)
     {
         if (value is null)
+        {
             writer.WriteNullValue();
+        }
         else
+        {
             writer.WriteStringValue(value.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
     }
 }
 

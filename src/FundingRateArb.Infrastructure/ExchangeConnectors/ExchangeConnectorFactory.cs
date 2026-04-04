@@ -268,7 +268,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private DydxConnector? CreateDydxConnector(string? mnemonic)
     {
         if (string.IsNullOrEmpty(mnemonic))
+        {
             return null;
+        }
 
         var signer = new Dydx.DydxSigner(mnemonic);
         var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();

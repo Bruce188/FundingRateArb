@@ -30,7 +30,9 @@ public sealed class DydxSigner : IDisposable
     public DydxSigner(string mnemonic, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(mnemonic))
+        {
             throw new ArgumentException("Mnemonic cannot be null or empty.", nameof(mnemonic));
+        }
 
         _logger = logger;
 
@@ -126,7 +128,9 @@ public sealed class DydxSigner : IDisposable
             cancellationToken: ct);
 
         if (result?.TxResponse is null)
+        {
             throw new InvalidOperationException("Empty broadcast response from validator");
+        }
 
         if (result.TxResponse.Code != 0)
         {
@@ -163,13 +167,17 @@ public sealed class DydxSigner : IDisposable
 
         var accountNumberStr = target.GetProperty("account_number").GetString();
         if (!ulong.TryParse(accountNumberStr, out var accountNumber))
+        {
             throw new InvalidOperationException(
                 $"Failed to parse account_number from validator response: '{accountNumberStr}'");
+        }
 
         var sequenceStr = target.GetProperty("sequence").GetString();
         if (!ulong.TryParse(sequenceStr, out var sequence))
+        {
             throw new InvalidOperationException(
                 $"Failed to parse sequence from validator response: '{sequenceStr}'");
+        }
 
         return (accountNumber, sequence);
     }
@@ -195,24 +203,35 @@ public sealed class DydxSigner : IDisposable
         // DER format: 0x30 [total-len] 0x02 [r-len] [r] 0x02 [s-len] [s]
         int offset = 2; // skip 0x30 and total length
         if (der[offset] != 0x02)
+        {
             throw new FormatException("Expected INTEGER tag for r");
+        }
+
         offset++;
         int rLen = der[offset++];
         var r = new byte[rLen];
         Array.Copy(der, offset, r, 0, rLen);
         // Strip leading zero padding (DER adds 0x00 prefix for positive numbers with high bit set)
         if (r.Length > 32 && r[0] == 0)
+        {
             r = r[1..];
+        }
+
         offset += rLen;
 
         if (der[offset] != 0x02)
+        {
             throw new FormatException("Expected INTEGER tag for s");
+        }
+
         offset++;
         int sLen = der[offset++];
         var s = new byte[sLen];
         Array.Copy(der, offset, s, 0, sLen);
         if (s.Length > 32 && s[0] == 0)
+        {
             s = s[1..];
+        }
 
         return (r, s);
     }
@@ -239,11 +258,16 @@ public sealed class DydxSigner : IDisposable
     {
         var ret = new int[hrp.Length * 2 + 1];
         for (int i = 0; i < hrp.Length; i++)
+        {
             ret[i] = hrp[i] >> 5;
+        }
         // separator
         ret[hrp.Length] = 0;
         for (int i = 0; i < hrp.Length; i++)
+        {
             ret[hrp.Length + 1 + i] = hrp[i] & 31;
+        }
+
         return ret;
     }
 
@@ -258,7 +282,9 @@ public sealed class DydxSigner : IDisposable
             for (int i = 0; i < 5; i++)
             {
                 if (((top >> i) & 1) == 1)
+                {
                     chk ^= gen[i];
+                }
             }
         }
         return (int)chk;
@@ -270,11 +296,17 @@ public sealed class DydxSigner : IDisposable
         var values = new int[hrpExpanded.Length + data.Length + 6];
         Array.Copy(hrpExpanded, values, hrpExpanded.Length);
         for (int i = 0; i < data.Length; i++)
+        {
             values[hrpExpanded.Length + i] = data[i];
+        }
+
         var polymod = Bech32Polymod(values) ^ 1;
         var ret = new int[6];
         for (int i = 0; i < 6; i++)
+        {
             ret[i] = (polymod >> (5 * (5 - i))) & 31;
+        }
+
         return ret;
     }
 
@@ -285,9 +317,15 @@ public sealed class DydxSigner : IDisposable
         sb.Append(hrp);
         sb.Append('1'); // separator
         foreach (var b in data)
+        {
             sb.Append(Bech32Charset[b]);
+        }
+
         foreach (var c in checksum)
+        {
             sb.Append(Bech32Charset[c]);
+        }
+
         return sb.ToString();
     }
 
