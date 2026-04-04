@@ -54,12 +54,16 @@ public class DashboardHub : Hub<IDashboardClient>
     {
         var userId = Context.UserIdentifier;
         if (userId == null)
+        {
             throw new HubException("Authentication required");
+        }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.MarketData);
 
         if (Context.User?.IsInRole("Admin") == true)
+        {
             await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.Admins);
+        }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
     }
@@ -68,7 +72,9 @@ public class DashboardHub : Hub<IDashboardClient>
     {
         var userId = Context.UserIdentifier;
         if (userId == null)
+        {
             throw new HubException("Authentication required");
+        }
 
         var isAdmin = Context.User?.IsInRole("Admin") == true;
         var openPositions = isAdmin
