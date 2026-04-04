@@ -174,7 +174,8 @@ public class SignalEngine : ISignalEngine
                     // Compute leverage-adjusted metrics when tier data is available
                     if (_tierProvider is not null)
                     {
-                        var refNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * config.DefaultLeverage;
+                        var cappedLeverage = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
+                        var refNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverage;
                         var longMaxLev = _tierProvider.GetEffectiveMaxLeverage(longR.Exchange.Name, symbol!, refNotional);
                         var shortMaxLev = _tierProvider.GetEffectiveMaxLeverage(shortR.Exchange.Name, symbol!, refNotional);
                         var tierMax = Math.Min(longMaxLev, shortMaxLev);

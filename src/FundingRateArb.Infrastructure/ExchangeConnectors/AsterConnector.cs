@@ -703,7 +703,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 return null;
 
             var marginUsed = pos.InitialMargin;
-            var marginAvailable = pos.MaintenanceMargin > 0
+            var marginAvailable = marginUsed > pos.MaintenanceMargin
                 ? marginUsed - pos.MaintenanceMargin
                 : 0m;
 
@@ -712,7 +712,11 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 MarginUsed = marginUsed,
                 MarginAvailable = marginAvailable,
                 LiquidationPrice = pos.LiquidationPrice,
-                MarginUtilizationPct = marginUsed > 0 ? pos.MaintenanceMargin / marginUsed : 0m
+                // Aster SDK does not expose IsolatedWallet; approximate utilization
+                // as InitialMargin / (InitialMargin + available buffer)
+                MarginUtilizationPct = marginUsed + marginAvailable > 0
+                    ? marginUsed / (marginUsed + marginAvailable)
+                    : 0m
             };
         }
         catch (OperationCanceledException) { throw; }
