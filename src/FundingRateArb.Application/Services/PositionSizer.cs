@@ -192,7 +192,7 @@ public class PositionSizer : IPositionSizer
             var longTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.LongExchangeName, opp.AssetSymbol, tentativeNotional);
             var shortTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.ShortExchangeName, opp.AssetSymbol, tentativeNotional);
             var tierMax = Math.Min(longTierMax, shortTierMax);
-            if (tierMax < oppLeverage && tierMax != int.MaxValue)
+            if (tierMax < oppLeverage && tierMax > 0 && tierMax != int.MaxValue)
                 oppLeverage = tierMax;
 
             var minVol = Math.Min(opp.LongVolume24h, opp.ShortVolume24h);

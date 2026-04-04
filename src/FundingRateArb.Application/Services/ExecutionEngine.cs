@@ -13,7 +13,7 @@ public class ExecutionEngine : IExecutionEngine
 {
     private const decimal MaxSingleOrderUsdc = 10_000m;
 
-    private readonly ConcurrentDictionary<(string Exchange, string Asset, int MaxLeverage), byte> _leverageWarned = new();
+    private readonly ConcurrentDictionary<(string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IConnectorLifecycleManager _connectorLifecycle;
@@ -123,7 +123,7 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (effectiveLeverage > tierMax)
                 {
-                    if (_leverageWarned.TryAdd((opp.LongExchangeName, opp.AssetSymbol, tierMax), 0))
+                    if (_leverageWarned.TryAdd((opp.AssetSymbol, tierMax), 0))
                     {
                         _logger.LogWarning(
                             "Leverage reduced from {Configured}x to {Max}x for {Asset} (tier/cap constraint)",

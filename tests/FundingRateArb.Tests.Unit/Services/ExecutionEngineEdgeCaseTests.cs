@@ -31,6 +31,7 @@ public class ExecutionEngineEdgeCaseTests
     {
         IsEnabled = true,
         DefaultLeverage = 5,
+        MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",
     };
 

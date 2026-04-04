@@ -150,4 +150,94 @@ public class LeverageTierCacheTests
         var result = _sut.GetEffectiveMaxLeverage("Binance", "ETH", 10_000m);
         result.Should().Be(3);
     }
+
+    // ── NB6: Exact boundary notional returns next tier leverage ─────────────
+
+    [Fact]
+    public void GetEffectiveMaxLeverage_ExactBoundaryNotional_ReturnsNextTierLeverage()
+    {
+        // Tier 1: [0, 50_000) = 50x, Tier 2: [50_000, 250_000) = 25x
+        _sut.UpdateTiers("Binance", "ETH", BinanceTiers);
+
+        // At exactly 50_000 — no longer in tier 1 (NotionalCap is exclusive), should be in tier 2
+        var result = _sut.GetEffectiveMaxLeverage("Binance", "ETH", 50_000m);
+
+        result.Should().Be(25, "notional at exact tier boundary should fall into the next tier");
+    }
+
+    // ── NB7: TTL expiration verified via reflection ─────────────────────────
+
+    [Fact]
+    public void IsStale_AfterTtlExpired_ReturnsTrue()
+    {
+        _sut.UpdateTiers("Binance", "ETH", BinanceTiers);
+        _sut.IsStale("Binance", "ETH").Should().BeFalse("should not be stale immediately after update");
+
+        BackdateCacheEntry(_sut, "Binance", "ETH", TimeSpan.FromHours(2));
+
+        _sut.IsStale("Binance", "ETH").Should().BeTrue("should be stale after TTL expiration");
+    }
+
+    [Fact]
+    public async Task GetTiersAsync_AfterTtlExpired_ReturnsEmpty()
+    {
+        _sut.UpdateTiers("Binance", "ETH", BinanceTiers);
+
+        BackdateCacheEntry(_sut, "Binance", "ETH", TimeSpan.FromHours(2));
+
+        var result = await _sut.GetTiersAsync("Binance", "ETH");
+        result.Should().BeEmpty("expired entries should not be returned");
+    }
+
+    /// <summary>
+    /// Uses reflection to back-date a cache entry's FetchedAtUtc by the given age,
+    /// using the strongly-typed ConcurrentDictionary to avoid IDictionary boxing issues.
+    /// </summary>
+    private static void BackdateCacheEntry(LeverageTierCache cache, string exchange, string asset, TimeSpan age)
+    {
+        var cacheField = typeof(LeverageTierCache)
+            .GetField("_cache", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        var dict = cacheField.GetValue(cache)!;
+
+        // The dictionary type is ConcurrentDictionary<(string, string), (LeverageTier[], DateTime)>
+        // We need to enumerate it and replace the value tuple with a back-dated one
+        var dictType = dict.GetType();
+        var enumerator = ((System.Collections.IEnumerable)dict).GetEnumerator();
+        while (enumerator.MoveNext())
+        {
+            var kvp = enumerator.Current!;
+            var kvpType = kvp.GetType();
+            var key = kvpType.GetProperty("Key")!.GetValue(kvp)!;
+            var value = kvpType.GetProperty("Value")!.GetValue(kvp)!;
+            var tiersField = value.GetType().GetField("Item1")!;
+            var tiers = (LeverageTier[])tiersField.GetValue(value)!;
+
+            // Create a new value tuple with back-dated time
+            var newValue = (tiers, DateTime.UtcNow - age);
+
+            // Use TryUpdate via the indexer — access via dynamic to avoid generic type issues
+            var indexerSetter = dictType.GetProperty("Item")!;
+            indexerSetter.SetValue(dict, newValue, new[] { key });
+            break;
+        }
+    }
+
+    // ── NB1: Fail-safe when notional exceeds all tiers ──────────────────────
+
+    [Fact]
+    public void GetEffectiveMaxLeverage_NotionalExceedsAllTiers_ReturnsMostRestrictive()
+    {
+        // Use tiers where the last tier has a finite NotionalCap (gap exists)
+        var tiersWithGap = new LeverageTier[]
+        {
+            new(0m, 50_000m, 50, 0.004m),
+            new(50_000m, 100_000m, 25, 0.005m),
+        };
+        _sut.UpdateTiers("Binance", "ETH", tiersWithGap);
+
+        // Query with notional beyond all tiers
+        var result = _sut.GetEffectiveMaxLeverage("Binance", "ETH", 200_000m);
+
+        result.Should().Be(25, "should fail-safe to most restrictive tier when notional exceeds all tiers");
+    }
 }

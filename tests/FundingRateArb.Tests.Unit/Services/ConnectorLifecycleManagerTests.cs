@@ -2,6 +2,7 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.ValueObjects;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -338,5 +339,77 @@ public class ConnectorLifecycleManagerTests
 
         wrappedLong.Should().BeOfType<DryRunConnectorWrapper>();
         wrappedShort.Should().BeOfType<DryRunConnectorWrapper>();
+    }
+
+    // ── NB3: EnsureTiersCachedAsync ─────────────────────────────────────────
+
+    [Fact]
+    public async Task EnsureTiersCachedAsync_WhenNotStale_DoesNotCallConnector()
+    {
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.IsStale("Hyperliquid", "ETH")).Returns(false);
+
+        var sut = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            mockTierProvider.Object,
+            NullLogger<ConnectorLifecycleManager>.Instance);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+
+        await sut.EnsureTiersCachedAsync(mockConnector.Object, "ETH", CancellationToken.None);
+
+        mockConnector.Verify(
+            c => c.GetLeverageTiersAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task EnsureTiersCachedAsync_WhenStale_FetchesAndUpdatesTiers()
+    {
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.IsStale("Hyperliquid", "ETH")).Returns(true);
+
+        var sut = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            mockTierProvider.Object,
+            NullLogger<ConnectorLifecycleManager>.Instance);
+
+        var tiers = new LeverageTier[] { new(0m, decimal.MaxValue, 20, 0.05m) };
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+        mockConnector
+            .Setup(c => c.GetLeverageTiersAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(tiers);
+
+        await sut.EnsureTiersCachedAsync(mockConnector.Object, "ETH", CancellationToken.None);
+
+        mockConnector.Verify(c => c.GetLeverageTiersAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
+        mockTierProvider.Verify(p => p.UpdateTiers("Hyperliquid", "ETH", tiers), Times.Once);
+    }
+
+    [Fact]
+    public async Task EnsureTiersCachedAsync_WhenConnectorReturnsNull_DoesNotUpdateTiers()
+    {
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.IsStale("Hyperliquid", "ETH")).Returns(true);
+
+        var sut = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            mockTierProvider.Object,
+            NullLogger<ConnectorLifecycleManager>.Instance);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+        mockConnector
+            .Setup(c => c.GetLeverageTiersAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((LeverageTier[]?)null);
+
+        await sut.EnsureTiersCachedAsync(mockConnector.Object, "ETH", CancellationToken.None);
+
+        mockConnector.Verify(c => c.GetLeverageTiersAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
+        mockTierProvider.Verify(
+            p => p.UpdateTiers(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<LeverageTier[]>()),
+            Times.Never);
     }
 }

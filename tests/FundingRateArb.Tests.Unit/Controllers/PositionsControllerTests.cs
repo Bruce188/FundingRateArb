@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
@@ -21,6 +22,7 @@ public class PositionsControllerTests
     private readonly Mock<IPositionRepository> _mockPositions = new();
     private readonly Mock<IAlertRepository> _mockAlerts = new();
     private readonly Mock<IExecutionEngine> _mockExecution = new();
+    private readonly Mock<IExchangeConnectorFactory> _mockConnectorFactory = new();
 
     public PositionsControllerTests()
     {
@@ -32,7 +34,7 @@ public class PositionsControllerTests
     private PositionsController CreateControllerForUser(ClaimsPrincipal user)
     {
         var controller = new PositionsController(_mockUow.Object, _mockExecution.Object,
-            NullLogger<PositionsController>.Instance);
+            _mockConnectorFactory.Object, NullLogger<PositionsController>.Instance);
 
         var httpContext = new DefaultHttpContext { User = user };
         var tempDataProvider = Mock.Of<ITempDataProvider>();

@@ -678,6 +678,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 .OrderBy(t => t.NotionalFloor)
                 .ToArray();
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);
@@ -714,6 +715,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 MarginUtilizationPct = marginUsed > 0 ? pos.MaintenanceMargin / marginUsed : 0m
             };
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug("Failed to fetch margin state for {Asset}: {Error}", asset, ex.Message);

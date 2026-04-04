@@ -31,6 +31,7 @@ public class ExecutionEngineTests
     {
         IsEnabled = true,
         DefaultLeverage = 5,
+        MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",
     };
 
@@ -1288,6 +1289,35 @@ public class ExecutionEngineTests
         result.Success.Should().BeTrue();
         // Falls back to configured leverage (5x) when check fails
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // ── NB4: Legacy fallback when tier cache is empty ─────────────────────
+
+    [Fact]
+    public async Task OpenPosition_NoTierData_FallsBackToLegacyMaxLeverage()
+    {
+        // Tier cache returns int.MaxValue (no data), legacy GetMaxLeverageAsync returns 3
+        // Effective leverage should be 3 (clamped by legacy path)
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]
@@ -3153,6 +3183,7 @@ public class ExecutionEngineTests
         {
             IsEnabled = true,
             DefaultLeverage = 5,
+            MaxLeverageCap = 50,
             ForceConcurrentExecution = true,
             UpdatedByUserId = "admin",
         };
@@ -3402,6 +3433,7 @@ public class ExecutionEngineTests
         {
             IsEnabled = true,
             DefaultLeverage = 5,
+            MaxLeverageCap = 50,
             ForceConcurrentExecution = true,
             UpdatedByUserId = "admin",
         };

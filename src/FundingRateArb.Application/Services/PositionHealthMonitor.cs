@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using Microsoft.Extensions.Logging;
@@ -18,6 +19,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
     private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
+    private readonly ConcurrentDictionary<int, DateTime> _recentMarginAlerts = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -193,7 +195,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
 
                 // Margin utilization monitoring via exchange API
-                await CheckMarginUtilizationAsync(pos, config, longExchangeName, shortExchangeName, assetSymbol);
+                await CheckMarginUtilizationAsync(pos, config, longExchangeName, shortExchangeName, assetSymbol, ct);
 
                 // Alert if spread below alert threshold (but above close threshold)
                 if (spread < config.AlertThreshold)
@@ -487,15 +489,28 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     private async Task CheckMarginUtilizationAsync(
         ArbitragePosition pos, BotConfiguration config,
-        string longExchangeName, string shortExchangeName, string assetSymbol)
+        string longExchangeName, string shortExchangeName, string assetSymbol,
+        CancellationToken ct = default)
     {
         try
         {
             var longConnector = _connectorFactory.GetConnector(longExchangeName);
             var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
-            var longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol);
-            var shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol);
+            // Deduplicate: if both legs use the same connector for the same asset, call once
+            Task<MarginStateDto?> longMarginTask;
+            Task<MarginStateDto?> shortMarginTask;
+            if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
+            {
+                longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                shortMarginTask = longMarginTask;
+            }
+            else
+            {
+                longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+            }
+
             await Task.WhenAll(longMarginTask, shortMarginTask);
 
             var longMargin = await longMarginTask;
@@ -508,6 +523,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             if (maxUtilization >= config.MarginUtilizationAlertPct)
             {
+                // NB12: In-memory dedup before hitting the DB
+                if (_recentMarginAlerts.TryGetValue(pos.Id, out var lastAlertTime)
+                    && DateTime.UtcNow - lastAlertTime < TimeSpan.FromHours(1))
+                {
+                    return;
+                }
+
                 var recentMarginAlert = await _uow.Alerts.GetRecentAsync(
                     pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(1));
 
@@ -526,8 +548,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                                   $"(threshold={config.MarginUtilizationAlertPct:P0})",
                     });
                 }
+
+                _recentMarginAlerts[pos.Id] = DateTime.UtcNow;
             }
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Margin utilization check failed for position #{Id}", pos.Id);

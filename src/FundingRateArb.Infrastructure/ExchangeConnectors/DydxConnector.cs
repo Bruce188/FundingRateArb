@@ -368,6 +368,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
                 new LeverageTier(0m, decimal.MaxValue, maxLeverage, maintMarginRate)
             };
         }
+        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug("Failed to fetch leverage tiers for {Asset}: {Error}", asset, ex.Message);

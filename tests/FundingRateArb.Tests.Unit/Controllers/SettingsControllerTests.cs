@@ -26,6 +26,7 @@ public class SettingsControllerTests
         IsEnabled = true,
         TotalCapitalUsdc = 5000m,
         DefaultLeverage = 5,
+        MaxLeverageCap = 50,
         MaxConcurrentPositions = 3,
         MaxCapitalPerPosition = 0.5m,
         OpenThreshold = 0.0003m,

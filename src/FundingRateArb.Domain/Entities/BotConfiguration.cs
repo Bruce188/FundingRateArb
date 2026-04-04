@@ -139,7 +139,7 @@ public class BotConfiguration
 
     /// <summary>Hard ceiling on effective leverage across all exchanges. Overrides exchange-reported max.</summary>
     [Range(1, 50)]
-    public int MaxLeverageCap { get; set; } = 50;
+    public int MaxLeverageCap { get; set; } = 3;
 
     /// <summary>Fraction of margin utilization that triggers an alert (e.g. 0.70 = 70%).</summary>
     [Range(0.1, 0.95)]
