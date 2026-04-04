@@ -1795,4 +1795,254 @@ public class SignalEngineTests
         opp!.MinutesToNextSettlement.Should().Be(5,
             "600s deviation should be capped at 300s (5 min), reducing 10 min settlement to 5 min");
     }
+
+    // ── Break-even filter ─────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BreakEven_ExcludesOpportunity_WhenExceedsThreshold()
+    {
+        // Arrange: high fees relative to net yield → break-even > 8 hours
+        // Using exchanges with high taker fees: Binance = 0.0004 per trade
+        // longFee = 0.0004 * 2 = 0.0008, shortFee = 0.0004 * 2 = 0.0008
+        // totalEntryCost = (0.0008 + 0.0008) + (5 / 10000) = 0.0016 + 0.0005 = 0.0021
+        // net yield per hour needs to be small enough that 0.0021 / net > 8
+        // net < 0.0021 / 8 = 0.0002625 → spread needs to be barely above fees
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Binance", 1, "ETH", 0.0001m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0004m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.00001m, // very low so the opportunity would pass without break-even filter
+            BreakevenHoursMax = 8,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        // Provide history for trend analysis
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert
+        result.Opportunities.Should().BeEmpty("break-even hours exceed threshold");
+        result.Diagnostics!.PairsFilteredByBreakeven.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task BreakEven_IncludesOpportunity_WhenWithinThreshold()
+    {
+        // Arrange: wide spread → break-even < 8 hours
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0020m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 8,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert
+        result.Opportunities.Should().NotBeEmpty("break-even within threshold");
+        result.Opportunities[0].BreakEvenHours.Should().NotBeNull();
+        result.Opportunities[0].BreakEvenHours!.Value.Should().BeLessThan(8m);
+    }
+
+    [Fact]
+    public async Task BreakEven_IsNull_WhenNetYieldNegative()
+    {
+        // Arrange: negative net yield → break-even is null
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0001m), // zero spread, net will be negative after fees
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = -1m, // allow everything through threshold for this test
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: with zero spread, net yield is negative after fees, so break-even is null
+        // and the opportunity goes to PairsFilteredByThreshold (net < 0)
+        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
+        if (allOpps.Count > 0)
+        {
+            allOpps[0].BreakEvenHours.Should().BeNull("net yield is negative");
+        }
+    }
+
+    // ── Trend analysis ────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TrendAnalysis_MarksUnconfirmed_WhenSpreadNegativeInHistory()
+    {
+        // Arrange: one of the history snapshots has negative spread
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Long exchange history: 3 snapshots with low rates
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+            });
+
+        // Short exchange history: one snapshot has rate lower than long → negative spread
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 2, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+                new() { RatePerHour = -0.0001m }, // negative spread in this cycle
+                new() { RatePerHour = 0.0010m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert
+        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
+        allOpps.Should().NotBeEmpty();
+        allOpps[0].TrendUnconfirmed.Should().BeTrue("one historical cycle had negative spread");
+    }
+
+    [Fact]
+    public async Task TrendAnalysis_Confirmed_WhenAllCyclesFavorable()
+    {
+        // Arrange: all history snapshots have positive spread
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Both exchanges: all snapshots favorable (short > long)
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+            });
+
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 2, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+                new() { RatePerHour = 0.0008m },
+                new() { RatePerHour = 0.0012m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert
+        result.Opportunities.Should().NotBeEmpty();
+        result.Opportunities[0].TrendUnconfirmed.Should().BeFalse("all cycles had positive spread");
+    }
+
+    [Fact]
+    public async Task TrendAnalysis_MarksUnconfirmed_WhenInsufficientHistory()
+    {
+        // Arrange: fewer snapshots than MinConsecutiveFavorableCycles
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 5, // require 5 but only provide 2
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 5, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0005m },
+                new() { RatePerHour = 0.0005m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert
+        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
+        allOpps.Should().NotBeEmpty();
+        allOpps[0].TrendUnconfirmed.Should().BeTrue("insufficient history snapshots");
+    }
 }

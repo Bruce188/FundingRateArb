@@ -2654,4 +2654,241 @@ public class PositionHealthMonitorTests
         pos.CurrentDivergencePct.Should().NotBeNull();
         pos.CurrentDivergencePct!.Value.Should().BeApproximately(0.6667m, 0.001m);
     }
+
+    // ── DetermineCloseReason: FundingFlipped ──────────────────────────────────
+
+    [Fact]
+    public void FundingFlipped_ClosesPosition_AfterConsecutiveNegativeCycles()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            FundingFlipExitCycles = 2,
+        };
+
+        // 2 consecutive negative cycles meets threshold
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 1m, spread: -0.0001m,
+            negativeFundingCycles: 2);
+
+        reason.Should().Be(CloseReason.FundingFlipped);
+    }
+
+    [Fact]
+    public void FundingFlipped_DoesNotClose_BeforeThreshold()
+    {
+        var pos = MakeOpenPosition();
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            FundingFlipExitCycles = 2,
+        };
+
+        // Only 1 negative cycle, threshold is 2
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 1m, spread: -0.0001m,
+            negativeFundingCycles: 1);
+
+        reason.Should().NotBe(CloseReason.FundingFlipped);
+    }
+
+    [Fact]
+    public async Task FundingFlipped_ResetsCounter_WhenSpreadPositive()
+    {
+        // First cycle: negative spread
+        var pos = MakeOpenPosition();
+        pos.CurrentSpreadPerHour = -0.0001m;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m); // negative spread
+        SetupMarkPrices();
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 48, // high min hold so SpreadCollapsed doesn't trigger
+            EmergencyCloseSpreadThreshold = -0.01m, // very low so emergency doesn't trigger
+            CloseThreshold = -0.01m,
+            FundingFlipExitCycles = 3, // needs 3 consecutive
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        await _sut.CheckAndActAsync(); // 1st negative cycle
+
+        // Second cycle: positive spread — should reset the counter
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // positive spread
+
+        var result = await _sut.CheckAndActAsync(); // resets to 0
+
+        // Third cycle: negative again — only 1 consecutive (counter was reset)
+        SetupLatestRates(longRate: 0.0003m, shortRate: 0.0001m); // negative spread
+
+        result = await _sut.CheckAndActAsync(); // 1st negative after reset
+
+        result.ToClose.Should().NotContain(r => r.Reason == CloseReason.FundingFlipped,
+            "counter was reset by positive spread; only 1 consecutive negative cycle");
+    }
+
+    // ── Collateral imbalance ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task CollateralImbalance_AlertsFired_WhenLegsDiverge()
+    {
+        // Arrange: asymmetric PnL creates imbalance > 30%
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Long mark moved up significantly (large long PnL), short barely moved
+        // estimatedQty = (3000+3001)/2 / ((3000+3001)/2) * 100 * 5 / ((3000+3001)/2) ≈ let's compute
+        // avgEntryPrice = 3000.5, estimatedQty = 100*5/3000.5 ≈ 0.1666
+        // longPnl = (3050 - 3000) * 0.1666 = 8.33 (winning)
+        // shortPnl = (3001 - 3005) * 0.1666 = -0.666 (small loss)
+        // marginPerLeg = 50, longUtil = |8.33|/50 = 0.1666, shortUtil = |0.666|/50 = 0.01332
+        // imbalance = |0.1666 - 0.01332| = 0.1533 — not enough. Need bigger divergence.
+        // Let's use 3100 for long mark:
+        // longPnl = (3100 - 3000) * 0.1666 = 16.66 → longUtil = 16.66/50 = 0.3332
+        // shortPnl = (3001 - 3002) * 0.1666 = -0.1666 → shortUtil = 0.1666/50 = 0.003332
+        // imbalance = |0.3332 - 0.003332| = 0.3299 → > 0.30 ✓
+        SetupMarkPrices(longMark: 3100m, shortMark: 3002m);
+
+        _mockAlerts.Setup(a => a.GetRecentAsync(
+            It.IsAny<string>(), It.IsAny<int?>(), AlertType.MarginWarning, It.IsAny<TimeSpan>()))
+            .ReturnsAsync((Alert?)null);
+
+        var result = await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            alert => alert.Type == AlertType.MarginWarning
+                && alert.Message.Contains("Collateral imbalance"))),
+            Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task CollateralImbalance_NoAlert_WhenWithinThreshold()
+    {
+        // Arrange: balanced PnL → imbalance < 30%
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Symmetric price movement → balanced PnL
+        SetupMarkPrices(longMark: 3005m, shortMark: 2996m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(
+            alert => alert.Message.Contains("Collateral imbalance"))),
+            Times.Never);
+    }
+
+    // ── Stablecoin depeg ──────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task StablecoinDepeg_Critical_ClosesOnlyCrossStablecoin()
+    {
+        // Arrange: USDCUSDT at 0.99 → 1% spread → critical
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0.99m);
+        _mockFactory.Setup(f => f.GetConnector("Binance")).Returns(mockBinance.Object);
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            StablecoinAlertThresholdPct = 0.3m,
+            StablecoinCriticalThresholdPct = 1.0m,
+            FundingFlipExitCycles = 100, // high to avoid FundingFlipped
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Cross-stablecoin position: Binance (USDT) ↔ Hyperliquid (USDC)
+        var crossPos = MakeOpenPosition();
+        crossPos.Id = 1;
+        crossPos.LongExchange = new Exchange { Id = 1, Name = "Binance" };
+        crossPos.LongExchangeId = 1;
+        crossPos.ShortExchange = new Exchange { Id = 2, Name = "Hyperliquid" };
+        crossPos.ShortExchangeId = 2;
+
+        // Same-stablecoin position: Hyperliquid ↔ Lighter (both USDC)
+        var samePos = MakeOpenPosition();
+        samePos.Id = 2;
+        samePos.LongExchange = new Exchange { Id = 3, Name = "Hyperliquid" };
+        samePos.LongExchangeId = 3;
+        samePos.ShortExchange = new Exchange { Id = 4, Name = "Lighter" };
+        samePos.ShortExchangeId = 4;
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([crossPos, samePos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Setup mark prices for both connectors
+        mockBinance.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(_mockLongConnector.Object);
+        _mockFactory.Setup(f => f.GetConnector("Lighter")).Returns(_mockShortConnector.Object);
+        _mockLongConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockShortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3001m);
+
+        // Setup rates for both exchange pairs
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m, MarkPrice = 3000m,
+                    Exchange = new Exchange { Id = 1, Name = "Binance" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+                new() { ExchangeId = 2, AssetId = 1, RatePerHour = 0.0006m, MarkPrice = 3001m,
+                    Exchange = new Exchange { Id = 2, Name = "Hyperliquid" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+                new() { ExchangeId = 3, AssetId = 1, RatePerHour = 0.0001m, MarkPrice = 3000m,
+                    Exchange = new Exchange { Id = 3, Name = "Hyperliquid" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+                new() { ExchangeId = 4, AssetId = 1, RatePerHour = 0.0006m, MarkPrice = 3001m,
+                    Exchange = new Exchange { Id = 4, Name = "Lighter" }, Asset = new Asset { Id = 1, Symbol = "ETH" } },
+            });
+
+        // Act
+        var result = await _sut.CheckAndActAsync();
+
+        // Assert: cross-stablecoin position closed, same-stablecoin position NOT closed
+        result.ToClose.Should().Contain(r => r.Position.Id == 1 && r.Reason == CloseReason.Manual,
+            "cross-stablecoin position should be closed on critical depeg");
+        result.ToClose.Should().NotContain(r => r.Position.Id == 2 && r.Reason == CloseReason.Manual,
+            "same-stablecoin position should NOT be closed");
+    }
+
+    [Fact]
+    public async Task StablecoinDepeg_FetchFailure_NoFalsePositive()
+    {
+        // Arrange: Binance connector throws
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("Connection failed"));
+        _mockFactory.Setup(f => f.GetConnector("Binance")).Returns(mockBinance.Object);
+
+        var config = new BotConfiguration
+        {
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            StablecoinCriticalThresholdPct = 1.0m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Cross-stablecoin position
+        var pos = MakeOpenPosition();
+        pos.LongExchange = new Exchange { Id = 1, Name = "Binance" };
+        pos.ShortExchange = new Exchange { Id = 2, Name = "Hyperliquid" };
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Act
+        var result = await _sut.CheckAndActAsync();
+
+        // Assert: no false positive close from failed price fetch
+        result.ToClose.Should().NotContain(r => r.Reason == CloseReason.Manual,
+            "price fetch failure should not trigger stablecoin close");
+    }
 }

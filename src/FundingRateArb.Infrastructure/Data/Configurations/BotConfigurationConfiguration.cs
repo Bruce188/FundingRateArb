@@ -39,5 +39,7 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.DryRunEnabled).HasDefaultValue(false);
         builder.Property(b => b.MaxLeverageCap).HasDefaultValue(3);
         builder.Property(b => b.MarginUtilizationAlertPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.70m);
+        builder.Property(b => b.StablecoinAlertThresholdPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.3m);
+        builder.Property(b => b.StablecoinCriticalThresholdPct).HasColumnType("decimal(18,4)").HasDefaultValue(1.0m);
     }
 }

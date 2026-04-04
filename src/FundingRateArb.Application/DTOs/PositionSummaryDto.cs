@@ -35,4 +35,7 @@ public class PositionSummaryDto
 
     /// <summary>Active warning types (e.g. SpreadRisk, TimeBased, Loss).</summary>
     public List<WarningType> WarningTypes { get; set; } = new();
+
+    /// <summary>Margin utilization imbalance between long and short legs (0.0 = balanced, 1.0 = fully imbalanced).</summary>
+    public decimal? CollateralImbalancePct { get; set; }
 }

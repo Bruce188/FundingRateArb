@@ -37,4 +37,10 @@ public class ArbitrageOpportunityDto
     public decimal? ReturnOnCapitalPerHour { get; set; }
     public decimal? AprOnCapital { get; set; }
     public decimal? BreakEvenCycles { get; set; }
+
+    /// <summary>Hours until entry costs are recovered by funding income. Null if net yield <= 0.</summary>
+    public decimal? BreakEvenHours { get; set; }
+
+    /// <summary>True if funding spread has not been favorable for MinConsecutiveFavorableCycles.</summary>
+    public bool TrendUnconfirmed { get; set; }
 }

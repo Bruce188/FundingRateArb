@@ -22,6 +22,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
     private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
     private readonly ConcurrentDictionary<int, DateTime> _recentMarginAlerts = new();
+    private readonly ConcurrentDictionary<int, int> _negativeFundingCycles = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -67,6 +68,10 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
+
+        // Stablecoin depeg check — before position loop
+        var stablecoinCritical = await CheckStablecoinDepegAsync(config, ct);
+
         var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
 
         // H3: Build a dictionary for O(1) lookup instead of O(N*M) linear scan
@@ -103,6 +108,29 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             // Use whatever spread is current (updated above or previous value)
             var spread = pos.CurrentSpreadPerHour;
+
+            // Track consecutive negative funding cycles for FundingFlipped close
+            if (spread < 0)
+            {
+                _negativeFundingCycles.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
+            }
+            else
+            {
+                _negativeFundingCycles.TryRemove(pos.Id, out _);
+            }
+
+            // Stablecoin depeg: close cross-stablecoin positions when critical
+            if (stablecoinCritical)
+            {
+                var isCrossStablecoin = (pos.LongExchange?.Name == "Binance") != (pos.ShortExchange?.Name == "Binance")
+                    && (pos.LongExchange?.Name == "Binance" || pos.ShortExchange?.Name == "Binance");
+                if (isCrossStablecoin)
+                {
+                    _logger.LogWarning("Closing cross-stablecoin position #{Id}: stablecoin depeg critical", pos.Id);
+                    toClose.Add((pos, CloseReason.Manual));
+                    continue;
+                }
+            }
 
             if (pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
             {
@@ -156,6 +184,37 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var longPnl = (currentLongMark - pos.LongEntryPrice) * estimatedQty;
                 var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
                 var unrealizedPnl = longPnl + shortPnl;
+
+                // Collateral imbalance monitoring
+                var marginPerLeg = pos.MarginUsdc / 2m;
+                decimal? collateralImbalancePct = null;
+                if (marginPerLeg > 0)
+                {
+                    var longUtil = Math.Abs(longPnl) / marginPerLeg;
+                    var shortUtil = Math.Abs(shortPnl) / marginPerLeg;
+                    collateralImbalancePct = Math.Abs(longUtil - shortUtil);
+
+                    if (collateralImbalancePct > 0.30m)
+                    {
+                        var winningExchange = longPnl > shortPnl ? longExchangeName : shortExchangeName;
+                        var losingExchange = longPnl > shortPnl ? shortExchangeName : longExchangeName;
+
+                        var recentImbalanceAlert = await _uow.Alerts.GetRecentAsync(
+                            pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(4));
+                        if (recentImbalanceAlert is null)
+                        {
+                            _uow.Alerts.Add(new Alert
+                            {
+                                UserId = pos.UserId,
+                                ArbitragePositionId = pos.Id,
+                                Type = AlertType.MarginWarning,
+                                Severity = AlertSeverity.Warning,
+                                Message = $"Collateral imbalance: {assetSymbol} {longExchangeName}/{shortExchangeName} " +
+                                          $"imbalance={collateralImbalancePct:P0}. Consider rebalancing from {winningExchange} to {losingExchange}.",
+                            });
+                        }
+                    }
+                }
 
                 // Unified PnL: both legs valued against single reference price
                 var unifiedPrice = _referencePriceProvider.GetUnifiedPrice(assetSymbol, longExchangeName, shortExchangeName);
@@ -228,7 +287,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // Intentional: all close reasons including PnlTargetReached use unified PnL (strategy-level profit
                 // target, not per-exchange margin impact). This ensures consistent close logic against a single
                 // reference price, avoiding false triggers from cross-exchange price divergence.
-                var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance);
+                _negativeFundingCycles.TryGetValue(pos.Id, out var flipCount);
+                var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance, flipCount);
 
                 if (reason.HasValue)
                 {
@@ -451,7 +511,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     public static CloseReason? DetermineCloseReason(
         ArbitragePosition pos, BotConfiguration config,
         decimal unrealizedPnl, decimal hoursOpen, decimal spread,
-        decimal? minLiquidationDistance = null)
+        decimal? minLiquidationDistance = null,
+        int negativeFundingCycles = 0)
     {
         // Priority: StopLoss > LiquidationRisk > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
@@ -490,6 +551,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         if (spread < config.EmergencyCloseSpreadThreshold)
         {
             return CloseReason.SpreadCollapsed;
+        }
+
+        // Funding flipped: spread has been negative for too many consecutive cycles
+        if (negativeFundingCycles >= config.FundingFlipExitCycles && config.FundingFlipExitCycles > 0)
+        {
+            return CloseReason.FundingFlipped;
         }
 
         if (hoursOpen >= config.MaxHoldTimeHours)
@@ -639,6 +706,40 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Fallback to shared constants when DB rate is not loaded
         return ExchangeFeeConstants.GetTakerFeeRate(exchangeName ?? string.Empty);
+    }
+
+    private async Task<bool> CheckStablecoinDepegAsync(
+        BotConfiguration config, CancellationToken ct)
+    {
+        try
+        {
+            var binance = _connectorFactory.GetConnector("Binance");
+            var price = await binance.GetMarkPriceAsync("USDCUSDT", ct);
+            if (price <= 0) return false;
+
+            var spreadPct = Math.Abs(1.0m - price) * 100m;
+            _logger.LogDebug("Stablecoin USDCUSDT spread: {SpreadPct:F4}%", spreadPct);
+
+            if (spreadPct >= config.StablecoinCriticalThresholdPct)
+            {
+                _logger.LogCritical("Stablecoin depeg CRITICAL: USDCUSDT spread {SpreadPct:F4}% >= {Threshold}%",
+                    spreadPct, config.StablecoinCriticalThresholdPct);
+                return true;
+            }
+
+            if (spreadPct >= config.StablecoinAlertThresholdPct)
+            {
+                _logger.LogWarning("Stablecoin depeg WARNING: USDCUSDT spread {SpreadPct:F4}% >= {Threshold}%",
+                    spreadPct, config.StablecoinAlertThresholdPct);
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to check stablecoin depeg — skipping");
+            return false;
+        }
     }
 
     public async Task ReconcileOpenPositionsAsync(CancellationToken ct = default)
