@@ -469,6 +469,9 @@ try
     builder.Services.AddSingleton<IFundingRateReadinessSignal, FundingRateReadinessSignal>();
     builder.Services.AddHostedService<MarketDataStreamManager>();
     builder.Services.AddHostedService<FundingRateFetcher>();
+    builder.Services.AddSingleton<ISignalRNotifier, SignalRNotifier>();
+    builder.Services.AddSingleton<ICircuitBreakerManager, CircuitBreakerManager>();
+    builder.Services.AddSingleton<IOpportunityFilter, OpportunityFilter>();
     builder.Services.AddSingleton<BotOrchestrator>();
     builder.Services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());

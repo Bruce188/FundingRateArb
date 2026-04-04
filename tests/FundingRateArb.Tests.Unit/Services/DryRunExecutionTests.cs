@@ -3,13 +3,12 @@ using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Extensions;
-using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
-using FundingRateArb.Infrastructure.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -303,15 +302,17 @@ public class DryRunExecutionTests
         mockScope.Setup(s => s.ServiceProvider).Returns(mockSp.Object);
 
         var mockReadiness = new Mock<IFundingRateReadinessSignal>();
-        var mockHub = new Mock<IHubContext<DashboardHub, IDashboardClient>>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
+        var cb = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
         var mockRotation = new Mock<IRotationEvaluator>();
         var mockLogger = new Mock<ILogger<BotOrchestrator>>();
 
-        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockHub.Object, mockRotation.Object, mockLogger.Object);
+        var oppFilter = new OpportunityFilter(cb, NullLogger<OpportunityFilter>.Instance);
+        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockNotifier.Object, cb, oppFilter, mockRotation.Object, mockLogger.Object);
 
         // Record a real loss (should increment consecutive losses)
         sut.RecordCloseResult(-10m, TestUserId);
-        sut.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(1);
+        cb.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(1);
 
         // The guard is in the orchestrator cycle, not in RecordCloseResult itself.
         // RecordCloseResult doesn't check IsDryRun — the call site does.
@@ -343,7 +344,7 @@ public class DryRunExecutionTests
         var mockHealthMonitor = new Mock<IPositionHealthMonitor>();
         var mockUserSettingsSvc = new Mock<IUserSettingsService>();
         var mockReadiness = new Mock<IFundingRateReadinessSignal>();
-        var mockHub = new Mock<IHubContext<DashboardHub, IDashboardClient>>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
         var mockRotation = new Mock<IRotationEvaluator>();
         var mockLogger = new Mock<ILogger<BotOrchestrator>>();
 
@@ -406,11 +407,7 @@ public class DryRunExecutionTests
         mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
 
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        mockHub.Setup(h => h.Clients).Returns(mockClients.Object);
+        // (notifier mock handles all SignalR communication)
 
         // Open positions: none
         mockPositionRepo.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
@@ -467,7 +464,9 @@ public class DryRunExecutionTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([100m]);
 
-        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockHub.Object, mockRotation.Object, mockLogger.Object);
+        var cb2 = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        var oppFilter2 = new OpportunityFilter(cb2, NullLogger<OpportunityFilter>.Instance);
+        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockNotifier.Object, cb2, oppFilter2, mockRotation.Object, mockLogger.Object);
 
         // Run a cycle — if dry-run PnL were counted, dailyPnl = -500 + 5 = -495,
         // which exceeds drawdown limit of 1000 * 0.05 = 50 → cycle would stop.
@@ -505,7 +504,7 @@ public class DryRunExecutionTests
         var mockHealthMonitor = new Mock<IPositionHealthMonitor>();
         var mockUserSettingsSvc = new Mock<IUserSettingsService>();
         var mockReadiness = new Mock<IFundingRateReadinessSignal>();
-        var mockHub = new Mock<IHubContext<DashboardHub, IDashboardClient>>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
         var mockRotation = new Mock<IRotationEvaluator>();
         var mockLogger = new Mock<ILogger<BotOrchestrator>>();
 
@@ -568,11 +567,7 @@ public class DryRunExecutionTests
         mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
 
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        mockHub.Setup(h => h.Clients).Returns(mockClients.Object);
+        // (notifier mock handles all SignalR communication)
 
         // Open dry-run position with large negative AccumulatedFunding
         var openDryRun = new ArbitragePosition
@@ -626,7 +621,9 @@ public class DryRunExecutionTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync([100m]);
 
-        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockHub.Object, mockRotation.Object, mockLogger.Object);
+        var cb3 = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        var oppFilter3 = new OpportunityFilter(cb3, NullLogger<OpportunityFilter>.Instance);
+        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockNotifier.Object, cb3, oppFilter3, mockRotation.Object, mockLogger.Object);
 
         // If open dry-run funding were counted, dailyPnl = -500,
         // which exceeds drawdown limit of 1000 * 0.05 = 50 → cycle would stop.
@@ -776,7 +773,7 @@ public class DryRunExecutionTests
         var mockHealthMonitor = new Mock<IPositionHealthMonitor>();
         var mockUserSettingsSvc = new Mock<IUserSettingsService>();
         var mockReadiness = new Mock<IFundingRateReadinessSignal>();
-        var mockHub = new Mock<IHubContext<DashboardHub, IDashboardClient>>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
         var mockRotation = new Mock<IRotationEvaluator>();
         var mockLogger = new Mock<ILogger<BotOrchestrator>>();
 
@@ -872,11 +869,7 @@ public class DryRunExecutionTests
         mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { TotalAvailableUsdc = 10_000m, FetchedAt = DateTime.UtcNow });
 
-        var mockClients = new Mock<IHubClients<IDashboardClient>>();
-        var mockClient = new Mock<IDashboardClient>();
-        mockClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
-        mockClients.Setup(c => c.Group(It.IsAny<string>())).Returns(mockClient.Object);
-        mockHub.Setup(h => h.Clients).Returns(mockClients.Object);
+        // (notifier mock handles all SignalR communication)
 
         mockPositionRepo.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
         mockPositionRepo.Setup(p => p.GetByStatusAsync(PositionStatus.Open)).ReturnsAsync(new List<ArbitragePosition>());
@@ -888,17 +881,19 @@ public class DryRunExecutionTests
         mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [] });
 
-        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockHub.Object, mockRotation.Object, mockLogger.Object);
+        var cb4 = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        var oppFilter4 = new OpportunityFilter(cb4, NullLogger<OpportunityFilter>.Instance);
+        var sut = new BotOrchestrator(mockScopeFactory.Object, mockReadiness.Object, mockNotifier.Object, cb4, oppFilter4, mockRotation.Object, mockLogger.Object);
 
         await sut.RunCycleAsync(CancellationToken.None);
 
         // Only real position's loss should be recorded
-        sut.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(1);
+        cb4.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(1);
 
         // Only real position should have a cooldown entry
         var realCooldownKey = $"{TestUserId}:{realPos.AssetId}:{realPos.LongExchangeId}:{realPos.ShortExchangeId}";
         var dryCooldownKey = $"{TestUserId}:{dryRunPos.AssetId}:{dryRunPos.LongExchangeId}:{dryRunPos.ShortExchangeId}";
-        sut.FailedOpCooldowns.ContainsKey(realCooldownKey).Should().BeTrue();
-        sut.FailedOpCooldowns.ContainsKey(dryCooldownKey).Should().BeFalse();
+        cb4.FailedOpCooldowns.ContainsKey(realCooldownKey).Should().BeTrue();
+        cb4.FailedOpCooldowns.ContainsKey(dryCooldownKey).Should().BeFalse();
     }
 }

@@ -6,6 +6,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -960,7 +961,7 @@ public class PositionHealthMonitorTests
         // target = 2.0 * 0.45 = 0.90
         // progress = 0.95 / 0.90 > 1.0 → > 90% → Critical
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().Contain(WarningType.PnlProgress);
         dto.WarningLevel.Should().Be(WarningLevel.Critical);
@@ -988,7 +989,7 @@ public class PositionHealthMonitorTests
         pos.AccumulatedFunding = 0.675m;
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().Contain(WarningType.PnlProgress);
         dto.WarningLevel.Should().BeOneOf(WarningLevel.Warning, WarningLevel.Critical);
@@ -1012,7 +1013,7 @@ public class PositionHealthMonitorTests
         };
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
     }
@@ -1069,7 +1070,7 @@ public class PositionHealthMonitorTests
         };
 
         var dto = new PositionSummaryDto();
-        BotOrchestrator.ComputeWarnings(dto, pos, config);
+        SignalRNotifier.ComputeWarnings(dto, pos, config);
 
         dto.WarningTypes.Should().NotContain(WarningType.PnlProgress);
     }

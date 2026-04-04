@@ -2,13 +2,12 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
-using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
-using FundingRateArb.Infrastructure.Hubs;
-using Microsoft.AspNetCore.SignalR;
+using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -35,11 +34,10 @@ public class BotOrchestratorTests
     private readonly Mock<IPositionHealthMonitor> _mockHealthMonitor = new();
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IFundingRateReadinessSignal> _mockReadinessSignal = new();
-    private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
-    private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
-    private readonly Mock<IDashboardClient> _mockDashboardClient = new();
-    private readonly Mock<IDashboardClient> _mockGroupClient = new();
+    private readonly Mock<ISignalRNotifier> _mockNotifier = new();
     private readonly Mock<IRotationEvaluator> _mockRotationEvaluator = new();
+    private readonly CircuitBreakerManager _circuitBreaker;
+    private readonly OpportunityFilter _opportunityFilter;
     private readonly BotOrchestrator _sut;
 
     private static readonly BotConfiguration EnabledConfig = new()
@@ -139,30 +137,29 @@ public class BotOrchestratorTests
         _mockUserSettings.Setup(s => s.GetDataOnlyExchangeIdsAsync())
             .ReturnsAsync(new List<int>());
 
-        // Wire hub — Clients.All for dashboard/position/notification broadcasts
-        _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
-        _mockHubClients.Setup(c => c.All).Returns(_mockDashboardClient.Object);
-        _mockDashboardClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mockDashboardClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
-        _mockDashboardClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-
-        // C4: Wire Group("user-{userId}") for per-user alert targeting
-        _mockHubClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockGroupClient.Object);
-        _mockGroupClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveNotification(It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceiveStatusExplanation(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
-        _mockGroupClient.Setup(d => d.ReceivePositionRemoval(It.IsAny<int>())).Returns(Task.CompletedTask);
+        // Wire notifier — default all methods to completed tasks
+        _mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushPositionUpdatesAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<BotConfiguration>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushPositionRemovalsAsync(It.IsAny<IReadOnlyList<(int, string, int, int, PositionStatus)>>(), It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushRebalanceRemovalsAsync(It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushNewAlertsAsync(It.IsAny<IUnitOfWork>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushStatusExplanationAsync(It.IsAny<string?>(), It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushOpportunityUpdateAsync(It.IsAny<OpportunityResultDto>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushBalanceUpdateAsync(It.IsAny<string>(), It.IsAny<BalanceSnapshotDto>())).Returns(Task.CompletedTask);
+        _mockNotifier.Setup(n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
 
         _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        _circuitBreaker = new CircuitBreakerManager(NullLogger<CircuitBreakerManager>.Instance);
+        _opportunityFilter = new OpportunityFilter(_circuitBreaker, NullLogger<OpportunityFilter>.Instance);
+
         _sut = new BotOrchestrator(
             _mockScopeFactory.Object,
             _mockReadinessSignal.Object,
-            _mockHubContext.Object,
+            _mockNotifier.Object,
+            _circuitBreaker,
+            _opportunityFilter,
             _mockRotationEvaluator.Object,
             NullLogger<BotOrchestrator>.Instance);
     }
@@ -329,13 +326,12 @@ public class BotOrchestratorTests
     // ── H-BO1: Position updates go to per-user group, not Clients.All ─────────
 
     [Fact]
-    public async Task RunCycle_PushesPositionUpdates_ToUserGroup_NotClientsAll()
+    public async Task RunCycle_PushesPositionUpdates_ViaNotifier()
     {
-        var userId = "trader-user-id";
         var openPosition = new ArbitragePosition
         {
             Id = 1,
-            UserId = userId,
+            UserId = "trader-user-id",
             Status = Domain.Enums.PositionStatus.Open,
             Asset = new Asset { Symbol = "ETH" },
             LongExchange = new Exchange { Name = "Hyperliquid" },
@@ -346,62 +342,33 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([openPosition]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var positionUpdateSentToAll = false;
-        _mockDashboardClient
-            .Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>()))
-            .Callback(() => positionUpdateSentToAll = true)
-            .Returns(Task.CompletedTask);
-
-        var positionUpdateSentToGroup = false;
-        _mockGroupClient
-            .Setup(d => d.ReceivePositionUpdate(It.IsAny<PositionSummaryDto>()))
-            .Callback(() => positionUpdateSentToGroup = true)
-            .Returns(Task.CompletedTask);
-
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Position updates must NOT go to Clients.All
-        positionUpdateSentToAll.Should().BeFalse(
-            "position updates contain user-specific data and must not be broadcast to all clients");
-
-        // Position updates MUST go to the user's group
-        positionUpdateSentToGroup.Should().BeTrue(
-            "position updates must be sent to the per-user group");
-
-        _mockHubClients.Verify(
-            c => c.Group($"user-{userId}"),
-            Times.AtLeastOnce);
+        _mockNotifier.Verify(
+            n => n.PushPositionUpdatesAsync(It.Is<List<ArbitragePosition>>(l => l.Count == 1), It.IsAny<BotConfiguration>()),
+            Times.Once);
     }
 
-    // ── H-BO1: Dashboard aggregates go to MarketData group ───────────────────
+    // ── H-BO1: Dashboard aggregates go via notifier ───────────────────
 
     [Fact]
-    public async Task RunCycle_PushesDashboardUpdate_ToMarketDataGroup()
+    public async Task RunCycle_PushesDashboardUpdate_ViaNotifier()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var dashboardSentToMarketData = false;
-        _mockGroupClient
-            .Setup(d => d.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
-            .Callback(() => dashboardSentToMarketData = true)
-            .Returns(Task.CompletedTask);
-
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        dashboardSentToMarketData.Should().BeTrue(
-            "dashboard KPI updates must be sent to the MarketData group");
-
-        _mockHubClients.Verify(
-            c => c.Group(HubGroups.MarketData),
-            Times.AtLeastOnce);
+        _mockNotifier.Verify(
+            n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<bool>(), It.IsAny<int>(), It.IsAny<int>()),
+            Times.Once);
     }
 
-    // ── H7: Position-open notification goes to user group + admins, not Clients.All ──
+    // ── H7: Position-open notification goes via notifier ──
 
     [Fact]
-    public async Task RunCycle_OnPositionOpen_SendsNotification_ToUserGroupAndAdmins_NotClientsAll()
+    public async Task RunCycle_OnPositionOpen_SendsNotification_ViaNotifier()
     {
         SetupEnabledUser();
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
@@ -423,30 +390,17 @@ public class BotOrchestratorTests
         _mockExecEngine.Setup(e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((true, (string?)null));
 
-        var notificationSentToAll = false;
-        _mockDashboardClient
-            .Setup(d => d.ReceiveNotification(It.IsAny<string>()))
-            .Callback(() => notificationSentToAll = true)
-            .Returns(Task.CompletedTask);
-
-        var notificationSentToGroup = false;
-        _mockGroupClient
-            .Setup(d => d.ReceiveNotification(It.IsAny<string>()))
-            .Callback(() => notificationSentToGroup = true)
-            .Returns(Task.CompletedTask);
-
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        notificationSentToAll.Should().BeFalse(
-            "position-open notifications reveal trading activity and must not go to Clients.All");
-        notificationSentToGroup.Should().BeTrue(
-            "position-open notifications must be routed to the user group and/or admins group");
+        _mockNotifier.Verify(
+            n => n.PushNotificationAsync(TestUserId, It.Is<string>(m => m.Contains("ETH"))),
+            Times.Once);
     }
 
-    // ── H8: BotOrchestrator pushes opportunity updates after GetOpportunitiesAsync ──
+    // ── H8: BotOrchestrator pushes opportunity updates via notifier ──
 
     [Fact]
-    public async Task RunCycle_PushesOpportunityUpdate_ToMarketDataGroup()
+    public async Task RunCycle_PushesOpportunityUpdate_ViaNotifier()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
@@ -456,23 +410,12 @@ public class BotOrchestratorTests
             new() { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, NetYieldPerHour = 0.001m },
         };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = opportunities });
-        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<Domain.Enums.AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync([0m]);
-
-        var opportunityUpdateSent = false;
-        _mockGroupClient
-            .Setup(d => d.ReceiveOpportunityUpdate(It.IsAny<OpportunityResultDto>()))
-            .Callback(() => opportunityUpdateSent = true)
-            .Returns(Task.CompletedTask);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        opportunityUpdateSent.Should().BeTrue(
-            "BotOrchestrator must push opportunity updates to MarketData group after computing them");
-
-        _mockHubClients.Verify(
-            c => c.Group(HubGroups.MarketData),
-            Times.AtLeastOnce);
+        _mockNotifier.Verify(
+            n => n.PushOpportunityUpdateAsync(It.IsAny<OpportunityResultDto>()),
+            Times.Once);
     }
 
     // ── M6: Position list is re-fetched AFTER health monitor closes positions ──
@@ -507,29 +450,18 @@ public class BotOrchestratorTests
     // ── M7: Alert push uses rolling cutoff, not fixed 2-minute window ─────────
 
     [Fact]
-    public async Task RunCycle_AlertPush_UsesRollingCutoff_NotFixed2MinuteWindow()
+    public async Task RunCycle_CallsPushNewAlerts_EachCycle()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var capturedWindows = new List<TimeSpan>();
-        _mockAlerts
-            .Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
-            .Callback<TimeSpan>(w => capturedWindows.Add(w))
-            .ReturnsAsync(new List<Alert>());
-
-        // First cycle
+        // Two cycles
         await _sut.RunCycleAsync(CancellationToken.None);
-        // Small pause to ensure time difference is measurable
-        await Task.Delay(10);
-        // Second cycle
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        capturedWindows.Should().HaveCount(2, "GetRecentUnreadAsync should be called once per cycle");
-
-        capturedWindows[1].Should().BeLessThan(TimeSpan.FromMinutes(1),
-            "the second cycle's window should be the elapsed time since the first alert push, not a fixed 2-min window");
+        _mockNotifier.Verify(n => n.PushNewAlertsAsync(It.IsAny<IUnitOfWork>()), Times.Exactly(2),
+            "PushNewAlertsAsync should be called once per cycle");
     }
 
     // ── M-BO2: SemaphoreSlim is disposed when orchestrator is disposed ─────────
@@ -604,8 +536,8 @@ public class BotOrchestratorTests
 
         // Manually expire the cooldown for testing (per-user key)
         var key = $"{TestUserId}:1_1_2";
-        var entry = _sut.FailedOpCooldowns[key];
-        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        _circuitBreaker.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
 
         // Cycle 2: cooldown expired — should retry
         await _sut.RunCycleAsync(CancellationToken.None);
@@ -644,15 +576,15 @@ public class BotOrchestratorTests
         // Cycle 1: fails
         await _sut.RunCycleAsync(CancellationToken.None);
         var key = $"{TestUserId}:1_1_2";
-        _sut.FailedOpCooldowns.ContainsKey(key).Should().BeTrue("cooldown must be registered after failure");
+        _circuitBreaker.FailedOpCooldowns.ContainsKey(key).Should().BeTrue("cooldown must be registered after failure");
 
         // Expire cooldown so cycle 2 retries
-        var entry = _sut.FailedOpCooldowns[key];
-        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        _circuitBreaker.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), entry.Failures);
 
         // Cycle 2: succeeds — clears cooldown
         await _sut.RunCycleAsync(CancellationToken.None);
-        _sut.FailedOpCooldowns.ContainsKey(key).Should().BeFalse("cooldown must be cleared after successful open");
+        _circuitBreaker.FailedOpCooldowns.ContainsKey(key).Should().BeFalse("cooldown must be cleared after successful open");
     }
 
     [Fact]
@@ -682,25 +614,25 @@ public class BotOrchestratorTests
 
         // Failure 1: cooldown = BaseCooldown (5 min)
         await _sut.RunCycleAsync(CancellationToken.None);
-        var cooldown1 = _sut.FailedOpCooldowns[key];
+        var cooldown1 = _circuitBreaker.FailedOpCooldowns[key];
         cooldown1.Failures.Should().Be(1);
 
         // Expire and fail again
-        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown1.Failures);
+        _circuitBreaker.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown1.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
-        var cooldown2 = _sut.FailedOpCooldowns[key];
+        var cooldown2 = _circuitBreaker.FailedOpCooldowns[key];
         cooldown2.Failures.Should().Be(2);
 
         // Expire and fail a third time
-        _sut.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown2.Failures);
+        _circuitBreaker.FailedOpCooldowns[key] = (DateTime.UtcNow.AddMinutes(-1), cooldown2.Failures);
         await _sut.RunCycleAsync(CancellationToken.None);
-        var cooldown3 = _sut.FailedOpCooldowns[key];
+        var cooldown3 = _circuitBreaker.FailedOpCooldowns[key];
         cooldown3.Failures.Should().Be(3);
 
         // After 3 failures, cooldown should be longer than after 1 failure
-        var duration1 = BotOrchestrator.BaseCooldown; // 5 min
+        var duration1 = CircuitBreakerManager.BaseCooldown; // 5 min
         var duration3 = TimeSpan.FromTicks(
-            Math.Min(BotOrchestrator.BaseCooldown.Ticks * (1L << 2), BotOrchestrator.MaxCooldown.Ticks)); // 20 min
+            Math.Min(CircuitBreakerManager.BaseCooldown.Ticks * (1L << 2), CircuitBreakerManager.MaxCooldown.Ticks)); // 20 min
         duration3.Should().BeGreaterThan(duration1, "exponential backoff must increase cooldown with consecutive failures");
     }
 
@@ -719,36 +651,18 @@ public class BotOrchestratorTests
             "Health monitor must run even when bot is disabled to prevent stale/unliquidated positions");
     }
 
-    // ── H6: Alert dedup ─────────────────────────────────────────────────────────
+    // ── H6: Alerts are pushed via notifier ──────────────────────────────────────
 
     [Fact]
-    public async Task RunCycle_AlertDedup_DoesNotPushSameAlertTwice()
+    public async Task RunCycle_CallsPushNewAlerts_ViaNotifier()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var alert = new Alert
-        {
-            Id = 42,
-            UserId = "test-user",
-            Message = "Test alert",
-            CreatedAt = DateTime.UtcNow,
-        };
-
-        _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
-            .ReturnsAsync([alert]);
-
-        var alertPushCount = 0;
-        _mockGroupClient.Setup(d => d.ReceiveAlert(It.IsAny<AlertDto>()))
-            .Callback(() => alertPushCount++)
-            .Returns(Task.CompletedTask);
-
-        // Two cycles with the same alert returned
-        await _sut.RunCycleAsync(CancellationToken.None);
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        alertPushCount.Should().Be(1, "same alert must not be pushed twice due to dedup");
+        _mockNotifier.Verify(n => n.PushNewAlertsAsync(It.IsAny<IUnitOfWork>()), Times.Once);
     }
 
     // ── H7: Daily drawdown circuit breaker ──────────────────────────────────────
@@ -854,7 +768,7 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
         // Pre-set per-user consecutive losses at the pause threshold
-        _sut.UserConsecutiveLosses[TestUserId] = 2;
+        _circuitBreaker.UserConsecutiveLosses[TestUserId] = 2;
 
         var opp = new ArbitrageOpportunityDto { AssetId = 1, AssetSymbol = "ETH", LongExchangeId = 1, ShortExchangeId = 2, LongExchangeName = "ExA", ShortExchangeName = "ExB", NetYieldPerHour = 0.001m };
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -875,7 +789,7 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
         // Pre-set per-user consecutive losses (below pause threshold of 3)
-        _sut.UserConsecutiveLosses[TestUserId] = 2;
+        _circuitBreaker.UserConsecutiveLosses[TestUserId] = 2;
 
         var opp = new ArbitrageOpportunityDto
         {
@@ -895,7 +809,7 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.UserConsecutiveLosses[TestUserId].Should().Be(2, "consecutive losses are only reset by RecordCloseResult, not by a successful open");
+        _circuitBreaker.UserConsecutiveLosses[TestUserId].Should().Be(2, "consecutive losses are only reset by RecordCloseResult, not by a successful open");
     }
 
     [Fact]
@@ -919,7 +833,7 @@ public class BotOrchestratorTests
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        _sut.UserConsecutiveLosses[TestUserId] = 2;
+        _circuitBreaker.UserConsecutiveLosses[TestUserId] = 2;
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
@@ -938,7 +852,7 @@ public class BotOrchestratorTests
         _sut.RecordCloseResult(-5m, TestUserId);
         _sut.RecordCloseResult(-5m, TestUserId);
 
-        _sut.UserConsecutiveLosses[TestUserId].Should().Be(3);
+        _circuitBreaker.UserConsecutiveLosses[TestUserId].Should().Be(3);
     }
 
     [Fact]
@@ -948,7 +862,7 @@ public class BotOrchestratorTests
         _sut.RecordCloseResult(-1m, TestUserId);
         _sut.RecordCloseResult(1m, TestUserId);
 
-        _sut.UserConsecutiveLosses[TestUserId].Should().Be(0);
+        _circuitBreaker.UserConsecutiveLosses[TestUserId].Should().Be(0);
     }
 
     [Fact]
@@ -976,7 +890,7 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(0,
+        _circuitBreaker.UserConsecutiveLosses.GetValueOrDefault(TestUserId, 0).Should().Be(0,
             "open failures do not count as realized losses — only RecordCloseResult increments the counter");
     }
 
@@ -1063,7 +977,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // RecordCloseResult should NOT have been called since pos is not Closed
-        _sut.UserConsecutiveLosses.GetValueOrDefault("admin-user-id", 0).Should().Be(0,
+        _circuitBreaker.UserConsecutiveLosses.GetValueOrDefault("admin-user-id", 0).Should().Be(0,
             "RecordCloseResult should only be called when position.Status == Closed");
     }
 
@@ -1110,31 +1024,16 @@ public class BotOrchestratorTests
     // ── D5: First cycle catches startup alerts ──────────────────────────────────
 
     [Fact]
-    public async Task RunCycle_FirstCycle_CatchesStartupAlerts()
+    public async Task RunCycle_FirstCycle_CallsPushNewAlerts()
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
         _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(new OpportunityResultDto());
 
-        var startupAlert = new Alert
-        {
-            Id = 99,
-            UserId = "test-user",
-            Message = "Startup alert",
-            CreatedAt = DateTime.UtcNow.AddMinutes(-3),
-        };
-        _mockAlerts.Setup(a => a.GetRecentUnreadAsync(It.IsAny<TimeSpan>()))
-            .ReturnsAsync([startupAlert]);
-
-        var alertPushed = false;
-        _mockGroupClient.Setup(d => d.ReceiveAlert(It.Is<AlertDto>(a => a.Id == 99)))
-            .Callback(() => alertPushed = true)
-            .Returns(Task.CompletedTask);
-
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        alertPushed.Should().BeTrue(
-            "_lastAlertPushUtc initialized to UtcNow.AddMinutes(-5) should catch alerts created 3 min ago");
+        _mockNotifier.Verify(n => n.PushNewAlertsAsync(It.IsAny<IUnitOfWork>()), Times.Once,
+            "PushNewAlertsAsync must be called each cycle to deliver alerts");
     }
 
     // ── Data-only exchange filtering ─────────────────────────────────────────
@@ -1195,9 +1094,12 @@ public class BotOrchestratorTests
         // Act
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Assert — ReceivePositionRemoval called for each reaped position
-        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(42), Times.Once);
-        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(99), Times.Once);
+        // Assert — PushPositionRemovalsAsync called with reaped positions
+        _mockNotifier.Verify(
+            n => n.PushPositionRemovalsAsync(
+                It.Is<IReadOnlyList<(int, string, int, int, PositionStatus)>>(l => l.Count == 2),
+                It.IsAny<List<(int, string)>>()),
+            Times.Once);
     }
 
     [Fact]
@@ -1230,8 +1132,12 @@ public class BotOrchestratorTests
         // Act
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Assert — ReceivePositionRemoval called for the closed position
-        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(55), Times.Once);
+        // Assert — PushPositionRemovalsAsync called with the closed position
+        _mockNotifier.Verify(
+            n => n.PushPositionRemovalsAsync(
+                It.IsAny<IReadOnlyList<(int, string, int, int, PositionStatus)>>(),
+                It.Is<List<(int, string)>>(l => l.Any(x => x.Item1 == 55))),
+            Times.Once);
     }
 
     [Fact]
@@ -1257,8 +1163,12 @@ public class BotOrchestratorTests
         // Act
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Assert — ReceivePositionRemoval should NOT be called
-        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(It.IsAny<int>()), Times.Never);
+        // Assert — PushPositionRemovalsAsync still called but with empty lists
+        _mockNotifier.Verify(
+            n => n.PushPositionRemovalsAsync(
+                It.Is<IReadOnlyList<(int, string, int, int, PositionStatus)>>(l => l.Count == 0),
+                It.Is<List<(int, string)>>(l => l.Count == 0)),
+            Times.Once);
     }
 
     [Fact]
@@ -1309,8 +1219,8 @@ public class BotOrchestratorTests
         // Act
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        // Assert — ReceivePositionRemoval should NOT be called because position didn't transition
-        _mockGroupClient.Verify(d => d.ReceivePositionRemoval(101), Times.Never);
+        // Assert — PushRebalanceRemovalsAsync should NOT be called because position didn't transition
+        _mockNotifier.Verify(n => n.PushRebalanceRemovalsAsync(It.IsAny<List<(int, string)>>()), Times.Never);
     }
 
     // ── Circuit Breaker Tests ────────────────────────────────────────────────
@@ -1368,17 +1278,17 @@ public class BotOrchestratorTests
         // Fail 3 times (threshold = 3)
         for (int i = 0; i < 3; i++)
         {
-            _sut.FailedOpCooldowns.Clear(); // Clear per-user cooldowns so the opp isn't skipped
+            _circuitBreaker.FailedOpCooldowns.Clear(); // Clear per-user cooldowns so the opp isn't skipped
             await _sut.RunCycleAsync(CancellationToken.None);
         }
 
         // Both exchanges should now be circuit-broken
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
-        _sut.ExchangeCircuitBreaker[1].Failures.Should().BeGreaterThanOrEqualTo(3);
-        _sut.ExchangeCircuitBreaker[2].Failures.Should().BeGreaterThanOrEqualTo(3);
-        _sut.ExchangeCircuitBreaker[1].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
-        _sut.ExchangeCircuitBreaker[2].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(2);
+        _circuitBreaker.ExchangeCircuitBreaker[1].Failures.Should().BeGreaterThanOrEqualTo(3);
+        _circuitBreaker.ExchangeCircuitBreaker[2].Failures.Should().BeGreaterThanOrEqualTo(3);
+        _circuitBreaker.ExchangeCircuitBreaker[1].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
+        _circuitBreaker.ExchangeCircuitBreaker[2].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
     }
 
     [Fact]
@@ -1399,15 +1309,15 @@ public class BotOrchestratorTests
         };
 
         // Pre-seed 2 failures (below threshold of 3)
-        _sut.ExchangeCircuitBreaker[2] = (2, DateTime.MinValue);
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (2, DateTime.MinValue);
 
         SetupCircuitBreakerScenario(opp, openSuccess: true);
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Both exchange counters should be reset
-        _sut.ExchangeCircuitBreaker.Should().NotContainKey(1);
-        _sut.ExchangeCircuitBreaker.Should().NotContainKey(2);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().NotContainKey(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().NotContainKey(2);
     }
 
     [Fact]
@@ -1428,7 +1338,7 @@ public class BotOrchestratorTests
         };
 
         // Pre-seed exchange 2 as circuit-broken
-        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
 
         SetupCircuitBreakerScenario(opp, openSuccess: true);
 
@@ -1458,7 +1368,7 @@ public class BotOrchestratorTests
         };
 
         // Pre-seed exchange 2 as circuit-broken but expired
-        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(-1));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(-1));
 
         SetupCircuitBreakerScenario(opp, openSuccess: true);
 
@@ -1491,7 +1401,7 @@ public class BotOrchestratorTests
         };
 
         // Pre-seed exchange 2 as circuit-broken
-        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
@@ -1514,7 +1424,7 @@ public class BotOrchestratorTests
     public async Task CircuitBreaker_ExpiredEntries_CleanedUpOnCycleStart()
     {
         // Pre-seed an expired circuit breaker entry
-        _sut.ExchangeCircuitBreaker[99] = (3, DateTime.UtcNow.AddMinutes(-5));
+        _circuitBreaker.ExchangeCircuitBreaker[99] = (3, DateTime.UtcNow.AddMinutes(-5));
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
@@ -1524,7 +1434,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Expired entry should have been cleaned up
-        _sut.ExchangeCircuitBreaker.Should().NotContainKey(99);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().NotContainKey(99);
     }
 
     [Fact]
@@ -1593,11 +1503,11 @@ public class BotOrchestratorTests
     public async Task FailedOpCooldowns_ExpiredEntries_CleanedUpOnCycleStart()
     {
         // Pre-seed an entry expired longer than MaxCooldown (60 min) — should be swept
-        _sut.FailedOpCooldowns["test-user:1_1_2"] = (DateTime.UtcNow.AddMinutes(-65), 2);
+        _circuitBreaker.FailedOpCooldowns["test-user:1_1_2"] = (DateTime.UtcNow.AddMinutes(-65), 2);
         // Seed a recently-expired entry (< MaxCooldown ago) — should survive to preserve failure count
-        _sut.FailedOpCooldowns["test-user:3_1_2"] = (DateTime.UtcNow.AddMinutes(-5), 1);
+        _circuitBreaker.FailedOpCooldowns["test-user:3_1_2"] = (DateTime.UtcNow.AddMinutes(-5), 1);
         // Seed a non-expired entry — should survive
-        _sut.FailedOpCooldowns["test-user:2_1_3"] = (DateTime.UtcNow.AddMinutes(5), 1);
+        _circuitBreaker.FailedOpCooldowns["test-user:2_1_3"] = (DateTime.UtcNow.AddMinutes(5), 1);
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DisabledConfig);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
@@ -1607,11 +1517,11 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Stale entry (expired > MaxCooldown ago) should have been cleaned up
-        _sut.FailedOpCooldowns.Should().NotContainKey("test-user:1_1_2");
+        _circuitBreaker.FailedOpCooldowns.Should().NotContainKey("test-user:1_1_2");
         // Recently-expired entry should survive (failure count preserved for exponential backoff)
-        _sut.FailedOpCooldowns.Should().ContainKey("test-user:3_1_2");
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey("test-user:3_1_2");
         // Non-expired entry should survive
-        _sut.FailedOpCooldowns.Should().ContainKey("test-user:2_1_3");
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey("test-user:2_1_3");
     }
 
     // ── Skip Reason Accuracy Tests ───────────────────────────────────────────
@@ -1652,7 +1562,7 @@ public class BotOrchestratorTests
     public async Task SkipReason_CircuitBroken()
     {
         // Pre-seed circuit breaker for exchange 2
-        _sut.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
+        _circuitBreaker.ExchangeCircuitBreaker[2] = (3, DateTime.UtcNow.AddMinutes(15));
 
         SetupEnabledUser();
         var opp = new ArbitrageOpportunityDto
@@ -1759,10 +1669,10 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Assert — circuit breaker incremented for both exchange IDs
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
-        _sut.ExchangeCircuitBreaker[1].Failures.Should().Be(1);
-        _sut.ExchangeCircuitBreaker[2].Failures.Should().Be(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(2);
+        _circuitBreaker.ExchangeCircuitBreaker[1].Failures.Should().Be(1);
+        _circuitBreaker.ExchangeCircuitBreaker[2].Failures.Should().Be(1);
     }
 
     // ── Opening positions counted in MaxConcurrentPositions gate ──────────
@@ -1854,10 +1764,10 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Assert — circuit breaker incremented for both exchanges
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
-        _sut.ExchangeCircuitBreaker[1].Failures.Should().Be(1);
-        _sut.ExchangeCircuitBreaker[2].Failures.Should().Be(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(2);
+        _circuitBreaker.ExchangeCircuitBreaker[1].Failures.Should().Be(1);
+        _circuitBreaker.ExchangeCircuitBreaker[2].Failures.Should().Be(1);
     }
 
     // ── NB1: Exception with "balance" in message takes generic failure path ──
@@ -2073,9 +1983,13 @@ public class BotOrchestratorTests
         // Verify CountByStatusesAsync is used with both EmergencyClosed and Failed
         _mockPositions.Verify(p => p.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed), Times.Once);
         _mockPositions.Verify(p => p.GetByStatusAsync(PositionStatus.EmergencyClosed), Times.Never);
-        // Verify the count is passed to the dashboard update
-        _mockGroupClient.Verify(c => c.ReceiveDashboardUpdate(
-            It.Is<DashboardDto>(d => d.NeedsAttentionCount == 3)), Times.Once);
+        // Verify the count is passed to the dashboard update via notifier
+        _mockNotifier.Verify(n => n.PushDashboardUpdateAsync(
+            It.IsAny<List<ArbitragePosition>>(),
+            It.IsAny<List<ArbitrageOpportunityDto>>(),
+            It.IsAny<bool>(),
+            It.IsAny<int>(),
+            3), Times.Once);
     }
 
     // ── Opening-reaped positions do NOT trigger circuit breaker ────────────────
@@ -2100,7 +2014,7 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Circuit breaker should NOT be incremented for Opening-reaped positions
-        _sut.ExchangeCircuitBreaker.Should().BeEmpty("Opening-reaped positions should not increment exchange circuit breaker");
+        _circuitBreaker.ExchangeCircuitBreaker.Should().BeEmpty("Opening-reaped positions should not increment exchange circuit breaker");
     }
 
     [Fact]
@@ -2123,8 +2037,8 @@ public class BotOrchestratorTests
         await _sut.RunCycleAsync(CancellationToken.None);
 
         // Circuit breaker SHOULD be incremented for Closing-reaped positions
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(1);
-        _sut.ExchangeCircuitBreaker.Should().ContainKey(2);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(1);
+        _circuitBreaker.ExchangeCircuitBreaker.Should().ContainKey(2);
     }
 
     // ── Asset-level cooldown ──────────────────────────────────────────────────
@@ -2158,10 +2072,10 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 1),
             "long exchange (Hyperliquid) identified in error — should be cooled down");
-        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
-        _sut.AssetExchangeCooldowns.Should().NotContainKey((1, 2),
+        _circuitBreaker.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns.Should().NotContainKey((1, 2),
             "short exchange (Lighter) not in error — should NOT be cooled down");
     }
 
@@ -2194,10 +2108,10 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 2),
             "short exchange (Lighter) identified in error — should be cooled down");
-        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
-        _sut.AssetExchangeCooldowns.Should().NotContainKey((1, 1),
+        _circuitBreaker.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns.Should().NotContainKey((1, 1),
             "long exchange (Hyperliquid) not in error — should NOT be cooled down");
     }
 
@@ -2230,12 +2144,12 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 1),
             "unidentifiable error — both exchanges should be cooled down (long)");
-        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+        _circuitBreaker.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 2),
             "unidentifiable error — both exchanges should be cooled down (short)");
-        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
     }
 
     [Fact]
@@ -2267,12 +2181,12 @@ public class BotOrchestratorTests
 
         await _sut.RunCycleAsync(CancellationToken.None);
 
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 1),
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 1),
             "exception path (null error) — both exchanges should be cooled down (long)");
-        _sut.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
-        _sut.AssetExchangeCooldowns.Should().ContainKey((1, 2),
+        _circuitBreaker.AssetExchangeCooldowns[(1, 1)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns.Should().ContainKey((1, 2),
             "exception path (null error) — both exchanges should be cooled down (short)");
-        _sut.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
+        _circuitBreaker.AssetExchangeCooldowns[(1, 2)].Failures.Should().Be(1);
     }
 
     [Fact]
@@ -2282,7 +2196,7 @@ public class BotOrchestratorTests
         for (int i = 0; i < 3; i++)
         {
             // Use reflection-free access via the exposed internal property
-            _sut.AssetExchangeCooldowns.AddOrUpdate(
+            _circuitBreaker.AssetExchangeCooldowns.AddOrUpdate(
                 (1, 1),
                 _ => (1, 1 >= 3 ? DateTime.UtcNow.AddMinutes(10) : DateTime.MinValue),
                 (_, current) =>
@@ -2292,7 +2206,7 @@ public class BotOrchestratorTests
                 });
         }
 
-        _sut.AssetExchangeCooldowns.TryGetValue((1, 1), out var cooldown);
+        _circuitBreaker.AssetExchangeCooldowns.TryGetValue((1, 1), out var cooldown);
         cooldown.Failures.Should().Be(3);
         cooldown.CooldownUntil.Should().BeAfter(DateTime.UtcNow);
     }
@@ -2301,10 +2215,10 @@ public class BotOrchestratorTests
     public void AssetExchangeCooldown_DoesNotAffectOtherAssets()
     {
         // Cool down asset 1 on exchange 1
-        _sut.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
+        _circuitBreaker.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
 
         // Asset 2 on exchange 1 should NOT be cooled down
-        _sut.AssetExchangeCooldowns.Should().NotContainKey((2, 1),
+        _circuitBreaker.AssetExchangeCooldowns.Should().NotContainKey((2, 1),
             "asset-level cooldown should not affect other assets on the same exchange");
     }
 
@@ -2312,13 +2226,13 @@ public class BotOrchestratorTests
     public void AssetExchangeCooldown_ResetsOnSuccess()
     {
         // Set up cooldown
-        _sut.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
-        _sut.AssetExchangeCooldowns[(1, 2)] = (3, DateTime.UtcNow.AddMinutes(10));
+        _circuitBreaker.AssetExchangeCooldowns[(1, 1)] = (3, DateTime.UtcNow.AddMinutes(10));
+        _circuitBreaker.AssetExchangeCooldowns[(1, 2)] = (3, DateTime.UtcNow.AddMinutes(10));
 
         // Simulate success — remove cooldowns
-        _sut.AssetExchangeCooldowns.TryRemove((1, 1), out _);
-        _sut.AssetExchangeCooldowns.TryRemove((1, 2), out _);
+        _circuitBreaker.AssetExchangeCooldowns.TryRemove((1, 1), out _);
+        _circuitBreaker.AssetExchangeCooldowns.TryRemove((1, 2), out _);
 
-        _sut.AssetExchangeCooldowns.Should().BeEmpty("asset cooldowns should be cleared on successful open");
+        _circuitBreaker.AssetExchangeCooldowns.Should().BeEmpty("asset cooldowns should be cleared on successful open");
     }
 }
