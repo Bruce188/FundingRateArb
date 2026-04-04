@@ -19,8 +19,11 @@ public static class ArbitragePositionMappingExtensions
             EntrySpreadPerHour = pos.EntrySpreadPerHour,
             CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
             AccumulatedFunding = pos.AccumulatedFunding,
-            // Note: DashboardController previously omitted this; now unified with other call sites
-            UnrealizedPnl = pos.AccumulatedFunding, // best estimate until live mark-to-market
+            // PnL values are computed live in the health monitor loop and set by the caller
+            UnrealizedPnl = 0m,
+            ExchangePnl = 0m,
+            UnifiedPnl = 0m,
+            DivergencePct = pos.CurrentDivergencePct ?? 0m,
             RealizedPnl = pos.RealizedPnl,
             Status = pos.Status,
             OpenedAt = pos.OpenedAt,

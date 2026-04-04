@@ -823,7 +823,8 @@ public class DryRunExecutionTests
         mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 new[] { (dryRunPos, CloseReason.LiquidationRisk), (realPos, CloseReason.LiquidationRisk) },
-                Array.Empty<(int, string, int, int, PositionStatus)>()));
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // Close callback sets position status to Closed (simulating ExecutionEngine behavior)
         mockExecutionEngine.Setup(e => e.ClosePositionAsync(
