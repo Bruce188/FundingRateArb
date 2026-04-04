@@ -30,6 +30,7 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.EmergencyCloseSpreadThreshold).HasColumnType("decimal(18,6)").HasDefaultValue(-0.001m);
         builder.Property(b => b.LiquidationWarningPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.50m);
         builder.Property(b => b.ReconciliationIntervalCycles).HasDefaultValue(10);
+        builder.Property(b => b.DivergenceAlertMultiplier).HasColumnType("decimal(18,4)").HasDefaultValue(2.0m);
         builder.Property(b => b.DryRunEnabled).HasDefaultValue(false);
     }
 }

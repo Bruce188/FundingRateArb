@@ -19,7 +19,23 @@
             spreadEl.textContent = ((position.currentSpreadPerHour ?? 0) * 100).toFixed(4) + "%";
         }
 
-        // Update accumulated funding / unrealized PnL
+        // Update strategy PnL
+        var pnlEl = row.querySelector(".position-pnl");
+        if (pnlEl) {
+            var uPnl = position.unifiedPnl ?? 0;
+            pnlEl.textContent = uPnl.toFixed(4);
+            pnlEl.className = "position-pnl text-end " + (uPnl >= 0 ? "text-success" : "text-danger");
+        }
+
+        // Update exchange PnL
+        var exchPnlEl = row.querySelector(".position-exchange-pnl");
+        if (exchPnlEl) {
+            var ePnl = position.exchangePnl ?? 0;
+            exchPnlEl.textContent = ePnl.toFixed(4);
+            exchPnlEl.className = "position-exchange-pnl text-end " + (ePnl >= 0 ? "text-success" : "text-danger");
+        }
+
+        // Update accumulated funding
         var fundingEl = row.querySelector(".pos-funding");
         if (fundingEl) {
             var funding = position.accumulatedFunding ?? 0;

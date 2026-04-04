@@ -394,8 +394,18 @@
                                             }
                                         </span>
                                     </div>
-                                    <small class="text-muted">@pos.LongExchangeName &rarr; @pos.ShortExchangeName</small>
+                                    <small class="text-muted">
+                                        @pos.LongExchangeName &rarr; @pos.ShortExchangeName
+                                        @if (pos.DivergencePct > 0.01m)
+                                        {
+                                            <span class="badge bg-info ms-1" title="Price divergence">@pos.DivergencePct.ToString("F2")%</span>
+                                        }
+                                    </small>
                                     <div class="small">Size: $@pos.SizeUsdc.ToString("F2") | Spread: @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%/hr</div>
+                                    <div class="small">
+                                        Strategy: <span class="@(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">$@pos.UnifiedPnl.ToString("F4")</span>
+                                        | Exch: <span class="@(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">$@pos.ExchangePnl.ToString("F4")</span>
+                                    </div>
                                     @if (pos.AccumulatedFunding != 0)
                                     {
                                         <div class="small">Funding: $@pos.AccumulatedFunding.ToString("F4")</div>
@@ -427,7 +437,9 @@
                                     <th>Size (USDC)</th>
                                     <th>Entry Spread/hr</th>
                                     <th>Current Spread/hr</th>
-                                    <th>Accumulated Funding</th>
+                                    <th>Strategy PnL</th>
+                                    <th>Exch. PnL</th>
+                                    <th>Funding</th>
                                     @if (Model.AdaptiveHoldEnabled)
                                     {
                                         <th>PnL Target</th>
@@ -467,7 +479,15 @@
                                         <td class="position-spread @(pos.CurrentSpreadPerHour >= 0 ? "text-success" : "text-danger")">
                                             @((pos.CurrentSpreadPerHour * 100).ToString("F4"))%
                                         </td>
-                                        <td class="position-pnl text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        <td class="position-pnl @(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">$@pos.UnifiedPnl.ToString("F4")</td>
+                                        <td class="position-exchange-pnl @(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">
+                                            $@pos.ExchangePnl.ToString("F4")
+                                            @if (pos.DivergencePct > 0.01m)
+                                            {
+                                                <span class="badge bg-info ms-1" title="Price divergence">@pos.DivergencePct.ToString("F2")%</span>
+                                            }
+                                        </td>
+                                        <td class="text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
                                         @if (Model.AdaptiveHoldEnabled)
                                         {
                                             <td>
