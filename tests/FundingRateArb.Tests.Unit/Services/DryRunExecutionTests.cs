@@ -101,7 +101,10 @@ public class DryRunExecutionTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, DefaultLeverage = 5, DryRunEnabled = true, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            DryRunEnabled = true,
+            UpdatedByUserId = "admin",
         });
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5, DryRunEnabled = false });
@@ -125,7 +128,10 @@ public class DryRunExecutionTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, DefaultLeverage = 5, DryRunEnabled = false, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            DryRunEnabled = false,
+            UpdatedByUserId = "admin",
         });
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5, DryRunEnabled = true });
@@ -147,7 +153,10 @@ public class DryRunExecutionTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, DefaultLeverage = 5, DryRunEnabled = false, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            DryRunEnabled = false,
+            UpdatedByUserId = "admin",
         });
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5, DryRunEnabled = false });
@@ -179,7 +188,10 @@ public class DryRunExecutionTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, DefaultLeverage = 5, DryRunEnabled = false, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            DryRunEnabled = false,
+            UpdatedByUserId = "admin",
         });
 
         _mockExchanges.Setup(e => e.GetByIdAsync(1)).ReturnsAsync(new Exchange { Id = 1, Name = "Hyperliquid" });
@@ -188,10 +200,17 @@ public class DryRunExecutionTests
 
         var position = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, AssetId = 1, IsDryRun = true,
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongEntryPrice = 3000m, ShortEntryPrice = 3001m,
-            SizeUsdc = 100m, Leverage = 5, Status = PositionStatus.Open,
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = true,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            Status = PositionStatus.Open,
         };
 
         var sut = CreateEngine();
@@ -220,7 +239,10 @@ public class DryRunExecutionTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, DefaultLeverage = 5, DryRunEnabled = false, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            DefaultLeverage = 5,
+            DryRunEnabled = false,
+            UpdatedByUserId = "admin",
         });
 
         _mockExchanges.Setup(e => e.GetByIdAsync(1)).ReturnsAsync(new Exchange { Id = 1, Name = "Hyperliquid" });
@@ -234,10 +256,17 @@ public class DryRunExecutionTests
 
         var position = new ArbitragePosition
         {
-            Id = 2, UserId = TestUserId, AssetId = 1, IsDryRun = false,
-            LongExchangeId = 1, ShortExchangeId = 2,
-            LongEntryPrice = 3000m, ShortEntryPrice = 3001m,
-            SizeUsdc = 100m, Leverage = 5, Status = PositionStatus.Open,
+            Id = 2,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = false,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            SizeUsdc = 100m,
+            Leverage = 5,
+            Status = PositionStatus.Open,
         };
 
         var sut = CreateEngine();
@@ -331,19 +360,30 @@ public class DryRunExecutionTests
 
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-            MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m, VolumeFraction = 0.001m,
-            DefaultLeverage = 5, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            OpenThreshold = 0.0001m,
+            VolumeFraction = 0.001m,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
         });
 
         mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync()).ReturnsAsync(new List<string> { TestUserId });
         mockUserSettingsSvc.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true, MaxConcurrentPositions = 5,
-                TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 3,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
             });
         mockUserSettingsSvc.Setup(s => s.HasValidCredentialsAsync(TestUserId)).ReturnsAsync(true);
         mockUserSettingsSvc.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
@@ -372,13 +412,21 @@ public class DryRunExecutionTests
         // Closed today: one dry-run with a big loss, one real with small profit
         var dryRunClosed = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, IsDryRun = true, RealizedPnl = -500m,
-            Status = PositionStatus.Closed, ClosedAt = DateTime.UtcNow,
+            Id = 1,
+            UserId = TestUserId,
+            IsDryRun = true,
+            RealizedPnl = -500m,
+            Status = PositionStatus.Closed,
+            ClosedAt = DateTime.UtcNow,
         };
         var realClosed = new ArbitragePosition
         {
-            Id = 2, UserId = TestUserId, IsDryRun = false, RealizedPnl = 5m,
-            Status = PositionStatus.Closed, ClosedAt = DateTime.UtcNow,
+            Id = 2,
+            UserId = TestUserId,
+            IsDryRun = false,
+            RealizedPnl = 5m,
+            Status = PositionStatus.Closed,
+            ClosedAt = DateTime.UtcNow,
         };
         mockPositionRepo.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))
             .ReturnsAsync(new List<ArbitragePosition> { dryRunClosed, realClosed });
@@ -386,12 +434,18 @@ public class DryRunExecutionTests
         // Provide opportunities so the cycle would try to open positions if drawdown doesn't block
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 1, AssetSymbol = "ETH",
-            LongExchangeId = 1, LongExchangeName = "ExA",
-            ShortExchangeId = 2, ShortExchangeName = "ExB",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
-            LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 2,
+            ShortExchangeName = "ExB",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m,
         };
         mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -468,19 +522,30 @@ public class DryRunExecutionTests
 
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-            MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m, VolumeFraction = 0.001m,
-            DefaultLeverage = 5, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            OpenThreshold = 0.0001m,
+            VolumeFraction = 0.001m,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
         });
 
         mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync()).ReturnsAsync(new List<string> { TestUserId });
         mockUserSettingsSvc.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true, MaxConcurrentPositions = 5,
-                TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 3,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
             });
         mockUserSettingsSvc.Setup(s => s.HasValidCredentialsAsync(TestUserId)).ReturnsAsync(true);
         mockUserSettingsSvc.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))
@@ -503,10 +568,14 @@ public class DryRunExecutionTests
         // Open dry-run position with large negative AccumulatedFunding
         var openDryRun = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, IsDryRun = true,
+            Id = 1,
+            UserId = TestUserId,
+            IsDryRun = true,
             AccumulatedFunding = -500m,
             Status = PositionStatus.Open,
-            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            AssetId = 1,
         };
 
         mockPositionRepo.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition> { openDryRun });
@@ -520,12 +589,18 @@ public class DryRunExecutionTests
         // so the candidate filtering doesn't exclude it as a duplicate
         var opp = new ArbitrageOpportunityDto
         {
-            AssetId = 2, AssetSymbol = "BTC",
-            LongExchangeId = 3, LongExchangeName = "ExA",
-            ShortExchangeId = 4, ShortExchangeName = "ExB",
-            NetYieldPerHour = 0.001m, SpreadPerHour = 0.001m,
-            LongVolume24h = 1_000_000m, ShortVolume24h = 1_000_000m,
-            LongMarkPrice = 100m, ShortMarkPrice = 100m,
+            AssetId = 2,
+            AssetSymbol = "BTC",
+            LongExchangeId = 3,
+            LongExchangeName = "ExA",
+            ShortExchangeId = 4,
+            ShortExchangeName = "ExB",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 100m,
+            ShortMarkPrice = 100m,
         };
         mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
@@ -562,9 +637,13 @@ public class DryRunExecutionTests
     {
         var pos = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, AssetId = 1,
-            LongExchangeId = 1, ShortExchangeId = 2,
-            IsDryRun = true, Status = PositionStatus.Open,
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            IsDryRun = true,
+            Status = PositionStatus.Open,
         };
 
         var dto = pos.ToSummaryDto();
@@ -577,9 +656,13 @@ public class DryRunExecutionTests
     {
         var pos = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, AssetId = 1,
-            LongExchangeId = 1, ShortExchangeId = 2,
-            IsDryRun = true, Status = PositionStatus.Open,
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            IsDryRun = true,
+            Status = PositionStatus.Open,
         };
 
         var dto = pos.ToDetailsDto();
@@ -594,8 +677,12 @@ public class DryRunExecutionTests
     {
         var position = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, AssetId = 1, IsDryRun = true,
-            LongExchangeId = 1, ShortExchangeId = 2,
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = true,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
@@ -618,8 +705,12 @@ public class DryRunExecutionTests
     {
         var dryRunPos = new ArbitragePosition
         {
-            Id = 1, UserId = TestUserId, AssetId = 1, IsDryRun = true,
-            LongExchangeId = 1, ShortExchangeId = 2,
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = true,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
@@ -627,8 +718,12 @@ public class DryRunExecutionTests
         };
         var realPos = new ArbitragePosition
         {
-            Id = 2, UserId = TestUserId, AssetId = 1, IsDryRun = false,
-            LongExchangeId = 1, ShortExchangeId = 2,
+            Id = 2,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = false,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
@@ -698,15 +793,25 @@ public class DryRunExecutionTests
         // Use different asset/exchange IDs so cooldown keys are distinct
         var dryRunPos = new ArbitragePosition
         {
-            Id = 10, UserId = TestUserId, AssetId = 1, IsDryRun = true,
-            LongExchangeId = 1, ShortExchangeId = 2,
-            Status = PositionStatus.Closed, RealizedPnl = -100m,
+            Id = 10,
+            UserId = TestUserId,
+            AssetId = 1,
+            IsDryRun = true,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Closed,
+            RealizedPnl = -100m,
         };
         var realPos = new ArbitragePosition
         {
-            Id = 11, UserId = TestUserId, AssetId = 2, IsDryRun = false,
-            LongExchangeId = 3, ShortExchangeId = 4,
-            Status = PositionStatus.Closed, RealizedPnl = -50m,
+            Id = 11,
+            UserId = TestUserId,
+            AssetId = 2,
+            IsDryRun = false,
+            LongExchangeId = 3,
+            ShortExchangeId = 4,
+            Status = PositionStatus.Closed,
+            RealizedPnl = -50m,
         };
 
         mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
@@ -721,19 +826,30 @@ public class DryRunExecutionTests
 
         mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
         {
-            IsEnabled = true, MaxConcurrentPositions = 5, TotalCapitalUsdc = 1000m,
-            MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m, VolumeFraction = 0.001m,
-            DefaultLeverage = 5, UpdatedByUserId = "admin",
+            IsEnabled = true,
+            MaxConcurrentPositions = 5,
+            TotalCapitalUsdc = 1000m,
+            MaxCapitalPerPosition = 0.5m,
+            OpenThreshold = 0.0001m,
+            VolumeFraction = 0.001m,
+            DefaultLeverage = 5,
+            UpdatedByUserId = "admin",
         });
 
         mockUserConfigs.Setup(c => c.GetAllEnabledUserIdsAsync()).ReturnsAsync(new List<string> { TestUserId });
         mockUserSettingsSvc.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
             .ReturnsAsync(new UserConfiguration
             {
-                UserId = TestUserId, IsEnabled = true, MaxConcurrentPositions = 5,
-                TotalCapitalUsdc = 1000m, MaxCapitalPerPosition = 0.5m, OpenThreshold = 0.0001m,
-                DailyDrawdownPausePct = 0.05m, ConsecutiveLossPause = 3,
-                AllocationStrategy = AllocationStrategy.Concentrated, AllocationTopN = 3,
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
             });
         mockUserSettingsSvc.Setup(s => s.HasValidCredentialsAsync(TestUserId)).ReturnsAsync(true);
         mockUserSettingsSvc.Setup(s => s.GetUserEnabledExchangeIdsAsync(TestUserId))

@@ -1355,7 +1355,9 @@ public class ExecutionEngine : IExecutionEngine
     public async Task<bool?> CheckPositionExistsOnExchangesAsync(ArbitragePosition position, CancellationToken ct = default)
     {
         if (position.IsDryRun)
+        {
             return true; // Simulated positions always "exist"
+        }
 
         var longExchangeName = position.LongExchange?.Name;
         var shortExchangeName = position.ShortExchange?.Name;
