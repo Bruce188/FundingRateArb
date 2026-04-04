@@ -1297,4 +1297,157 @@ public class BinanceConnectorTests
         result.Value.Second.Should().Be(0);
         result.Value.Should().BeAfter(DateTime.UtcNow, "fallback settlement must be in the future");
     }
+
+    // ── NB2: PlaceMarketOrderByQuantityAsync error paths ─────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_InvalidLeverage_ReturnsFailure()
+    {
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 1.0m, leverage: 0);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Invalid leverage");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_MarkPriceZero_ReturnsFailure()
+    {
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 0m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 1.0m, leverage: 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero", "mark price zero guard must trigger");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_RoundedQuantityZero_ReturnsFailure()
+    {
+        // quantity=0.0001 with default precision=3 → Math.Round(0.0001, 3, ToZero) = 0
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.0001m, leverage: 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero", "rounded quantity zero guard must trigger");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantity_BelowMinNotional_ReturnsFailure()
+    {
+        // quantity=0.001, markPrice=3500 → notional = 3.5 < $5
+        var client = BuildClientWithOrderResult(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }), markPrice: 3500m);
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.001m, leverage: 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("minimum", "notional below $5 guard must trigger");
+    }
+
+    // ── NB3: GetQuantityPrecisionAsync ───────────────────────────────────────
+
+    [Fact]
+    public async Task GetQuantityPrecision_ReturnsDefaultPrecision_WhenExchangeInfoNotLoaded()
+    {
+        // Without exchange info cached, the default precision is 3
+        var exchangeDataMock = new Mock<IBinanceRestClientUsdFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([]));
+        exchangeDataMock
+            .Setup(x => x.GetTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessTickers([]));
+        // GetExchangeInfoAsync not mocked — will return null/default, so symbol info won't load
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var precision = await sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(3, "default precision should be 3 when exchange info is not cached");
+    }
+
+    // ── N1: Short side slippage price ────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrder_ShortSideSlippagePrice()
+    {
+        decimal? capturedPrice = null;
+        var tradingMock = new Mock<IBinanceRestClientUsdFuturesApiTrading>();
+        tradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<OrderSide>(), It.IsAny<FuturesOrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<PositionSide?>(),
+                It.IsAny<TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<WorkingType?>(), It.IsAny<bool?>(), It.IsAny<OrderResponseType?>(),
+                It.IsAny<bool?>(), It.IsAny<PriceMatch?>(), It.IsAny<SelfTradePreventionMode?>(),
+                It.IsAny<DateTime?>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .Callback(new Moq.InvocationAction(invocation =>
+            {
+                capturedPrice = (decimal?)invocation.Arguments[4];
+            }))
+            .ReturnsAsync(SuccessOrder(new BinanceUsdFuturesOrder { Id = 1 }));
+
+        var accountMock = new Mock<IBinanceRestClientUsdFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.ChangeInitialLeverageAsync(It.IsAny<string>(), It.IsAny<int>(),
+                It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+
+        var exchangeDataMock = new Mock<IBinanceRestClientUsdFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", 3500m, 3495m, 0.0001m)]));
+
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(tradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        await sut.PlaceMarketOrderAsync("ETH", Side.Short, 100m, 5);
+
+        capturedPrice.Should().NotBeNull("limit price must be set for IOC order");
+        // Short side slippage: markPrice * 0.995 = 3500 * 0.995 = 3482.5
+        capturedPrice!.Value.Should().BeApproximately(3482.5m, 0.1m, "Short side slippage: markPrice * 0.995");
+    }
+
+    // ── N2: Null funding rate defaults to zero ───────────────────────────────
+
+    [Fact]
+    public async Task GetFundingRates_NullFundingRate_DefaultsToZero()
+    {
+        var markPrice = new BinanceFuturesMarkPrice
+        {
+            Symbol = "ETHUSDT",
+            MarkPrice = 3500m,
+            IndexPrice = 3495m,
+            FundingRate = null,
+        };
+
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([markPrice]));
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().ContainSingle();
+        rates[0].RawRate.Should().Be(0m, "null funding rate should default to zero");
+        rates[0].RatePerHour.Should().Be(0m, "null funding rate / 8 should be zero");
+    }
 }

@@ -82,6 +82,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
                 : new Dictionary<string, decimal>();
         }
+        catch (OperationCanceledException) { throw; }
         catch
         {
             volumeBySymbol = new Dictionary<string, decimal>();
@@ -314,7 +315,8 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             return new OrderResultDto { Success = false, Error = $"Failed to fetch position: {posResult.Error?.Message ?? "Unknown error"}" };
         }
 
-        var pos = posResult.Data?.FirstOrDefault(p => p.Symbol == symbol && p.Quantity != 0);
+        var pos = posResult.Data?.FirstOrDefault(p => p.Symbol == symbol &&
+            ((side == Side.Long && p.Quantity > 0) || (side == Side.Short && p.Quantity < 0)));
         if (pos == null)
         {
             return new OrderResultDto { Success = false, Error = $"No open position for {symbol}" };
