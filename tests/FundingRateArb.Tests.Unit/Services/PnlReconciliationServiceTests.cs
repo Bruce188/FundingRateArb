@@ -87,7 +87,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, null);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedPnl.Should().Be(9.8m);
         position.PnlDivergence.Should().NotBeNull();
@@ -106,7 +106,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, null);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedPnl.Should().Be(9.3m);
         position.PnlDivergence.Should().NotBeNull();
@@ -128,7 +128,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, null);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedPnl.Should().Be(8.5m);
         position.PnlDivergence.Should().NotBeNull();
@@ -148,7 +148,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, null);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedPnl.Should().BeNull();
         position.PnlDivergence.Should().BeNull();
@@ -165,7 +165,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, 3m);
         SetupConnectorFunding(_mockShortConnector, 1.5m);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedFunding.Should().Be(4.5m);
         position.ReconciledAt.Should().NotBeNull();
@@ -181,7 +181,7 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, null);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         position.ExchangeReportedPnl.Should().Be(0m);
         position.PnlDivergence.Should().BeNull(); // Cannot compute divergence vs zero
@@ -199,11 +199,132 @@ public class PnlReconciliationServiceTests
         SetupConnectorFunding(_mockLongConnector, 3m);
         SetupConnectorFunding(_mockShortConnector, null);
 
-        await _sut.ReconcileAsync(position, _mockLongConnector.Object, _mockShortConnector.Object);
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
         // Partial data: only long leg's PnL available (null treated as 0)
         position.ExchangeReportedPnl.Should().Be(7m);
         position.ExchangeReportedFunding.Should().Be(3m);
         position.ReconciledAt.Should().NotBeNull();
+    }
+
+    // ── B5: Null/empty symbol handling (N2 changed signature to accept assetSymbol) ──
+
+    [Fact]
+    public async Task Reconcile_WhenAssetSymbolIsNullOrEmpty_ReturnsEarlyWithoutSettingReconciledAt()
+    {
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+
+        await _sut.ReconcileAsync(position, "", _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ReconciledAt.Should().BeNull();
+        position.ExchangeReportedPnl.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenAssetSymbolIsNull_ReturnsEarlyWithoutSettingReconciledAt()
+    {
+        var position = CreatePosition(realizedPnl: 10m);
+
+        await _sut.ReconcileAsync(position, null!, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ReconciledAt.Should().BeNull();
+        position.ExchangeReportedPnl.Should().BeNull();
+    }
+
+    // ── NB5: RealizedPnl null with exchange PnL available ──
+
+    [Fact]
+    public async Task Reconcile_WhenLocalPnlIsNull_StoresExchangePnlButSkipsDivergence()
+    {
+        var position = CreatePosition(realizedPnl: null);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedPnl.Should().Be(10m);
+        position.PnlDivergence.Should().BeNull();
+        position.ReconciledAt.Should().NotBeNull();
+        _capturedAlerts.Should().BeEmpty();
+    }
+
+    // ── NB6: Boundary values at 5%/10% thresholds ──
+
+    [Fact]
+    public async Task Reconcile_WhenDivergenceExactly5Pct_NoAlertCreated()
+    {
+        // local=10.5, exchange=10.0 → divergence = (10.5-10)/10*100 = 5.0% exactly
+        var position = CreatePosition(realizedPnl: 10.5m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.PnlDivergence.Should().Be(5m);
+        _capturedAlerts.Should().BeEmpty("exactly 5% should not trigger alert (threshold is >5%)");
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenDivergenceExactly10Pct_CreatesWarningNotCritical()
+    {
+        // local=11.0, exchange=10.0 → divergence = (11-10)/10*100 = 10.0% exactly
+        var position = CreatePosition(realizedPnl: 11m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.PnlDivergence.Should().Be(10m);
+        _capturedAlerts.Should().HaveCount(1);
+        _capturedAlerts[0].Severity.Should().Be(AlertSeverity.Warning,
+            "exactly 10% should create Warning (threshold for Critical is >10%)");
+    }
+
+    // ── NB7: Negative divergence ──
+
+    [Fact]
+    public async Task Reconcile_WhenLocalPnlBelowExchange_CreatesAlertWithNegativeDivergence()
+    {
+        // local=5, exchange=10 → divergence = (5-10)/10*100 = -50% → Critical (|divergence| > 10%)
+        var position = CreatePosition(realizedPnl: 5m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.PnlDivergence.Should().BeNegative();
+        _capturedAlerts.Should().HaveCount(1);
+        _capturedAlerts[0].Severity.Should().Be(AlertSeverity.Critical);
+    }
+
+    // ── B1: Near-zero PnL min threshold ──
+
+    [Fact]
+    public async Task Reconcile_WhenExchangePnlNearZero_SkipsDivergenceCalculation()
+    {
+        // Exchange PnL = 0.005 (below MinPnlForDivergence of 0.01), local PnL = 10
+        // Without the threshold this would produce 199900% divergence
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, 0.003m);
+        SetupConnectorPnl(_mockShortConnector, 0.002m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedPnl.Should().Be(0.005m);
+        position.PnlDivergence.Should().BeNull("near-zero exchange PnL should skip divergence calculation");
+        position.ReconciledAt.Should().NotBeNull();
+        _capturedAlerts.Should().BeEmpty();
     }
 }

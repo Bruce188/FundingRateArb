@@ -3438,4 +3438,73 @@ public class ExecutionEngineTests
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
             Times.Once, "successful leg should be emergency closed when other leg fails");
     }
+
+    // ── PnL Reconciliation Integration ────────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePosition_BothLegsSucceed_CallsReconciliation()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.167m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.167m));
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closed);
+        _mockReconciliation.Verify(
+            r => r.ReconcileAsync(
+                position, "ETH",
+                It.IsAny<IExchangeConnector>(), It.IsAny<IExchangeConnector>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ClosePosition_OneLegFails_DoesNotCallReconciliation()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.167m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Exchange unavailable"));
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().NotBe(PositionStatus.Closed);
+        _mockReconciliation.Verify(
+            r => r.ReconcileAsync(
+                It.IsAny<ArbitragePosition>(), It.IsAny<string>(),
+                It.IsAny<IExchangeConnector>(), It.IsAny<IExchangeConnector>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ClosePosition_ReconciliationThrows_StillClosesPosition()
+    {
+        var position = MakeOpenPosition();
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-long", 3010m, 0.167m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("close-short", 3009m, 0.167m));
+        _mockReconciliation
+            .Setup(r => r.ReconcileAsync(
+                It.IsAny<ArbitragePosition>(), It.IsAny<string>(),
+                It.IsAny<IExchangeConnector>(), It.IsAny<IExchangeConnector>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Reconciliation service unavailable"));
+
+        await _sut.ClosePositionAsync(TestUserId, position, CloseReason.SpreadCollapsed, CancellationToken.None);
+
+        position.Status.Should().Be(PositionStatus.Closed);
+        position.RealizedPnl.Should().NotBeNull();
+    }
 }

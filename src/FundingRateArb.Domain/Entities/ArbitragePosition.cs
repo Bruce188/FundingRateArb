@@ -33,9 +33,6 @@ public class ArbitragePosition
     /// <summary>Percentage divergence between local and exchange PnL: (local - exchange) / |exchange| * 100.</summary>
     public decimal? PnlDivergence { get; set; }
 
-    /// <summary>Total fees reported by the exchange for this position.</summary>
-    public decimal? ExchangeReportedFees { get; set; }
-
     /// <summary>Total funding payments reported by the exchange for this position.</summary>
     public decimal? ExchangeReportedFunding { get; set; }
 

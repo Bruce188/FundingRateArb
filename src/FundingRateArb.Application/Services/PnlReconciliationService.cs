@@ -1,4 +1,3 @@
-using System.Globalization;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
@@ -12,6 +11,12 @@ public class PnlReconciliationService : IPnlReconciliationService
     private readonly IUnitOfWork _uow;
     private readonly ILogger<PnlReconciliationService> _logger;
 
+    /// <summary>
+    /// Minimum absolute exchange PnL required before computing percentage divergence.
+    /// Prevents false-positive alerts on near-zero PnL values.
+    /// </summary>
+    private const decimal MinPnlForDivergence = 0.01m;
+
     public PnlReconciliationService(IUnitOfWork uow, ILogger<PnlReconciliationService> logger)
     {
         _uow = uow;
@@ -20,23 +25,21 @@ public class PnlReconciliationService : IPnlReconciliationService
 
     public async Task ReconcileAsync(
         ArbitragePosition position,
+        string assetSymbol,
         IExchangeConnector longConnector,
         IExchangeConnector shortConnector,
         CancellationToken ct = default)
     {
-        var from = position.OpenedAt;
-        var to = position.ClosedAt ?? DateTime.UtcNow;
-
-        var assetSymbol = position.Asset?.Symbol
-            ?? (await _uow.Assets.GetByIdAsync(position.AssetId))?.Symbol;
-
         if (string.IsNullOrEmpty(assetSymbol))
         {
-            _logger.LogWarning("Cannot reconcile position #{PositionId} — asset symbol not found", position.Id);
+            _logger.LogWarning("Cannot reconcile position #{PositionId} — asset symbol not provided", position.Id);
             return;
         }
 
-        // Fetch realized PnL from both legs in parallel
+        var from = position.OpenedAt;
+        var to = position.ClosedAt ?? DateTime.UtcNow;
+
+        // Fetch realized PnL and funding from both legs in parallel
         var longPnlTask = longConnector.GetRealizedPnlAsync(assetSymbol, Side.Long, from, to, ct);
         var shortPnlTask = shortConnector.GetRealizedPnlAsync(assetSymbol, Side.Short, from, to, ct);
         var longFundingTask = longConnector.GetFundingPaymentsAsync(assetSymbol, Side.Long, from, to, ct);
@@ -68,7 +71,7 @@ public class PnlReconciliationService : IPnlReconciliationService
         {
             position.ExchangeReportedPnl = exchangePnl.Value;
 
-            if (position.RealizedPnl.HasValue && exchangePnl.Value != 0m)
+            if (position.RealizedPnl.HasValue && Math.Abs(exchangePnl.Value) > MinPnlForDivergence)
             {
                 var divergence = (position.RealizedPnl.Value - exchangePnl.Value)
                     / Math.Abs(exchangePnl.Value) * 100m;
@@ -100,11 +103,6 @@ public class PnlReconciliationService : IPnlReconciliationService
                     });
                 }
             }
-            else if (position.RealizedPnl.HasValue && exchangePnl.Value == 0m)
-            {
-                // Exchange reports 0 — cannot compute meaningful divergence percentage
-                position.PnlDivergence = null;
-            }
         }
 
         // Store exchange-reported funding
@@ -115,12 +113,12 @@ public class PnlReconciliationService : IPnlReconciliationService
 
         position.ReconciledAt = DateTime.UtcNow;
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Reconciled position #{PositionId} ({Asset}): localPnl={LocalPnl:F4}, exchangePnl={ExchangePnl}, " +
             "divergence={Divergence}%, exchangeFunding={ExchangeFunding}",
             position.Id, assetSymbol, position.RealizedPnl,
-            exchangePnl?.ToString("F4", CultureInfo.InvariantCulture) ?? "N/A",
-            position.PnlDivergence?.ToString("F2", CultureInfo.InvariantCulture) ?? "N/A",
-            exchangeFunding?.ToString("F4", CultureInfo.InvariantCulture) ?? "N/A");
+            exchangePnl?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "N/A",
+            position.PnlDivergence?.ToString("F2", System.Globalization.CultureInfo.InvariantCulture) ?? "N/A",
+            exchangeFunding?.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) ?? "N/A");
     }
 }

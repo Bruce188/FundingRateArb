@@ -173,9 +173,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<decimal>("EntrySpreadPerHour")
                         .HasColumnType("decimal(18,10)");
 
-                    b.Property<decimal?>("ExchangeReportedFees")
-                        .HasColumnType("decimal(18,4)");
-
                     b.Property<decimal?>("ExchangeReportedFunding")
                         .HasColumnType("decimal(18,4)");
 

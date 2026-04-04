@@ -12,12 +12,6 @@ namespace FundingRateArb.Infrastructure.Migrations
         protected override void Up(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.AddColumn<decimal>(
-                name: "ExchangeReportedFees",
-                table: "ArbitragePositions",
-                type: "decimal(18,4)",
-                nullable: true);
-
-            migrationBuilder.AddColumn<decimal>(
                 name: "ExchangeReportedFunding",
                 table: "ArbitragePositions",
                 type: "decimal(18,4)",
@@ -45,10 +39,6 @@ namespace FundingRateArb.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropColumn(
-                name: "ExchangeReportedFees",
-                table: "ArbitragePositions");
-
             migrationBuilder.DropColumn(
                 name: "ExchangeReportedFunding",
                 table: "ArbitragePositions");

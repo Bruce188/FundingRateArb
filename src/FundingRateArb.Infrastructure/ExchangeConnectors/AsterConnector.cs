@@ -427,20 +427,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     {
         try
         {
-            var symbol = asset + "USDT";
-            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
-            var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
-                    symbol, IncomeType.RealizedPnl, from, to, limit: 1000, ct: token),
-                ct);
-
-            if (!result.Success || result.Data is null)
-            {
-                _logger.LogWarning("Aster GetIncomeHistoryAsync (RealizedPnl) failed: {Error}", result.Error?.Message);
-                return null;
-            }
-
-            return result.Data.Sum(i => i.Income);
+            return await PaginateIncomeHistoryAsync(asset + "USDT", IncomeType.RealizedPnl, from, to, ct);
         }
         catch (Exception ex)
         {
@@ -453,26 +440,48 @@ public class AsterConnector : IExchangeConnector, IDisposable
     {
         try
         {
-            var symbol = asset + "USDT";
-            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
-            var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
-                    symbol, IncomeType.FundingFee, from, to, limit: 1000, ct: token),
-                ct);
-
-            if (!result.Success || result.Data is null)
-            {
-                _logger.LogWarning("Aster GetIncomeHistoryAsync (FundingFee) failed: {Error}", result.Error?.Message);
-                return null;
-            }
-
-            return result.Data.Sum(i => i.Income);
+            return await PaginateIncomeHistoryAsync(asset + "USDT", IncomeType.FundingFee, from, to, ct);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Aster GetFundingPaymentsAsync failed for {Asset}", asset);
             return null;
         }
+    }
+
+    private async Task<decimal?> PaginateIncomeHistoryAsync(
+        string symbol, IncomeType incomeType, DateTime from, DateTime to, CancellationToken ct)
+    {
+        const int pageSize = 1000;
+        var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+        var cursor = from;
+        var total = 0m;
+
+        while (true)
+        {
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                    symbol, incomeType, cursor, to, limit: pageSize, ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Aster GetIncomeHistoryAsync ({IncomeType}) failed: {Error}",
+                    incomeType, result.Error?.Message);
+                return null;
+            }
+
+            var entries = result.Data.ToList();
+            total += entries.Sum(i => i.Income);
+
+            if (entries.Count < pageSize)
+                break;
+
+            // Advance cursor past the last entry to fetch the next page
+            cursor = entries[^1].Timestamp.AddMilliseconds(1);
+        }
+
+        return total;
     }
 
     public void Dispose()

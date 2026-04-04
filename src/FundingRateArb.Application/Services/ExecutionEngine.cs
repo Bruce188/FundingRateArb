@@ -953,7 +953,7 @@ public class ExecutionEngine : IExecutionEngine
             // Post-close PnL reconciliation (informational — never blocks close)
             try
             {
-                await _reconciliation.ReconcileAsync(position, longConnector, shortConnector, ct);
+                await _reconciliation.ReconcileAsync(position, assetSymbol, longConnector, shortConnector, ct);
             }
             catch (Exception ex)
             {

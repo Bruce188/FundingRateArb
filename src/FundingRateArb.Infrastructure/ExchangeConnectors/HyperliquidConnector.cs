@@ -420,7 +420,15 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 return null;
             }
 
-            var pnl = result.Data
+            var trades = result.Data.ToList();
+            if (trades.Count > 5000)
+            {
+                _logger.LogWarning(
+                    "Hyperliquid returned {Count} trades for {Asset} — response may be truncated",
+                    trades.Count, asset);
+            }
+
+            var pnl = trades
                 .Where(t => t.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase)
                          || t.ExchangeSymbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
                 .Sum(t => t.ClosedPnl ?? 0m);
