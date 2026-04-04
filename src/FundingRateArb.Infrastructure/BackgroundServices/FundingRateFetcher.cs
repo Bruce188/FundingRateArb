@@ -180,6 +180,17 @@ public class FundingRateFetcher : BackgroundService
         // Hourly aggregation: at minute >= 5 of each hour, aggregate the previous hour's raw snapshots
         await TryAggregateHourlyAsync(uow, ct);
 
+        // Prune CoinGlass analytics snapshots (>7 days)
+        try
+        {
+            var analyticsRepo = scope.ServiceProvider.GetRequiredService<ICoinGlassAnalyticsRepository>();
+            await analyticsRepo.PruneOldSnapshotsAsync(7, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CoinGlass analytics pruning failed");
+        }
+
         await UpdateAccumulatedFundingAsync(uow, ct);
 
         // M13: Push live updates consistently to Group("MarketData"), not Clients.All

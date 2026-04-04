@@ -219,6 +219,7 @@ try
 
     // --- Unit of Work (cursus BankingApp pattern) ---
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+    builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
 
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();
@@ -237,6 +238,7 @@ try
     builder.Services.AddSingleton<IRotationEvaluator, RotationEvaluator>();
     builder.Services.AddSingleton<IEmailService, EmailService>();
     builder.Services.AddScoped<IConnectivityTestService, ConnectivityTestService>();
+    builder.Services.AddScoped<IExchangeAnalyticsService, ExchangeAnalyticsService>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls

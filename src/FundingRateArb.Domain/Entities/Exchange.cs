@@ -30,6 +30,12 @@ public class Exchange
     public bool IsDataOnly { get; set; }
 
     /// <summary>
+    /// True for exchanges that are planned for future direct connector integration
+    /// but not yet implemented (e.g. Binance, dYdX).
+    /// </summary>
+    public bool IsPlanned { get; set; }
+
+    /// <summary>
     /// Taker fee rate as a fraction (e.g. 0.00045 = 0.045%). Null means use the built-in fallback.
     /// </summary>
     public decimal? TakerFeeRate { get; set; }
