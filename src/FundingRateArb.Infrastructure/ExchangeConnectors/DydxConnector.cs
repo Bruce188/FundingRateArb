@@ -28,16 +28,17 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private readonly SemaphoreSlim _marketInfoLock = new(1, 1);
     private volatile bool _marketInfoLoaded;
     private long _marketInfoFailedUntilTicks = DateTime.MinValue.Ticks;
+    private long _marketInfoExpiryTicks = DateTime.MinValue.Ticks;
     private Dictionary<string, DydxPerpetualMarket> _marketCache = new(StringComparer.OrdinalIgnoreCase);
 
     // Block height cache (short TTL for goodTilBlock)
-    private uint _cachedBlockHeight;
+    private long _cachedBlockHeight;
     private long _blockHeightExpiryTicks;
 
     // Local sequence counter for rapid successive orders
     private ulong _cachedAccountNumber;
-    private ulong _cachedSequence;
-    private bool _accountInfoCached;
+    private long _cachedSequence;
+    private volatile bool _accountInfoCached;
 
     /// <summary>Default slippage tolerance for market orders (5%).</summary>
     private const decimal SlippagePct = 0.05m;
@@ -268,6 +269,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         }
         catch (Exception ex)
         {
+            _accountInfoCached = false;
             return new OrderResultDto { Success = false, Error = ex.Message };
         }
     }
@@ -354,6 +356,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
     public void Dispose()
     {
+        _signer?.Dispose();
         _marketInfoLock.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -414,6 +417,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         }
         catch (Exception ex)
         {
+            _accountInfoCached = false;
             return new OrderResultDto { Success = false, Error = ex.Message };
         }
     }
@@ -426,6 +430,10 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
     private async Task EnsureMarketInfoCachedAsync(CancellationToken ct)
     {
+        // Reset cache after 1-hour TTL
+        if (_marketInfoLoaded && DateTime.UtcNow.Ticks > Interlocked.Read(ref _marketInfoExpiryTicks))
+            _marketInfoLoaded = false;
+
         if (_marketInfoLoaded)
             return;
 
@@ -447,6 +455,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             {
                 _marketCache = new Dictionary<string, DydxPerpetualMarket>(
                     resp.Markets, StringComparer.OrdinalIgnoreCase);
+                Interlocked.Exchange(ref _marketInfoExpiryTicks, DateTime.UtcNow.AddHours(1).Ticks);
                 _marketInfoLoaded = true;
             }
         }
@@ -465,7 +474,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private async Task<uint> GetCurrentBlockHeightAsync(CancellationToken ct)
     {
         if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _blockHeightExpiryTicks))
-            return _cachedBlockHeight;
+            return (uint)Interlocked.Read(ref _cachedBlockHeight);
 
         try
         {
@@ -476,7 +485,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
             if (resp is not null)
             {
-                _cachedBlockHeight = resp.Height;
+                Interlocked.Exchange(ref _cachedBlockHeight, resp.Height);
                 Interlocked.Exchange(ref _blockHeightExpiryTicks, DateTime.UtcNow.AddSeconds(5).Ticks);
             }
         }
@@ -486,17 +495,17 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             _logger.LogWarning("Failed to fetch dYdX block height: {Error}", ex.Message);
         }
 
-        return _cachedBlockHeight;
+        return (uint)Interlocked.Read(ref _cachedBlockHeight);
     }
 
     private async Task<(ulong AccountNumber, ulong Sequence)> GetAccountSequenceAsync(CancellationToken ct)
     {
         if (_accountInfoCached)
-            return (_cachedAccountNumber, _cachedSequence);
+            return (_cachedAccountNumber, (ulong)Interlocked.Read(ref _cachedSequence));
 
         var (accountNumber, sequence) = await RequireSigner().GetAccountInfoAsync(_validatorClient, ct);
         _cachedAccountNumber = accountNumber;
-        _cachedSequence = sequence;
+        Interlocked.Exchange(ref _cachedSequence, (long)sequence);
         _accountInfoCached = true;
         return (accountNumber, sequence);
     }
@@ -504,7 +513,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     private void IncrementSequence()
     {
         if (_accountInfoCached)
-            _cachedSequence++;
+            Interlocked.Increment(ref _cachedSequence);
     }
 
     internal static ulong ToQuantums(decimal quantity, int atomicResolution)

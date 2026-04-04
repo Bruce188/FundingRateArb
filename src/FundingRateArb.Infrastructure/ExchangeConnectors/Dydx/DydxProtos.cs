@@ -24,12 +24,9 @@ public sealed class DydxSubaccountId
             output.WriteTag(1, WireFormat.WireType.LengthDelimited);
             output.WriteString(Owner);
         }
-        // field 2: uint32 subaccount_number
-        if (SubaccountNumber != 0)
-        {
-            output.WriteTag(2, WireFormat.WireType.Varint);
-            output.WriteUInt32(SubaccountNumber);
-        }
+        // field 2: uint32 subaccount_number (always emit — 0 is a valid subaccount)
+        output.WriteTag(2, WireFormat.WireType.Varint);
+        output.WriteUInt32(SubaccountNumber);
     }
 
     public byte[] ToByteArray()
@@ -59,24 +56,15 @@ public sealed class DydxOrderId
             output.WriteTag(1, WireFormat.WireType.LengthDelimited);
             output.WriteBytes(ByteString.CopyFrom(subBytes));
         }
-        // field 2: uint32 client_id
-        if (ClientId != 0)
-        {
-            output.WriteTag(2, WireFormat.WireType.Varint);
-            output.WriteUInt32(ClientId);
-        }
-        // field 3: uint32 order_flags
-        if (OrderFlags != 0)
-        {
-            output.WriteTag(3, WireFormat.WireType.Varint);
-            output.WriteUInt32(OrderFlags);
-        }
-        // field 4: uint32 clob_pair_id
-        if (ClobPairId != 0)
-        {
-            output.WriteTag(4, WireFormat.WireType.Varint);
-            output.WriteUInt32(ClobPairId);
-        }
+        // field 2: uint32 client_id (always emit — 0 is valid)
+        output.WriteTag(2, WireFormat.WireType.Varint);
+        output.WriteUInt32(ClientId);
+        // field 3: uint32 order_flags (always emit — 0 means short-term)
+        output.WriteTag(3, WireFormat.WireType.Varint);
+        output.WriteUInt32(OrderFlags);
+        // field 4: uint32 clob_pair_id (always emit — 0 is BTC-USD)
+        output.WriteTag(4, WireFormat.WireType.Varint);
+        output.WriteUInt32(ClobPairId);
     }
 
     public byte[] ToByteArray()
@@ -255,12 +243,9 @@ public sealed class CosmosSignerInfo
         output.WriteTag(2, WireFormat.WireType.LengthDelimited);
         output.WriteBytes(ByteString.CopyFrom(modeInfoBytes));
 
-        // field 3: uint64 sequence
-        if (Sequence != 0)
-        {
-            output.WriteTag(3, WireFormat.WireType.Varint);
-            output.WriteUInt64(Sequence);
-        }
+        // field 3: uint64 sequence (always emit — 0 is valid for first tx)
+        output.WriteTag(3, WireFormat.WireType.Varint);
+        output.WriteUInt64(Sequence);
     }
 
     public byte[] ToByteArray()
@@ -371,12 +356,9 @@ public sealed class CosmosSignDoc
             output.WriteTag(3, WireFormat.WireType.LengthDelimited);
             output.WriteString(ChainId);
         }
-        // field 4: uint64 account_number
-        if (AccountNumber != 0)
-        {
-            output.WriteTag(4, WireFormat.WireType.Varint);
-            output.WriteUInt64(AccountNumber);
-        }
+        // field 4: uint64 account_number (always emit — 0 is valid)
+        output.WriteTag(4, WireFormat.WireType.Varint);
+        output.WriteUInt64(AccountNumber);
     }
 
     public byte[] ToByteArray()

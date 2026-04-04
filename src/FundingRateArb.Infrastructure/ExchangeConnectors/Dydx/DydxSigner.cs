@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using NBitcoin;
 using NBitcoin.Crypto;
 
@@ -10,10 +11,11 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors.Dydx;
 /// Handles all cryptographic operations for dYdX v4: key derivation from mnemonic,
 /// dYdX address generation, Cosmos transaction building, and secp256k1 signing.
 /// </summary>
-public sealed class DydxSigner
+public sealed class DydxSigner : IDisposable
 {
-    private readonly Key _privateKey;
+    private Key? _privateKey;
     private readonly PubKey _publicKey;
+    private readonly ILogger? _logger;
 
     /// <summary>Bech32-encoded dydx address (e.g. "dydx1abc...").</summary>
     public string Address { get; }
@@ -25,10 +27,12 @@ public sealed class DydxSigner
     /// Derives a secp256k1 key pair and dYdX address from a BIP39 mnemonic phrase.
     /// Uses Cosmos BIP44 path m/44'/118'/0'/0/0.
     /// </summary>
-    public DydxSigner(string mnemonic)
+    public DydxSigner(string mnemonic, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(mnemonic))
             throw new ArgumentException("Mnemonic cannot be null or empty.", nameof(mnemonic));
+
+        _logger = logger;
 
         var mnemonicObj = new Mnemonic(mnemonic);
         var masterKey = mnemonicObj.DeriveExtKey();
@@ -37,6 +41,10 @@ public sealed class DydxSigner
         _privateKey = derived.PrivateKey;
         _publicKey = _privateKey.PubKey;
         CompressedPublicKey = _publicKey.ToBytes(); // 33 bytes compressed
+
+        // Null out intermediate key material
+        masterKey = null;
+        derived = null;
 
         // Address derivation: SHA256(pubkey) -> RIPEMD160 -> Bech32 with "dydx" HRP
         var sha256Hash = SHA256.HashData(CompressedPublicKey);
@@ -86,7 +94,8 @@ public sealed class DydxSigner
 
         // 5. Sign: SHA256 hash of SignDoc, then secp256k1 compact signature (r || s, 64 bytes)
         var hash = SHA256.HashData(signDocBytes);
-        var signature = _privateKey.Sign(new uint256(hash));
+        ObjectDisposedException.ThrowIf(_privateKey is null, this);
+        var signature = _privateKey.Sign(new uint256(hash)).MakeCanonical();
         var sigBytes = ToCompactSignature(signature);
 
         // 6. Build TxRaw
@@ -120,8 +129,12 @@ public sealed class DydxSigner
             throw new InvalidOperationException("Empty broadcast response from validator");
 
         if (result.TxResponse.Code != 0)
+        {
+            _logger?.LogWarning("dYdX broadcast failed — code {Code}, raw_log: {RawLog}",
+                result.TxResponse.Code, result.TxResponse.RawLog);
             throw new InvalidOperationException(
-                $"Broadcast failed with code {result.TxResponse.Code}: {result.TxResponse.RawLog}");
+                $"Broadcast failed with code {result.TxResponse.Code}");
+        }
 
         return result.TxResponse.TxHash;
     }
@@ -148,8 +161,15 @@ public sealed class DydxSigner
             ? baseAccount
             : accountElement;
 
-        var accountNumber = ulong.Parse(target.GetProperty("account_number").GetString()!);
-        var sequence = ulong.Parse(target.GetProperty("sequence").GetString()!);
+        var accountNumberStr = target.GetProperty("account_number").GetString();
+        if (!ulong.TryParse(accountNumberStr, out var accountNumber))
+            throw new InvalidOperationException(
+                $"Failed to parse account_number from validator response: '{accountNumberStr}'");
+
+        var sequenceStr = target.GetProperty("sequence").GetString();
+        if (!ulong.TryParse(sequenceStr, out var sequence))
+            throw new InvalidOperationException(
+                $"Failed to parse sequence from validator response: '{sequenceStr}'");
 
         return (accountNumber, sequence);
     }
@@ -157,10 +177,8 @@ public sealed class DydxSigner
     /// <summary>
     /// Converts an ECDSA DER signature to the compact 64-byte (r || s) format used by Cosmos.
     /// </summary>
-    private static byte[] ToCompactSignature(ECDSASignature signature)
+    internal static byte[] ToCompactSignature(ECDSASignature signature)
     {
-        // ECDSASignature.ToDER() returns DER-encoded bytes.
-        // Parse r and s from DER: SEQUENCE { INTEGER r, INTEGER s }
         var der = signature.ToDER();
         var (r, s) = ParseDerSignature(der);
 
@@ -197,6 +215,12 @@ public sealed class DydxSigner
             s = s[1..];
 
         return (r, s);
+    }
+
+    public void Dispose()
+    {
+        _privateKey?.Dispose();
+        _privateKey = null;
     }
 
     /// <summary>

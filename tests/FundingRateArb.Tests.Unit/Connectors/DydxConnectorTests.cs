@@ -38,7 +38,8 @@ public class DydxConnectorTests
     private static DydxConnector BuildConnector(
         MultiRouteHttpMessageHandler? indexerHandler = null,
         MultiRouteHttpMessageHandler? validatorHandler = null,
-        IMarkPriceCache? markPriceCache = null)
+        IMarkPriceCache? markPriceCache = null,
+        bool withSigner = true)
     {
         var ih = indexerHandler ?? new MultiRouteHttpMessageHandler();
         var vh = validatorHandler ?? new MultiRouteHttpMessageHandler();
@@ -51,13 +52,39 @@ public class DydxConnectorTests
         {
             BaseAddress = new Uri("https://dydx-rpc.publicnode.com/")
         };
-        var signer = BuildTestSigner();
+        var signer = withSigner ? BuildTestSigner() : null;
         var cache = markPriceCache ?? new SingletonMarkPriceCache();
 
         return new DydxConnector(
             indexerClient, validatorClient, signer,
             BuildEmptyPipelineProvider(), BuildNullLogger(), cache);
     }
+
+    private static string BuildAccountInfoJson(ulong accountNumber = 0, ulong sequence = 0) => $$"""
+        {
+            "account": {
+                "account_number": "{{accountNumber}}",
+                "sequence": "{{sequence}}"
+            }
+        }
+        """;
+
+    private static string BuildBroadcastResponseJson(string txHash = "AABBCC", int code = 0) => $$"""
+        {
+            "tx_response": {
+                "code": {{code}},
+                "txhash": "{{txHash}}",
+                "raw_log": ""
+            }
+        }
+        """;
+
+    private static string BuildHeightJson(uint height = 1000) => $$"""
+        {
+            "height": "{{height}}",
+            "time": "2026-01-01T00:00:00Z"
+        }
+        """;
 
     private static string BuildPerpetualMarketsJson(
         string ticker = "BTC-USD",
@@ -367,5 +394,164 @@ public class DydxConnectorTests
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("No open");
+    }
+
+    // ── B3: PlaceMarketOrderByQuantityAsync tests ──────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_MarkPriceZero_ReturnsError()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson(oraclePrice: 0m));
+
+        using var connector = BuildConnector(indexerHandler: handler);
+        var result = await connector.PlaceMarketOrderByQuantityAsync("BTC", Side.Long, 0.5m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero or negative");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_RoundedQuantityZero_ReturnsError()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        // stepSize = 1.0 means quantities are rounded to whole numbers; 0.0001 rounds to 0
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson(stepSize: 1m, oraclePrice: 50000m));
+
+        using var connector = BuildConnector(indexerHandler: handler);
+        var result = await connector.PlaceMarketOrderByQuantityAsync("BTC", Side.Long, 0.0001m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Rounded quantity is zero");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_MarketInfoNotFound_ReturnsError()
+    {
+        // Return markets JSON that contains only ETH-USD, not BTC-USD
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson(ticker: "ETH-USD", oraclePrice: 3000m));
+
+        // Mock mark price cache to return a price for BTC so the mark-price check passes
+        var mockCache = new Mock<IMarkPriceCache>();
+        mockCache.Setup(c => c.GetOrRefreshAsync("dYdX", "BTC-USD", It.IsAny<Func<CancellationToken, Task<Dictionary<string, decimal>>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(50000m);
+
+        using var connector = BuildConnector(indexerHandler: handler, markPriceCache: mockCache.Object);
+        var result = await connector.PlaceMarketOrderByQuantityAsync("BTC", Side.Long, 0.5m, 5);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Market info not found");
+    }
+
+    // ── B4: ClosePositionAsync success tests ────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePositionAsync_LongPosition_Success()
+    {
+        var indexerHandler = new MultiRouteHttpMessageHandler();
+        indexerHandler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson());
+        indexerHandler.AddRoute("perpetualPositions", BuildPositionsJson("BTC-USD", "LONG", 0.5m));
+        indexerHandler.AddRoute("height", BuildHeightJson());
+
+        var validatorHandler = new MultiRouteHttpMessageHandler();
+        validatorHandler.AddRoute("accounts", BuildAccountInfoJson());
+        validatorHandler.AddRoute("txs", BuildBroadcastResponseJson());
+
+        using var connector = BuildConnector(indexerHandler: indexerHandler, validatorHandler: validatorHandler);
+        var result = await connector.ClosePositionAsync("BTC", Side.Long);
+
+        result.Success.Should().BeTrue();
+        result.FilledQuantity.Should().Be(0.5m);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_ShortPosition_Success()
+    {
+        var indexerHandler = new MultiRouteHttpMessageHandler();
+        indexerHandler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson());
+        indexerHandler.AddRoute("perpetualPositions", BuildPositionsJson("BTC-USD", "SHORT", 0.3m));
+        indexerHandler.AddRoute("height", BuildHeightJson());
+
+        var validatorHandler = new MultiRouteHttpMessageHandler();
+        validatorHandler.AddRoute("accounts", BuildAccountInfoJson());
+        validatorHandler.AddRoute("txs", BuildBroadcastResponseJson());
+
+        using var connector = BuildConnector(indexerHandler: indexerHandler, validatorHandler: validatorHandler);
+        var result = await connector.ClosePositionAsync("BTC", Side.Short);
+
+        result.Success.Should().BeTrue();
+        result.FilledQuantity.Should().Be(0.3m);
+    }
+
+    // ── B5: Parameterized ToQuantums/ToSubticks tests ───────────────────────────
+
+    [Theory]
+    [InlineData(1.5, -10, 15_000_000_000UL)]
+    [InlineData(1.0, -6, 1_000_000UL)]
+    [InlineData(0.001, -8, 100_000UL)]
+    [InlineData(2.5, -10, 25_000_000_000UL)]
+    [InlineData(0.1, -6, 100_000UL)]
+    public void ToQuantums_VariousResolutions_ConvertsCorrectly(
+        double quantity, int atomicResolution, ulong expected)
+    {
+        var quantums = DydxConnector.ToQuantums((decimal)quantity, atomicResolution);
+        quantums.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData(50000, -10, -9, 5000UL)]
+    [InlineData(50000, -6, -9, 50_000_000UL)]
+    [InlineData(3000, -10, -9, 300UL)]
+    [InlineData(1.5, -8, -9, 15UL)]
+    public void ToSubticks_VariousResolutions_ConvertsCorrectly(
+        double price, int atomicResolution, int quantumConversionExponent, ulong expected)
+    {
+        var subticks = DydxConnector.ToSubticks((decimal)price, atomicResolution, quantumConversionExponent);
+        subticks.Should().Be(expected);
+    }
+
+    // ── NB8: Null signer guard test ────────────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderAsync_NullSigner_ThrowsInvalidOperationException()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson());
+
+        using var connector = BuildConnector(indexerHandler: handler, withSigner: false);
+
+        var act = () => connector.PlaceMarketOrderAsync("BTC", Side.Long, 100m, 5);
+
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*signing credentials*");
+    }
+
+    // ── NB9: GetMaxLeverage with zero initial margin ───────────────────────────
+
+    [Fact]
+    public async Task GetMaxLeverage_InitialMarginFractionZero_ReturnsNull()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson(initialMarginFraction: 0m));
+
+        using var connector = BuildConnector(indexerHandler: handler);
+        var maxLeverage = await connector.GetMaxLeverageAsync("BTC");
+
+        maxLeverage.Should().BeNull();
+    }
+
+    // ── NB10: HasOpenPosition exception path ───────────────────────────────────
+
+    [Fact]
+    public async Task HasOpenPosition_WhenApiThrows_ReturnsNull()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualPositions", "server error", System.Net.HttpStatusCode.InternalServerError);
+
+        using var connector = BuildConnector(indexerHandler: handler);
+        var result = await connector.HasOpenPositionAsync("BTC", Side.Long);
+
+        result.Should().BeNull();
     }
 }

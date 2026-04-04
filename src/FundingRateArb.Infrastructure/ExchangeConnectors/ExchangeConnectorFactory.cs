@@ -264,6 +264,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         return new LighterConnector(httpClient, logger, userConfig);
     }
 
+    // privateKey field stores BIP39 mnemonic for dYdX
     private DydxConnector? CreateDydxConnector(string? mnemonic)
     {
         if (string.IsNullOrEmpty(mnemonic))

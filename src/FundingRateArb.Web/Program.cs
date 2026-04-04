@@ -387,6 +387,13 @@ try
     {
         client.BaseAddress = new Uri("https://dydx-rpc.publicnode.com/");
         client.Timeout = TimeSpan.FromSeconds(30);
+    }).AddStandardResilienceHandler(options =>
+    {
+        options.Retry.MaxRetryAttempts = 2;
+        options.Retry.Delay = TimeSpan.FromMilliseconds(500);
+        options.Retry.BackoffType = Polly.DelayBackoffType.Exponential;
+        options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(10);
+        options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(30);
     });
     builder.Services.AddScoped<DydxConnector>(sp =>
     {
