@@ -115,7 +115,7 @@ public class DashboardHubReconnectionTests : IClassFixture<DashboardHubReconnect
         await _hubConnection.StartAsync();
 
         var tcs = new TaskCompletionSource<DashboardDto>();
-        _hubConnection.On<DashboardDto>("ReceiveDashboardUpdate", dto => tcs.SetResult(dto));
+        _hubConnection.On<DashboardDto>("ReceiveDashboardUpdate", dto => tcs.TrySetResult(dto));
 
         await _hubConnection.InvokeAsync("RequestFullUpdate");
 

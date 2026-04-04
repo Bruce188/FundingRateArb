@@ -125,10 +125,8 @@
         connection.invoke("RejoinGroups")
             .then(function () {
                 if (Date.now() - _lastFullUpdate < 10000) return;
-                return connection.invoke("RequestFullUpdate");
-            })
-            .then(function () {
-                _lastFullUpdate = Date.now();
+                return connection.invoke("RequestFullUpdate")
+                    .then(function () { _lastFullUpdate = Date.now(); });
             })
             .catch(function (err) {
                 console.error("Reconnection recovery failed:", err);
