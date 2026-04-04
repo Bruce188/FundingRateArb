@@ -11,13 +11,15 @@ public class SignalEngine : ISignalEngine
     private readonly IUnitOfWork _uow;
     private readonly IMarketDataCache _cache;
     private readonly IRatePredictionService? _predictionService;
+    private readonly ILeverageTierProvider? _tierProvider;
     private readonly ILogger<SignalEngine>? _logger;
 
-    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache, IRatePredictionService? predictionService = null, ILogger<SignalEngine>? logger = null)
+    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache, IRatePredictionService? predictionService = null, ILeverageTierProvider? tierProvider = null, ILogger<SignalEngine>? logger = null)
     {
         _uow = uow;
         _cache = cache;
         _predictionService = predictionService;
+        _tierProvider = tierProvider;
         _logger = logger;
     }
 
@@ -199,6 +201,29 @@ public class SignalEngine : ISignalEngine
                             : null,
                         PredictedTrend = shortPred?.TrendDirection,
                     };
+
+                    // Compute leverage-adjusted metrics when tier data is available
+                    if (_tierProvider is not null)
+                    {
+                        var cappedLeverage = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
+                        var refNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverage;
+                        var longMaxLev = _tierProvider.GetEffectiveMaxLeverage(longR.Exchange.Name, symbol!, refNotional);
+                        var shortMaxLev = _tierProvider.GetEffectiveMaxLeverage(shortR.Exchange.Name, symbol!, refNotional);
+                        var tierMax = Math.Min(longMaxLev, shortMaxLev);
+                        var effectiveLev = Math.Min(config.DefaultLeverage, Math.Min(config.MaxLeverageCap, tierMax));
+                        if (effectiveLev > 0 && effectiveLev < int.MaxValue)
+                        {
+                            dto.EffectiveLeverage = effectiveLev;
+                            dto.ReturnOnCapitalPerHour = net * effectiveLev;
+                            dto.AprOnCapital = dto.ReturnOnCapitalPerHour.Value * 24m * 365m * 100m;
+                            // BreakEvenCycles: total entry cost / (net yield per cycle * leverage)
+                            var entrySpreadCost = (longFee + shortFee);
+                            if (net > 0)
+                            {
+                                dto.BreakEvenCycles = entrySpreadCost / (net * effectiveLev);
+                            }
+                        }
+                    }
 
                     if (net >= config.OpenThreshold)
                     {

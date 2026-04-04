@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
@@ -16,9 +17,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     private readonly IMarketDataCache _marketDataCache;
     private readonly IReferencePriceProvider _referencePriceProvider;
     private readonly IExecutionEngine _executionEngine;
+    private readonly ILeverageTierProvider _tierProvider;
     private readonly ILogger<PositionHealthMonitor> _logger;
     private readonly ConcurrentDictionary<int, int> _priceFetchFailures = new();
     private readonly ConcurrentDictionary<int, int> _zeroPriceCheckCounts = new();
+    private readonly ConcurrentDictionary<int, DateTime> _recentMarginAlerts = new();
 
     public PositionHealthMonitor(
         IUnitOfWork uow,
@@ -26,6 +29,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         IMarketDataCache marketDataCache,
         IReferencePriceProvider referencePriceProvider,
         IExecutionEngine executionEngine,
+        ILeverageTierProvider tierProvider,
         ILogger<PositionHealthMonitor> logger)
     {
         _uow = uow;
@@ -33,6 +37,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         _marketDataCache = marketDataCache;
         _referencePriceProvider = referencePriceProvider;
         _executionEngine = executionEngine;
+        _tierProvider = tierProvider;
         _logger = logger;
     }
 
@@ -258,6 +263,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                         });
                     }
                 }
+
+                // Margin utilization monitoring via exchange API
+                await CheckMarginUtilizationAsync(pos, config, longExchangeName, shortExchangeName, assetSymbol, ct);
 
                 // Alert if spread below alert threshold (but above close threshold)
                 if (spread < config.AlertThreshold)
@@ -547,6 +555,78 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     {
         return GetExchangeTakerFee(longExchange, longTakerFeeRate)
              + GetExchangeTakerFee(shortExchange, shortTakerFeeRate);
+    }
+
+    private async Task CheckMarginUtilizationAsync(
+        ArbitragePosition pos, BotConfiguration config,
+        string longExchangeName, string shortExchangeName, string assetSymbol,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var longConnector = _connectorFactory.GetConnector(longExchangeName);
+            var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+
+            // Deduplicate: if both legs use the same connector for the same asset, call once
+            Task<MarginStateDto?> longMarginTask;
+            Task<MarginStateDto?> shortMarginTask;
+            if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
+            {
+                longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                shortMarginTask = longMarginTask;
+            }
+            else
+            {
+                longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+            }
+
+            await Task.WhenAll(longMarginTask, shortMarginTask);
+
+            var longMargin = await longMarginTask;
+            var shortMargin = await shortMarginTask;
+
+            // Check if either leg exceeds the margin utilization alert threshold
+            var maxUtilization = Math.Max(
+                longMargin?.MarginUtilizationPct ?? 0m,
+                shortMargin?.MarginUtilizationPct ?? 0m);
+
+            if (maxUtilization >= config.MarginUtilizationAlertPct)
+            {
+                // NB12: In-memory dedup before hitting the DB
+                if (_recentMarginAlerts.TryGetValue(pos.Id, out var lastAlertTime)
+                    && DateTime.UtcNow - lastAlertTime < TimeSpan.FromHours(1))
+                {
+                    return;
+                }
+
+                var recentMarginAlert = await _uow.Alerts.GetRecentAsync(
+                    pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(1));
+
+                if (recentMarginAlert is null)
+                {
+                    var longPct = longMargin?.MarginUtilizationPct ?? 0m;
+                    var shortPct = shortMargin?.MarginUtilizationPct ?? 0m;
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = pos.UserId,
+                        ArbitragePositionId = pos.Id,
+                        Type = AlertType.MarginWarning,
+                        Severity = AlertSeverity.Warning,
+                        Message = $"Margin utilization alert: {assetSymbol} " +
+                                  $"{longExchangeName}={longPct:P0} / {shortExchangeName}={shortPct:P0} " +
+                                  $"(threshold={config.MarginUtilizationAlertPct:P0})",
+                    });
+                }
+
+                _recentMarginAlerts[pos.Id] = DateTime.UtcNow;
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Margin utilization check failed for position #{Id}", pos.Id);
+        }
     }
 
     private static decimal GetExchangeTakerFee(string? exchangeName, decimal? dbFeeRate = null)

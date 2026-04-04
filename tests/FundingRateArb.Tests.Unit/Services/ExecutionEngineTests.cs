@@ -32,6 +32,7 @@ public class ExecutionEngineTests
         IsEnabled = true,
         OperatingState = BotOperatingState.Armed,
         DefaultLeverage = 5,
+        MaxLeverageCap = 50,
         UpdatedByUserId = "admin-user-id",
     };
 
@@ -116,13 +117,14 @@ public class ExecutionEngineTests
             .ReturnsAsync(SuccessOrder());
 
         var connectorLifecycle = new ConnectorLifecycleManager(
-            _mockFactory.Object, _mockUserSettings.Object, NullLogger<ConnectorLifecycleManager>.Instance);
+            _mockFactory.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
         var emergencyClose = new EmergencyCloseHandler(
             _mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, NullLogger<ExecutionEngine>.Instance);
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
@@ -1291,11 +1293,40 @@ public class ExecutionEngineTests
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
     }
 
+    // ── NB4: Legacy fallback when tier cache is empty ─────────────────────
+
     [Fact]
-    public async Task OpenPosition_BothExchangesClampLeverage_BothAlertsShowOriginalLeverage()
+    public async Task OpenPosition_NoTierData_FallsBackToLegacyMaxLeverage()
+    {
+        // Tier cache returns int.MaxValue (no data), legacy GetMaxLeverageAsync returns 3
+        // Effective leverage should be 3 (clamped by legacy path)
+        _mockLongConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+        _mockShortConnector
+            .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3001m));
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothExchangesClampLeverage_AlertShowsOriginalAndFinalLeverage()
     {
         // Configured leverage = 5x, long max = 3x, short max = 2x
-        // Both alerts should say "from 5x" (original), not "from 3x" (intermediate)
+        // A single alert should show "from 5x to 2x" (min of both exchange limits)
         _mockLongConnector
             .Setup(c => c.GetMaxLeverageAsync("ETH", It.IsAny<CancellationToken>()))
             .ReturnsAsync(3);
@@ -1314,13 +1345,7 @@ public class ExecutionEngineTests
 
         result.Success.Should().BeTrue();
 
-        // Both alerts should reference the original configured leverage (5x)
-        _mockAlerts.Verify(
-            a => a.Add(It.Is<Alert>(al =>
-                al.Type == AlertType.LeverageReduced &&
-                al.Message!.Contains("from 5x to 3x"))),
-            Times.Once);
-
+        // Unified alert: reduced from original to most restrictive exchange limit
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al =>
                 al.Type == AlertType.LeverageReduced &&
@@ -3161,6 +3186,7 @@ public class ExecutionEngineTests
             IsEnabled = true,
             OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
+            MaxLeverageCap = 50,
             ForceConcurrentExecution = true,
             UpdatedByUserId = "admin",
         };
@@ -3411,6 +3437,7 @@ public class ExecutionEngineTests
             IsEnabled = true,
             OperatingState = BotOperatingState.Armed,
             DefaultLeverage = 5,
+            MaxLeverageCap = 50,
             ForceConcurrentExecution = true,
             UpdatedByUserId = "admin",
         };

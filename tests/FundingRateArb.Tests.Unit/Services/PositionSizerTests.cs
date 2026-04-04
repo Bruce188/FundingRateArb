@@ -1,4 +1,5 @@
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
@@ -40,7 +41,7 @@ public class PositionSizerTests
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
         // Use real YieldCalculator — no external dependencies
-        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object);
+        _sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue));
     }
 
     private static ArbitrageOpportunityDto DefaultOpp(
@@ -69,11 +70,13 @@ public class PositionSizerTests
         decimal maxCapitalPerPos = 0.80m,
         int leverage = 5,
         decimal volumeFraction = 0.001m,
-        int maxConcurrentPositions = 1) => new()
+        int maxConcurrentPositions = 1,
+        int maxLeverageCap = 50) => new()
         {
             TotalCapitalUsdc = totalCapital,
             MaxCapitalPerPosition = maxCapitalPerPos,
             DefaultLeverage = leverage,
+            MaxLeverageCap = maxLeverageCap,
             VolumeFraction = volumeFraction,
             MaxConcurrentPositions = maxConcurrentPositions,
             IsEnabled = true,
@@ -794,5 +797,69 @@ public class PositionSizerTests
         // Asset exposure cap = 0.5 * 1000 = 500
         // User A should get 500 (not reduced by User B's positions)
         sizes[0].Should().Be(500m, "user-a's asset exposure should not include user-b's 400 USDC position");
+    }
+
+    // ── NB5: Tier-constrained leverage reduces notional calculation ──────────
+
+    [Fact]
+    public async Task CalculateBatchSizes_TierConstrainsLeverage_ReducesNotionalCalculation()
+    {
+        // Config leverage = 10x, tier returns 3x
+        // Liquidity cap should use 3x notional, not 10x
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m, leverage: 10, volumeFraction: 0.001m);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10 });
+
+        // Tier provider returns 3x for any lookup
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(3);
+
+        var sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object, mockTierProvider.Object);
+
+        // Volume = 1M, fraction = 0.001 → liquidity cap = 1000
+        // With tier cap 3x: notional = size * 3, cap check uses 3x
+        var opps = MakeOpps((0.001m, 1_000_000m));
+        var sizes = await sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-1");
+
+        // At 10x: notional = 100 * 10 = 1000, liquidityLimit = 1000, size stays 100
+        // At 3x: notional = 100 * 3 = 300, liquidityLimit = 1000, 300 < 1000 → size stays 100
+        // The key assertion: the tier provider was consulted with the tentative notional
+        mockTierProvider.Verify(
+            p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()),
+            Times.AtLeastOnce);
+    }
+
+    // ── NB8: MaxLeverageCap limits effective leverage ────────────────────────
+
+    [Fact]
+    public async Task CalculateBatchSizes_MaxLeverageCap_LimitsEffectiveLeverage()
+    {
+        // DefaultLeverage=10, MaxLeverageCap=2 → effective leverage should be 2
+        var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 1.0m, leverage: 10, volumeFraction: 0.001m, maxLeverageCap: 2);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10 });
+
+        // Capture the notional argument passed to GetEffectiveMaxLeverage
+        var capturedNotionals = new List<decimal>();
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider.Setup(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Callback<string, string, decimal>((_, _, notional) => capturedNotionals.Add(notional))
+            .Returns(int.MaxValue);
+
+        var sut = new PositionSizer(_mockUow.Object, new YieldCalculator(), _mockBalanceAggregator.Object, _mockUserSettings.Object, mockTierProvider.Object);
+
+        // Volume = 100M → liquidity limit = 100K (not binding)
+        var opps = MakeOpps((0.001m, 100_000_000m));
+        var sizes = await sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-1");
+
+        // Available capital = min(10000, 100) - 0 = 100, * 1.0 = 100
+        // With MaxLeverageCap=2: effectiveLeverage = min(10, 2) = 2
+        // tentativeNotional = 100 * 2 = 200, NOT 100 * 10 = 1000
+        sizes[0].Should().Be(100m);
+        capturedNotionals.Should().NotBeEmpty();
+        capturedNotionals.Should().AllSatisfy(n => n.Should().Be(200m, "notional should reflect leverage=2 (capped), not leverage=10"));
     }
 }

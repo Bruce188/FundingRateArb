@@ -44,6 +44,7 @@ public class BotOrchestratorMultiUserTests
         IsEnabled = true,
         OperatingState = BotOperatingState.Armed,
         MaxConcurrentPositions = 5,
+        MaxLeverageCap = 50,
         TotalCapitalUsdc = 1000m,
         UpdatedByUserId = "admin",
         AllocationStrategy = AllocationStrategy.Concentrated,

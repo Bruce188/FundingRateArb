@@ -34,6 +34,7 @@ public class PositionHealthMonitorTests
         AlertThreshold = 0.0001m,
         StopLossPct = 0.15m,
         MaxHoldTimeHours = 72,
+        MaxLeverageCap = 50,
         AdaptiveHoldEnabled = true, // matches BotConfiguration default; explicit for test clarity
     };
 
@@ -60,7 +61,8 @@ public class PositionHealthMonitorTests
 
         _sut = new PositionHealthMonitor(_mockUow.Object,
             _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
-            _mockExecutionEngine.Object, NullLogger<PositionHealthMonitor>.Instance);
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(),
+            NullLogger<PositionHealthMonitor>.Instance);
     }
 
     private ArbitragePosition MakeOpenPosition(
@@ -2150,6 +2152,253 @@ public class PositionHealthMonitorTests
             minLiquidationDistance: null);
 
         reason.Should().BeNull();
+    }
+
+    // ── Margin utilization alert fires at configured threshold ─────────────────
+
+    [Fact]
+    public async Task CheckAndAct_MarginUtilizationAboveThreshold_CreatesMarginWarningAlert()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MarginUtilizationAlertPct = 0.70m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices();
+
+        // Long margin utilization at 75% — above 70% threshold
+        _mockLongConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto
+            {
+                MarginUsed = 75m,
+                MarginAvailable = 25m,
+                MarginUtilizationPct = 0.75m,
+                LiquidationPrice = 2800m,
+            });
+        _mockShortConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto
+            {
+                MarginUsed = 50m,
+                MarginAvailable = 50m,
+                MarginUtilizationPct = 0.50m,
+                LiquidationPrice = 3200m,
+            });
+
+        await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.MarginWarning &&
+                al.Message!.Contains("Margin utilization alert") &&
+                al.Message!.Contains("ETH"))),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_MarginUtilizationBelowThreshold_NoMarginAlert()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MarginUtilizationAlertPct = 0.70m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Both legs below threshold
+        _mockLongConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto
+            {
+                MarginUsed = 30m,
+                MarginAvailable = 70m,
+                MarginUtilizationPct = 0.30m,
+            });
+        _mockShortConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto
+            {
+                MarginUsed = 40m,
+                MarginAvailable = 60m,
+                MarginUtilizationPct = 0.40m,
+            });
+
+        await _sut.CheckAndActAsync();
+
+        // No margin warning alerts should be created (existing alerts may be for other types)
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.MarginWarning &&
+                al.Message!.Contains("Margin utilization alert"))),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_MarginStateNull_NoMarginAlert()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MarginUtilizationAlertPct = 0.70m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Both connectors return null (exchange doesn't support margin state)
+        _mockLongConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MarginStateDto?)null);
+        _mockShortConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MarginStateDto?)null);
+
+        await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.MarginWarning &&
+                al.Message!.Contains("Margin utilization alert"))),
+            Times.Never);
+    }
+
+    // ── CyclesUntilLiquidation — pure computation ─────────────────────────────
+
+    [Fact]
+    public void ComputeLiquidationDistance_ValidInputs_ReturnsExpectedDistance()
+    {
+        // Long entry=3000, leverage=5 → long liq = 3000 * (1 - 1/5) = 2400
+        // Short entry=3001, leverage=5 → short liq = 3001 * (1 + 1/5) = 3601.2
+        // Long distance: (3000 - 2400) / (3000 - 2400) = 1.0 (at entry)
+        // Short distance: (3601.2 - 3001) / (3601.2 - 3001) = 1.0 (at entry)
+        var pos = MakeOpenPosition();
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 3000m, 3001m);
+
+        distance.Should().BeApproximately(1.0m, 0.01m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_PriceMovedTowardLiquidation_ReturnsSmaller()
+    {
+        // Long entry=3000, leverage=5 → long liq = 2400
+        // Current mark = 2700 (moved toward liquidation)
+        // Long range = 3000 - 2400 = 600, long dist = (2700 - 2400)/600 = 0.5
+        var pos = MakeOpenPosition();
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(pos, 2700m, 3001m);
+
+        distance.Should().BeApproximately(0.5m, 0.01m);
+    }
+
+    // ── NB9: Margin alert dedup — recent alert suppresses duplicate ──────────
+
+    [Fact]
+    public async Task CheckAndAct_MarginUtilizationAboveThreshold_RecentAlertExists_SuppressesDuplicate()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MaxLeverageCap = 50,
+            MarginUtilizationAlertPct = 0.70m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Margin utilization above threshold
+        _mockLongConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto { MarginUsed = 75m, MarginAvailable = 25m, MarginUtilizationPct = 0.75m });
+        _mockShortConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MarginStateDto { MarginUsed = 50m, MarginAvailable = 50m, MarginUtilizationPct = 0.50m });
+
+        // First call creates the alert; second call should suppress it
+        // Mock GetRecentAsync to return null first time (alert fires), then return an alert (suppressed)
+        _mockAlerts
+            .SetupSequence(a => a.GetRecentAsync("admin-user-id", 1, AlertType.MarginWarning, TimeSpan.FromHours(1)))
+            .ReturnsAsync((Alert?)null)
+            .ReturnsAsync(new Alert { Type = AlertType.MarginWarning });
+
+        await _sut.CheckAndActAsync(); // fires the first alert
+        await _sut.CheckAndActAsync(); // should be suppressed by in-memory dedup
+
+        // Alert.Add should be called only once (first invocation)
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.MarginWarning)),
+            Times.Once);
+    }
+
+    // ── NB10: GetPositionMarginStateAsync throws — no crash ─────────────────
+
+    [Fact]
+    public async Task CheckAndAct_MarginStateThrows_NoMarginAlertAndNoCrash()
+    {
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.001m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MaxLeverageCap = 50,
+            MarginUtilizationAlertPct = 0.70m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Connector throws on margin state
+        _mockLongConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Exchange unreachable"));
+        _mockShortConnector
+            .Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MarginStateDto?)null);
+
+        // Should not throw
+        var act = async () => await _sut.CheckAndActAsync();
+        await act.Should().NotThrowAsync();
+
+        // No margin alerts should be created
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.MarginWarning)),
+            Times.Never);
     }
 
     // ── Unified PnL: stop loss uses unified price ─────────────────────────────

@@ -77,6 +77,7 @@ public class ArmingStateTests
             mockEmergencyClose.Object,
             mockPositionCloser.Object,
             mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(),
             NullLogger<ExecutionEngine>.Instance);
 
         return (engine, mockBotConfig);

@@ -13,13 +13,14 @@ public class ExecutionEngine : IExecutionEngine
 {
     private const decimal MaxSingleOrderUsdc = 10_000m;
 
-    private readonly ConcurrentDictionary<(string Exchange, string Asset, int MaxLeverage), byte> _leverageWarned = new();
+    private readonly ConcurrentDictionary<(string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IConnectorLifecycleManager _connectorLifecycle;
     private readonly IEmergencyCloseHandler _emergencyClose;
     private readonly IPositionCloser _positionCloser;
     private readonly IUserSettingsService _userSettings;
+    private readonly ILeverageTierProvider _tierProvider;
     private readonly ILogger<ExecutionEngine> _logger;
 
     public ExecutionEngine(
@@ -28,6 +29,7 @@ public class ExecutionEngine : IExecutionEngine
         IEmergencyCloseHandler emergencyClose,
         IPositionCloser positionCloser,
         IUserSettingsService userSettings,
+        ILeverageTierProvider tierProvider,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
@@ -35,6 +37,7 @@ public class ExecutionEngine : IExecutionEngine
         _emergencyClose = emergencyClose;
         _positionCloser = positionCloser;
         _userSettings = userSettings;
+        _tierProvider = tierProvider;
         _logger = logger;
     }
 
@@ -93,57 +96,55 @@ public class ExecutionEngine : IExecutionEngine
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
             }
 
-            // Pre-flight leverage validation: use user leverage (falling back to bot config), then clamp to exchange max
+            // Pre-flight leverage validation: use user leverage, apply MaxLeverageCap, then clamp to tier-based exchange max
             var originalLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
-            var effectiveLeverage = originalLeverage;
+            var effectiveLeverage = Math.Min(originalLeverage, config.MaxLeverageCap);
             if (effectiveLeverage < 1)
             {
                 effectiveLeverage = 1;
             }
             try
             {
-                var longMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(longConnector, opp.AssetSymbol, ct);
-                var shortMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(shortConnector, opp.AssetSymbol, ct);
-                await Task.WhenAll(longMaxTask, shortMaxTask);
+                // Ensure tier cache is populated for both exchanges
+                await Task.WhenAll(
+                    _connectorLifecycle.EnsureTiersCachedAsync(longConnector, opp.AssetSymbol, ct),
+                    _connectorLifecycle.EnsureTiersCachedAsync(shortConnector, opp.AssetSymbol, ct));
 
-                var longMax = longMaxTask.Result;
-                var shortMax = shortMaxTask.Result;
+                // Compute target notional for tier lookup
+                var targetNotional = sizeUsdc * effectiveLeverage;
 
-                if (longMax.HasValue && effectiveLeverage > longMax.Value)
+                // Get tier-based max leverage for both exchanges
+                var longTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.LongExchangeName, opp.AssetSymbol, targetNotional);
+                var shortTierMax = _tierProvider.GetEffectiveMaxLeverage(opp.ShortExchangeName, opp.AssetSymbol, targetNotional);
+                var tierMax = Math.Min(longTierMax, shortTierMax);
+
+                // Fall back to legacy cache if tiers aren't available (tierMax == int.MaxValue)
+                if (tierMax == int.MaxValue)
                 {
-                    // Only log/alert on first occurrence per (exchange, asset, maxLeverage) tuple
-                    if (_leverageWarned.TryAdd((opp.LongExchangeName, opp.AssetSymbol, longMax.Value), 0))
-                    {
-                        _logger.LogWarning(
-                            "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
-                            originalLeverage, longMax.Value, opp.AssetSymbol, opp.LongExchangeName);
-                        _uow.Alerts.Add(new Alert
-                        {
-                            UserId = userId,
-                            Type = AlertType.LeverageReduced,
-                            Severity = AlertSeverity.Warning,
-                            Message = $"Leverage reduced from {originalLeverage}x to {longMax.Value}x for {opp.AssetSymbol} on {opp.LongExchangeName} (exchange maximum)",
-                        });
-                    }
-                    effectiveLeverage = longMax.Value;
+                    var longMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(longConnector, opp.AssetSymbol, ct);
+                    var shortMaxTask = _connectorLifecycle.GetCachedMaxLeverageAsync(shortConnector, opp.AssetSymbol, ct);
+                    await Task.WhenAll(longMaxTask, shortMaxTask);
+                    var longMax = longMaxTask.Result ?? int.MaxValue;
+                    var shortMax = shortMaxTask.Result ?? int.MaxValue;
+                    tierMax = Math.Min(longMax, shortMax);
                 }
 
-                if (shortMax.HasValue && effectiveLeverage > shortMax.Value)
+                if (effectiveLeverage > tierMax)
                 {
-                    if (_leverageWarned.TryAdd((opp.ShortExchangeName, opp.AssetSymbol, shortMax.Value), 0))
+                    if (_leverageWarned.TryAdd((opp.AssetSymbol, tierMax), 0))
                     {
                         _logger.LogWarning(
-                            "Leverage reduced from {Configured}x to {Max}x for {Asset} on {Exchange} (exchange maximum)",
-                            originalLeverage, shortMax.Value, opp.AssetSymbol, opp.ShortExchangeName);
+                            "Leverage reduced from {Configured}x to {Max}x for {Asset} (tier/cap constraint)",
+                            originalLeverage, tierMax, opp.AssetSymbol);
                         _uow.Alerts.Add(new Alert
                         {
                             UserId = userId,
                             Type = AlertType.LeverageReduced,
                             Severity = AlertSeverity.Warning,
-                            Message = $"Leverage reduced from {originalLeverage}x to {shortMax.Value}x for {opp.AssetSymbol} on {opp.ShortExchangeName} (exchange maximum)",
+                            Message = $"Leverage reduced from {originalLeverage}x to {tierMax}x for {opp.AssetSymbol} (tier/cap constraint)",
                         });
                     }
-                    effectiveLeverage = shortMax.Value;
+                    effectiveLeverage = tierMax;
                 }
             }
             catch (Exception ex)

@@ -19,6 +19,7 @@ public class ConfigValidatorTests
         MaxHoldTimeHours = 48,
         MinHoldTimeHours = 2,
         DefaultLeverage = 5,
+        MaxLeverageCap = 50,
         MaxConcurrentPositions = 1,
         MaxCapitalPerPosition = 0.90m,
         AllocationTopN = 3,

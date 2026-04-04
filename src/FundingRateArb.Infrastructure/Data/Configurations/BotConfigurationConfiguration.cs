@@ -37,5 +37,7 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.ReconciliationIntervalCycles).HasDefaultValue(10);
         builder.Property(b => b.DivergenceAlertMultiplier).HasColumnType("decimal(18,4)").HasDefaultValue(2.0m);
         builder.Property(b => b.DryRunEnabled).HasDefaultValue(false);
+        builder.Property(b => b.MaxLeverageCap).HasDefaultValue(3);
+        builder.Property(b => b.MarginUtilizationAlertPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.70m);
     }
 }

@@ -1,5 +1,6 @@
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 
 namespace FundingRateArb.Application.Common.Exchanges;
 
@@ -67,6 +68,12 @@ public interface IExchangeConnector
     /// </summary>
     Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not support quantity precision query");
+
+    Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
+        => Task.FromResult<LeverageTier[]?>(null);
+
+    Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+        => Task.FromResult<MarginStateDto?>(null);
 }
 
 /// <summary>

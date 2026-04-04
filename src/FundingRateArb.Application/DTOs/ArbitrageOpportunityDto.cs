@@ -31,4 +31,10 @@ public class ArbitrageOpportunityDto
     public decimal? PredictedSpread { get; set; }
     public decimal? PredictionConfidence { get; set; }
     public string? PredictedTrend { get; set; }
+
+    // Leverage-adjusted metrics (populated when tier data is available)
+    public int? EffectiveLeverage { get; set; }
+    public decimal? ReturnOnCapitalPerHour { get; set; }
+    public decimal? AprOnCapital { get; set; }
+    public decimal? BreakEvenCycles { get; set; }
 }

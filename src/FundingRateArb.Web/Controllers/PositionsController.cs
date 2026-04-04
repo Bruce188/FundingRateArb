@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Extensions;
@@ -15,13 +16,16 @@ public class PositionsController : Controller
 {
     private readonly IUnitOfWork _uow;
     private readonly IExecutionEngine _executionEngine;
+    private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly ILogger<PositionsController> _logger;
 
     public PositionsController(IUnitOfWork uow, IExecutionEngine executionEngine,
+        IExchangeConnectorFactory connectorFactory,
         ILogger<PositionsController> logger)
     {
         _uow = uow;
         _executionEngine = executionEngine;
+        _connectorFactory = connectorFactory;
         _logger = logger;
     }
 
@@ -65,6 +69,63 @@ public class PositionsController : Controller
         }
 
         var positionDto = position.ToDetailsDto();
+
+        // Populate margin utilization fields from exchange API (best-effort)
+        if (position.Status == PositionStatus.Open)
+        {
+            try
+            {
+                var longExchangeName = position.LongExchange?.Name;
+                var shortExchangeName = position.ShortExchange?.Name;
+                var assetSymbol = position.Asset?.Symbol;
+
+                if (longExchangeName is not null && shortExchangeName is not null && assetSymbol is not null)
+                {
+                    var longConnector = _connectorFactory.GetConnector(longExchangeName);
+
+                    // Deduplicate: if both legs use the same exchange, call once
+                    Task<MarginStateDto?> longMarginTask;
+                    Task<MarginStateDto?> shortMarginTask;
+                    if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                        shortMarginTask = longMarginTask;
+                    }
+                    else
+                    {
+                        var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+                        longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                        shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+                    }
+
+                    await Task.WhenAll(longMarginTask, shortMarginTask);
+
+                    var longMargin = await longMarginTask;
+                    var shortMargin = await shortMarginTask;
+
+                    positionDto.LongMarginUtilizationPct = longMargin?.MarginUtilizationPct;
+                    positionDto.ShortMarginUtilizationPct = shortMargin?.MarginUtilizationPct;
+
+                    if (longMargin?.LiquidationPrice is not null)
+                    {
+                        var longMark = position.LongEntryPrice;
+                        if (longMark > 0)
+                            positionDto.MaxSafeMovePctLong = Math.Abs(longMark - longMargin.LiquidationPrice.Value) / longMark * 100m;
+                    }
+
+                    if (shortMargin?.LiquidationPrice is not null)
+                    {
+                        var shortMark = position.ShortEntryPrice;
+                        if (shortMark > 0)
+                            positionDto.MaxSafeMovePctShort = Math.Abs(shortMark - shortMargin.LiquidationPrice.Value) / shortMark * 100m;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to fetch margin state for position #{Id}", position.Id);
+            }
+        }
 
         var vm = new PositionDetailsViewModel
         {

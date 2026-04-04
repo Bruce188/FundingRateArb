@@ -13,4 +13,5 @@ public interface IConnectorLifecycleManager
     Task<int?> GetCachedMaxLeverageAsync(
         IExchangeConnector connector, string asset, CancellationToken ct);
 
+    Task EnsureTiersCachedAsync(IExchangeConnector connector, string asset, CancellationToken ct);
 }
