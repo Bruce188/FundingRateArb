@@ -24,6 +24,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
+using Polly.Registry;
 using Polly.CircuitBreaker;
 using Polly.Retry;
 using Polly.Timeout;
@@ -387,7 +388,17 @@ try
         client.BaseAddress = new Uri("https://dydx-rpc.publicnode.com/");
         client.Timeout = TimeSpan.FromSeconds(30);
     });
-    builder.Services.AddScoped<DydxConnector>();
+    builder.Services.AddScoped<DydxConnector>(sp =>
+    {
+        var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+        return new DydxConnector(
+            httpFactory.CreateClient("DydxIndexer"),
+            httpFactory.CreateClient("DydxValidator"),
+            signer: null, // read-only infrastructure connector; trading requires user credentials via factory
+            sp.GetRequiredService<ResiliencePipelineProvider<string>>(),
+            sp.GetRequiredService<ILogger<DydxConnector>>(),
+            sp.GetRequiredService<IMarkPriceCache>());
+    });
     builder.Services.AddHttpClient<CoinGlassConnector>(client =>
     {
         client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");

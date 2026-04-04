@@ -19,7 +19,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 {
     private readonly HttpClient _indexerClient;
     private readonly HttpClient _validatorClient;
-    private readonly DydxSigner _signer;
+    private readonly DydxSigner? _signer;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly ILogger<DydxConnector> _logger;
     private readonly IMarkPriceCache _markPriceCache;
@@ -56,14 +56,14 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     public DydxConnector(
         HttpClient indexerClient,
         HttpClient validatorClient,
-        DydxSigner signer,
+        DydxSigner? signer,
         ResiliencePipelineProvider<string> pipelineProvider,
         ILogger<DydxConnector> logger,
         IMarkPriceCache markPriceCache)
     {
         _indexerClient = indexerClient ?? throw new ArgumentNullException(nameof(indexerClient));
         _validatorClient = validatorClient ?? throw new ArgumentNullException(nameof(validatorClient));
-        _signer = signer ?? throw new ArgumentNullException(nameof(signer));
+        _signer = signer; // nullable — read-only operations work without signing
         _pipelineProvider = pipelineProvider;
         _logger = logger;
         _markPriceCache = markPriceCache;
@@ -72,6 +72,10 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
     public string ExchangeName => "dYdX";
 
     public bool IsEstimatedFillExchange => false;
+
+    private DydxSigner RequireSigner() =>
+        _signer ?? throw new InvalidOperationException(
+            "dYdX connector requires signing credentials. Configure a mnemonic via user exchange credentials.");
 
     /// <inheritdoc />
     /// <remarks>
@@ -194,7 +198,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         {
             positionsResp = await pipeline.ExecuteAsync(async token =>
                 await _indexerClient.GetFromJsonAsync<DydxPositionsResponse>(
-                    $"addresses/{_signer.Address}/subaccountNumber/0/perpetualPositions?status=OPEN",
+                    $"addresses/{RequireSigner().Address}/subaccountNumber/0/perpetualPositions?status=OPEN",
                     JsonOptions, token), ct);
         }
         catch (Exception ex)
@@ -230,7 +234,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         {
             OrderId = new DydxOrderId
             {
-                SubaccountId = new DydxSubaccountId { Owner = _signer.Address, SubaccountNumber = 0 },
+                SubaccountId = new DydxSubaccountId { Owner = RequireSigner().Address, SubaccountNumber = 0 },
                 ClientId = clientId,
                 OrderFlags = OrderFlagShortTerm,
                 ClobPairId = (uint)marketInfo.ClobPairId,
@@ -248,8 +252,8 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             var orderPipeline = _pipelineProvider.GetPipeline("OrderClose");
             var txHash = await orderPipeline.ExecuteAsync(async token =>
             {
-                var txBytes = _signer.BuildAndSignPlaceOrderTx(order, accountNumber, sequence, ChainId);
-                return await _signer.BroadcastTxAsync(_validatorClient, txBytes, token);
+                var txBytes = RequireSigner().BuildAndSignPlaceOrderTx(order, accountNumber, sequence, ChainId);
+                return await RequireSigner().BroadcastTxAsync(_validatorClient, txBytes, token);
             }, ct);
 
             IncrementSequence();
@@ -306,7 +310,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
         var resp = await pipeline.ExecuteAsync(async token =>
             await _indexerClient.GetFromJsonAsync<DydxSubaccountResponse>(
-                $"addresses/{_signer.Address}/subaccountNumber/0", JsonOptions, token), ct);
+                $"addresses/{RequireSigner().Address}/subaccountNumber/0", JsonOptions, token), ct);
 
         return resp?.Subaccount?.FreeCollateral ?? 0m;
     }
@@ -331,7 +335,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var resp = await pipeline.ExecuteAsync(async token =>
                 await _indexerClient.GetFromJsonAsync<DydxPositionsResponse>(
-                    $"addresses/{_signer.Address}/subaccountNumber/0/perpetualPositions?status=OPEN",
+                    $"addresses/{RequireSigner().Address}/subaccountNumber/0/perpetualPositions?status=OPEN",
                     JsonOptions, token), ct);
 
             var expectedSide = side == Side.Long ? "LONG" : "SHORT";
@@ -376,7 +380,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         {
             OrderId = new DydxOrderId
             {
-                SubaccountId = new DydxSubaccountId { Owner = _signer.Address, SubaccountNumber = 0 },
+                SubaccountId = new DydxSubaccountId { Owner = RequireSigner().Address, SubaccountNumber = 0 },
                 ClientId = clientId,
                 OrderFlags = OrderFlagShortTerm,
                 ClobPairId = (uint)marketInfo.ClobPairId,
@@ -394,8 +398,8 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
             var txHash = await pipeline.ExecuteAsync(async token =>
             {
-                var txBytes = _signer.BuildAndSignPlaceOrderTx(order, accountNumber, sequence, ChainId);
-                return await _signer.BroadcastTxAsync(_validatorClient, txBytes, token);
+                var txBytes = RequireSigner().BuildAndSignPlaceOrderTx(order, accountNumber, sequence, ChainId);
+                return await RequireSigner().BroadcastTxAsync(_validatorClient, txBytes, token);
             }, ct);
 
             IncrementSequence();
@@ -490,7 +494,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
         if (_accountInfoCached)
             return (_cachedAccountNumber, _cachedSequence);
 
-        var (accountNumber, sequence) = await _signer.GetAccountInfoAsync(_validatorClient, ct);
+        var (accountNumber, sequence) = await RequireSigner().GetAccountInfoAsync(_validatorClient, ct);
         _cachedAccountNumber = accountNumber;
         _cachedSequence = sequence;
         _accountInfoCached = true;
