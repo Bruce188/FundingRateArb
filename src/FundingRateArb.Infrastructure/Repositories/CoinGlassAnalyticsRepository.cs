@@ -2,14 +2,20 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
 public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
 {
     private readonly AppDbContext _context;
+    private readonly ILogger<CoinGlassAnalyticsRepository> _logger;
 
-    public CoinGlassAnalyticsRepository(AppDbContext context) => _context = context;
+    public CoinGlassAnalyticsRepository(AppDbContext context, ILogger<CoinGlassAnalyticsRepository> logger)
+    {
+        _context = context;
+        _logger = logger;
+    }
 
     public async Task SaveSnapshotAsync(List<CoinGlassExchangeRate> rates, CancellationToken ct = default)
     {
@@ -35,8 +41,26 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
             return;
         }
 
-        await _context.CoinGlassExchangeRates.AddRangeAsync(rates, ct);
-        await _context.SaveChangesAsync(ct);
+        try
+        {
+            // Normalize SnapshotTime to hour boundary for unique index enforcement
+            foreach (var rate in rates)
+                rate.SnapshotTime = snapshotHour;
+
+            await _context.CoinGlassExchangeRates.AddRangeAsync(rates, ct);
+            await _context.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException?.Message.Contains("unique", StringComparison.OrdinalIgnoreCase) == true
+                                         || ex.InnerException?.Message.Contains("duplicate", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            _logger.LogInformation("CoinGlass analytics snapshot dedup: concurrent insert detected, skipping");
+            // Detach the tracked entities to avoid stale state
+            foreach (var entry in _context.ChangeTracker.Entries<CoinGlassExchangeRate>()
+                .Where(e => e.State == EntityState.Added))
+            {
+                entry.State = EntityState.Detached;
+            }
+        }
     }
 
     public async Task<List<CoinGlassExchangeRate>> GetLatestSnapshotPerExchangeAsync(CancellationToken ct = default)
@@ -60,10 +84,11 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
             .ToListAsync(ct);
     }
 
-    public async Task<List<CoinGlassExchangeRate>> GetSnapshotsAsync(DateTime from, DateTime to, CancellationToken ct = default)
+    public async Task<List<CoinGlassExchangeRate>> GetSnapshotsAsync(DateTime from, DateTime to, int maxRows = 10_000, CancellationToken ct = default)
     {
         return await _context.CoinGlassExchangeRates
             .Where(r => r.SnapshotTime >= from && r.SnapshotTime <= to)
+            .Take(maxRows)
             .AsNoTracking()
             .ToListAsync(ct);
     }
@@ -101,12 +126,31 @@ public class CoinGlassAnalyticsRepository : ICoinGlassAnalyticsRepository
 
     public async Task<HashSet<(string Exchange, string Symbol)>> GetKnownPairsAsync(CancellationToken ct = default)
     {
+        var cutoff = DateTime.UtcNow.AddDays(-1);
+
         var pairs = await _context.CoinGlassExchangeRates
+            .Where(r => r.SnapshotTime >= cutoff)
             .Select(r => new { r.SourceExchange, r.Symbol })
             .Distinct()
             .AsNoTracking()
             .ToListAsync(ct);
 
-        return pairs.Select(p => (p.SourceExchange, p.Symbol)).ToHashSet();
+        return pairs.Select(p => (p.SourceExchange, p.Symbol))
+            .ToHashSet(new ExchangeSymbolComparer());
+    }
+
+    /// <summary>
+    /// Case-insensitive comparer for (Exchange, Symbol) tuples.
+    /// </summary>
+    private sealed class ExchangeSymbolComparer : IEqualityComparer<(string Exchange, string Symbol)>
+    {
+        public bool Equals((string Exchange, string Symbol) x, (string Exchange, string Symbol) y) =>
+            string.Equals(x.Exchange, y.Exchange, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(x.Symbol, y.Symbol, StringComparison.OrdinalIgnoreCase);
+
+        public int GetHashCode((string Exchange, string Symbol) obj) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Exchange),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Symbol));
     }
 }

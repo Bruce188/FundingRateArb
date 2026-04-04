@@ -19,7 +19,8 @@ public class CoinGlassExchangeRateConfiguration : IEntityTypeConfiguration<CoinG
         builder.Property(r => r.IndexPrice).HasColumnType("decimal(18,4)");
         builder.Property(r => r.Volume24hUsd).HasColumnType("decimal(18,2)");
 
-        builder.HasIndex(r => new { r.SourceExchange, r.Symbol, r.SnapshotTime });
+        builder.HasIndex(r => new { r.SourceExchange, r.Symbol, r.SnapshotTime })
+            .IsUnique();
         builder.HasIndex(r => r.SnapshotTime);
     }
 }

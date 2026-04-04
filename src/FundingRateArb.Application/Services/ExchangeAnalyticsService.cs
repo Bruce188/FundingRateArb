@@ -1,6 +1,7 @@
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Application.Services;
@@ -10,14 +11,6 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
     private readonly ICoinGlassAnalyticsRepository _analyticsRepo;
     private readonly IUnitOfWork _uow;
     private readonly ILogger<ExchangeAnalyticsService> _logger;
-
-    /// <summary>
-    /// Exchanges that have dedicated direct connectors in the system.
-    /// </summary>
-    private static readonly HashSet<string> DirectConnectorExchanges = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Hyperliquid", "Lighter", "Aster"
-    };
 
     public ExchangeAnalyticsService(
         ICoinGlassAnalyticsRepository analyticsRepo,
@@ -32,6 +25,11 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
     public async Task<List<ExchangeOverviewDto>> GetExchangeOverviewAsync(CancellationToken ct = default)
     {
         var latestRates = await _analyticsRepo.GetLatestSnapshotPerExchangeAsync(ct);
+        return await GetExchangeOverviewAsync(latestRates, ct);
+    }
+
+    public async Task<List<ExchangeOverviewDto>> GetExchangeOverviewAsync(List<CoinGlassExchangeRate> latestRates, CancellationToken ct = default)
+    {
         var exchanges = await _uow.Exchanges.GetAllAsync();
         var exchangeByName = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -73,6 +71,13 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
         int count = 20, decimal minSpreadPerHour = 0.00005m, CancellationToken ct = default)
     {
         var latestRates = await _analyticsRepo.GetLatestSnapshotPerExchangeAsync(ct);
+        return await GetTopOpportunitiesAsync(latestRates, count, minSpreadPerHour, ct);
+    }
+
+    public async Task<List<SpreadOpportunityDto>> GetTopOpportunitiesAsync(
+        List<CoinGlassExchangeRate> latestRates, int count = 20, decimal minSpreadPerHour = 0.00005m, CancellationToken ct = default)
+    {
+        var connectorExchanges = await GetConnectorExchangeNamesAsync();
 
         // Group by symbol: only consider coins on 2+ exchanges
         var bySymbol = latestRates
@@ -107,8 +112,8 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
                     var netYieldPerHour = spreadPerHour - estFeesPerHour;
                     var apr = netYieldPerHour * 24m * 365m * 100m;
 
-                    var longHasConnector = DirectConnectorExchanges.Contains(longExch.SourceExchange);
-                    var shortHasConnector = DirectConnectorExchanges.Contains(shortExch.SourceExchange);
+                    var longHasConnector = connectorExchanges.Contains(longExch.SourceExchange);
+                    var shortHasConnector = connectorExchanges.Contains(shortExch.SourceExchange);
                     var bothHaveConnectors = longHasConnector && shortHasConnector;
                     var oneHasConnector = longHasConnector || shortHasConnector;
 
@@ -145,10 +150,12 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
 
     public async Task<List<RateComparisonDto>> GetRateComparisonsAsync(CancellationToken ct = default)
     {
+        var connectorExchanges = await GetConnectorExchangeNamesAsync();
+
         // Get CoinGlass rates for exchanges that have direct connectors
         var latestCgRates = await _analyticsRepo.GetLatestSnapshotPerExchangeAsync(ct);
         var cgRatesForConnectors = latestCgRates
-            .Where(r => DirectConnectorExchanges.Contains(r.SourceExchange))
+            .Where(r => connectorExchanges.Contains(r.SourceExchange))
             .ToList();
 
         if (cgRatesForConnectors.Count == 0)
@@ -214,9 +221,21 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
     }
 
     /// <summary>
+    /// Gets exchange names that have direct connectors (IsDataOnly = false, IsActive = true).
+    /// </summary>
+    private async Task<HashSet<string>> GetConnectorExchangeNamesAsync()
+    {
+        var exchanges = await _uow.Exchanges.GetActiveAsync();
+        return exchanges
+            .Where(e => !e.IsDataOnly)
+            .Select(e => e.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Case-insensitive comparer for (Exchange, Symbol) tuples.
     /// </summary>
-    private class ExchangeSymbolComparer : IEqualityComparer<(string Exchange, string Symbol)>
+    private sealed class ExchangeSymbolComparer : IEqualityComparer<(string Exchange, string Symbol)>
     {
         public bool Equals((string Exchange, string Symbol) x, (string Exchange, string Symbol) y) =>
             string.Equals(x.Exchange, y.Exchange, StringComparison.OrdinalIgnoreCase) &&
@@ -224,7 +243,7 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
 
         public int GetHashCode((string Exchange, string Symbol) obj) =>
             HashCode.Combine(
-                obj.Exchange.ToUpperInvariant().GetHashCode(),
-                obj.Symbol.ToUpperInvariant().GetHashCode());
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Exchange),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Symbol));
     }
 }

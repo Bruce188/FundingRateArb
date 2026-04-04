@@ -237,37 +237,45 @@ public class CoinGlassConnector : IExchangeConnector
                     // Discovery detection
                     var knownPairs = await _analyticsRepo.GetKnownPairsAsync(ct);
                     var discoveryEvents = new List<CoinGlassDiscoveryEvent>();
-                    var currentExchanges = analyticsRates.Select(r => r.SourceExchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                    var knownExchanges = knownPairs.Select(p => p.Exchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-                    foreach (var exchange in currentExchanges.Except(knownExchanges, StringComparer.OrdinalIgnoreCase))
+                    if (knownPairs.Count == 0)
                     {
-                        var coinCount = analyticsRates.Count(r => r.SourceExchange.Equals(exchange, StringComparison.OrdinalIgnoreCase));
-                        _logger.LogWarning("CoinGlass: new exchange discovered: {ExchangeName} with {CoinCount} coins", exchange, coinCount);
-                        discoveryEvents.Add(new CoinGlassDiscoveryEvent
-                        {
-                            EventType = DiscoveryEventType.NewExchange,
-                            ExchangeName = exchange,
-                            DiscoveredAt = DateTime.UtcNow
-                        });
+                        _logger.LogInformation("CoinGlass analytics: first run, skipping discovery detection (no baseline)");
                     }
-
-                    // New coins on known exchanges
-                    foreach (var rate in analyticsRates)
+                    else
                     {
-                        if (!knownPairs.Contains((rate.SourceExchange, rate.Symbol)))
+                        var currentExchanges = analyticsRates.Select(r => r.SourceExchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        var knownExchanges = knownPairs.Select(p => p.Exchange).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                        foreach (var exchange in currentExchanges.Except(knownExchanges, StringComparer.OrdinalIgnoreCase))
                         {
-                            if (DirectConnectorExchanges.Contains(rate.SourceExchange))
-                            {
-                                _logger.LogInformation("CoinGlass: new coin {Symbol} available on {ExchangeName} (has connector)", rate.Symbol, rate.SourceExchange);
-                            }
+                            var coinCount = analyticsRates.Count(r => r.SourceExchange.Equals(exchange, StringComparison.OrdinalIgnoreCase));
+                            _logger.LogWarning("CoinGlass: new exchange discovered: {ExchangeName} with {CoinCount} coins", exchange, coinCount);
                             discoveryEvents.Add(new CoinGlassDiscoveryEvent
                             {
-                                EventType = DiscoveryEventType.NewCoin,
-                                ExchangeName = rate.SourceExchange,
-                                Symbol = rate.Symbol,
+                                EventType = DiscoveryEventType.NewExchange,
+                                ExchangeName = exchange,
                                 DiscoveredAt = DateTime.UtcNow
                             });
+                        }
+
+                        // New coins on known exchanges
+                        foreach (var rate in analyticsRates)
+                        {
+                            if (!knownPairs.Contains((rate.SourceExchange, rate.Symbol)))
+                            {
+                                if (DirectConnectorExchanges.Contains(rate.SourceExchange))
+                                {
+                                    _logger.LogInformation("CoinGlass: new coin {Symbol} available on {ExchangeName} (has connector)", rate.Symbol, rate.SourceExchange);
+                                }
+                                discoveryEvents.Add(new CoinGlassDiscoveryEvent
+                                {
+                                    EventType = DiscoveryEventType.NewCoin,
+                                    ExchangeName = rate.SourceExchange,
+                                    Symbol = rate.Symbol,
+                                    DiscoveredAt = DateTime.UtcNow
+                                });
+                            }
                         }
                     }
 
