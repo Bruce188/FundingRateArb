@@ -163,14 +163,19 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
                 else
                 {
-                    unifiedUnrealizedPnl = unrealizedPnl; // fallback to per-exchange
+                    // Unified price unavailable (data feed gap) — fall back to per-exchange PnL
+                    _logger.LogWarning(
+                        "Unified price unavailable for {Asset} ({Long}/{Short}), falling back to per-exchange PnL",
+                        assetSymbol, longExchangeName, shortExchangeName);
+                    unifiedUnrealizedPnl = unrealizedPnl;
                 }
 
                 // Price divergence tracking
                 if (unifiedPrice > 0)
                 {
                     var newDivergencePct = Math.Abs(currentLongMark - currentShortMark) / unifiedPrice * 100m;
-                    if (pos.CurrentDivergencePct != newDivergencePct)
+                    if (pos.CurrentDivergencePct is null ||
+                        Math.Abs(pos.CurrentDivergencePct.Value - newDivergencePct) >= 0.0001m)
                     {
                         pos.CurrentDivergencePct = newDivergencePct;
                     }
