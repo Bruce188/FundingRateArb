@@ -458,7 +458,9 @@ public class FundingRateFetcher : BackgroundService
     {
         var fallbackNotional = pos.SizeUsdc * pos.Leverage;
         if (entryPrice <= 0 || exchange is null)
+        {
             return fallbackNotional;
+        }
 
         var quantity = fallbackNotional / entryPrice;
         var priceRef = exchange.FundingNotionalPriceType == FundingNotionalPriceType.OraclePrice
@@ -476,7 +478,9 @@ public class FundingRateFetcher : BackgroundService
     internal decimal ApplyRebate(decimal funding, Exchange? exchange, bool isPaying)
     {
         if (!isPaying || exchange is null || exchange.FundingRebateRate <= 0)
+        {
             return funding;
+        }
 
         var effectiveRate = Math.Clamp(exchange.FundingRebateRate, 0m, 1m);
         var rebateAmount = Math.Abs(funding) * effectiveRate;

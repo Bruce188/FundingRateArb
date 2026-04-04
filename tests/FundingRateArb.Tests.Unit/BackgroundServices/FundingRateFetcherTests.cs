@@ -1035,13 +1035,17 @@ public class FundingRateFetcherTests
         // Arrange: Binance exchange with 8h interval, but API returns 4h
         var binanceExchange = new Exchange
         {
-            Id = 4, Name = "Binance", IsActive = true,
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
             FundingIntervalHours = 8,
             FundingSettlementType = FundingSettlementType.Periodic,
         };
         var trackedBinance = new Exchange
         {
-            Id = 4, Name = "Binance", IsActive = true,
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
             FundingIntervalHours = 8,
             FundingSettlementType = FundingSettlementType.Periodic,
         };
@@ -1172,7 +1176,8 @@ public class FundingRateFetcherTests
 
         var pos = new ArbitragePosition
         {
-            Id = 1, AssetId = 1,
+            Id = 1,
+            AssetId = 1,
             LongExchangeId = 1,   // Hyperliquid (OraclePrice → IndexPrice)
             ShortExchangeId = 2,  // Lighter (MarkPrice → MarkPrice)
             SizeUsdc = 100m,
@@ -1241,7 +1246,9 @@ public class FundingRateFetcherTests
         // Arrange: Binance exchange with 8h interval, API also returns 8h (no change)
         var binanceExchange = new Exchange
         {
-            Id = 4, Name = "Binance", IsActive = true,
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
             FundingIntervalHours = 8,
             FundingSettlementType = FundingSettlementType.Periodic,
         };
@@ -1342,7 +1349,8 @@ public class FundingRateFetcherTests
 
         var pos = new ArbitragePosition
         {
-            Id = 1, AssetId = 1,
+            Id = 1,
+            AssetId = 1,
             LongExchangeId = 2,   // Lighter (rebate=0.15, pays when rate > 0)
             ShortExchangeId = 1,  // Hyperliquid
             SizeUsdc = 100m,
@@ -1394,7 +1402,9 @@ public class FundingRateFetcherTests
         // Arrange: Binance with 8h interval, API returns invalid interval=6
         var binanceExchange = new Exchange
         {
-            Id = 4, Name = "Binance", IsActive = true,
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
             FundingIntervalHours = 8,
             FundingSettlementType = FundingSettlementType.Periodic,
         };
@@ -1467,7 +1477,9 @@ public class FundingRateFetcherTests
         // Arrange: Binance with 8h interval, all rates have null DetectedFundingIntervalHours
         var binanceExchange = new Exchange
         {
-            Id = 4, Name = "Binance", IsActive = true,
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
             FundingIntervalHours = 8,
             FundingSettlementType = FundingSettlementType.Periodic,
         };
