@@ -65,7 +65,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
         var tickersTask = pipeline.ExecuteAsync(
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
         var fundingInfoTask = pipeline.ExecuteAsync(
-            async token => await _restClient.UsdFuturesApi.ExchangeData.GetFundingInfoAsync(token), ct).AsTask();
+            async token => await _restClient.UsdFuturesApi.ExchangeData.GetFundingInfoAsync(token), ct)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
 
         await Task.WhenAll(markPricesTask, tickersTask, fundingInfoTask);
 
@@ -85,8 +87,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 : new Dictionary<string, decimal>();
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to fetch Binance tickers; falling back to empty volume map");
             volumeBySymbol = new Dictionary<string, decimal>();
         }
 
@@ -103,8 +106,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 : new Dictionary<string, int>();
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to fetch Binance funding info; falling back to default intervals");
             intervalBySymbol = new Dictionary<string, int>();
         }
 

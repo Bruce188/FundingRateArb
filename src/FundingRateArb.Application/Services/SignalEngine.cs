@@ -113,12 +113,14 @@ public class SignalEngine : ISignalEngine
 
                     // Apply funding rebate: if the paying leg's exchange offers a rebate, the effective
                     // funding cost is reduced, improving net yield for the opportunity.
-                    if (longR.Exchange.FundingRebateRate > 0)
+                    // Long leg pays when rate > 0; guard prevents incorrect boost when rate is negative.
+                    if (longR.Exchange.FundingRebateRate > 0 && longR.RatePerHour > 0)
                     {
                         var rebateBoost = longR.RatePerHour * longR.Exchange.FundingRebateRate;
                         net += rebateBoost;
                     }
-                    // Also check short leg — if short rate is negative, the short side pays
+                    // Short side pays when rate is negative. Rebate reduces that cost,
+                    // which improves net yield (hence +=).
                     if (shortR.Exchange.FundingRebateRate > 0 && shortR.RatePerHour < 0)
                     {
                         var rebateBoost = Math.Abs(shortR.RatePerHour) * shortR.Exchange.FundingRebateRate;
@@ -144,12 +146,13 @@ public class SignalEngine : ISignalEngine
                     // Adjust for exchange-specific timing deviations (e.g. Aster settles 15s after boundary)
                     if (minutesToSettlement.HasValue)
                     {
-                        var longDeviation = longR.Exchange.FundingTimingDeviationSeconds / 60.0;
-                        var shortDeviation = shortR.Exchange.FundingTimingDeviationSeconds / 60.0;
-                        var maxDeviation = (int)Math.Ceiling(Math.Max(longDeviation, shortDeviation));
-                        if (maxDeviation > 0)
+                        var longDeviationSec = Math.Min(longR.Exchange.FundingTimingDeviationSeconds, 300);
+                        var shortDeviationSec = Math.Min(shortR.Exchange.FundingTimingDeviationSeconds, 300);
+                        var maxDeviationSec = Math.Max(longDeviationSec, shortDeviationSec);
+                        var maxDeviationMin = (maxDeviationSec + 59) / 60;
+                        if (maxDeviationMin > 0)
                         {
-                            minutesToSettlement = Math.Max(0, minutesToSettlement.Value - maxDeviation);
+                            minutesToSettlement = Math.Max(0, minutesToSettlement.Value - maxDeviationMin);
                         }
                     }
 

@@ -132,20 +132,33 @@ public class FundingRateFetcher : BackgroundService
         var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var assetMap = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
 
-        // Detect Binance funding interval changes
+        // Detect Binance funding interval changes using modal (most common) value
+        var validIntervals = new HashSet<int> { 4, 8 };
         if (exchangeMap.TryGetValue("Binance", out var binanceExchange))
         {
             var detectedInterval = allRates
                 .Where(r => r.ExchangeName == "Binance" && r.DetectedFundingIntervalHours.HasValue)
-                .Select(r => r.DetectedFundingIntervalHours!.Value)
+                .GroupBy(r => r.DetectedFundingIntervalHours!.Value)
+                .OrderByDescending(g => g.Count())
+                .Select(g => g.Key)
                 .FirstOrDefault();
 
-            if (detectedInterval > 0 && detectedInterval != binanceExchange.FundingIntervalHours)
+            if (detectedInterval > 0
+                && validIntervals.Contains(detectedInterval)
+                && detectedInterval != binanceExchange.FundingIntervalHours)
             {
                 _logger.LogWarning(
                     "Binance funding interval changed from {Old}h to {New}h — updating exchange entity",
                     binanceExchange.FundingIntervalHours, detectedInterval);
-                binanceExchange.FundingIntervalHours = detectedInterval;
+
+                // Persist to a tracked entity so the change reaches the DB
+                var tracked = await uow.Exchanges.GetByNameAsync("Binance");
+                if (tracked is not null)
+                {
+                    tracked.FundingIntervalHours = detectedInterval;
+                    uow.Exchanges.Update(tracked);
+                    uow.Exchanges.InvalidateCache();
+                }
             }
         }
 
@@ -322,9 +335,13 @@ public class FundingRateFetcher : BackgroundService
                 continue;
             }
 
+            // Hoist exchange lookups once per position
+            var longExchange = exchangeById.GetValueOrDefault(pos.LongExchangeId);
+            var shortExchange = exchangeById.GetValueOrDefault(pos.ShortExchangeId);
+
             // Compute notional per-leg using exchange-specific price reference
-            var longNotional = ComputeNotional(pos, pos.LongEntryPrice, longRate, exchangeById.GetValueOrDefault(pos.LongExchangeId));
-            var shortNotional = ComputeNotional(pos, pos.ShortEntryPrice, shortRate, exchangeById.GetValueOrDefault(pos.ShortExchangeId));
+            var longNotional = ComputeNotional(pos, pos.LongEntryPrice, longRate, longExchange);
+            var shortNotional = ComputeNotional(pos, pos.ShortEntryPrice, shortRate, shortExchange);
 
             // Compute each leg's funding contribution separately to handle mixed settlement types.
             // Convention: short leg earns funding (positive), long leg pays funding (negative).
@@ -334,8 +351,8 @@ public class FundingRateFetcher : BackgroundService
                 shortRate.RatePerHour, shortNotional, pos.ShortExchangeId, exchangeById, now);
 
             // Apply exchange rebate on the paying side
-            longFunding = ApplyRebate(longFunding, exchangeById.GetValueOrDefault(pos.LongExchangeId));
-            shortFunding = ApplyRebate(shortFunding, exchangeById.GetValueOrDefault(pos.ShortExchangeId));
+            longFunding = ApplyRebate(longFunding, longExchange);
+            shortFunding = ApplyRebate(shortFunding, shortExchange);
 
             // Net funding = short income - long cost
             pos.AccumulatedFunding += shortFunding - longFunding;
@@ -452,11 +469,17 @@ public class FundingRateFetcher : BackgroundService
         if (exchange is null || exchange.FundingRebateRate <= 0 || funding <= 0)
             return funding;
 
-        var rebateAmount = funding * exchange.FundingRebateRate;
-        _logger.LogDebug(
-            "Funding rebate applied for {Exchange}: raw={Raw:F6}, rebate={Rebate:F6} ({Rate:P0})",
-            exchange.Name, funding, rebateAmount, exchange.FundingRebateRate);
-        return funding * (1 - exchange.FundingRebateRate);
+        var effectiveRate = Math.Clamp(exchange.FundingRebateRate, 0m, 1m);
+        var rebateAmount = funding * effectiveRate;
+
+        if (_logger.IsEnabled(LogLevel.Debug))
+        {
+            _logger.LogDebug(
+                "Funding rebate applied for {Exchange}: raw={Raw:F6}, rebate={Rebate:F6} ({Rate:P0})",
+                exchange.Name, funding, rebateAmount, effectiveRate);
+        }
+
+        return funding - rebateAmount;
     }
 
     /// <summary>
