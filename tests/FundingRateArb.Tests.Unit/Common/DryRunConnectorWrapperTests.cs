@@ -126,4 +126,87 @@ public class DryRunConnectorWrapperTests
 
         sut.ExchangeName.Should().Be("TestExchange");
     }
+
+    // ── NB1: Zero mark price guard ───────────────────────────────────────
+
+    [Fact]
+    public async Task PlaceMarketOrderAsync_ZeroMarkPrice_ReturnsFailure()
+    {
+        _mockInner.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 300m, 5);
+
+        result.Success.Should().BeFalse();
+        result.OrderId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_ZeroMarkPrice_ReturnsFailure()
+    {
+        _mockInner.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 0.5m, 5);
+
+        result.Success.Should().BeFalse();
+        result.OrderId.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_ZeroMarkPrice_ReturnsFailure()
+    {
+        _mockInner.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeFalse();
+        result.OrderId.Should().BeEmpty();
+    }
+
+    // ── NB3: Constructor null guards ─────────────────────────────────────
+
+    [Fact]
+    public void Constructor_NullInner_ThrowsArgumentNullException()
+    {
+        var act = () => new DryRunConnectorWrapper(null!, _logger);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("inner");
+    }
+
+    [Fact]
+    public void Constructor_NullLogger_ThrowsArgumentNullException()
+    {
+        var act = () => new DryRunConnectorWrapper(_mockInner.Object, null!);
+
+        act.Should().Throw<ArgumentNullException>().WithParameterName("logger");
+    }
+
+    // ── NB4: Short side slippage ─────────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePositionAsync_ShortSide_AppliesInverseSlippage()
+    {
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Short);
+
+        result.Success.Should().BeTrue();
+        result.FilledPrice.Should().Be(3000m * 1.001m);
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_ShortSide_ReturnsNegativeSlippage()
+    {
+        var sut = new DryRunConnectorWrapper(_mockInner.Object, _logger);
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, 0.5m, 5);
+
+        result.Success.Should().BeTrue();
+        result.FilledPrice.Should().Be(3000m * 0.999m);
+    }
 }

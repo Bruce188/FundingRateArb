@@ -52,6 +52,12 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
         string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default)
     {
         var markPrice = await _inner.GetMarkPriceAsync(asset, ct);
+        if (markPrice <= 0)
+        {
+            _logger.LogWarning("[DRY-RUN] Invalid mark price {Price} for {Asset}", markPrice, asset);
+            return new OrderResultDto { Success = false, OrderId = string.Empty };
+        }
+
         var quantity = sizeUsdc / markPrice;
         var fillPrice = side == Side.Long ? markPrice * 1.001m : markPrice * 0.999m;
 
@@ -71,6 +77,12 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
         string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
     {
         var markPrice = await _inner.GetMarkPriceAsync(asset, ct);
+        if (markPrice <= 0)
+        {
+            _logger.LogWarning("[DRY-RUN] Invalid mark price {Price} for {Asset}", markPrice, asset);
+            return new OrderResultDto { Success = false, OrderId = string.Empty };
+        }
+
         var fillPrice = side == Side.Long ? markPrice * 1.001m : markPrice * 0.999m;
 
         _logger.LogInformation("[DRY-RUN] PlaceMarketOrderByQuantity {Asset} {Side} qty={Qty} fill={Fill}",
@@ -89,6 +101,12 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
         string asset, Side side, CancellationToken ct = default)
     {
         var markPrice = await _inner.GetMarkPriceAsync(asset, ct);
+        if (markPrice <= 0)
+        {
+            _logger.LogWarning("[DRY-RUN] Invalid mark price {Price} for {Asset}", markPrice, asset);
+            return new OrderResultDto { Success = false, OrderId = string.Empty };
+        }
+
         // Inverse slippage on close: closing a long sells at slightly lower, closing a short buys at slightly higher
         var fillPrice = side == Side.Long ? markPrice * 0.999m : markPrice * 1.001m;
 
