@@ -50,12 +50,14 @@ public class Exchange
     /// Rebate rate applied to funding payments on the paying side (0.0 to 1.0).
     /// E.g. 0.15 = 15% rebate on Lighter. Default 0 = no rebate.
     /// </summary>
+    [Range(0.0, 1.0)]
     public decimal FundingRebateRate { get; set; }
 
     /// <summary>
     /// Seconds after the nominal settlement boundary when funding is actually applied.
     /// E.g. 15 for Aster. Default 0 = no deviation.
     /// </summary>
+    [Range(0, 300)]
     public int FundingTimingDeviationSeconds { get; set; }
 
     [MaxLength(500)]

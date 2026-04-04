@@ -64,12 +64,14 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetMarkPricesAsync(token), ct).AsTask();
         var tickersTask = pipeline.ExecuteAsync(
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
+        // fundingInfoTask runs concurrently but is NOT in Task.WhenAll to prevent
+        // its timeout from crashing the entire fetch (B2 fix). Consumed separately below.
         var fundingInfoTask = pipeline.ExecuteAsync(
             async token => await _restClient.UsdFuturesApi.ExchangeData.GetFundingInfoAsync(token), ct)
             .AsTask()
             .WaitAsync(TimeSpan.FromSeconds(5), ct);
 
-        await Task.WhenAll(markPricesTask, tickersTask, fundingInfoTask);
+        await Task.WhenAll(markPricesTask, tickersTask);
 
         var markPrices = await markPricesTask;
 

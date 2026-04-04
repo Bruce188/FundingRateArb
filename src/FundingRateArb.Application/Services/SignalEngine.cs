@@ -116,14 +116,16 @@ public class SignalEngine : ISignalEngine
                     // Long leg pays when rate > 0; guard prevents incorrect boost when rate is negative.
                     if (longR.Exchange.FundingRebateRate > 0 && longR.RatePerHour > 0)
                     {
-                        var rebateBoost = longR.RatePerHour * longR.Exchange.FundingRebateRate;
+                        var effectiveLongRebate = Math.Clamp(longR.Exchange.FundingRebateRate, 0m, 1m);
+                        var rebateBoost = longR.RatePerHour * effectiveLongRebate;
                         net += rebateBoost;
                     }
                     // Short side pays when rate is negative. Rebate reduces that cost,
                     // which improves net yield (hence +=).
                     if (shortR.Exchange.FundingRebateRate > 0 && shortR.RatePerHour < 0)
                     {
-                        var rebateBoost = Math.Abs(shortR.RatePerHour) * shortR.Exchange.FundingRebateRate;
+                        var effectiveShortRebate = Math.Clamp(shortR.Exchange.FundingRebateRate, 0m, 1m);
+                        var rebateBoost = Math.Abs(shortR.RatePerHour) * effectiveShortRebate;
                         net += rebateBoost;
                     }
 
@@ -146,8 +148,8 @@ public class SignalEngine : ISignalEngine
                     // Adjust for exchange-specific timing deviations (e.g. Aster settles 15s after boundary)
                     if (minutesToSettlement.HasValue)
                     {
-                        var longDeviationSec = Math.Min(longR.Exchange.FundingTimingDeviationSeconds, 300);
-                        var shortDeviationSec = Math.Min(shortR.Exchange.FundingTimingDeviationSeconds, 300);
+                        var longDeviationSec = Math.Clamp(longR.Exchange.FundingTimingDeviationSeconds, 0, 300);
+                        var shortDeviationSec = Math.Clamp(shortR.Exchange.FundingTimingDeviationSeconds, 0, 300);
                         var maxDeviationSec = Math.Max(longDeviationSec, shortDeviationSec);
                         var maxDeviationMin = (maxDeviationSec + 59) / 60;
                         if (maxDeviationMin > 0)

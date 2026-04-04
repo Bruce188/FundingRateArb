@@ -1526,4 +1526,54 @@ public class SignalEngineTests
         opp.BoostedNetYieldPerHour.Should().BeGreaterThan(opp.NetYieldPerHour,
             "funding window boost should apply when minutesToSettlement is clamped to 0");
     }
+
+    // ── Review-v2: Timing deviation 600s capped at 300s (NB5) ───────────────
+
+    [Fact]
+    public async Task GetOpportunities_TimingDeviation600s_CappedAt300s()
+    {
+        // Arrange: deviation=600s on Aster, settlement 10 min away.
+        // 600s should be capped to 300s = 5 min reduction, NOT 10 min.
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1, AssetId = 1, RatePerHour = 0.0001m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3, AssetId = 1, RatePerHour = 0.0010m,
+                MarkPrice = 3000m, Volume24hUsd = 1_000_000m, RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 600 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                FundingWindowMinutes = 60,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Settlement in 10+ minutes (add 30s buffer for test execution time and int truncation)
+        var nextSettlement = now.AddMinutes(10).AddSeconds(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+        opp.Should().NotBeNull();
+
+        // 600s capped to 300s ��� ceil(300/60) = 5 min reduction
+        // 10 - 5 = 5 minutes remaining (not 0 which would happen without cap)
+        opp!.MinutesToNextSettlement.Should().Be(5,
+            "600s deviation should be capped at 300s (5 min), reducing 10 min settlement to 5 min");
+    }
 }

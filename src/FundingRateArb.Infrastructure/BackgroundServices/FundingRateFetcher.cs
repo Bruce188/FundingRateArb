@@ -136,28 +136,36 @@ public class FundingRateFetcher : BackgroundService
         var validIntervals = new HashSet<int> { 4, 8 };
         if (exchangeMap.TryGetValue("Binance", out var binanceExchange))
         {
-            var detectedInterval = allRates
+            // N3: Early-out when no Binance rates have DetectedFundingIntervalHours
+            var binanceRatesWithInterval = allRates
                 .Where(r => r.ExchangeName == "Binance" && r.DetectedFundingIntervalHours.HasValue)
-                .GroupBy(r => r.DetectedFundingIntervalHours!.Value)
-                .OrderByDescending(g => g.Count())
-                .Select(g => g.Key)
-                .FirstOrDefault();
+                .ToList();
 
-            if (detectedInterval > 0
-                && validIntervals.Contains(detectedInterval)
-                && detectedInterval != binanceExchange.FundingIntervalHours)
+            if (binanceRatesWithInterval.Count > 0)
             {
-                _logger.LogWarning(
-                    "Binance funding interval changed from {Old}h to {New}h — updating exchange entity",
-                    binanceExchange.FundingIntervalHours, detectedInterval);
+                var detectedInterval = binanceRatesWithInterval
+                    .GroupBy(r => r.DetectedFundingIntervalHours!.Value)
+                    .OrderByDescending(g => g.Count())
+                    .Select(g => g.Key)
+                    .First();
 
-                // Persist to a tracked entity so the change reaches the DB
-                var tracked = await uow.Exchanges.GetByNameAsync("Binance");
-                if (tracked is not null)
+                if (validIntervals.Contains(detectedInterval)
+                    && detectedInterval != binanceExchange.FundingIntervalHours)
                 {
-                    tracked.FundingIntervalHours = detectedInterval;
-                    uow.Exchanges.Update(tracked);
-                    uow.Exchanges.InvalidateCache();
+                    // NB6: Confirm change against tracked entity to prevent stale-cache no-op updates
+                    var tracked = await uow.Exchanges.GetByNameAsync("Binance");
+                    if (tracked is not null && tracked.FundingIntervalHours != detectedInterval)
+                    {
+                        _logger.LogWarning(
+                            "Binance funding interval changed from {Old}h to {New}h — updating exchange entity",
+                            tracked.FundingIntervalHours, detectedInterval);
+
+                        tracked.FundingIntervalHours = detectedInterval;
+                        uow.Exchanges.Update(tracked);
+                        await uow.SaveAsync(ct);
+                        // N2: InvalidateCache after save so consumers see persisted data
+                        uow.Exchanges.InvalidateCache();
+                    }
                 }
             }
         }
@@ -346,13 +354,14 @@ public class FundingRateFetcher : BackgroundService
             // Compute each leg's funding contribution separately to handle mixed settlement types.
             // Convention: short leg earns funding (positive), long leg pays funding (negative).
             var longFunding = ComputeLegFunding(
-                longRate.RatePerHour, longNotional, pos.LongExchangeId, exchangeById, now);
+                longRate.RatePerHour, longNotional, longExchange, now);
             var shortFunding = ComputeLegFunding(
-                shortRate.RatePerHour, shortNotional, pos.ShortExchangeId, exchangeById, now);
+                shortRate.RatePerHour, shortNotional, shortExchange, now);
 
             // Apply exchange rebate on the paying side
-            longFunding = ApplyRebate(longFunding, longExchange);
-            shortFunding = ApplyRebate(shortFunding, shortExchange);
+            // Long leg pays when rate > 0; short leg pays when rate < 0
+            longFunding = ApplyRebate(longFunding, longExchange, isPaying: longRate.RatePerHour > 0);
+            shortFunding = ApplyRebate(shortFunding, shortExchange, isPaying: shortRate.RatePerHour < 0);
 
             // Net funding = short income - long cost
             pos.AccumulatedFunding += shortFunding - longFunding;
@@ -376,11 +385,10 @@ public class FundingRateFetcher : BackgroundService
     internal decimal ComputeLegFunding(
         decimal ratePerHour,
         decimal notional,
-        int exchangeId,
-        Dictionary<int, Exchange> exchangeById,
+        Exchange? exchange,
         DateTime now)
     {
-        if (!exchangeById.TryGetValue(exchangeId, out var exchange))
+        if (exchange is null)
         {
             return 0m;
         }
@@ -395,7 +403,7 @@ public class FundingRateFetcher : BackgroundService
                 intervalHours = 8; // safety fallback
             }
 
-            var lastCycle = _lastCycleTimePerExchange.GetValueOrDefault(exchangeId, DateTime.MinValue);
+            var lastCycle = _lastCycleTimePerExchange.GetValueOrDefault(exchange.Id, DateTime.MinValue);
 
             if (lastCycle == DateTime.MinValue)
             {
@@ -417,7 +425,7 @@ public class FundingRateFetcher : BackgroundService
                 var intervalFunding = notional * ratePerHour * intervalHours;
                 _logger.LogDebug(
                     "Periodic settlement crossed for exchange {ExchangeId}: added {Funding:F6} (rate={Rate}, interval={Hours}h)",
-                    exchangeId, intervalFunding, ratePerHour, intervalHours);
+                    exchange.Id, intervalFunding, ratePerHour, intervalHours);
                 return intervalFunding;
             }
 
@@ -462,15 +470,16 @@ public class FundingRateFetcher : BackgroundService
 
     /// <summary>
     /// Applies the exchange's funding rebate to a funding amount.
-    /// Rebate applies when the position is paying funding (funding > 0 = paying).
+    /// Rebate only applies when the leg is paying funding (determined by rate direction).
+    /// Moves the funding amount toward zero by the rebate fraction.
     /// </summary>
-    internal decimal ApplyRebate(decimal funding, Exchange? exchange)
+    internal decimal ApplyRebate(decimal funding, Exchange? exchange, bool isPaying)
     {
-        if (exchange is null || exchange.FundingRebateRate <= 0 || funding <= 0)
+        if (!isPaying || exchange is null || exchange.FundingRebateRate <= 0)
             return funding;
 
         var effectiveRate = Math.Clamp(exchange.FundingRebateRate, 0m, 1m);
-        var rebateAmount = funding * effectiveRate;
+        var rebateAmount = Math.Abs(funding) * effectiveRate;
 
         if (_logger.IsEnabled(LogLevel.Debug))
         {
@@ -479,7 +488,7 @@ public class FundingRateFetcher : BackgroundService
                 exchange.Name, funding, rebateAmount, effectiveRate);
         }
 
-        return funding - rebateAmount;
+        return funding > 0 ? funding - rebateAmount : funding + rebateAmount;
     }
 
     /// <summary>
