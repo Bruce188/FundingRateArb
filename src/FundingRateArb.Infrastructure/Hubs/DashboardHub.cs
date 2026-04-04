@@ -52,14 +52,16 @@ public class DashboardHub : Hub<IDashboardClient>
 
     public async Task RejoinGroups()
     {
+        var userId = Context.UserIdentifier;
+        if (userId == null)
+            throw new HubException("Authentication required");
+
         await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.MarketData);
 
         if (Context.User?.IsInRole("Admin") == true)
             await Groups.AddToGroupAsync(Context.ConnectionId, HubGroups.Admins);
 
-        var userId = Context.UserIdentifier;
-        if (userId != null)
-            await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"user-{userId}");
     }
 
     public async Task RequestFullUpdate()
@@ -68,7 +70,10 @@ public class DashboardHub : Hub<IDashboardClient>
         if (userId == null)
             throw new HubException("Authentication required");
 
-        var openPositions = await _uow.Positions.GetOpenAsync();
+        var isAdmin = Context.User?.IsInRole("Admin") == true;
+        var openPositions = isAdmin
+            ? await _uow.Positions.GetOpenAsync()
+            : await _uow.Positions.GetOpenByUserAsync(userId);
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
         var needsAttentionCount = await _uow.Positions.CountByStatusesAsync(

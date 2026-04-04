@@ -58,9 +58,8 @@
             needsAttention.textContent = count;
             var badge = document.getElementById("needs-attention-badge");
             if (badge) {
-                badge.className = count > 0
-                    ? "text-warning"
-                    : "text-success";
+                badge.classList.remove("text-warning", "text-success");
+                badge.classList.add(count > 0 ? "text-warning" : "text-success");
             }
         }
 
@@ -544,6 +543,11 @@
             statusArea.textContent = message;
             statusArea.style.display = "block";
         }
+    });
+
+    // Clear stale timer on connection close
+    connection.onclose(function () {
+        if (staleTimer) clearTimeout(staleTimer);
     });
 
     // Retry Now button
