@@ -57,7 +57,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         {
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                allReaped);
+                allReaped,
+                new Dictionary<int, ComputedPositionPnl>());
         }
 
         var config = await _uow.BotConfig.GetActiveAsync();
@@ -68,6 +69,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // C-PH1: Collect positions that need closing; call SaveAsync ONCE after the loop
         var toClose = new List<(ArbitragePosition Position, CloseReason Reason)>();
+        var computedPnl = new Dictionary<int, ComputedPositionPnl>();
 
         foreach (var pos in openPositions)
         {
@@ -167,7 +169,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // Price divergence tracking
                 if (unifiedPrice > 0)
                 {
-                    pos.CurrentDivergencePct = Math.Abs(currentLongMark - currentShortMark) / unifiedPrice * 100m;
+                    var newDivergencePct = Math.Abs(currentLongMark - currentShortMark) / unifiedPrice * 100m;
+                    if (pos.CurrentDivergencePct != newDivergencePct)
+                    {
+                        pos.CurrentDivergencePct = newDivergencePct;
+                    }
 
                     // Alert if divergence exceeds threshold
                     var entryMid = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
@@ -196,6 +202,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     }
                 }
 
+                // Track computed PnL for downstream DTO population
+                computedPnl[pos.Id] = new ComputedPositionPnl(
+                    ExchangePnl: unrealizedPnl,
+                    UnifiedPnl: unifiedUnrealizedPnl,
+                    DivergencePct: pos.CurrentDivergencePct ?? 0m);
+
                 // Calculate liquidation prices and distance
                 var minLiquidationDistance = ComputeLiquidationDistance(
                     pos, currentLongMark, currentShortMark);
@@ -203,6 +215,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
                 // Determine close reason (priority: stop-loss > liquidation > PnL target > max hold > spread collapsed)
+                // Intentional: all close reasons including PnlTargetReached use unified PnL (strategy-level profit
+                // target, not per-exchange margin impact). This ensures consistent close logic against a single
+                // reference price, avoiding false triggers from cross-exchange price divergence.
                 var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance);
 
                 if (reason.HasValue)
@@ -288,7 +303,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // C-PH1: Single SaveAsync call after the loop — persists all spread updates and new alerts
         await _uow.SaveAsync(ct);
 
-        return new HealthCheckResult(toClose, allReaped);
+        return new HealthCheckResult(toClose, allReaped, computedPnl);
     }
 
     private async Task RetryClosingPositionsAsync(IReadOnlyList<ArbitragePosition> positions, CancellationToken ct)

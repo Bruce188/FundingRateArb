@@ -482,12 +482,10 @@
                                         <td class="position-pnl @(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">$@pos.UnifiedPnl.ToString("F4")</td>
                                         <td class="position-exchange-pnl @(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">
                                             $@pos.ExchangePnl.ToString("F4")
-                                            @if (pos.DivergencePct > 0.01m)
-                                            {
-                                                <span class="badge bg-info ms-1" title="Price divergence">@pos.DivergencePct.ToString("F2")%</span>
-                                            }
+                                            <span class="badge bg-info ms-1 divergence-badge" title="Price divergence"
+                                                  style="@(pos.DivergencePct > 0.01m ? "" : "display:none")">@pos.DivergencePct.ToString("F2")%</span>
                                         </td>
-                                        <td class="text-success">$@pos.AccumulatedFunding.ToString("F4")</td>
+                                        <td class="@(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">$@pos.AccumulatedFunding.ToString("F4")</td>
                                         @if (Model.AdaptiveHoldEnabled)
                                         {
                                             <td>

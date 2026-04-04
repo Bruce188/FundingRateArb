@@ -1,5 +1,6 @@
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 
@@ -20,7 +21,10 @@ public interface ISignalRNotifier
         int openingCount,
         int needsAttentionCount);
 
-    Task PushPositionUpdatesAsync(List<ArbitragePosition> openPositions, BotConfiguration config);
+    Task PushPositionUpdatesAsync(
+        List<ArbitragePosition> openPositions,
+        BotConfiguration config,
+        IReadOnlyDictionary<int, ComputedPositionPnl>? computedPnl = null);
 
     Task PushPositionRemovalsAsync(
         IReadOnlyList<(int PositionId, string UserId, int LongExchangeId, int ShortExchangeId, PositionStatus OriginalStatus)> reapedPositions,

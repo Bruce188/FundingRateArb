@@ -843,7 +843,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 [(posToClose, CloseReason.SpreadCollapsed)],
-                []));
+                [],
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // Execution engine mutates the position on close
         _mockExecutionEngine.Setup(e => e.ClosePositionAsync(TestUserId, posToClose, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
@@ -1475,7 +1476,8 @@ public class BotOrchestratorTests
         _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
-                reaped));
+                reaped,
+                new Dictionary<int, ComputedPositionPnl>()));
 
         // Mock the position lookup for emergency close
         var reapedPos = new ArbitragePosition

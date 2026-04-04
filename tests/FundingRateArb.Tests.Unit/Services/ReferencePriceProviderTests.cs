@@ -78,4 +78,57 @@ public class ReferencePriceProviderTests
 
         result.Should().Be(0m);
     }
+
+    [Fact]
+    public void GetUnifiedPrice_LongDtoNull_ShortHasData_UsesShortMarkPrice()
+    {
+        _mockCache.Setup(c => c.GetLatest("Hyperliquid", "ETH"))
+            .Returns((FundingRateDto?)null);
+        _mockCache.Setup(c => c.GetLatest("Lighter", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "Lighter", Symbol = "ETH", IndexPrice = 3000m, MarkPrice = 2998m });
+
+        var result = _sut.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter");
+
+        result.Should().Be(2998m);
+    }
+
+    [Fact]
+    public void GetUnifiedPrice_ShortDtoNull_LongHasData_UsesLongMarkPrice()
+    {
+        _mockCache.Setup(c => c.GetLatest("Hyperliquid", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "Hyperliquid", Symbol = "ETH", IndexPrice = 3000m, MarkPrice = 3005m });
+        _mockCache.Setup(c => c.GetLatest("Lighter", "ETH"))
+            .Returns((FundingRateDto?)null);
+
+        var result = _sut.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter");
+
+        result.Should().Be(3005m);
+    }
+
+    [Fact]
+    public void GetUnifiedPrice_BinanceWithZeroIndexPrice_FallsThroughToNextTier()
+    {
+        _mockCache.Setup(c => c.GetLatest("Binance", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "Binance", Symbol = "ETH", IndexPrice = 0m, MarkPrice = 3001m });
+        _mockCache.Setup(c => c.GetLatest("Lighter", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "Lighter", Symbol = "ETH", IndexPrice = 0m, MarkPrice = 3003m });
+
+        var result = _sut.GetUnifiedPrice("ETH", "Binance", "Lighter");
+
+        // Both index prices are 0, falls through to mark price average
+        result.Should().Be(3002m);
+    }
+
+    [Fact]
+    public void GetUnifiedPrice_CaseInsensitiveBinanceMatch()
+    {
+        _mockCache.Setup(c => c.GetLatest("binance", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "binance", Symbol = "ETH", IndexPrice = 3000m, MarkPrice = 3001m });
+        _mockCache.Setup(c => c.GetLatest("Lighter", "ETH"))
+            .Returns(new FundingRateDto { ExchangeName = "Lighter", Symbol = "ETH", IndexPrice = 2999m, MarkPrice = 2998m });
+
+        var result = _sut.GetUnifiedPrice("ETH", "binance", "Lighter");
+
+        result.Should().Be(3000m);
+    }
 }

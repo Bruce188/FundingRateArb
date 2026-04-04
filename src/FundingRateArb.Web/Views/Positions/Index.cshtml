@@ -65,10 +65,10 @@ else
                         <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
                         <td class="text-end pos-spread">@pos.CurrentSpreadPerHour.ToString("P4")</td>
                         <td class="position-pnl text-end @(pos.UnifiedPnl >= 0 ? "text-success" : "text-danger")">
-                            @pos.UnifiedPnl.ToString("F4")
+                            $@pos.UnifiedPnl.ToString("F4")
                         </td>
                         <td class="position-exchange-pnl text-end @(pos.ExchangePnl >= 0 ? "text-success" : "text-danger")">
-                            @pos.ExchangePnl.ToString("F4")
+                            $@pos.ExchangePnl.ToString("F4")
                         </td>
                         <td class="text-end">
                             @if (pos.DivergencePct > 0.01m)

@@ -230,8 +230,8 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         // Hoist Opening positions query once per cycle (shared across all users)
         var allOpeningPositions = await uow.Positions.GetByStatusAsync(PositionStatus.Opening);
 
-        // Push per-user position updates with warning computation (always, regardless of bot state)
-        await _notifier.PushPositionUpdatesAsync(allOpenPositions, globalConfig);
+        // Push per-user position updates with warning computation and computed PnL (always, regardless of bot state)
+        await _notifier.PushPositionUpdatesAsync(allOpenPositions, globalConfig, healthResult.ComputedPnl);
         await _notifier.PushNewAlertsAsync(uow);
 
         // Step 2: Compute + push opportunities globally (always, regardless of bot state)

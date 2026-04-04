@@ -2249,6 +2249,11 @@ public class PositionHealthMonitorTests
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
             al.Type == AlertType.SpreadWarning &&
             al.Message.Contains("divergence"))), Times.Once);
+
+        // NB6: Assert computed divergence value on entity
+        // divergence = |2950-3050|/3000*100 = 100/3000*100 = 3.3333...%
+        pos.CurrentDivergencePct.Should().NotBeNull();
+        pos.CurrentDivergencePct!.Value.Should().BeApproximately(3.3333m, 0.001m);
     }
 
     [Fact]
@@ -2303,5 +2308,101 @@ public class PositionHealthMonitorTests
         // Per-exchange PnL = -33.16 which exceeds StopLossPct (0.15 * 100 = 15)
         // But unified PnL = 0.17, so no stop loss fires (correct behavior)
         result.ToClose.Should().NotContain(r => r.Reason == CloseReason.StopLoss);
+    }
+
+    // ── Review tests: B3, NB3, NB7, CurrentDivergencePct ─────────────────────
+
+    [Fact]
+    public async Task DivergenceAlert_SuppressedWhenRecentAlertExists()
+    {
+        // Same setup as DivergenceAlert_FiresWhenThresholdExceeded but mock returns existing alert
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        // Return existing recent alert — dedup should suppress new alert creation
+        _mockAlerts.Setup(a => a.GetRecentAsync(
+            It.IsAny<string>(), It.IsAny<int?>(), AlertType.SpreadWarning, It.IsAny<TimeSpan>()))
+            .ReturnsAsync(new Alert { Id = 999, Type = AlertType.SpreadWarning });
+
+        await _sut.CheckAndActAsync();
+
+        // Verify Add is never called for divergence alert because recent one exists
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Message.Contains("divergence"))), Times.Never);
+    }
+
+    [Fact]
+    public async Task StopLoss_FallsBackToPerExchangePnl_WhenUnifiedPriceZero()
+    {
+        // Entry: long=3000, short=3001, margin=100, leverage=5
+        // avgEntry=3000.5, qty=100*5/3000.5≈0.16664
+        //
+        // Per-exchange marks: longMark=2000, shortMark=3001
+        //   longPnl=(2000-3000)*0.16664=-166.64, shortPnl=(3001-3001)*0.16664=0
+        //   perExchangePnl = -166.64 → exceeds StopLossPct (0.15 * 100 = 15)
+        //
+        // Unified price = 0 → fallback to per-exchange PnL for close decision
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2000m, shortMark: 3001m);
+
+        // Unified price 0 → fallback to per-exchange
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(0m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        // StopLoss should fire because fallback per-exchange PnL exceeds threshold
+        result.ToClose.Should().ContainSingle(r => r.Reason == CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public async Task DivergenceAlert_IdenticalEntryPrices_DoesNotFire()
+    {
+        // Entry: long=3000, short=3000 → entryMid=3000, entrySpreadCostPct = |3000-3000|/3000*100 = 0%
+        // DivergenceAlertMultiplier=2.0 → threshold = 2.0 * 0 = 0 → guard prevents alert (threshold > 0 check)
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2900m, shortMark: 3100m);
+
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        await _sut.CheckAndActAsync();
+
+        // No divergence alert because threshold is 0 (entry prices identical)
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Message.Contains("divergence"))), Times.Never);
+    }
+
+    [Fact]
+    public async Task CurrentDivergencePct_IsSetOnPosition()
+    {
+        // Entry: long=3000, short=3001
+        // Current: longMark=2990, shortMark=3010 → divergence = |2990-3010|/3000*100 = 20/3000*100 ≈ 0.6667%
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2990m, shortMark: 3010m);
+
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        _mockAlerts.Setup(a => a.GetRecentAsync(
+            It.IsAny<string>(), It.IsAny<int?>(), It.IsAny<AlertType>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync((Alert?)null);
+
+        await _sut.CheckAndActAsync();
+
+        // divergence = |2990-3010|/3000*100 = 0.6667%
+        pos.CurrentDivergencePct.Should().NotBeNull();
+        pos.CurrentDivergencePct!.Value.Should().BeApproximately(0.6667m, 0.001m);
     }
 }

@@ -116,23 +116,19 @@
 
         var tdExchPnl = document.createElement("td");
         tdExchPnl.className = "position-exchange-pnl " + (exchangePnl >= 0 ? "text-success" : "text-danger");
-        var exchText = "$" + exchangePnl.toFixed(4);
         var divergence = position.divergencePct ?? 0;
-        if (divergence > 0.01) {
-            exchText += " ";
-            var badge = document.createElement("span");
-            badge.className = "badge bg-info ms-1";
-            badge.title = "Price divergence";
-            badge.textContent = divergence.toFixed(2) + "%";
-            tdExchPnl.textContent = "$" + exchangePnl.toFixed(4) + " ";
-            tdExchPnl.appendChild(badge);
-        } else {
-            tdExchPnl.textContent = exchText;
-        }
+        var exchTextNode = document.createTextNode("$" + exchangePnl.toFixed(4) + " ");
+        tdExchPnl.appendChild(exchTextNode);
+        var badge = document.createElement("span");
+        badge.className = "badge bg-info ms-1 divergence-badge";
+        badge.title = "Price divergence";
+        badge.textContent = divergence.toFixed(2) + "%";
+        badge.style.display = divergence > 0.01 ? "" : "none";
+        tdExchPnl.appendChild(badge);
         tr.appendChild(tdExchPnl);
 
         var tdFunding = document.createElement("td");
-        tdFunding.className = "text-success";
+        tdFunding.className = funding >= 0 ? "text-success" : "text-danger";
         tdFunding.textContent = "$" + funding.toFixed(4);
         tr.appendChild(tdFunding);
 
@@ -187,8 +183,21 @@
         pnlDiv.className = "small";
         var cardUnified = position.unifiedPnl ?? 0;
         var cardExch = position.exchangePnl ?? 0;
-        pnlDiv.innerHTML = "Strategy: <span class=\"" + (cardUnified >= 0 ? "text-success" : "text-danger") + "\">$" + cardUnified.toFixed(4) + "</span>" +
-            " | Exch: <span class=\"" + (cardExch >= 0 ? "text-success" : "text-danger") + "\">$" + cardExch.toFixed(4) + "</span>";
+
+        var stratLabel = document.createTextNode("Strategy: ");
+        pnlDiv.appendChild(stratLabel);
+        var stratSpan = document.createElement("span");
+        stratSpan.className = cardUnified >= 0 ? "text-success" : "text-danger";
+        stratSpan.textContent = "$" + cardUnified.toFixed(4);
+        pnlDiv.appendChild(stratSpan);
+
+        var sep = document.createTextNode(" | Exch: ");
+        pnlDiv.appendChild(sep);
+        var exchSpan = document.createElement("span");
+        exchSpan.className = cardExch >= 0 ? "text-success" : "text-danger";
+        exchSpan.textContent = "$" + cardExch.toFixed(4);
+        pnlDiv.appendChild(exchSpan);
+
         body.appendChild(pnlDiv);
 
         card.appendChild(body);
@@ -212,14 +221,19 @@
             if (exchPnlEl) {
                 var ePnl = position.exchangePnl ?? 0;
                 var div = position.divergencePct ?? 0;
-                exchPnlEl.textContent = "$" + ePnl.toFixed(4);
                 exchPnlEl.className = "position-exchange-pnl " + (ePnl >= 0 ? "text-success" : "text-danger");
-                if (div > 0.01) {
-                    var dbadge = document.createElement("span");
-                    dbadge.className = "badge bg-info ms-1";
-                    dbadge.title = "Price divergence";
+
+                // Update text node without destroying child elements
+                var textNode = exchPnlEl.firstChild;
+                if (textNode && textNode.nodeType === 3) {
+                    textNode.textContent = "$" + ePnl.toFixed(4) + " ";
+                }
+
+                // Reuse pre-created badge, toggle visibility
+                var dbadge = exchPnlEl.querySelector(".divergence-badge");
+                if (dbadge) {
                     dbadge.textContent = div.toFixed(2) + "%";
-                    exchPnlEl.appendChild(dbadge);
+                    dbadge.style.display = div > 0.01 ? "" : "none";
                 }
             }
             var spreadEl = positionRow.querySelector(".position-spread");

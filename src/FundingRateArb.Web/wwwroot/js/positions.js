@@ -23,7 +23,7 @@
         var pnlEl = row.querySelector(".position-pnl");
         if (pnlEl) {
             var uPnl = position.unifiedPnl ?? 0;
-            pnlEl.textContent = uPnl.toFixed(4);
+            pnlEl.textContent = "$" + uPnl.toFixed(4);
             pnlEl.className = "position-pnl text-end " + (uPnl >= 0 ? "text-success" : "text-danger");
         }
 
@@ -31,7 +31,7 @@
         var exchPnlEl = row.querySelector(".position-exchange-pnl");
         if (exchPnlEl) {
             var ePnl = position.exchangePnl ?? 0;
-            exchPnlEl.textContent = ePnl.toFixed(4);
+            exchPnlEl.textContent = "$" + ePnl.toFixed(4);
             exchPnlEl.className = "position-exchange-pnl text-end " + (ePnl >= 0 ? "text-success" : "text-danger");
         }
 
