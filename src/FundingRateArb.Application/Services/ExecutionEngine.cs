@@ -58,11 +58,22 @@ public class ExecutionEngine : IExecutionEngine
         }
 
         // Create user-specific connectors using the user's exchange credentials
+#pragma warning disable CA1859 // Variable type may be reassigned to DryRunConnectorWrapper
         var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
             userId, opp.LongExchangeName, opp.ShortExchangeName);
+#pragma warning restore CA1859
         if (credError is not null)
         {
             return (false, credError);
+        }
+
+        // Wrap connectors for dry-run mode (simulated fills, no real orders)
+        var isDryRun = config.DryRunEnabled || userConfig!.DryRunEnabled;
+        if (isDryRun)
+        {
+            longConnector = new DryRunConnectorWrapper(longConnector, _logger);
+            shortConnector = new DryRunConnectorWrapper(shortConnector, _logger);
+            _logger.LogInformation("[DRY-RUN] Opening position for {Asset} — simulated fills", opp.AssetSymbol);
         }
 
         try
@@ -218,6 +229,7 @@ public class ExecutionEngine : IExecutionEngine
                 CurrentSpreadPerHour = opp.SpreadPerHour,
                 Status = PositionStatus.Opening,
                 OpenedAt = DateTime.UtcNow,
+                IsDryRun = isDryRun,
             };
 
             _uow.Positions.Add(position);
@@ -678,8 +690,10 @@ public class ExecutionEngine : IExecutionEngine
             ?? (await _uow.Assets.GetByIdAsync(position.AssetId))!.Symbol;
 
         // Create user-specific connectors using the user's exchange credentials
+#pragma warning disable CA1859 // Variable type may be reassigned to DryRunConnectorWrapper
         var (longConnector, shortConnector, credError) = await CreateUserConnectorsAsync(
             userId, longExchangeName, shortExchangeName);
+#pragma warning restore CA1859
         if (credError is not null)
         {
             _logger.LogError("Cannot close position #{PositionId} for user {UserId}: {Error}", position.Id, userId, credError);
@@ -693,6 +707,14 @@ public class ExecutionEngine : IExecutionEngine
             });
             await _uow.SaveAsync(ct);
             return;
+        }
+
+        // Wrap connectors for dry-run positions (simulated close fills)
+        if (position.IsDryRun)
+        {
+            longConnector = new DryRunConnectorWrapper(longConnector, _logger);
+            shortConnector = new DryRunConnectorWrapper(shortConnector, _logger);
+            _logger.LogInformation("[DRY-RUN] Closing position #{PositionId}", position.Id);
         }
 
         try
@@ -835,6 +857,14 @@ public class ExecutionEngine : IExecutionEngine
 
             var longClose = longCloseTask.Result;
             var shortClose = shortCloseTask.Result;
+
+            // Dry-run wrapper returns FilledQuantity=0 (can't know position qty).
+            // Override with actual stored quantities for correct PnL/fee/partial-fill calculations.
+            if (position.IsDryRun)
+            {
+                longClose.FilledQuantity = position.LongFilledQuantity ?? 0m;
+                shortClose.FilledQuantity = position.ShortFilledQuantity ?? 0m;
+            }
 
             // Track successful legs — persist even on partial failure for retry
             if (longClose.Success && needLongClose)
@@ -1324,6 +1354,9 @@ public class ExecutionEngine : IExecutionEngine
 
     public async Task<bool?> CheckPositionExistsOnExchangesAsync(ArbitragePosition position, CancellationToken ct = default)
     {
+        if (position.IsDryRun)
+            return true; // Simulated positions always "exist"
+
         var longExchangeName = position.LongExchange?.Name;
         var shortExchangeName = position.ShortExchange?.Name;
         var assetSymbol = position.Asset?.Symbol;
@@ -1421,6 +1454,12 @@ public class ExecutionEngine : IExecutionEngine
 
                 foreach (var pos in group)
                 {
+                    if (pos.IsDryRun)
+                    {
+                        results[pos.Id] = PositionExistsResult.BothPresent;
+                        continue;
+                    }
+
                     try
                     {
                         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);

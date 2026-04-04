@@ -25,6 +25,7 @@ public static class ArbitragePositionMappingExtensions
             Status = pos.Status,
             OpenedAt = pos.OpenedAt,
             ClosedAt = pos.ClosedAt,
+            IsDryRun = pos.IsDryRun,
         };
     }
 
@@ -53,6 +54,7 @@ public static class ArbitragePositionMappingExtensions
             OpenedAt = pos.OpenedAt,
             ClosedAt = pos.ClosedAt,
             Notes = pos.Notes,
+            IsDryRun = pos.IsDryRun,
         };
     }
 }
