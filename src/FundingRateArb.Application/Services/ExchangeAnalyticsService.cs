@@ -43,11 +43,17 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
 
                 string statusBadge;
                 if (hasConnector)
+                {
                     statusBadge = "Active Connector";
+                }
                 else if (isPlanned)
+                {
                     statusBadge = "Planned";
+                }
                 else
+                {
                     statusBadge = "Available";
+                }
 
                 return new ExchangeOverviewDto
                 {
@@ -104,7 +110,10 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
                         : (b, a);
 
                     var spreadPerHour = shortExch.RatePerHour - longExch.RatePerHour;
-                    if (spreadPerHour < minSpreadPerHour) continue;
+                    if (spreadPerHour < minSpreadPerHour)
+                    {
+                        continue;
+                    }
 
                     var longFee = ExchangeFeeConstants.GetTakerFeeRate(longExch.SourceExchange) / 24m;
                     var shortFee = ExchangeFeeConstants.GetTakerFeeRate(shortExch.SourceExchange) / 24m;
@@ -119,11 +128,17 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
 
                     string connectorStatus;
                     if (bothHaveConnectors)
+                    {
                         connectorStatus = "Capturable";
+                    }
                     else if (oneHasConnector)
+                    {
                         connectorStatus = "Partial";
+                    }
                     else
+                    {
                         connectorStatus = "None";
+                    }
 
                     opportunities.Add(new SpreadOpportunityDto
                     {
@@ -159,7 +174,9 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
             .ToList();
 
         if (cgRatesForConnectors.Count == 0)
+        {
             return [];
+        }
 
         // Get latest direct connector rates from FundingRateSnapshot
         var directSnapshots = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
@@ -175,8 +192,16 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
 
         foreach (var snap in directSnapshots)
         {
-            if (!exchangeById.TryGetValue(snap.ExchangeId, out var exch)) continue;
-            if (!assetById.TryGetValue(snap.AssetId, out var asset)) continue;
+            if (!exchangeById.TryGetValue(snap.ExchangeId, out var exch))
+            {
+                continue;
+            }
+
+            if (!assetById.TryGetValue(snap.AssetId, out var asset))
+            {
+                continue;
+            }
+
             directRateLookup[(exch.Name, asset.Symbol)] = snap.RatePerHour;
         }
 
@@ -185,7 +210,9 @@ public class ExchangeAnalyticsService : IExchangeAnalyticsService
         foreach (var cgRate in cgRatesForConnectors)
         {
             if (!directRateLookup.TryGetValue((cgRate.SourceExchange, cgRate.Symbol), out var directRate))
+            {
                 continue;
+            }
 
             var divergence = directRate != 0
                 ? Math.Abs((cgRate.RatePerHour - directRate) / directRate) * 100m

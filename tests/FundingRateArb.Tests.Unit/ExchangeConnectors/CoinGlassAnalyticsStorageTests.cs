@@ -53,7 +53,7 @@ public class CoinGlassAnalyticsStorageTests
     [Fact]
     public async Task GetFundingRates_StoresUnfilteredPerExchangeRates()
     {
-        // Response includes Hyperliquid (DirectConnector) and Binance (non-connector)
+        // Response includes Hyperliquid (DirectConnector) and Bybit (non-connector)
         var json = """
         {
             "code": "0",
@@ -62,7 +62,7 @@ public class CoinGlassAnalyticsStorageTests
                     "symbol": "BTCUSDT",
                     "volume24hUsd": 50000000,
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 60000, "indexPrice": 60000, "intervalHours": 8 },
+                        "Bybit": { "rate": 0.0001, "markPrice": 60000, "indexPrice": 60000, "intervalHours": 8 },
                         "Hyperliquid": { "rate": 0.00008, "markPrice": 60100, "indexPrice": 60000, "intervalHours": 1 }
                     }
                 }
@@ -80,11 +80,11 @@ public class CoinGlassAnalyticsStorageTests
         rates.Should().OnlyContain(r => r.ExchangeName == "CoinGlass");
         rates.Should().HaveCount(1);
 
-        // Analytics storage should include BOTH Binance AND Hyperliquid (unfiltered)
+        // Analytics storage should include BOTH Bybit AND Hyperliquid (unfiltered)
         _mockAnalyticsRepo.Verify(r => r.SaveSnapshotAsync(
             It.Is<List<CoinGlassExchangeRate>>(list =>
                 list.Count == 2 &&
-                list.Any(x => x.SourceExchange == "Binance") &&
+                list.Any(x => x.SourceExchange == "Bybit") &&
                 list.Any(x => x.SourceExchange == "Hyperliquid")),
             It.IsAny<CancellationToken>()),
             Times.Once);
@@ -182,7 +182,7 @@ public class CoinGlassAnalyticsStorageTests
                     "symbol": "BTCUSDT",
                     "volume24hUsd": 50000000,
                     "fundingRateByExchange": {
-                        "Binance": { "rate": 0.0001, "markPrice": 60000, "indexPrice": 60000, "intervalHours": 8 }
+                        "Bybit": { "rate": 0.0001, "markPrice": 60000, "indexPrice": 60000, "intervalHours": 8 }
                     }
                 }
             ]
