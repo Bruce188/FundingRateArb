@@ -142,7 +142,7 @@ public class BotConfigController : Controller
     public async Task<IActionResult> SetState(BotOperatingState newState)
     {
         // B1: Validate enum value is defined
-        if (!Enum.IsDefined(typeof(BotOperatingState), newState))
+        if (!Enum.IsDefined(newState))
         {
             TempData["Error"] = "Invalid operating state value.";
             return RedirectToAction(nameof(Index));
