@@ -82,46 +82,52 @@ public class PositionsController : Controller
                 if (longExchangeName is not null && shortExchangeName is not null && assetSymbol is not null)
                 {
                     var longConnector = _connectorFactory.GetConnector(longExchangeName);
+                    var shortConnector = string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase)
+                        ? longConnector
+                        : _connectorFactory.GetConnector(shortExchangeName);
 
-                    // Deduplicate: if both legs use the same exchange, call once
+                    // Fetch margin state AND current mark prices in parallel.
+                    // Using current marks (not entry prices) for MaxSafeMovePct reflects the
+                    // actual remaining buffer as price moves — otherwise the value stays frozen
+                    // at entry and misrepresents risk during adverse moves.
                     Task<MarginStateDto?> longMarginTask;
                     Task<MarginStateDto?> shortMarginTask;
-                    if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
+                    if (ReferenceEquals(longConnector, shortConnector))
                     {
                         longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
                         shortMarginTask = longMarginTask;
                     }
                     else
                     {
-                        var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
                         longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
                         shortMarginTask = shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
                     }
 
-                    await Task.WhenAll(longMarginTask, shortMarginTask);
+                    var longMarkTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
+                    var shortMarkTask = ReferenceEquals(longConnector, shortConnector)
+                        ? longMarkTask
+                        : shortConnector.GetMarkPriceAsync(assetSymbol, ct);
+
+                    await Task.WhenAll(longMarginTask, shortMarginTask, longMarkTask, shortMarkTask);
 
                     var longMargin = await longMarginTask;
                     var shortMargin = await shortMarginTask;
+                    var currentLongMark = await longMarkTask;
+                    var currentShortMark = await shortMarkTask;
 
                     positionDto.LongMarginUtilizationPct = longMargin?.MarginUtilizationPct;
                     positionDto.ShortMarginUtilizationPct = shortMargin?.MarginUtilizationPct;
 
-                    if (longMargin?.LiquidationPrice is not null)
+                    if (longMargin?.LiquidationPrice is not null && currentLongMark > 0)
                     {
-                        var longMark = position.LongEntryPrice;
-                        if (longMark > 0)
-                        {
-                            positionDto.MaxSafeMovePctLong = Math.Abs(longMark - longMargin.LiquidationPrice.Value) / longMark * 100m;
-                        }
+                        positionDto.MaxSafeMovePctLong =
+                            Math.Abs(currentLongMark - longMargin.LiquidationPrice.Value) / currentLongMark * 100m;
                     }
 
-                    if (shortMargin?.LiquidationPrice is not null)
+                    if (shortMargin?.LiquidationPrice is not null && currentShortMark > 0)
                     {
-                        var shortMark = position.ShortEntryPrice;
-                        if (shortMark > 0)
-                        {
-                            positionDto.MaxSafeMovePctShort = Math.Abs(shortMark - shortMargin.LiquidationPrice.Value) / shortMark * 100m;
-                        }
+                        positionDto.MaxSafeMovePctShort =
+                            Math.Abs(currentShortMark - shortMargin.LiquidationPrice.Value) / currentShortMark * 100m;
                     }
                 }
             }

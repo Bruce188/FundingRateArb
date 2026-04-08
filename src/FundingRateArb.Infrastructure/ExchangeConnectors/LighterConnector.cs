@@ -1622,10 +1622,83 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
-    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
     {
-        // Lighter position endpoints do not expose margin/liquidation details
-        return Task.FromResult<MarginStateDto?>(null);
+        try
+        {
+            var accountIndex = GetAccountIndex();
+            if (accountIndex <= 0)
+            {
+                return null;
+            }
+
+            var accountResponse = await GetAccountAsync(accountIndex, ct);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+            if (account is null)
+            {
+                return null;
+            }
+
+            var collateral = ParseDecimalOrZero(account.Collateral);
+            var availableBalance = ParseDecimalOrZero(account.AvailableBalance);
+            var totalAssetValue = ParseDecimalOrZero(account.TotalAssetValue);
+
+            // Lighter account-level margin used = collateral minus available (funds committed to positions)
+            var marginUsed = collateral - availableBalance;
+            if (marginUsed < 0m)
+            {
+                marginUsed = 0m;
+            }
+
+            var marginUtilizationPct = totalAssetValue > 0m
+                ? marginUsed / totalAssetValue
+                : 0m;
+
+            // Per-position liquidation price for the requested asset
+            decimal? liquidationPrice = null;
+            if (account.Positions is not null)
+            {
+                var position = account.Positions.FirstOrDefault(p =>
+                    string.Equals(p.Symbol, asset, StringComparison.OrdinalIgnoreCase));
+                if (position is not null)
+                {
+                    var parsedLiq = ParseDecimalOrZero(position.LiquidationPrice);
+                    if (parsedLiq > 0m)
+                    {
+                        liquidationPrice = parsedLiq;
+                    }
+                }
+            }
+
+            return new MarginStateDto
+            {
+                MarginUsed = marginUsed,
+                MarginAvailable = availableBalance,
+                LiquidationPrice = liquidationPrice,
+                MarginUtilizationPct = marginUtilizationPct,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch Lighter margin state for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    private static decimal ParseDecimalOrZero(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return 0m;
+        }
+
+        return decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0m;
     }
 
     public Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)

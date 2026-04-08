@@ -577,10 +577,62 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         }
     }
 
-    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
     {
-        // Hyperliquid clearinghouse state is not easily accessible through the typed SDK
-        return Task.FromResult<MarginStateDto?>(null);
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(_vaultAddress, null, token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                return null;
+            }
+
+            var accountInfo = result.Data;
+            var marginSummary = accountInfo.MarginSummary;
+
+            // Account-level totals (falls back to 0 if the summary is not populated)
+            var accountValue = marginSummary?.AccountValue ?? 0m;
+            var totalMarginUsed = marginSummary?.TotalMarginUsed ?? 0m;
+            var withdrawable = accountInfo.Withdrawable;
+
+            // Find the matching position to get per-asset liquidation/margin data
+            var positionWrapper = accountInfo.Positions?
+                .FirstOrDefault(p => string.Equals(p.Position?.Symbol, asset, StringComparison.OrdinalIgnoreCase));
+            var position = positionWrapper?.Position;
+
+            if (position is null)
+            {
+                // No open position — surface account-level margin only.
+                return new MarginStateDto
+                {
+                    MarginUsed = totalMarginUsed,
+                    MarginAvailable = withdrawable,
+                    LiquidationPrice = null,
+                    MarginUtilizationPct = accountValue > 0 ? totalMarginUsed / accountValue : 0m,
+                };
+            }
+
+            return new MarginStateDto
+            {
+                MarginUsed = position.MarginUsed ?? 0m,
+                MarginAvailable = withdrawable,
+                LiquidationPrice = position.LiquidationPrice,
+                MarginUtilizationPct = accountValue > 0 ? totalMarginUsed / accountValue : 0m,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch Hyperliquid margin state for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
     }
 
     private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)

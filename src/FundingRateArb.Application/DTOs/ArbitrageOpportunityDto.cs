@@ -43,4 +43,12 @@ public class ArbitrageOpportunityDto
 
     /// <summary>True if funding spread has not been favorable for MinConsecutiveFavorableCycles.</summary>
     public bool TrendUnconfirmed { get; set; }
+
+    /// <summary>
+    /// True when CoinGlass's pre-calculated arbitrage screening currently lists this symbol
+    /// as a hot cross-exchange opportunity above the configured APR threshold. Populated by
+    /// SignalEngine when ICoinGlassScreeningProvider is available. Used as a priority hint
+    /// during opportunity ranking and surfaced on the dashboard as a visual badge.
+    /// </summary>
+    public bool IsCoinGlassHot { get; set; }
 }

@@ -2040,6 +2040,7 @@ public class SignalEngineTests
             BreakevenHoursMax = 5, // generous enough for post-rebate, tight enough to verify calculation
             FeeAmortizationHours = 12,
             MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 1m, // disable 3× edge guardrail to isolate break-even behaviour under test
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);

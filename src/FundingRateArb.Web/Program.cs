@@ -418,6 +418,11 @@ try
         client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");
         client.Timeout = TimeSpan.FromSeconds(30);
     });
+    builder.Services.AddHttpClient<ICoinGlassScreeningProvider, CoinGlassScreeningService>(client =>
+    {
+        client.BaseAddress = new Uri("https://open-api-v4.coinglass.com/");
+        client.Timeout = TimeSpan.FromSeconds(30);
+    });
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- WebSocket Market Data Streaming ---
@@ -480,6 +485,7 @@ try
     builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddSingleton<IBotDiagnostics>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
+    builder.Services.AddHostedService<LeverageTierRefresher>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>

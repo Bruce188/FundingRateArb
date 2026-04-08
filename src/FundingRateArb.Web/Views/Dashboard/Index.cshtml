@@ -322,7 +322,13 @@
                                             : "";
                                     var constrained = IsVolumeConstrained(opp);
                                     <tr class="@(constrained ? "table-warning" : "")">
-                                        <td><strong>@opp.AssetSymbol</strong></td>
+                                        <td>
+                                            <strong>@opp.AssetSymbol</strong>
+                                            @if (opp.IsCoinGlassHot)
+                                            {
+                                                <span class="badge bg-info ms-1" title="Matching cross-exchange arbitrage opportunity on CoinGlass">CG</span>
+                                            }
+                                        </td>
                                         @{ var displayPrice = opp.LongMarkPrice > 0 && opp.ShortMarkPrice > 0
                                                 ? (opp.LongMarkPrice + opp.ShortMarkPrice) / 2
                                                 : Math.Max(opp.LongMarkPrice, opp.ShortMarkPrice); }

@@ -96,9 +96,14 @@ public class ExecutionEngine : IExecutionEngine
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, sizeUsdc);
             }
 
-            // Pre-flight leverage validation: use user leverage, apply MaxLeverageCap, then clamp to tier-based exchange max
+            // Pre-flight leverage validation: use user leverage, apply global + per-user MaxLeverageCap,
+            // then clamp to tier-based exchange max. Per-user cap (if set) can only tighten below global
+            // — users cannot raise their ceiling above the BotConfiguration-wide limit.
             var originalLeverage = userConfig.DefaultLeverage > 0 ? userConfig.DefaultLeverage : config.DefaultLeverage;
-            var effectiveLeverage = Math.Min(originalLeverage, config.MaxLeverageCap);
+            var globalCap = config.MaxLeverageCap;
+            var userCap = userConfig.MaxLeverageCap ?? globalCap;
+            var enforcedCap = Math.Min(globalCap, userCap);
+            var effectiveLeverage = Math.Min(originalLeverage, enforcedCap);
             if (effectiveLeverage < 1)
             {
                 effectiveLeverage = 1;

@@ -21,6 +21,23 @@ public class PositionDetailsDto
     public decimal CurrentSpreadPerHour { get; set; }
     public decimal AccumulatedFunding { get; set; }
     public decimal? RealizedPnl { get; set; }
+
+    /// <summary>
+    /// Closed position PnL decomposition (Analysis Section 4.3.3):
+    /// directional component from price movement on actual fill prices.
+    /// Null while the position is open or if RealizedPnl is unset.
+    /// </summary>
+    public decimal? RealizedDirectionalPnl { get; set; }
+
+    /// <summary>Total fees across entry and exit legs (EntryFeesUsdc + ExitFeesUsdc).</summary>
+    public decimal TotalFeesUsdc { get; set; }
+
+    /// <summary>Entry fees captured at position open (both legs).</summary>
+    public decimal EntryFeesUsdc { get; set; }
+
+    /// <summary>Exit fees captured at position close (both legs). Zero while open.</summary>
+    public decimal ExitFeesUsdc { get; set; }
+
     public PositionStatus Status { get; set; }
     public CloseReason? CloseReason { get; set; }
     public DateTime OpenedAt { get; set; }
