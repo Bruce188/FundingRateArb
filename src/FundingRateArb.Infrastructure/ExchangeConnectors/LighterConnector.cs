@@ -1689,7 +1689,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
-    private static decimal ParseDecimalOrZero(string? value)
+    internal static decimal ParseDecimalOrZero(string? value)
     {
         if (string.IsNullOrEmpty(value))
         {

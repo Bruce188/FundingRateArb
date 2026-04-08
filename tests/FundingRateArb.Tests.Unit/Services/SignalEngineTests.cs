@@ -2173,4 +2173,302 @@ public class SignalEngineTests
         lookbackHours.Should().BeGreaterOrEqualTo(24.0,
             "max exchange interval (8h) * MinConsecutiveFavorableCycles (3) = 24h minimum lookback");
     }
+
+    // ── B6: 3× MinEdgeMultiplier filter ──────────────────────────────────────
+
+    [Fact]
+    public async Task MinEdgeFilter_NetBelow3xEdge_RoutedToAllNetPositive()
+    {
+        // Arrange — opportunity with net just above OpenThreshold but below 3× edge.
+        // OpenThreshold = 0.0001, FeeAmortizationHours = 12, takerFee per leg = 0.00045
+        // totalEntryCost = (0.0009 + 0.0009) + (5/10000) = 0.00185
+        // amortizedEntryCostPerHour = 0.00185 / 12 ≈ 0.000154
+        // 3× edge ≈ 0.000463
+        // Spread = 0.0008, fees ≈ 0.00015/hr, slippage ≈ 0.0000417/hr
+        // Net ≈ 0.0008 - 0.00015 - 0.0000417 ≈ 0.0006 (above OpenThreshold but should pass 3× edge here)
+        // Tighten: spread = 0.00045 → net ≈ 0.00026 → above OpenThreshold (0.0001), below 3× edge (0.000463)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.00045m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.00045m, takerFeeRate: 0.00045m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: opportunity routed to AllNetPositive, not Opportunities
+        result.Opportunities.Should().BeEmpty(
+            "net is above OpenThreshold but below 3× amortized entry cost");
+        result.AllNetPositive.Should().NotBeEmpty(
+            "the filtered opportunity should still appear in AllNetPositive for diagnostics");
+        result.Diagnostics!.NetPositiveBelowThreshold.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task MinEdgeFilter_DisabledViaMultiplierZero_FallsBackToDefault()
+    {
+        // The `> 0` guard at line 334 falls back to the spec-default (3) when configured value is 0.
+        // Verify by setting MinEdgeMultiplier = 0 and confirming the same opportunity is filtered
+        // as if MinEdgeMultiplier had been left at 3.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.00045m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.00045m, takerFeeRate: 0.00045m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0m, // explicitly disabled — should fall back to 3
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Same outcome as default 3× — opportunity below 3× edge → AllNetPositive
+        result.Opportunities.Should().BeEmpty("zero MinEdgeMultiplier falls back to 3× default");
+    }
+
+    [Fact]
+    public async Task MinEdgeFilter_LooseMultiplier1x_AllowsOpportunityToPass()
+    {
+        // With MinEdgeMultiplier=1, the filter is much more lenient.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.00045m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.00045m, takerFeeRate: 0.00045m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 5,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 1m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().HaveCount(1,
+            "1× edge multiplier allows the opportunity through");
+    }
+
+    // ── B7: CoinGlass hot symbol prioritization ──────────────────────────────
+
+    [Fact]
+    public async Task HotSymbols_PreferredOverHigherYieldNonHot()
+    {
+        // Two opportunities, BTC (hot, lower yield) and ETH (not hot, higher yield).
+        // Expected sort: BTC first (hot), then ETH (higher yield but not hot).
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+            MakeRate(1, "Hyperliquid", 2, "BTC", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 2, "BTC", 0.0008m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m, // permissive — let both opportunities through
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        // BTC is the hot symbol (despite lower yield)
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "BTC" });
+
+        var sutWithScreening = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object);
+
+        // Act
+        var result = await sutWithScreening.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: BTC ranks first despite ETH's higher yield
+        result.Opportunities.Should().HaveCountGreaterThan(0);
+        result.Opportunities[0].AssetSymbol.Should().Be("BTC");
+        result.Opportunities[0].IsCoinGlassHot.Should().BeTrue();
+        if (result.Opportunities.Count > 1)
+        {
+            result.Opportunities[1].AssetSymbol.Should().Be("ETH");
+            result.Opportunities[1].IsCoinGlassHot.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task HotSymbols_EmptySet_LeavesOpportunitiesSortedByNetYield()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        var sutWithScreening = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object);
+
+        var result = await sutWithScreening.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().NotBeEmpty();
+        result.Opportunities[0].IsCoinGlassHot.Should().BeFalse(
+            "empty hot set means no opportunity is flagged");
+    }
+
+    [Fact]
+    public async Task HotSymbols_NullProvider_AllOpportunitiesNotHot()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        // _sut has no screening provider (null)
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().NotBeEmpty();
+        result.Opportunities.Should().AllSatisfy(o => o.IsCoinGlassHot.Should().BeFalse());
+    }
+
+    [Fact]
+    public async Task HotSymbols_ProviderThrows_OpportunitiesUnaffected()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("CoinGlass down"));
+
+        var sutWithScreening = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object);
+
+        var result = await sutWithScreening.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().NotBeEmpty(
+            "screening failure should not break opportunity generation");
+    }
+
+    [Fact]
+    public async Task HotSymbols_ProviderThrowsCancellation_PropagatesException()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        var sutWithScreening = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object);
+
+        Func<Task> act = async () =>
+            await sutWithScreening.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "cancellation must propagate, not be swallowed");
+    }
 }

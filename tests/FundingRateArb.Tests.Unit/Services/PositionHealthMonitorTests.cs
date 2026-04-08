@@ -3089,4 +3089,238 @@ public class PositionHealthMonitorTests
             al.Message.Contains("Collateral imbalance"))), Times.Never,
             "unified price shows balanced PnL — no spurious imbalance alert");
     }
+
+    // ── B4: ComputeLiquidationDistance — API liquidation price path ────────────
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiLongLiqPriceProvided_UsesApiOverFormula()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        // Formula at 5x leverage: longLiqPrice = 3000 * (1 - 1/5) = 2400
+        // API price overrides: 2500
+        var apiLong = 2500m;
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 2900m, currentShortMark: 3001m,
+            apiLongLiqPrice: apiLong, apiShortLiqPrice: null);
+
+        pos.LongLiquidationPrice.Should().Be(2500m,
+            "API-pulled liquidation price should be preferred over leverage formula");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiShortLiqPriceProvided_UsesApiOverFormula()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        // Formula: shortLiqPrice = 3001 * (1 + 1/5) = 3601.2
+        var apiShort = 3500m;
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3100m,
+            apiLongLiqPrice: null, apiShortLiqPrice: apiShort);
+
+        pos.ShortLiquidationPrice.Should().Be(3500m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiPricesNull_FallsBackToFormula()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3001m,
+            apiLongLiqPrice: null, apiShortLiqPrice: null);
+
+        // Formula path: longLiq = 3000 * (1 - 1/5) = 2400
+        pos.LongLiquidationPrice.Should().Be(2400m);
+        // shortLiq = 3001 * (1 + 1/5) = 3601.2
+        pos.ShortLiquidationPrice.Should().Be(3601.2m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiPriceZero_FallsBackToFormula()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3001m,
+            apiLongLiqPrice: 0m, apiShortLiqPrice: 0m);
+
+        // The `is > 0m` guard rejects zero — formula is used
+        pos.LongLiquidationPrice.Should().Be(2400m);
+        pos.ShortLiquidationPrice.Should().Be(3601.2m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiPriceNegative_FallsBackToFormula()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3001m,
+            apiLongLiqPrice: -100m, apiShortLiqPrice: -100m);
+
+        pos.LongLiquidationPrice.Should().Be(2400m);
+        pos.ShortLiquidationPrice.Should().Be(3601.2m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_OnlyLongApiProvided_UsesApiForLongFormulaForShort()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3001m,
+            apiLongLiqPrice: 2500m, apiShortLiqPrice: null);
+
+        pos.LongLiquidationPrice.Should().Be(2500m, "API for long");
+        pos.ShortLiquidationPrice.Should().Be(3601.2m, "formula for short");
+    }
+
+    // ── B5: DetermineCloseReason — DivergenceCritical and PnL deferral ─────────
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceExceedsCriticalThreshold_ReturnsDivergenceCritical()
+    {
+        var pos = MakeOpenPosition();
+        pos.CurrentDivergencePct = 1.0m;
+
+        var config = new BotConfiguration
+        {
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            CloseThreshold = -0.00005m,
+        };
+
+        // entrySpreadCostPct = 0.1, alert threshold = 0.1 * 2 = 0.2, critical = 0.4
+        // CurrentDivergencePct (1.0) > critical (0.4) → DivergenceCritical
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0.1m);
+
+        result.Should().Be(CloseReason.DivergenceCritical);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceAboveAlertButBelowCritical_DoesNotReturnDivergenceCritical()
+    {
+        var pos = MakeOpenPosition();
+        pos.CurrentDivergencePct = 0.3m;
+
+        var config = new BotConfiguration
+        {
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            CloseThreshold = -0.00005m,
+        };
+
+        // alert = 0.2, critical = 0.4, divergence = 0.3 → above alert, below critical
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0.1m);
+
+        result.Should().NotBe(CloseReason.DivergenceCritical);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_EntrySpreadCostZero_DoesNotReturnDivergenceCritical()
+    {
+        var pos = MakeOpenPosition();
+        pos.CurrentDivergencePct = 100m; // huge divergence
+
+        var config = new BotConfiguration
+        {
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            CloseThreshold = -0.00005m,
+        };
+
+        // entrySpreadCostPct = 0 → divergenceCloseThreshold guard returns 0 → no DivergenceCritical
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0m);
+
+        result.Should().NotBe(CloseReason.DivergenceCritical);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_StopLossPriority_OverridesDivergenceCritical()
+    {
+        var pos = MakeOpenPosition();
+        pos.MarginUsdc = 100m;
+        pos.CurrentDivergencePct = 100m; // would trigger DivergenceCritical
+
+        var config = new BotConfiguration
+        {
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.10m,
+            CloseThreshold = -0.00005m,
+        };
+
+        // unrealizedPnl = -50 (loss); stop loss = 100 * 0.10 = 10; |loss| >= stop → StopLoss wins
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: -50m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0.1m);
+
+        result.Should().Be(CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlTargetReached_DefersWhenDivergenceAboveAlert()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 0.90m; // exactly at target (see existing test)
+        pos.CurrentDivergencePct = 0.3m; // above alert (0.2), below critical (0.4)
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            MinHoldBeforePnlTargetMinutes = 60,
+        };
+
+        // Position is 2h old (120 min) > MinHoldBeforePnlTargetMinutes (60).
+        // Without divergence, this would return PnlTargetReached.
+        // With divergence above alert and not over-performed (3× target), it defers.
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0.1m);
+
+        result.Should().BeNull("PnlTargetReached should defer when divergence is elevated");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PnlTargetReached_FiresEvenWithDivergence_WhenOverperformed()
+    {
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.CurrentDivergencePct = 0.3m; // above alert, below critical
+
+        var config = new BotConfiguration
+        {
+            AdaptiveHoldEnabled = true,
+            TargetPnlMultiplier = 2.0m,
+            DivergenceAlertMultiplier = 2.0m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+            MinHoldBeforePnlTargetMinutes = 60,
+        };
+
+        // entryFee = 100 * 5 * 2 * 0.00045 = 0.45. Target = 2.0 * 0.45 = 0.90.
+        // Over-performed = 3 * 2.0 * 0.45 = 2.70. Set funding well above that.
+        pos.AccumulatedFunding = 5m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            entrySpreadCostPct: 0.1m);
+
+        result.Should().Be(CloseReason.PnlTargetReached,
+            "over-performed positions skip the divergence-based deferral");
+    }
 }

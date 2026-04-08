@@ -15,18 +15,35 @@ namespace FundingRateArb.Infrastructure.BackgroundServices;
 /// </summary>
 public class LeverageTierRefresher : BackgroundService
 {
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromHours(1);
+    public static readonly TimeSpan DefaultInitialDelay = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromHours(1);
 
+    private readonly TimeSpan _initialDelay;
+    private readonly TimeSpan _refreshInterval;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<LeverageTierRefresher> _logger;
 
     public LeverageTierRefresher(
         IServiceScopeFactory scopeFactory,
         ILogger<LeverageTierRefresher> logger)
+        : this(scopeFactory, logger, DefaultInitialDelay, DefaultRefreshInterval)
+    {
+    }
+
+    /// <summary>
+    /// Test seam: lets unit tests inject short delays so the cycle completes quickly.
+    /// Production registration uses the default-delay constructor above.
+    /// </summary>
+    internal LeverageTierRefresher(
+        IServiceScopeFactory scopeFactory,
+        ILogger<LeverageTierRefresher> logger,
+        TimeSpan initialDelay,
+        TimeSpan refreshInterval)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _initialDelay = initialDelay;
+        _refreshInterval = refreshInterval;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -34,7 +51,7 @@ public class LeverageTierRefresher : BackgroundService
         // Give funding rate fetcher time to seed the database on first run
         try
         {
-            await Task.Delay(InitialDelay, ct);
+            await Task.Delay(_initialDelay, ct);
         }
         catch (OperationCanceledException)
         {
@@ -58,7 +75,7 @@ public class LeverageTierRefresher : BackgroundService
 
             try
             {
-                await Task.Delay(RefreshInterval, ct);
+                await Task.Delay(_refreshInterval, ct);
             }
             catch (OperationCanceledException)
             {
@@ -67,7 +84,7 @@ public class LeverageTierRefresher : BackgroundService
         }
     }
 
-    private async Task RefreshTiersAsync(CancellationToken ct)
+    internal async Task RefreshTiersAsync(CancellationToken ct)
     {
         using var scope = _scopeFactory.CreateScope();
         var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();

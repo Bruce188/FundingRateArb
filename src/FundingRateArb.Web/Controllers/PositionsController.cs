@@ -81,8 +81,12 @@ public class PositionsController : Controller
 
                 if (longExchangeName is not null && shortExchangeName is not null && assetSymbol is not null)
                 {
+                    // Dedupe by exchange name (the source of truth) — not by reference equality
+                    // on the connector instance, which would silently break if a future factory
+                    // implementation returned different instances for the same exchange name.
+                    var sameExchange = string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase);
                     var longConnector = _connectorFactory.GetConnector(longExchangeName);
-                    var shortConnector = string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase)
+                    var shortConnector = sameExchange
                         ? longConnector
                         : _connectorFactory.GetConnector(shortExchangeName);
 
@@ -92,7 +96,7 @@ public class PositionsController : Controller
                     // at entry and misrepresents risk during adverse moves.
                     Task<MarginStateDto?> longMarginTask;
                     Task<MarginStateDto?> shortMarginTask;
-                    if (ReferenceEquals(longConnector, shortConnector))
+                    if (sameExchange)
                     {
                         longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
                         shortMarginTask = longMarginTask;
@@ -104,7 +108,7 @@ public class PositionsController : Controller
                     }
 
                     var longMarkTask = longConnector.GetMarkPriceAsync(assetSymbol, ct);
-                    var shortMarkTask = ReferenceEquals(longConnector, shortConnector)
+                    var shortMarkTask = sameExchange
                         ? longMarkTask
                         : shortConnector.GetMarkPriceAsync(assetSymbol, ct);
 

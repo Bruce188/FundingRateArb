@@ -505,4 +505,126 @@ public class ExecutionEngineEdgeCaseTests
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
         };
+
+    // ── Per-user MaxLeverageCap tests (security invariant) ─────────────────────
+
+    [Fact]
+    public async Task OpenPosition_UserCapBelowGlobal_TightensEffectiveLeverage()
+    {
+        // Global cap is 50 (DefaultConfig). User cap of 3 should win.
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10, MaxLeverageCap = 3 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert: orders placed with leverage capped at 3, not 10
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockShortConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_UserCapAboveGlobal_ClampedToGlobal()
+    {
+        // Security invariant: a user cannot raise their leverage ceiling above the global cap.
+        // Set a tight global cap and a loose user cap — global must win.
+        _mockBotConfig
+            .Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                IsEnabled = true,
+                OperatingState = BotOperatingState.Armed,
+                DefaultLeverage = 10,
+                MaxLeverageCap = 3,
+                UpdatedByUserId = "admin",
+            });
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10, MaxLeverageCap = 50 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert: leverage clamped to global cap (3), not user cap (50)
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
+        _mockShortConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_UserCapNull_FallsBackToGlobalCap()
+    {
+        _mockBotConfig
+            .Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                IsEnabled = true,
+                OperatingState = BotOperatingState.Armed,
+                DefaultLeverage = 10,
+                MaxLeverageCap = 5,
+                UpdatedByUserId = "admin",
+            });
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10, MaxLeverageCap = null });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert: leverage = 5 (global cap, since user cap is null)
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_UserCapEqualsGlobal_LeverageClampedToBoth()
+    {
+        _mockBotConfig
+            .Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                IsEnabled = true,
+                OperatingState = BotOperatingState.Armed,
+                DefaultLeverage = 10,
+                MaxLeverageCap = 7,
+                UpdatedByUserId = "admin",
+            });
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10, MaxLeverageCap = 7 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 7, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_DefaultLeverageBelowBothCaps_LeverageUnchanged()
+    {
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 2, MaxLeverageCap = 10 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Default leverage (2) is below both caps, so no clamping happens.
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 2, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }
