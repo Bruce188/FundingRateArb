@@ -604,13 +604,118 @@ public class AsterConnector : IExchangeConnector, IDisposable
     }
 
     /// <summary>
-    /// Returns trading constraints (max notional, step size, min qty) for a symbol.
-    /// Stub — implemented in the green phase of Task 4.1 (plan-v60).
+    /// Returns trading constraints (max notional, step size, min qty) for a symbol,
+    /// fetching from the Aster exchangeInfo endpoint on cold start or when the 6-hour
+    /// TTL has expired. Refresh failures fall back to the cached value; on a cold start
+    /// with no cache, returns a "no cap" default (<see cref="decimal.MaxValue"/>) so the
+    /// system remains usable.
     /// </summary>
-    public virtual Task<AsterSymbolConstraints> GetSymbolConstraintsAsync(
+    public virtual async Task<AsterSymbolConstraints> GetSymbolConstraintsAsync(
         string symbol, CancellationToken ct = default)
     {
-        throw new NotImplementedException("GetSymbolConstraintsAsync not yet implemented (Task 5.1).");
+        ct.ThrowIfCancellationRequested();
+
+        // Fast path: cache is still within TTL and contains this symbol.
+        if (DateTime.UtcNow < _symbolConstraintsExpiry &&
+            _symbolConstraintsCache.TryGetValue(symbol, out var cached))
+        {
+            return cached;
+        }
+
+        await _symbolConstraintsLock.WaitAsync(ct);
+        try
+        {
+            // Double-check after acquiring the lock — another caller may have just refreshed.
+            if (DateTime.UtcNow < _symbolConstraintsExpiry &&
+                _symbolConstraintsCache.TryGetValue(symbol, out cached))
+            {
+                return cached;
+            }
+
+            try
+            {
+                var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+                var result = await pipeline.ExecuteAsync(
+                    async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
+
+                if (result.Success && result.Data?.Symbols != null)
+                {
+                    foreach (var s in result.Data.Symbols)
+                    {
+                        _symbolConstraintsCache[s.Name] = BuildConstraints(s);
+                    }
+                    _symbolConstraintsExpiry = DateTime.UtcNow + SymbolConstraintsTtl;
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "Aster exchangeInfo request returned failure while refreshing constraints for {Symbol}: {Error}",
+                        symbol, result.Error?.Message ?? "unknown");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    "Aster exchangeInfo refresh failed for {Symbol}; falling back to cached constraints: {Error}",
+                    symbol, ex.Message);
+            }
+
+            if (_symbolConstraintsCache.TryGetValue(symbol, out var fromCache))
+            {
+                return fromCache;
+            }
+
+            // No cache yet and refresh failed — use a safe "no cap" default so callers are not blocked.
+            _logger.LogWarning(
+                "Aster symbol constraints unavailable for {Symbol}; returning MaxValue default (no cap).",
+                symbol);
+            return new AsterSymbolConstraints
+            {
+                Symbol = symbol,
+                MaxNotionalValue = decimal.MaxValue,
+                MinQuantity = 0m,
+                StepSize = 0m,
+            };
+        }
+        finally
+        {
+            _symbolConstraintsLock.Release();
+        }
+    }
+
+    private static AsterSymbolConstraints BuildConstraints(Aster.Net.Objects.Models.AsterSymbol symbol)
+    {
+        decimal maxNotional = decimal.MaxValue;
+        decimal minQty = 0m;
+        decimal stepSize = 0m;
+
+        if (symbol.Filters is { Length: > 0 })
+        {
+            var maxNotionalFilter = symbol.Filters.OfType<AsterSymbolMaxNotionalFilter>().FirstOrDefault();
+            if (maxNotionalFilter is not null && maxNotionalFilter.MaxNotional > 0)
+            {
+                maxNotional = maxNotionalFilter.MaxNotional;
+            }
+        }
+
+        var lotSize = symbol.LotSizeFilter;
+        if (lotSize is not null)
+        {
+            minQty = lotSize.MinQuantity;
+            stepSize = lotSize.StepSize;
+        }
+
+        return new AsterSymbolConstraints
+        {
+            Symbol = symbol.Name,
+            MaxNotionalValue = maxNotional,
+            MinQuantity = minQty,
+            StepSize = stepSize,
+        };
     }
 
     private async Task EnsureSymbolInfoCachedAsync(string symbol, CancellationToken ct)
