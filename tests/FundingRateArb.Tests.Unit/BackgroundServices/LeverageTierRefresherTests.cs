@@ -173,9 +173,9 @@ public class LeverageTierRefresherTests
         {
             foreach (var p in ctor.GetParameters())
             {
-                p.ParameterType.Should().NotBe(typeof(HttpClient),
+                p.ParameterType.Should().NotBe<HttpClient>(
                     "the refresher must not accept a raw HttpClient — use IHttpClientFactory or an injected connector");
-                p.ParameterType.Should().NotBe(typeof(IHttpClientFactory),
+                p.ParameterType.Should().NotBe<IHttpClientFactory>(
                     "the refresher delegates HTTP through IExchangeConnector and should not own an IHttpClientFactory either");
             }
         }
