@@ -5,6 +5,8 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Tests.Unit.Common;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
@@ -2319,6 +2321,7 @@ public class SignalEngineTests
 
         // BTC is the hot symbol (despite lower yield)
         var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(true);
         screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "BTC" });
 
@@ -2365,6 +2368,7 @@ public class SignalEngineTests
             .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(true);
         screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
@@ -2435,6 +2439,7 @@ public class SignalEngineTests
             .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(true);
         screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("CoinGlass down"));
 
@@ -2462,6 +2467,7 @@ public class SignalEngineTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(true);
         screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
 
@@ -2657,5 +2663,137 @@ public class SignalEngineTests
 
         result.Opportunities.Should().HaveCount(1);
         result.Diagnostics!.PairsFilteredByExchangeSymbolCap.Should().Be(0);
+    }
+
+    // ── plan-v61 Task 3.1: SignalEngine consumes IsAvailable flag ──
+
+    private const string CoinGlassUnavailableMessage =
+        "CoinGlass screening skipped (unavailable) — continuing without screening for this cycle";
+
+    [Fact]
+    public async Task SignalEngine_CoinGlassUnavailable_ContinuesWithRemainingSources()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(false);
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object);
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().NotBeEmpty(
+            "unavailable screening must not block opportunity generation from other sources");
+    }
+
+    [Fact]
+    public async Task SignalEngine_CoinGlassUnavailable_LogsOncePerCycle_NotPerCandidate()
+    {
+        // Seed ≥3 candidate symbols so the inner nested loop runs multiple times.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "BTC", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "BTC", 0.0010m, takerFeeRate: 0m),
+            MakeRate(1, "Hyperliquid", 2, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 2, "ETH", 0.0010m, takerFeeRate: 0m),
+            MakeRate(1, "Hyperliquid", 3, "SOL", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 3, "SOL", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(false);
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        var logger = new ListLogger<SignalEngine>();
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object,
+            logger: logger);
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().NotBeEmpty();
+        logger.CountMessages(LogLevel.Warning, CoinGlassUnavailableMessage).Should().Be(1,
+            "the unavailable warning must fire exactly once per cycle, not once per candidate");
+    }
+
+    [Fact]
+    public async Task SignalEngine_CoinGlassAvailable_NoSkipLog()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Lighter", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 0.5m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var screening = new Mock<ICoinGlassScreeningProvider>();
+        screening.SetupGet(s => s.IsAvailable).Returns(true);
+        screening.Setup(s => s.GetHotSymbolsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        var logger = new ListLogger<SignalEngine>();
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            screeningProvider: screening.Object,
+            logger: logger);
+
+        await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        logger.CountMessages(LogLevel.Warning, CoinGlassUnavailableMessage).Should().Be(0,
+            "the unavailable warning must not fire when the provider is available");
     }
 }

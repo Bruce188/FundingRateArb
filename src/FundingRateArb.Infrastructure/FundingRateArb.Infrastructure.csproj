@@ -40,4 +40,8 @@
     <NoWarn>$(NoWarn);CA1305;CA1310</NoWarn>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="FundingRateArb.Tests.Unit" />
+  </ItemGroup>
+
 </Project>

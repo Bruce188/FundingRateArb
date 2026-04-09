@@ -4,7 +4,9 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
@@ -51,7 +53,12 @@ public class CoinGlassConnectorTests
         var analyticsRepo = new Mock<ICoinGlassAnalyticsRepository>();
         analyticsRepo.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, analyticsRepo.Object);
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            analyticsRepo.Object,
+            TestResiliencePipelineProvider.NoOp());
         return (connector, handler);
     }
 
@@ -386,7 +393,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         await sut.GetFundingRatesAsync();
 
@@ -419,7 +431,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -481,7 +498,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -595,7 +617,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
         await sut.GetFundingRatesAsync();
 
         capturedRequest.Should().NotBeNull();
@@ -671,7 +698,12 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         // First call fails — sets backoff
         await connector.GetFundingRatesAsync();
@@ -716,7 +748,12 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         // First call — triggers backoff
         await connector.GetFundingRatesAsync();
@@ -779,5 +816,284 @@ public class CoinGlassConnectorTests
         // Cap is 900 seconds (15 minutes)
         backoffDuration.TotalSeconds.Should().BeLessOrEqualTo(905, "backoff should be capped at 900 seconds");
         backoffDuration.TotalSeconds.Should().BeGreaterOrEqualTo(895, "after many failures backoff should approach cap");
+    }
+
+    // ── plan-v61 Task 2.1: body logging, IsAvailable, Polly circuit breaker ──
+
+    private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler, ListLogger<CoinGlassConnector> Logger)
+        CreateConnectorWithLogger(
+            HttpResponseMessage response,
+            Polly.Registry.ResiliencePipelineProvider<string>? pipelineProvider = null)
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(response);
+
+        return CreateWithHandlerMock(handler, pipelineProvider);
+    }
+
+    private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler, ListLogger<CoinGlassConnector> Logger)
+        CreateWithHandlerMock(
+            Mock<HttpMessageHandler> handler,
+            Polly.Registry.ResiliencePipelineProvider<string>? pipelineProvider = null)
+    {
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
+            })
+            .Build();
+
+        var analyticsRepo = new Mock<ICoinGlassAnalyticsRepository>();
+        analyticsRepo.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
+
+        var logger = new ListLogger<CoinGlassConnector>();
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            logger,
+            analyticsRepo.Object,
+            pipelineProvider ?? TestResiliencePipelineProvider.NoOp());
+        return (connector, handler, logger);
+    }
+
+    private static HttpResponseMessage ErrorResponse(HttpStatusCode status, string body) =>
+        new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns401_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("401", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("unauthorized", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns429_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.TooManyRequests, "{\"error\":\"rate limited\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("429", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("rate limited", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns500_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.InternalServerError, "{\"error\":\"internal\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("500", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("internal", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Timeout_LogsAndReturnsUnavailable()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new TaskCanceledException("request timeout after 30s"));
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("CoinGlass API request failed", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_MalformedJson_LogsBodyAndReturnsUnavailable()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{invalid json", Encoding.UTF8, "application/json"),
+        };
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("Failed to parse CoinGlass response", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitOpens_After5ConsecutiveFailures()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "oops"));
+
+        var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
+
+        // Each call needs to reset the manual backoff (via reflection) because the real
+        // _backoffUntil field short-circuits before the Polly pipeline ever runs. We bypass it
+        // to verify the Polly circuit breaker opens independently.
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        // Drive failures until the breaker trips. Polly's rolling health metrics may need
+        // slightly more than MinimumThroughput invocations before the sliding window has
+        // enough data to open the circuit — loop with an upper bound instead of hard-coding.
+        int maxAttempts = 10;
+        for (int i = 0; i < maxAttempts && connector.IsAvailable; i++)
+        {
+            backoffField.SetValue(null, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+
+        connector.IsAvailable.Should().BeFalse(
+            "circuit breaker should have opened after enough consecutive failures (>= 5)");
+
+        var sendCountAfterOpen = handlerMock.Invocations.Count;
+
+        // Subsequent calls must not hit the handler at all.
+        for (int i = 0; i < 3; i++)
+        {
+            backoffField.SetValue(null, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+        }
+
+        handlerMock.Invocations.Count.Should().Be(sendCountAfterOpen,
+            "open circuit should short-circuit all subsequent calls without hitting SendAsync");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitHalfOpens_After5Minutes()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        // Drive the breaker open
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            backoffField.SetValue(null, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        var failuresBeforeHalfOpen = callCount;
+
+        // Advance past the 5-minute break duration — the circuit should transition to
+        // half-open and allow the next call through to the handler.
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        backoffField.SetValue(null, DateTime.MinValue);
+        await connector.GetFundingRatesAsync();
+
+        callCount.Should().BeGreaterThan(failuresBeforeHalfOpen,
+            "after the break window the pipeline should allow one probe through");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitCloses_OnFirstSuccessAfterHalfOpen()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount <= 5)
+                {
+                    return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"code":"0","data":[]}""", Encoding.UTF8, "application/json"),
+                };
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        // Drive the breaker open
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            backoffField.SetValue(null, DateTime.MinValue);
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Advance past break window and make a successful probe
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        backoffField.SetValue(null, DateTime.MinValue);
+        await connector.GetFundingRatesAsync();
+
+        connector.IsAvailable.Should().BeTrue("first successful call after half-open should close the circuit");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_BodyLogging_RedactsCgApiKey()
+    {
+        var response = ErrorResponse(
+            HttpStatusCode.Unauthorized,
+            "CG-API-KEY: secret-key-value\nerror: invalid key");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        var warningEntries = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warningEntries.Should().NotBeEmpty();
+        warningEntries.Should().NotContain(e => e.Message.Contains("secret-key-value", StringComparison.Ordinal));
+        warningEntries.Should().Contain(e => e.Message.Contains("REDACTED", StringComparison.Ordinal));
     }
 }

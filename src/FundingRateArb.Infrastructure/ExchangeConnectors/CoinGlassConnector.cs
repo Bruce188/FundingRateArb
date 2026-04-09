@@ -6,8 +6,12 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 
@@ -26,11 +30,22 @@ public class CoinGlassConnector : IExchangeConnector
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassConnector> _logger;
     private readonly ICoinGlassAnalyticsRepository _analyticsRepo;
+    private readonly ResiliencePipeline _pipeline;
     private readonly string? _apiKey;
     private static readonly object BackoffLock = new();
     private static int _consecutiveFailures;
     private static DateTime _backoffUntil = DateTime.MinValue;
     private static int _lastLoggedBackoffLevel;
+
+    /// <summary>
+    /// Tracks the CoinGlass circuit-breaker state. Starts as <c>true</c>; flips to <c>false</c>
+    /// when the Polly pipeline short-circuits (throws <see cref="BrokenCircuitException"/>)
+    /// and back to <c>true</c> on the first successful call after the half-open probe.
+    /// SignalEngine reads this flag via <see cref="ICoinGlassScreeningProvider.IsAvailable"/>
+    /// on the screening service; this property exists on the connector for symmetry and
+    /// diagnostics logging.
+    /// </summary>
+    public bool IsAvailable { get; private set; } = true;
 
     /// <summary>Resets static backoff state. For unit testing only.</summary>
     internal static void ResetBackoffState()
@@ -60,11 +75,13 @@ public class CoinGlassConnector : IExchangeConnector
         HttpClient httpClient,
         IConfiguration configuration,
         ILogger<CoinGlassConnector> logger,
-        ICoinGlassAnalyticsRepository analyticsRepo)
+        ICoinGlassAnalyticsRepository analyticsRepo,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _httpClient = httpClient;
         _logger = logger;
         _analyticsRepo = analyticsRepo;
+        _pipeline = pipelineProvider.GetPipeline("CoinGlass");
         _apiKey = configuration["ExchangeConnectors:CoinGlass:ApiKey"];
     }
 
@@ -93,24 +110,68 @@ public class CoinGlassConnector : IExchangeConnector
         HttpResponseMessage response;
         try
         {
-            response = await _httpClient.SendAsync(request, ct);
+            // Wrap the HTTP call in the "CoinGlass" Polly circuit-breaker pipeline. Non-2xx
+            // responses are converted into CoinGlassApiFailureException inside the pipeline so
+            // the circuit breaker counts them as failures alongside HttpRequestException /
+            // TaskCanceledException. When the circuit opens, Polly short-circuits with
+            // BrokenCircuitException without hitting the handler — caught below and used to
+            // flip IsAvailable = false. On success, IsAvailable is restored to true.
+            response = await _pipeline.ExecuteAsync(
+                async token =>
+                {
+                    var r = await _httpClient.SendAsync(request, token);
+                    if (!r.IsSuccessStatusCode)
+                    {
+                        string body;
+                        try
+                        {
+                            body = await r.Content.ReadAsStringAsync(token);
+                        }
+                        catch (Exception readEx) when (readEx is not OperationCanceledException)
+                        {
+                            body = $"<body read failed: {readEx.GetType().Name}>";
+                        }
+
+                        var statusCode = r.StatusCode;
+                        r.Dispose();
+                        throw new CoinGlassApiFailureException(
+                            (int)statusCode,
+                            HttpResponseBodyLogging.TruncateAndSanitize(body));
+                    }
+                    return r;
+                },
+                ct);
+        }
+        catch (BrokenCircuitException ex)
+        {
+            if (IsAvailable)
+            {
+                _logger.LogInformation("CoinGlass circuit breaker OPENED — short-circuiting requests");
+            }
+            IsAvailable = false;
+            _logger.LogWarning("CoinGlass API request short-circuited: {Message}",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            RecordFailure();
+            return [];
+        }
+        catch (CoinGlassApiFailureException ex)
+        {
+            _logger.LogWarning("CoinGlass API returned {StatusCode}: {Body}",
+                ex.StatusCode,
+                ex.SanitizedBody);
+            RecordFailure();
+            return [];
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "CoinGlass API request failed");
+            _logger.LogWarning(ex, "CoinGlass API request failed: {Body}",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
             RecordFailure();
             return [];
         }
 
         using (response)
         {
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("CoinGlass API returned {StatusCode}", response.StatusCode);
-                RecordFailure();
-                return [];
-            }
-
             CoinGlassResponse? data;
             try
             {
@@ -118,7 +179,18 @@ public class CoinGlassConnector : IExchangeConnector
             }
             catch (JsonException ex)
             {
-                _logger.LogWarning(ex, "Failed to parse CoinGlass response");
+                string body;
+                try
+                {
+                    body = await response.Content.ReadAsStringAsync(ct);
+                }
+                catch (Exception readEx) when (readEx is not OperationCanceledException)
+                {
+                    body = ex.Message;
+                }
+
+                _logger.LogWarning(ex, "Failed to parse CoinGlass response: {Body}",
+                    HttpResponseBodyLogging.TruncateAndSanitize(body));
                 RecordFailure();
                 return [];
             }
@@ -128,6 +200,14 @@ public class CoinGlassConnector : IExchangeConnector
                 _logger.LogDebug("CoinGlass returned no data or error code {Code}", data?.Code);
                 RecordFailure();
                 return [];
+            }
+
+            // Reaching here means the Polly pipeline succeeded and the response was parsed —
+            // flip IsAvailable back on if it was previously off (circuit closed after half-open).
+            if (!IsAvailable)
+            {
+                _logger.LogInformation("CoinGlass circuit breaker CLOSED — requests flowing again");
+                IsAvailable = true;
             }
 
             var rates = new List<FundingRateDto>();
@@ -371,6 +451,30 @@ public class CoinGlassConnector : IExchangeConnector
         }
         // Strip trailing separator if present
         return s.TrimEnd('-', '_', '/');
+    }
+
+    /// <summary>
+    /// Sentinel exception thrown from inside the Polly pipeline when a non-2xx response is
+    /// received. This allows the CoinGlass circuit breaker (which handles exceptions, not
+    /// status codes) to count HTTP error responses as pipeline failures. Caught immediately
+    /// by the caller and translated into a "return empty list" path with a sanitized
+    /// warning log.
+    /// </summary>
+#pragma warning disable CA1064 // Exceptions should be public — intentionally file-scoped sentinel
+#pragma warning disable CA1032 // Standard exception constructors — intentionally minimal
+    private sealed class CoinGlassApiFailureException : Exception
+#pragma warning restore CA1032
+#pragma warning restore CA1064
+    {
+        public int StatusCode { get; }
+        public string SanitizedBody { get; }
+
+        public CoinGlassApiFailureException(int statusCode, string sanitizedBody)
+            : base($"CoinGlass returned {statusCode}")
+        {
+            StatusCode = statusCode;
+            SanitizedBody = sanitizedBody;
+        }
     }
 
     // ── Response DTOs ──────────────────────────────────────────────

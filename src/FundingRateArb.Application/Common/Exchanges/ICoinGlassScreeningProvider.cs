@@ -16,4 +16,13 @@ public interface ICoinGlassScreeningProvider
     /// Returns an empty set on API failure or when the feature is disabled.
     /// </summary>
     Task<IReadOnlySet<string>> GetHotSymbolsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Indicates whether the screening provider is currently reachable. Flips to
+    /// <c>false</c> when the underlying Polly circuit breaker opens (after consecutive
+    /// failures) and back to <c>true</c> on the first successful call once the
+    /// breaker half-opens. SignalEngine reads this flag after <see cref="GetHotSymbolsAsync"/>
+    /// to emit a once-per-cycle "skipped (unavailable)" warning instead of a per-candidate log.
+    /// </summary>
+    bool IsAvailable { get; }
 }

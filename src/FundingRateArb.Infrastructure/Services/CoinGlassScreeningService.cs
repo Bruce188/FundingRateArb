@@ -2,8 +2,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Infrastructure.Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.CircuitBreaker;
+using Polly.Registry;
 
 namespace FundingRateArb.Infrastructure.Services;
 
@@ -11,6 +15,9 @@ namespace FundingRateArb.Infrastructure.Services;
 /// Calls the CoinGlass v4 /api/futures/funding-rate/arbitrage endpoint to retrieve
 /// pre-calculated cross-exchange arbitrage opportunities. Returns the set of normalized
 /// symbols above the configured APR threshold as a priority hint for SignalEngine.
+/// Wraps the HTTP call in the shared "CoinGlass" Polly circuit-breaker pipeline and
+/// exposes an <see cref="IsAvailable"/> flag so SignalEngine can skip the screening
+/// step cleanly when the circuit is open.
 /// </summary>
 public class CoinGlassScreeningService : ICoinGlassScreeningProvider
 {
@@ -21,17 +28,23 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
 
     private readonly HttpClient _httpClient;
     private readonly ILogger<CoinGlassScreeningService> _logger;
+    private readonly ResiliencePipeline _pipeline;
     private readonly string? _apiKey;
     private readonly int _investmentUsd;
     private readonly double _minAprThreshold;
 
+    /// <inheritdoc />
+    public bool IsAvailable { get; private set; } = true;
+
     public CoinGlassScreeningService(
         HttpClient httpClient,
         IConfiguration configuration,
-        ILogger<CoinGlassScreeningService> logger)
+        ILogger<CoinGlassScreeningService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _httpClient = httpClient;
         _logger = logger;
+        _pipeline = pipelineProvider.GetPipeline("CoinGlass");
         _apiKey = configuration["ExchangeConnectors:CoinGlass:ApiKey"];
         _investmentUsd = configuration.GetValue<int?>("ExchangeConnectors:CoinGlass:ScreeningInvestmentUsd") ?? 10000;
         _minAprThreshold = configuration.GetValue<double?>("ExchangeConnectors:CoinGlass:ScreeningMinAprPct") ?? 10d;
@@ -49,15 +62,69 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Add("CG-API-KEY", _apiKey);
 
+        HttpResponseMessage response;
         try
         {
-            using var response = await _httpClient.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode)
-            {
-                _logger.LogWarning("CoinGlass arbitrage screening returned {StatusCode}", response.StatusCode);
-                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            }
+            response = await _pipeline.ExecuteAsync(
+                async token =>
+                {
+                    var r = await _httpClient.SendAsync(request, token);
+                    if (!r.IsSuccessStatusCode)
+                    {
+                        string body;
+                        try
+                        {
+                            body = await r.Content.ReadAsStringAsync(token);
+                        }
+                        catch (Exception readEx) when (readEx is not OperationCanceledException)
+                        {
+                            body = $"<body read failed: {readEx.GetType().Name}>";
+                        }
 
+                        var statusCode = r.StatusCode;
+                        r.Dispose();
+                        throw new CoinGlassScreeningFailureException(
+                            (int)statusCode,
+                            HttpResponseBodyLogging.TruncateAndSanitize(body));
+                    }
+                    return r;
+                },
+                ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Caller cancelled — propagate the cancellation. HTTP timeouts also surface as
+            // TaskCanceledException but must be treated as failures (handled by the generic
+            // catch below) so the pipeline's circuit breaker can count them.
+            throw;
+        }
+        catch (BrokenCircuitException ex)
+        {
+            if (IsAvailable)
+            {
+                _logger.LogInformation("CoinGlass screening circuit breaker OPENED — short-circuiting requests");
+            }
+            IsAvailable = false;
+            _logger.LogWarning("CoinGlass arbitrage screening short-circuited: {Message}",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (CoinGlassScreeningFailureException ex)
+        {
+            _logger.LogWarning("CoinGlass arbitrage screening returned {StatusCode}: {Body}",
+                ex.StatusCode,
+                ex.SanitizedBody);
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "CoinGlass arbitrage screening request failed: {Body}",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        using (response)
+        {
             CoinGlassArbitrageResponse? data;
             try
             {
@@ -65,7 +132,18 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
             }
             catch (JsonException ex)
             {
-                _logger.LogWarning(ex, "Failed to parse CoinGlass arbitrage response");
+                string body;
+                try
+                {
+                    body = await response.Content.ReadAsStringAsync(ct);
+                }
+                catch (Exception readEx) when (readEx is not OperationCanceledException)
+                {
+                    body = ex.Message;
+                }
+
+                _logger.LogWarning(ex, "Failed to parse CoinGlass arbitrage response: {Body}",
+                    HttpResponseBodyLogging.TruncateAndSanitize(body));
                 return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
 
@@ -73,6 +151,14 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
             {
                 _logger.LogDebug("CoinGlass arbitrage endpoint returned no data or error code {Code}", data?.Code);
                 return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            // Flip IsAvailable back on after a successful call — the circuit closed post
+            // half-open, so downstream consumers can safely trust the fresh data.
+            if (!IsAvailable)
+            {
+                _logger.LogInformation("CoinGlass screening circuit breaker CLOSED — requests flowing again");
+                IsAvailable = true;
             }
 
             var hot = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -95,15 +181,6 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
 
             return hot;
         }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "CoinGlass arbitrage screening request failed");
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
     }
 
     private static string NormalizeSymbol(string symbol)
@@ -119,6 +196,28 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
         }
 
         return normalized;
+    }
+
+    /// <summary>
+    /// Sentinel exception thrown from inside the Polly pipeline on non-2xx responses so the
+    /// shared "CoinGlass" circuit breaker (which handles exceptions, not status codes) counts
+    /// HTTP error responses as failures alongside network exceptions.
+    /// </summary>
+#pragma warning disable CA1064 // Exceptions should be public — intentionally file-scoped sentinel
+#pragma warning disable CA1032 // Standard exception constructors — intentionally minimal
+    private sealed class CoinGlassScreeningFailureException : Exception
+#pragma warning restore CA1032
+#pragma warning restore CA1064
+    {
+        public int StatusCode { get; }
+        public string SanitizedBody { get; }
+
+        public CoinGlassScreeningFailureException(int statusCode, string sanitizedBody)
+            : base($"CoinGlass screening returned {statusCode}")
+        {
+            StatusCode = statusCode;
+            SanitizedBody = sanitizedBody;
+        }
     }
 
     private sealed class CoinGlassArbitrageResponse

@@ -3,8 +3,11 @@ using System.Text;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Infrastructure.Services;
+using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Polly.Registry;
 
 namespace FundingRateArb.Tests.Unit.Infrastructure;
 
@@ -58,7 +61,8 @@ public class CoinGlassScreeningServiceTests : IDisposable
     private (CoinGlassScreeningService Service, StubHandler Handler) MakeService(
         string? apiKey = "test-key",
         int investmentUsd = 10000,
-        double minAprPct = 10d)
+        double minAprPct = 10d,
+        ResiliencePipelineProvider<string>? pipelineProvider = null)
     {
         var handler = new StubHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
@@ -70,8 +74,34 @@ public class CoinGlassScreeningServiceTests : IDisposable
             ["ExchangeConnectors:CoinGlass:ScreeningMinAprPct"] = minAprPct.ToString(System.Globalization.CultureInfo.InvariantCulture),
         };
         var config = new ConfigurationBuilder().AddInMemoryCollection(configValues!).Build();
-        var service = new CoinGlassScreeningService(client, config, NullLogger<CoinGlassScreeningService>.Instance);
+        var service = new CoinGlassScreeningService(
+            client,
+            config,
+            NullLogger<CoinGlassScreeningService>.Instance,
+            pipelineProvider ?? TestResiliencePipelineProvider.NoOp());
         return (service, handler);
+    }
+
+    private (CoinGlassScreeningService Service, StubHandler Handler, ListLogger<CoinGlassScreeningService> Logger) MakeServiceWithLogger(
+        ResiliencePipelineProvider<string>? pipelineProvider = null)
+    {
+        var handler = new StubHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        _clientsToDispose.Add(client);
+        var configValues = new Dictionary<string, string?>
+        {
+            ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
+            ["ExchangeConnectors:CoinGlass:ScreeningInvestmentUsd"] = "10000",
+            ["ExchangeConnectors:CoinGlass:ScreeningMinAprPct"] = "10",
+        };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(configValues!).Build();
+        var logger = new ListLogger<CoinGlassScreeningService>();
+        var service = new CoinGlassScreeningService(
+            client,
+            config,
+            logger,
+            pipelineProvider ?? TestResiliencePipelineProvider.NoOp());
+        return (service, handler, logger);
     }
 
     private static HttpResponseMessage JsonResponse(string body, HttpStatusCode status = HttpStatusCode.OK) =>
@@ -260,12 +290,175 @@ public class CoinGlassScreeningServiceTests : IDisposable
         {
             ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
         }!).Build();
-        var service = new CoinGlassScreeningService(client, config, NullLogger<CoinGlassScreeningService>.Instance);
+        var service = new CoinGlassScreeningService(
+            client,
+            config,
+            NullLogger<CoinGlassScreeningService>.Instance,
+            TestResiliencePipelineProvider.NoOp());
 
         // Must not throw — the outer catch swallows HttpRequestException.
         var result = await service.GetHotSymbolsAsync();
 
         result.Should().BeEmpty(
             "transport exceptions must be caught and return an empty set");
+    }
+
+    // ── plan-v61 Task 2.2: body logging, IsAvailable, Polly circuit breaker ──
+
+    private static HttpResponseMessage ErrorJson(HttpStatusCode status, string body) =>
+        new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task CoinGlassScreeningService_Returns401_LogsBodyAndReturnsUnavailable()
+    {
+        var (service, handler, logger) = MakeServiceWithLogger();
+        handler.Responses.Enqueue(ErrorJson(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}"));
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("401", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("unauthorized", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_Returns429_LogsBodyAndReturnsUnavailable()
+    {
+        var (service, handler, logger) = MakeServiceWithLogger();
+        handler.Responses.Enqueue(ErrorJson(HttpStatusCode.TooManyRequests, "{\"error\":\"rate limited\"}"));
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("429", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("rate limited", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_Returns500_LogsBodyAndReturnsUnavailable()
+    {
+        var (service, handler, logger) = MakeServiceWithLogger();
+        handler.Responses.Enqueue(ErrorJson(HttpStatusCode.InternalServerError, "{\"error\":\"server boom\"}"));
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("500", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("server boom", LogLevel.Warning).Should().BeTrue();
+    }
+
+    private sealed class TimeoutHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new TaskCanceledException("request timeout after 30s");
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_Timeout_LogsAndReturnsUnavailable()
+    {
+        var handler = new TimeoutHandler();
+        var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        _clientsToDispose.Add(client);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
+        }!).Build();
+        var logger = new ListLogger<CoinGlassScreeningService>();
+        var service = new CoinGlassScreeningService(client, config, logger, TestResiliencePipelineProvider.NoOp());
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("CoinGlass arbitrage screening request failed", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_MalformedJson_LogsAndReturnsUnavailable()
+    {
+        var (service, handler, logger) = MakeServiceWithLogger();
+        handler.Responses.Enqueue(JsonResponse("{bogus"));
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("Failed to parse CoinGlass arbitrage response", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_CircuitOpens_After5ConsecutiveFailures()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+        var (service, handler, _) = MakeServiceWithLogger(provider);
+
+        for (int i = 0; i < 10; i++)
+        {
+            handler.Responses.Enqueue(ErrorJson(HttpStatusCode.InternalServerError, "fail"));
+        }
+
+        for (int i = 0; i < 10 && service.IsAvailable; i++)
+        {
+            await service.GetHotSymbolsAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+
+        service.IsAvailable.Should().BeFalse("circuit breaker should open after consecutive failures");
+
+        var requestsBeforeShortCircuit = handler.Requests.Count;
+
+        // Subsequent calls must not hit the handler
+        for (int i = 0; i < 3; i++)
+        {
+            await service.GetHotSymbolsAsync();
+        }
+        handler.Requests.Count.Should().Be(requestsBeforeShortCircuit,
+            "open circuit must short-circuit without hitting SendAsync");
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_CircuitHalfOpens_After5Minutes()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+        var (service, handler, _) = MakeServiceWithLogger(provider);
+
+        // Seed enough failures to open the circuit
+        for (int i = 0; i < 15; i++)
+        {
+            handler.Responses.Enqueue(ErrorJson(HttpStatusCode.InternalServerError, "fail"));
+        }
+
+        for (int i = 0; i < 10 && service.IsAvailable; i++)
+        {
+            await service.GetHotSymbolsAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        service.IsAvailable.Should().BeFalse();
+
+        var requestsBeforeHalfOpen = handler.Requests.Count;
+
+        // Advance past the 5-minute break window — the next call should be a probe
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        await service.GetHotSymbolsAsync();
+
+        handler.Requests.Count.Should().BeGreaterThan(requestsBeforeHalfOpen,
+            "after the break window a probe request should be allowed through");
+    }
+
+    [Fact]
+    public async Task CoinGlassScreeningService_BodyLogging_RedactsCgApiKey()
+    {
+        var (service, handler, logger) = MakeServiceWithLogger();
+        handler.Responses.Enqueue(ErrorJson(
+            HttpStatusCode.Unauthorized,
+            "CG-API-KEY: leaked-key\nerror: invalid"));
+
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty();
+        var warnings = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warnings.Should().NotBeEmpty();
+        warnings.Should().NotContain(e => e.Message.Contains("leaked-key", StringComparison.Ordinal));
+        warnings.Should().Contain(e => e.Message.Contains("REDACTED", StringComparison.Ordinal));
     }
 }

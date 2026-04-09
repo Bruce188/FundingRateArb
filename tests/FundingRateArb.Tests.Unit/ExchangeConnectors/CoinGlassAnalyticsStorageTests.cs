@@ -5,6 +5,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -47,7 +48,12 @@ public class CoinGlassAnalyticsStorageTests
             })
             .Build();
 
-        return new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, _mockAnalyticsRepo.Object);
+        return new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            _mockAnalyticsRepo.Object,
+            TestResiliencePipelineProvider.NoOp());
     }
 
     [Fact]
