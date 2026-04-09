@@ -356,6 +356,7 @@ try
     // See: dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "0x..."
     builder.Services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
     builder.Services.AddSingleton<ILeverageTierProvider, LeverageTierCache>();
+    builder.Services.AddScoped<IExchangeSymbolConstraintsProvider, ExchangeSymbolConstraintsProvider>();
     builder.Services.AddScoped<HyperliquidConnector>();
     builder.Services.AddHttpClient<LighterConnector>(client =>
     {

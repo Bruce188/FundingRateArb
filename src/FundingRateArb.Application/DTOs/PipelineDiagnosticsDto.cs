@@ -18,6 +18,14 @@ public class PipelineDiagnosticsDto
     public int NetPositiveBelowEdgeGuardrail { get; set; }
 
     public int PairsFilteredByBreakeven { get; set; }
+
+    /// <summary>
+    /// Opportunities filtered because sized notional would exceed an exchange's
+    /// per-symbol <c>MAX_NOTIONAL_VALUE</c> limit on at least one leg. Tracked so
+    /// operators see "WLFI dropped by Aster cap" instead of a silent skip.
+    /// </summary>
+    public int PairsFilteredByExchangeSymbolCap { get; set; }
+
     public int PairsPassing { get; set; }
     public decimal BestRawSpread { get; set; }
     public int StalenessMinutes { get; set; }

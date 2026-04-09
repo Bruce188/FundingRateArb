@@ -14,6 +14,7 @@ public class SignalEngine : ISignalEngine
     private readonly IRatePredictionService? _predictionService;
     private readonly ILeverageTierProvider? _tierProvider;
     private readonly ICoinGlassScreeningProvider? _screeningProvider;
+    private readonly IExchangeSymbolConstraintsProvider? _symbolConstraintsProvider;
     private readonly ILogger<SignalEngine>? _logger;
 
     public SignalEngine(
@@ -22,6 +23,7 @@ public class SignalEngine : ISignalEngine
         IRatePredictionService? predictionService = null,
         ILeverageTierProvider? tierProvider = null,
         ICoinGlassScreeningProvider? screeningProvider = null,
+        IExchangeSymbolConstraintsProvider? symbolConstraintsProvider = null,
         ILogger<SignalEngine>? logger = null)
     {
         _uow = uow;
@@ -29,6 +31,7 @@ public class SignalEngine : ISignalEngine
         _predictionService = predictionService;
         _tierProvider = tierProvider;
         _screeningProvider = screeningProvider;
+        _symbolConstraintsProvider = symbolConstraintsProvider;
         _logger = logger;
     }
 
@@ -301,6 +304,38 @@ public class SignalEngine : ISignalEngine
                     {
                         diagnostics.PairsFilteredByBreakeven++;
                         continue;
+                    }
+
+                    // Exchange per-symbol notional cap filter: if either leg's exchange exposes a
+                    // MAX_NOTIONAL_VALUE (e.g. Aster's WLFI cap), reject candidates whose sized
+                    // notional would exceed the cap BEFORE execution. Prevents the 2026-04-09
+                    // WLFI failure mode where the Aster leg rejected after the Lighter leg had
+                    // already opened, forcing an emergency close.
+                    if (_symbolConstraintsProvider is not null)
+                    {
+                        var cappedLeverageForCap = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
+                        var sizedNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;
+                        var longMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
+                            longR.Exchange.Name, symbol!, ct);
+                        var shortMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
+                            shortR.Exchange.Name, symbol!, ct);
+                        var cappedBy = string.Empty;
+                        if (longMaxNotional.HasValue && sizedNotional > longMaxNotional.Value)
+                        {
+                            cappedBy = longR.Exchange.Name;
+                        }
+                        else if (shortMaxNotional.HasValue && sizedNotional > shortMaxNotional.Value)
+                        {
+                            cappedBy = shortR.Exchange.Name;
+                        }
+                        if (!string.IsNullOrEmpty(cappedBy))
+                        {
+                            diagnostics.PairsFilteredByExchangeSymbolCap++;
+                            _logger?.LogDebug(
+                                "Opportunity {Asset} {Long}/{Short} filtered: sized notional {Notional} exceeds {Exchange} MAX_NOTIONAL_VALUE cap",
+                                symbol, longR.Exchange.Name, shortR.Exchange.Name, sizedNotional, cappedBy);
+                            continue;
+                        }
                     }
 
                     // Trend analysis: check if funding spread has been favorable for N consecutive snapshots.
