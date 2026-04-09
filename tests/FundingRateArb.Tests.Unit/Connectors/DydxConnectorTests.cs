@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Domain.Enums;
@@ -553,5 +554,108 @@ public class DydxConnectorTests
         var result = await connector.HasOpenPositionAsync("BTC", Side.Long);
 
         result.Should().BeNull();
+    }
+
+    // ── Task 4.1: StringDecimalConverter null-oracle handling ──────────────────
+
+    private static readonly JsonSerializerOptions StringDecimalConverterOptions = new()
+    {
+        Converters = { new StringDecimalConverter() }
+    };
+
+    [Fact]
+    public void StringDecimalConverter_Null_ReturnsZero()
+    {
+        // dYdX returns null oraclePrice for inactive markets (e.g. WTI-USD outside trading hours).
+        // The converter must normalize null to 0m rather than throwing InvalidOperationException.
+        var result = JsonSerializer.Deserialize<decimal>("null", StringDecimalConverterOptions);
+
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public void DydxPerpetualMarketsResponse_Deserializes_WithNullOraclePrice()
+    {
+        // Full response fixture containing an inactive market with `oraclePrice: null`.
+        // The response must parse successfully and the inactive market's OraclePrice must be 0m.
+        var json = """
+        {
+            "markets": {
+                "WTI-USD": {
+                    "ticker": "WTI-USD",
+                    "status": "INACTIVE",
+                    "oraclePrice": null,
+                    "atomicResolution": -10,
+                    "quantumConversionExponent": -9,
+                    "stepSize": "0.01",
+                    "tickSize": "0.1",
+                    "initialMarginFraction": "0.1",
+                    "stepBaseQuantums": 100000000,
+                    "subticksPerTick": 1000000,
+                    "clobPairId": "42",
+                    "nextFundingRate": "0"
+                }
+            }
+        }
+        """;
+
+        var response = JsonSerializer.Deserialize<DydxPerpetualMarketsResponse>(json);
+
+        response.Should().NotBeNull();
+        response!.Markets.Should().ContainKey("WTI-USD");
+        response.Markets["WTI-USD"].OraclePrice.Should().Be(0m);
+        response.Markets["WTI-USD"].Status.Should().Be("INACTIVE");
+    }
+
+    [Fact]
+    public async Task DydxConnector_SkipsMarkets_WithNullOraclePrice()
+    {
+        // End-to-end: a perpetualMarkets payload containing an inactive market with `oraclePrice: null`
+        // must not throw during deserialization, and the inactive market must be excluded from
+        // GetFundingRatesAsync output (existing ACTIVE-only filter handles the exclusion).
+        var json = """
+        {
+            "markets": {
+                "BTC-USD": {
+                    "ticker": "BTC-USD",
+                    "status": "ACTIVE",
+                    "oraclePrice": "50000",
+                    "atomicResolution": -10,
+                    "quantumConversionExponent": -9,
+                    "stepSize": "0.0001",
+                    "tickSize": "1",
+                    "initialMarginFraction": "0.05",
+                    "stepBaseQuantums": 1000000,
+                    "subticksPerTick": 100000,
+                    "clobPairId": "0",
+                    "nextFundingRate": "0.0001"
+                },
+                "WTI-USD": {
+                    "ticker": "WTI-USD",
+                    "status": "INACTIVE",
+                    "oraclePrice": null,
+                    "atomicResolution": -10,
+                    "quantumConversionExponent": -9,
+                    "stepSize": "0.01",
+                    "tickSize": "0.1",
+                    "initialMarginFraction": "0.1",
+                    "stepBaseQuantums": 100000000,
+                    "subticksPerTick": 1000000,
+                    "clobPairId": "42",
+                    "nextFundingRate": "0"
+                }
+            }
+        }
+        """;
+
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", json);
+
+        using var connector = BuildConnector(indexerHandler: handler);
+        var rates = await connector.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(1);
+        rates[0].Symbol.Should().Be("BTC");
+        rates.Should().NotContain(r => r.Symbol == "WTI");
     }
 }
