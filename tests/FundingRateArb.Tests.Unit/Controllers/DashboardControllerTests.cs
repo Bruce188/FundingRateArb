@@ -755,4 +755,28 @@ public class DashboardControllerTests
         model.BestSpread.Should().Be(0.0005m,
             "when opportunities exist, BestSpread should use opportunity spread, not position spread");
     }
+
+    [Fact]
+    public async Task Index_DegradedState_RendersBannerNotThrows()
+    {
+        // Azure production stabilization (plan-v60 Task 3.2): when the SignalEngine returns a
+        // degraded OpportunityResultDto (DatabaseAvailable=false), the dashboard controller
+        // must render a ViewResult with the banner-enabled view model instead of propagating
+        // an exception and rendering the 500 page.
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                DatabaseAvailable = false,
+                FailureReason = FundingRateArb.Application.DTOs.SignalEngineFailureReason.DatabaseUnavailable,
+                Opportunities = [],
+                AllNetPositive = [],
+            });
+
+        var result = await _controller.Index();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.DatabaseAvailable.Should().BeFalse(
+            "the controller must surface the degraded signal to the view");
+    }
 }
