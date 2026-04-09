@@ -50,7 +50,12 @@ public class DatabaseHealthCheckTests
 
         result.Status.Should().Be(HealthStatus.Degraded);
         result.Description.Should().Contain("transient failure");
-        result.Exception.Should().BeSameAs(loginEx);
+        // review-v131 B2: the raw exception must NOT be attached to the HealthCheckResult
+        // because the default /healthz response writer can serialize Exception.Message
+        // into the public response body. SqlException messages on login-phase failures
+        // commonly contain the server name, database name, and username — we must not
+        // leak infrastructure topology to anonymous callers.
+        result.Exception.Should().BeNull("public /healthz response must not leak exception detail");
     }
 
     [Fact]

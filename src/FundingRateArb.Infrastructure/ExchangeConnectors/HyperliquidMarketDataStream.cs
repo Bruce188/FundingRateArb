@@ -34,6 +34,11 @@ public class HyperliquidMarketDataStream : IMarketDataStream
     private readonly List<UpdateSubscription> _subscriptions = new();
     private readonly Queue<DateTime> _recentDisconnects = new();
     private DateTime? _throttleUntil;
+    // NB7 from review-v131: volatile counter backs IsConnected so the getter does NOT
+    // acquire _socketLock synchronously. Calling IsConnected from /healthz must never
+    // block on an in-flight subscribe (which itself awaits a WebSocket handshake under
+    // the lock). Updated under _socketLock after every _subscriptions mutation.
+    private volatile int _subscriptionCount;
 
     public HyperliquidMarketDataStream(
         IHyperLiquidSocketClient socketClient,
@@ -47,21 +52,11 @@ public class HyperliquidMarketDataStream : IMarketDataStream
 
     public string ExchangeName => "Hyperliquid";
 
-    public bool IsConnected
-    {
-        get
-        {
-            _socketLock.Wait();
-            try
-            {
-                return _subscriptions.Count > 0;
-            }
-            finally
-            {
-                _socketLock.Release();
-            }
-        }
-    }
+    // NB7 from review-v131: lock-free read. `/healthz` calls this synchronously via
+    // WebSocketStreamHealthCheck; the previous implementation blocked the calling thread
+    // on `_socketLock.Wait()` during any in-flight subscribe, which could hang the health
+    // endpoint for the duration of a HyperLiquid WebSocket handshake.
+    public bool IsConnected => _subscriptionCount > 0;
 
     public event Action<FundingRateDto>? OnRateUpdate;
     public event Action<string, string>? OnDisconnected;
@@ -138,6 +133,9 @@ public class HyperliquidMarketDataStream : IMarketDataStream
                         symbol, elapsed);
 
                 _subscriptions.Add(sub);
+                // Keep _subscriptionCount in sync with the list so IsConnected is
+                // lock-free and accurate.
+                _subscriptionCount = _subscriptions.Count;
             }
             catch (Exception ex)
             {
@@ -197,7 +195,10 @@ public class HyperliquidMarketDataStream : IMarketDataStream
                 _recentDisconnects.Dequeue();
             }
 
-            if (_recentDisconnects.Count > DisconnectThreshold
+            // NB10 from review-v131: `>=` not `>` so the documented "20 events per minute"
+            // threshold trips on the 20th event, matching the class XML comment. The
+            // previous `>` required 21 events, contradicting the stated behaviour.
+            if (_recentDisconnects.Count >= DisconnectThreshold
                 && (_throttleUntil is null || _throttleUntil <= now))
             {
                 _throttleUntil = now + ThrottleCooldown;
@@ -231,18 +232,40 @@ public class HyperliquidMarketDataStream : IMarketDataStream
 
     public async Task StopAsync()
     {
-        await _socketLock.WaitAsync().ConfigureAwait(false);
+        // N7 from review-v131: StopAsync previously called `_socketLock.WaitAsync()`
+        // with no token — if a subscribe was stuck inside the SDK during shutdown this
+        // would hang the process forever. Use a short timeout CTS so Stop can proceed
+        // to close whatever subscriptions it already has and let the SDK tear down.
+        using var stopTimeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
         List<UpdateSubscription> snapshot;
+        try
+        {
+            await _socketLock.WaitAsync(stopTimeoutCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning(
+                "HyperLiquid StopAsync could not acquire socket lock within 5s — proceeding with best-effort close");
+            // Best-effort snapshot without the lock — accepting that a concurrent
+            // subscribe may mutate the list. Shutdown is imminent; consistency is less
+            // important than progress.
+            snapshot = _subscriptions.ToList();
+            _subscriptions.Clear();
+            _subscriptionCount = 0;
+            goto closeSnapshot;
+        }
         try
         {
             snapshot = _subscriptions.ToList();
             _subscriptions.Clear();
+            _subscriptionCount = 0;
         }
         finally
         {
             _socketLock.Release();
         }
 
+        closeSnapshot:
         foreach (var sub in snapshot)
         {
             try

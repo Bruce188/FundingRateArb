@@ -35,6 +35,18 @@ public class SignalEngine : ISignalEngine
         _logger = logger;
     }
 
+    /// <summary>
+    /// Only exchanges in this set expose a per-symbol notional cap today. The SignalEngine
+    /// uses this as a synchronous pre-filter so non-capped pairs skip both async state-machine
+    /// allocations inside the O(n²) inner loop. Keep in sync with
+    /// <see cref="FundingRateArb.Infrastructure.Services.ExchangeSymbolConstraintsProvider"/>.
+    /// </summary>
+    private static readonly HashSet<string> ExchangesWithNotionalCaps =
+        new(StringComparer.OrdinalIgnoreCase) { "Aster" };
+
+    private static bool HasKnownSymbolCap(string longExchange, string shortExchange) =>
+        ExchangesWithNotionalCaps.Contains(longExchange) || ExchangesWithNotionalCaps.Contains(shortExchange);
+
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
         var result = await GetOpportunitiesWithDiagnosticsAsync(ct);
@@ -311,7 +323,18 @@ public class SignalEngine : ISignalEngine
                     // notional would exceed the cap BEFORE execution. Prevents the 2026-04-09
                     // WLFI failure mode where the Aster leg rejected after the Lighter leg had
                     // already opened, forcing an emergency close.
-                    if (_symbolConstraintsProvider is not null)
+                    //
+                    // NB6 from review-v131: synchronous pre-filter — the provider only returns
+                    // a non-null cap for exchanges that expose one (Aster today), so for the
+                    // common non-Aster pairs we skip both async state-machine allocations.
+                    // This keeps the O(n²) inner loop cheap.
+                    //
+                    // N3 from review-v131: `cappedLeverageForCap` is an upper bound on the
+                    // leverage actually used at execution (the tier provider may cap further).
+                    // That makes this filter conservative-safe — it may over-reject, never
+                    // under-reject. The opposite direction would allow orders that hit the
+                    // cap at execution, which defeats the whole point of the filter.
+                    if (_symbolConstraintsProvider is not null && HasKnownSymbolCap(longR.Exchange.Name, shortR.Exchange.Name))
                     {
                         var cappedLeverageForCap = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
                         var sizedNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;

@@ -53,8 +53,12 @@ public class DatabaseHealthCheck : IHealthCheck
         }
         catch (Exception ex)
         {
+            // B2 from review-v131: never pass the raw exception into the HealthCheckResult
+            // that ASP.NET Core serializes out to the public /healthz endpoint — SqlException
+            // messages on login-phase failures commonly contain the server name, database name,
+            // and username. Log the full exception server-side only.
             _logger.LogWarning(ex, "Database health check failed with transient error");
-            return HealthCheckResult.Degraded("database transient failure", ex);
+            return HealthCheckResult.Degraded("database transient failure");
         }
     }
 

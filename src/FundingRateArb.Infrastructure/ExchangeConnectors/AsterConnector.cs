@@ -54,7 +54,15 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
     private readonly ConcurrentDictionary<string, AsterSymbolConstraints> _symbolConstraintsCache = new();
     private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
-    private readonly SemaphoreSlim _symbolConstraintsLock = new(1, 1);
+    // B3 / NB5 from review-v131: no SemaphoreSlim across the HTTP refresh. The previous
+    // lock scope held the semaphore across the entire exchangeInfo call + Polly retries,
+    // causing cold-start stalls of 5-30s under concurrent load. Replaced by a
+    // "single-flight" in-flight Task field: concurrent callers share the same refresh Task.
+    private readonly object _refreshLock = new();
+    private Task<bool>? _refreshInFlight;
+    // Defensive cap on the symbol-cache write-through so a misbehaving upstream cannot
+    // explode memory. Aster lists roughly ~200 symbols in production; 10k is 50x headroom.
+    private const int SymbolConstraintsCacheMaxSize = 10_000;
     private volatile bool _symbolInfoLoaded;
     private DateTime _symbolConstraintsExpiry = DateTime.MinValue;
 
@@ -615,75 +623,136 @@ public class AsterConnector : IExchangeConnector, IDisposable
     {
         ct.ThrowIfCancellationRequested();
 
-        // Fast path: cache is still within TTL and contains this symbol.
+        // Fast path: cache is still within TTL and contains this symbol. This path hits
+        // a ConcurrentDictionary read + one DateTime compare — no lock, no async hop.
         if (DateTime.UtcNow < _symbolConstraintsExpiry &&
             _symbolConstraintsCache.TryGetValue(symbol, out var cached))
         {
             return cached;
         }
 
-        await _symbolConstraintsLock.WaitAsync(ct);
+        // B3 single-flight: only one refresh runs at a time, but all concurrent waiters
+        // share the same in-flight Task and are released as soon as it completes — no
+        // serialized HTTP round-trips, no 30-second Polly retry stalling the whole cycle.
+        await EnsureConstraintsRefreshedAsync(ct).ConfigureAwait(false);
+
+        if (_symbolConstraintsCache.TryGetValue(symbol, out var afterRefresh))
+        {
+            return afterRefresh;
+        }
+
+        // NB4 from review-v131: the symbol was absent from the exchangeInfo payload (or the
+        // refresh itself failed). Cache a "no cap" sentinel so we don't hot-loop the refresh
+        // on every subsequent call for this unknown symbol until TTL expiry.
+        var sentinel = new AsterSymbolConstraints
+        {
+            Symbol = symbol,
+            MaxNotionalValue = decimal.MaxValue,
+            MinQuantity = 0m,
+            StepSize = 0m,
+        };
+        // Only write the sentinel when we're under the size cap (NB5 defense against
+        // unbounded cache growth from a misbehaving upstream or attacker-controlled symbol).
+        if (_symbolConstraintsCache.Count < SymbolConstraintsCacheMaxSize)
+        {
+            _symbolConstraintsCache.TryAdd(symbol, sentinel);
+        }
+        _logger.LogWarning(
+            "Aster symbol constraints unavailable for {Symbol}; caching no-cap sentinel until next refresh.",
+            symbol);
+        return sentinel;
+    }
+
+    /// <summary>
+    /// Single-flight refresh of the constraints cache. Concurrent callers share one
+    /// in-flight Task — no semaphore held across the HTTP call, no cold-start stall.
+    /// </summary>
+    private Task<bool> EnsureConstraintsRefreshedAsync(CancellationToken ct)
+    {
+        // Cheap double-check — avoid the lock if the cache is already warm.
+        if (DateTime.UtcNow < _symbolConstraintsExpiry)
+        {
+            return Task.FromResult(true);
+        }
+
+        Task<bool> task;
+        lock (_refreshLock)
+        {
+            if (DateTime.UtcNow < _symbolConstraintsExpiry)
+            {
+                return Task.FromResult(true);
+            }
+            // If another caller is mid-refresh, return its Task and await it instead of
+            // starting a second HTTP call.
+            if (_refreshInFlight is { IsCompleted: false } existing)
+            {
+                return existing;
+            }
+            // Start a new refresh and publish the Task for other concurrent callers.
+            task = RefreshConstraintsCacheAsync(ct);
+            _refreshInFlight = task;
+        }
+
+        // Clear the in-flight pointer once the refresh completes so subsequent callers
+        // past TTL expiry start a new refresh rather than seeing a stale completed Task.
+        _ = task.ContinueWith(_ =>
+        {
+            lock (_refreshLock)
+            {
+                if (ReferenceEquals(_refreshInFlight, task))
+                {
+                    _refreshInFlight = null;
+                }
+            }
+        }, TaskScheduler.Default);
+
+        return task;
+    }
+
+    private async Task<bool> RefreshConstraintsCacheAsync(CancellationToken ct)
+    {
         try
         {
-            // Double-check after acquiring the lock — another caller may have just refreshed.
-            if (DateTime.UtcNow < _symbolConstraintsExpiry &&
-                _symbolConstraintsCache.TryGetValue(symbol, out cached))
-            {
-                return cached;
-            }
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct)
+                .ConfigureAwait(false);
 
-            try
+            if (result.Success && result.Data?.Symbols is { } symbols)
             {
-                var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
-                var result = await pipeline.ExecuteAsync(
-                    async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
-
-                if (result.Success && result.Data?.Symbols != null)
+                var written = 0;
+                foreach (var s in symbols)
                 {
-                    foreach (var s in result.Data.Symbols)
+                    // NB5 defensive cap against unbounded cache growth from a misbehaving
+                    // upstream response. Aster lists ~200 symbols in production.
+                    if (_symbolConstraintsCache.Count >= SymbolConstraintsCacheMaxSize &&
+                        !_symbolConstraintsCache.ContainsKey(s.Name))
                     {
-                        _symbolConstraintsCache[s.Name] = BuildConstraints(s);
+                        continue;
                     }
-                    _symbolConstraintsExpiry = DateTime.UtcNow + SymbolConstraintsTtl;
+                    _symbolConstraintsCache[s.Name] = BuildConstraints(s);
+                    written++;
                 }
-                else
-                {
-                    _logger.LogWarning(
-                        "Aster exchangeInfo request returned failure while refreshing constraints for {Symbol}: {Error}",
-                        symbol, result.Error?.Message ?? "unknown");
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(
-                    "Aster exchangeInfo refresh failed for {Symbol}; falling back to cached constraints: {Error}",
-                    symbol, ex.Message);
+                _symbolConstraintsExpiry = DateTime.UtcNow + SymbolConstraintsTtl;
+                _logger.LogDebug(
+                    "Aster symbol constraints cache refreshed: {Written} symbols written (cap {Cap})",
+                    written, SymbolConstraintsCacheMaxSize);
+                return true;
             }
 
-            if (_symbolConstraintsCache.TryGetValue(symbol, out var fromCache))
-            {
-                return fromCache;
-            }
-
-            // No cache yet and refresh failed — use a safe "no cap" default so callers are not blocked.
             _logger.LogWarning(
-                "Aster symbol constraints unavailable for {Symbol}; returning MaxValue default (no cap).",
-                symbol);
-            return new AsterSymbolConstraints
-            {
-                Symbol = symbol,
-                MaxNotionalValue = decimal.MaxValue,
-                MinQuantity = 0m,
-                StepSize = 0m,
-            };
+                "Aster exchangeInfo request returned failure while refreshing constraints: {Error}",
+                result.Error?.Message ?? "unknown");
+            return false;
         }
-        finally
+        catch (OperationCanceledException)
         {
-            _symbolConstraintsLock.Release();
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Aster exchangeInfo refresh failed; falling back to cached constraints");
+            return false;
         }
     }
 

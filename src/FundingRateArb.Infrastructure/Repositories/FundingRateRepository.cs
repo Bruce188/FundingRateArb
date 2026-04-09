@@ -19,12 +19,15 @@ public class FundingRateRepository : IFundingRateRepository
         _logger = logger;
     }
 
-    // Matches any error number on the DbContext retry allowlist, plus a loose
-    // substring check as a last-resort catch for providers that wrap the error
-    // number in a message without populating SqlException.Number.
+    // NB2 from review-v131: rely exclusively on SqlTransientErrorNumbers.Contains —
+    // the previous ex.Message.Contains("login") heuristic could false-match non-transient
+    // authz errors ("login not permitted") and keep the service in degraded mode.
     private static bool IsTransientLoginFailure(SqlException ex) =>
-        SqlTransientErrorNumbers.Contains(ex.Number)
-        || ex.Message.Contains("login", StringComparison.OrdinalIgnoreCase);
+        SqlTransientErrorNumbers.Contains(ex.Number);
+
+    // NB9 from review-v131: cap the degraded path at 10s so the banner renders promptly
+    // instead of waiting up to 150s for EF's 5-retry × 30s-delay policy to exhaust.
+    private static readonly TimeSpan DegradedReadTimeout = TimeSpan.FromSeconds(10);
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
@@ -33,6 +36,8 @@ public class FundingRateRepository : IFundingRateRepository
         var maxTimes = _context.FundingRateSnapshots
             .GroupBy(f => new { f.ExchangeId, f.AssetId })
             .Select(g => new { g.Key.ExchangeId, g.Key.AssetId, MaxAt = g.Max(x => x.RecordedAt) });
+
+        using var timeoutCts = new CancellationTokenSource(DegradedReadTimeout);
 
         try
         {
@@ -44,17 +49,27 @@ public class FundingRateRepository : IFundingRateRepository
                 .Include(f => f.Exchange)
                 .Include(f => f.Asset)
                 .AsNoTracking()
-                .ToListAsync();
+                .ToListAsync(timeoutCts.Token);
         }
         catch (SqlException ex) when (IsTransientLoginFailure(ex))
         {
             // Re-throw as a domain exception so Application-layer callers (SignalEngine)
             // can return a degraded result without referencing Microsoft.Data.SqlClient.
-            _logger?.LogWarning(ex,
-                "SQL transient login-phase failure in GetLatestPerExchangePerAssetAsync (Number={ErrorNumber}); surfacing as DatabaseUnavailable",
-                ex.Number);
+            // NB2: log only the structural metadata — the full SqlException.Message
+            // commonly contains server name + username on login-phase failures.
+            _logger?.LogWarning(
+                "SQL transient login-phase failure in GetLatestPerExchangePerAssetAsync Number={ErrorNumber} Type={ExType}",
+                ex.Number, ex.GetType().Name);
             throw new DatabaseUnavailableException(
                 "Database temporarily unavailable during funding rate read.", ex);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger?.LogWarning(
+                "GetLatestPerExchangePerAssetAsync timed out after {TimeoutSeconds}s; surfacing as DatabaseUnavailable",
+                DegradedReadTimeout.TotalSeconds);
+            throw new DatabaseUnavailableException(
+                $"Database read exceeded {DegradedReadTimeout.TotalSeconds:0}s timeout.");
         }
     }
 
