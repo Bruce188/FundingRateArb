@@ -577,6 +577,23 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         }
     }
 
+    /// <summary>
+    /// Computes margin utilization with a zero-denominator safeguard. When the account
+    /// value collapses to zero with non-zero margin committed (cross-margin account
+    /// fully consumed by adverse PnL/funding), returns 1m (100% utilized) so the alert
+    /// threshold fires. Reporting 0% would mask the catastrophic state at exactly the
+    /// moment the alert is most needed. Exposed as internal so unit tests can verify the
+    /// branch matrix without mocking the Hyperliquid SDK pipeline.
+    /// </summary>
+    internal static decimal ComputeMarginUtilization(decimal accountValue, decimal totalMarginUsed)
+    {
+        if (accountValue > 0m)
+        {
+            return totalMarginUsed / accountValue;
+        }
+        return totalMarginUsed > 0m ? 1m : 0m;
+    }
+
     public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
     {
         try
@@ -604,13 +621,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 .FirstOrDefault(p => string.Equals(p.Position?.Symbol, asset, StringComparison.OrdinalIgnoreCase));
             var position = positionWrapper?.Position;
 
-            // When the account value collapses to zero with non-zero margin committed
-            // (cross-margin account fully consumed by adverse PnL/funding), report 100%
-            // utilization so the alert threshold fires. Reporting 0% would mask the
-            // catastrophic state at exactly the moment the alert is most needed.
-            var utilization = accountValue > 0
-                ? totalMarginUsed / accountValue
-                : (totalMarginUsed > 0 ? 1m : 0m);
+            var utilization = ComputeMarginUtilization(accountValue, totalMarginUsed);
 
             if (position is null)
             {

@@ -627,4 +627,38 @@ public class ExecutionEngineEdgeCaseTests
                 It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 2, It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    [Fact]
+    public async Task OpenPosition_UserCapIsZero_ClampedUpToOne()
+    {
+        // Defense-in-depth: the [Range(1, 50)] attribute prevents 0 via model binding,
+        // but the ExecutionEngine's own `< 1` clamp is the load-bearing safeguard if an
+        // entity is constructed directly (e.g., in code or via seeding).
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5, MaxLeverageCap = 0 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Math.Min(global=50, userCap=0) = 0, then `< 1` clamp forces to 1.
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPosition_UserCapIsOne_LeverageClampedToOne()
+    {
+        _mockUserSettings
+            .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
+            .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10, MaxLeverageCap = 1 });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        _mockLongConnector.Verify(
+            c => c.PlaceMarketOrderByQuantityAsync(
+                It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }

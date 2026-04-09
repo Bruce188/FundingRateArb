@@ -48,20 +48,34 @@ public class LighterConnectorMarginStateTests
     }
 
     [Fact]
-    public void ParseDecimalOrZero_CommaDecimalSeparator_ReturnsZeroUnderInvariantCulture()
+    public void ParseDecimalOrZero_CommaDecimalSeparator_ReturnsZeroUnderStrictStyles()
     {
         // Lighter API returns plain dotted decimals. A comma-separated value would only appear
-        // if a locale-sensitive caller mis-formatted the input. The invariant-culture parse must
-        // reject this rather than silently treat "1,5" as "15" (en-US thousands) or "1.5" (de-DE).
-        // This is a load-bearing test — culture-sensitive parsing has caused production incidents
-        // in this codebase before per the user's commit history feedback.
+        // if a locale-sensitive caller mis-formatted the input or if an upstream proxy mangled it.
+        // The strict NumberStyles (Float | AllowLeadingSign | AllowExponent) rejects thousands
+        // separators outright — "1,5" parses as 0m. This is the load-bearing test for CWE-1284
+        // defense: culture-sensitive parsing has caused production incidents before.
         var result = LighterConnector.ParseDecimalOrZero("1,5");
 
-        // NumberStyles.Any with InvariantCulture treats "," as a thousands separator,
-        // so "1,5" parses as 15 (one comma followed by digits is interpreted as a group).
-        // Document the actual behavior so future tightening to NumberStyles.Float
-        // (which would reject this) is intentional.
-        result.Should().BeOneOf(0m, 15m);
+        result.Should().Be(0m,
+            "strict NumberStyles rejects thousands separators to prevent 10x inflation bugs");
+    }
+
+    [Fact]
+    public void ParseDecimalOrZero_HexNotation_ReturnsZero()
+    {
+        // NumberStyles.Any would accept "0x1A" as hex; the strict styles reject it.
+        var result = LighterConnector.ParseDecimalOrZero("0x1A");
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ParseDecimalOrZero_ParenthesesNegative_ReturnsZero()
+    {
+        // NumberStyles.Any accepts "(100)" as -100 (accounting convention);
+        // the strict styles reject it. Upstream API uses explicit "-100" instead.
+        var result = LighterConnector.ParseDecimalOrZero("(100)");
+        result.Should().Be(0m);
     }
 
     [Fact]
@@ -78,5 +92,45 @@ public class LighterConnectorMarginStateTests
         // Lighter occasionally returns very small numbers in scientific notation
         var result = LighterConnector.ParseDecimalOrZero("1.5e-3");
         result.Should().Be(0.0015m);
+    }
+
+    // ── ComputeMarginUtilization zero-denominator safeguard ────────────────
+
+    [Theory]
+    [InlineData(100, 50, 0.5)]       // 50% utilization
+    [InlineData(100, 100, 1.0)]      // 100% utilization
+    [InlineData(100, 0, 0.0)]        // idle account
+    [InlineData(200, 150, 0.75)]     // 75% utilization
+    public void ComputeMarginUtilization_NormalCase_ReturnsRatio(double accountValue, double marginUsed, double expected)
+    {
+        var result = LighterConnector.ComputeMarginUtilization((decimal)accountValue, (decimal)marginUsed);
+        result.Should().Be((decimal)expected);
+    }
+
+    [Fact]
+    public void ComputeMarginUtilization_ZeroAccountValueWithMargin_ReturnsFullUtilization()
+    {
+        // The catastrophic case: account value has collapsed to 0 while margin is
+        // still committed. Reporting 0m (the old bug) would mask the emergency.
+        var result = LighterConnector.ComputeMarginUtilization(0m, 50m);
+        result.Should().Be(1m,
+            "zero denominator with non-zero margin must report 100% so the alert fires");
+    }
+
+    [Fact]
+    public void ComputeMarginUtilization_ZeroAccountValueZeroMargin_ReturnsZero()
+    {
+        // Legitimately empty account — no margin committed, report 0.
+        var result = LighterConnector.ComputeMarginUtilization(0m, 0m);
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ComputeMarginUtilization_NegativeAccountValue_TreatedAsZero()
+    {
+        // Defensive: if the API ever returns a negative totalAssetValue, treat as
+        // zero-denominator. The `> 0` guard handles this.
+        var result = LighterConnector.ComputeMarginUtilization(-10m, 50m);
+        result.Should().Be(1m);
     }
 }

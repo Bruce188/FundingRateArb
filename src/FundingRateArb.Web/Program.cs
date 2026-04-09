@@ -417,6 +417,14 @@ try
     {
         client.BaseAddress = new Uri("https://open-api-v3.coinglass.com/");
         client.Timeout = TimeSpan.FromSeconds(30);
+        client.MaxResponseContentBufferSize = 2_000_000;
+    })
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        // Same rationale as the v4 screening client: CG-API-KEY is a custom header,
+        // so .NET will not strip it on cross-origin redirects. Disable auto-redirect
+        // to prevent credential exfiltration if CoinGlass infrastructure is compromised.
+        AllowAutoRedirect = false,
     });
     builder.Services.AddHttpClient<ICoinGlassScreeningProvider, CoinGlassScreeningService>(client =>
     {

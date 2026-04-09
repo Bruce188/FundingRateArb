@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Aster.Net.Enums;
 using Aster.Net.Interfaces.Clients;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
@@ -81,7 +82,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 ExchangeName = ExchangeName,
                 Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
                 RawRate = mp.FundingRate ?? 0m,
-                RatePerHour = (mp.FundingRate ?? 0m) / 8m, // 8-hour rate normalised to per-hour
+                RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, 8),
                 MarkPrice = mp.MarkPrice,
                 IndexPrice = mp.IndexPrice,
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),

@@ -101,11 +101,10 @@ public class CoinGlassScreeningServiceTests
     [Fact]
     public async Task GetHotSymbolsAsync_NonZeroErrorCode_ReturnsEmptySet()
     {
-        var (service, _) = MakeService();
-        var (svc2, handler) = MakeService();
+        var (service, handler) = MakeService();
         handler.Responses.Enqueue(JsonResponse("{\"code\":\"40001\",\"msg\":\"rate limited\",\"data\":[]}"));
 
-        var result = await svc2.GetHotSymbolsAsync();
+        var result = await service.GetHotSymbolsAsync();
 
         result.Should().BeEmpty();
     }
@@ -201,17 +200,45 @@ public class CoinGlassScreeningServiceTests
     }
 
     [Fact]
-    public async Task GetHotSymbolsAsync_NetworkException_ReturnsEmptySet()
+    public async Task GetHotSymbolsAsync_NonSuccessStatusFromServer_ReturnsEmptySet()
     {
+        // 503 path — goes through the !response.IsSuccessStatusCode early-return.
         var (service, handler) = MakeService();
-        // No queued response and SendAsync returns 500 by default — exercises the catch path
-        // by simulating consistent server failure rather than a true network exception.
-        // For exception coverage the StubHandler stays simple; the production catch covers
-        // both transport and parse exceptions in a single defensive block.
         handler.Responses.Enqueue(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
 
         var result = await service.GetHotSymbolsAsync();
 
         result.Should().BeEmpty();
+    }
+
+    /// <summary>
+    /// Actually throws from SendAsync so the outer catch block runs.
+    /// The previous name "NetworkException" was misleading — a 503 response is
+    /// not a network exception.
+    /// </summary>
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            throw new HttpRequestException("connection refused");
+        }
+    }
+
+    [Fact]
+    public async Task GetHotSymbolsAsync_TransportException_ReturnsEmptySetAndDoesNotThrow()
+    {
+        var handler = new ThrowingHandler();
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
+        }!).Build();
+        var service = new CoinGlassScreeningService(client, config, NullLogger<CoinGlassScreeningService>.Instance);
+
+        // Must not throw — the outer catch swallows HttpRequestException.
+        var result = await service.GetHotSymbolsAsync();
+
+        result.Should().BeEmpty(
+            "transport exceptions must be caught and return an empty set");
     }
 }

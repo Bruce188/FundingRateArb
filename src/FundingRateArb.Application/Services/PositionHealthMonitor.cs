@@ -569,7 +569,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         int negativeFundingCycles = 0,
         decimal entrySpreadCostPct = 0m)
     {
-        // Priority: StopLoss > LiquidationRisk > DivergenceCritical > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
+        // Priority (top wins):
+        //   StopLoss > LiquidationRisk > DivergenceCritical > PnlTargetReached(with divergence deferral)
+        //   > SpreadCollapsed(emergency path, bypasses MinHoldTime) > FundingFlipped > MaxHoldTimeReached
+        //   > SpreadCollapsed(normal path, respects MinHoldTime)
+        // Note: both SpreadCollapsed returns use the same enum value; downstream alerts can
+        // distinguish by checking the spread magnitude against EmergencyCloseSpreadThreshold.
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
         {
             return CloseReason.StopLoss;
@@ -787,8 +792,12 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 longMargin?.MarginUtilizationPct ?? 0m,
                 shortMargin?.MarginUtilizationPct ?? 0m);
 
-            // Split threshold per Analysis Section 7.4: 60% for 3-5x leverage, 70% for 1-3x.
-            // Higher leverage = tighter buffer before liquidation, so alert earlier.
+            // Split threshold per Analysis Section 7.4: at >=3x leverage, cap the alert
+            // threshold at 60% even if the operator's configured MarginUtilizationAlertPct
+            // is looser; at <3x leverage, use the operator's setting as-is. If the operator
+            // tightens the config to e.g. 0.50m, the stricter value always wins at high
+            // leverage via Math.Min. Reason: tighter buffer before liquidation at higher
+            // leverage, so we want to alert earlier.
             var leverageAwareThreshold = pos.Leverage >= 3
                 ? Math.Min(config.MarginUtilizationAlertPct, 0.60m)
                 : config.MarginUtilizationAlertPct;

@@ -1650,12 +1650,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 marginUsed = 0m;
             }
 
-            // When totalAssetValue collapses to zero with non-zero margin committed
-            // (account fully consumed by adverse PnL), report 100% utilization so the
-            // alert threshold fires. Reporting 0% would mask the catastrophic state.
-            var marginUtilizationPct = totalAssetValue > 0m
-                ? marginUsed / totalAssetValue
-                : (marginUsed > 0m ? 1m : 0m);
+            var marginUtilizationPct = ComputeMarginUtilization(totalAssetValue, marginUsed);
 
             // Per-position liquidation price for the requested asset
             decimal? liquidationPrice = null;
@@ -1692,6 +1687,21 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
+    /// <summary>
+    /// Computes margin utilization with a zero-denominator safeguard. When totalAssetValue
+    /// collapses to zero with non-zero margin committed (account fully consumed by adverse
+    /// PnL), returns 1m (100% utilized) so the alert threshold fires. Reporting 0% would
+    /// mask the catastrophic state at exactly the moment the alert is most needed.
+    /// </summary>
+    internal static decimal ComputeMarginUtilization(decimal accountValue, decimal marginUsed)
+    {
+        if (accountValue > 0m)
+        {
+            return marginUsed / accountValue;
+        }
+        return marginUsed > 0m ? 1m : 0m;
+    }
+
     internal static decimal ParseDecimalOrZero(string? value)
     {
         if (string.IsNullOrEmpty(value))
@@ -1699,7 +1709,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             return 0m;
         }
 
-        return decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+        // NumberStyles.Any accepts thousands separators, hex, and parentheses — all
+        // hazards when parsing upstream API strings. Tightening to Float + LeadingSign
+        // + Exponent permits plain decimals and scientific notation only, matching the
+        // Lighter API's documented response shape.
+        const System.Globalization.NumberStyles AllowedStyles =
+            System.Globalization.NumberStyles.Float
+            | System.Globalization.NumberStyles.AllowLeadingSign
+            | System.Globalization.NumberStyles.AllowExponent;
+
+        return decimal.TryParse(value, AllowedStyles, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 0m;
     }
