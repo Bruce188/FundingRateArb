@@ -282,13 +282,19 @@
                                                     @dx.PairsFilteredByVolume pairs filtered &mdash; volume below $@dx.MinVolumeThreshold.ToString("N0") on one or both legs.
                                                 </div>
                                             }
-                                            else if (dx.PairsPassing == 0 && (dx.PairsFilteredByThreshold > 0 || dx.NetPositiveBelowThreshold > 0))
+                                            else if (dx.PairsPassing == 0 && (dx.PairsFilteredByThreshold > 0 || dx.NetPositiveBelowThreshold > 0 || dx.NetPositiveBelowEdgeGuardrail > 0))
                                             {
                                                 <div class="alert alert-info mb-0 d-inline-block">
-                                                    @(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold) pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
+                                                    @(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold + dx.NetPositiveBelowEdgeGuardrail) pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
                                                     @if (dx.NetPositiveBelowThreshold > 0)
                                                     {
                                                         <strong>@dx.NetPositiveBelowThreshold profitable (adaptive eligible).</strong>
+                                                    }
+                                                    @if (dx.NetPositiveBelowEdgeGuardrail > 0)
+                                                    {
+                                                        <br />
+                                                        <strong>@dx.NetPositiveBelowEdgeGuardrail above threshold but below the 3&times; edge guardrail</strong>
+                                                        <span> &mdash; loosen MinEdgeMultiplier to surface.</span>
                                                     }
                                                     Best raw spread: @((dx.BestRawSpread * 100).ToString("F4"))%.
                                                 </div>
@@ -322,7 +328,13 @@
                                             : "";
                                     var constrained = IsVolumeConstrained(opp);
                                     <tr class="@(constrained ? "table-warning" : "")">
-                                        <td><strong>@opp.AssetSymbol</strong></td>
+                                        <td>
+                                            <strong>@opp.AssetSymbol</strong>
+                                            @if (opp.IsCoinGlassHot)
+                                            {
+                                                <span class="badge bg-info ms-1" title="Matching cross-exchange arbitrage opportunity on CoinGlass">CG</span>
+                                            }
+                                        </td>
                                         @{ var displayPrice = opp.LongMarkPrice > 0 && opp.ShortMarkPrice > 0
                                                 ? (opp.LongMarkPrice + opp.ShortMarkPrice) / 2
                                                 : Math.Max(opp.LongMarkPrice, opp.ShortMarkPrice); }

@@ -166,6 +166,15 @@ public class BotConfiguration
     [Range(0.1, 0.95)]
     public decimal MarginUtilizationAlertPct { get; set; } = 0.70m;
 
+    /// <summary>
+    /// Multiplier applied to amortized entry cost to compute the minimum net yield a
+    /// candidate opportunity must exceed before it's considered actionable. Per
+    /// Appendix B of the analysis, the industry best-practice guardrail is 3× entry cost.
+    /// Set to &lt;= 1 to disable the guardrail (e.g., for backtests).
+    /// </summary>
+    [Range(0.0, 20.0)]
+    public decimal MinEdgeMultiplier { get; set; } = 3m;
+
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
 }

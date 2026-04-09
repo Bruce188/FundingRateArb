@@ -13,14 +13,22 @@ public class SignalEngine : ISignalEngine
     private readonly IMarketDataCache _cache;
     private readonly IRatePredictionService? _predictionService;
     private readonly ILeverageTierProvider? _tierProvider;
+    private readonly ICoinGlassScreeningProvider? _screeningProvider;
     private readonly ILogger<SignalEngine>? _logger;
 
-    public SignalEngine(IUnitOfWork uow, IMarketDataCache cache, IRatePredictionService? predictionService = null, ILeverageTierProvider? tierProvider = null, ILogger<SignalEngine>? logger = null)
+    public SignalEngine(
+        IUnitOfWork uow,
+        IMarketDataCache cache,
+        IRatePredictionService? predictionService = null,
+        ILeverageTierProvider? tierProvider = null,
+        ICoinGlassScreeningProvider? screeningProvider = null,
+        ILogger<SignalEngine>? logger = null)
     {
         _uow = uow;
         _cache = cache;
         _predictionService = predictionService;
         _tierProvider = tierProvider;
+        _screeningProvider = screeningProvider;
         _logger = logger;
     }
 
@@ -64,6 +72,23 @@ public class SignalEngine : ISignalEngine
             {
                 // Predictions are informational — don't block opportunity generation
                 _logger?.LogWarning(ex, "Failed to load rate predictions; continuing without prediction data");
+            }
+        }
+
+        // Fetch CoinGlass pre-calculated arbitrage screening (non-critical — null on failure).
+        // Used as a priority hint: symbols listed here are showing active cross-exchange arbitrage
+        // on CoinGlass-tracked exchanges, so equivalent opportunities on directly-connected exchanges
+        // should be preferred in ranking.
+        IReadOnlySet<string>? hotSymbols = null;
+        if (_screeningProvider is not null)
+        {
+            try
+            {
+                hotSymbols = await _screeningProvider.GetHotSymbolsAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger?.LogWarning(ex, "Failed to load CoinGlass screening data; continuing without priority hints");
             }
         }
 
@@ -218,6 +243,9 @@ public class SignalEngine : ISignalEngine
                             : null,
                         PredictedTrend = shortPred?.TrendDirection,
                         BreakEvenHours = breakEvenHours,
+                        IsCoinGlassHot = hotSymbols is not null
+                            && !string.IsNullOrEmpty(symbol)
+                            && hotSymbols.Contains(symbol),
                     };
 
                     // Compute leverage-adjusted metrics when tier data is available
@@ -296,12 +324,32 @@ public class SignalEngine : ISignalEngine
                         dto.TrendUnconfirmed = true;
                     }
 
-                    if (net >= config.OpenThreshold)
+                    // MinEdgeThreshold per Appendix B: opportunity must cover at least
+                    // MinEdgeMultiplier × amortized entry cost to justify execution. This is
+                    // the industry best-practice safety guardrail — below 3× cost, noise,
+                    // slippage, and funding flips can easily wipe out the edge during a
+                    // realistic hold. The multiplier is configurable so operators can relax
+                    // it in backtests or tighten it in production; default is 3× per spec.
+                    var amortizedEntryCostPerHour = amortHours > 0 ? totalEntryCost / amortHours : totalEntryCost;
+                    var minEdgeMultiplier = config.MinEdgeMultiplier > 0 ? config.MinEdgeMultiplier : 3m;
+                    var minEdgeThreshold = minEdgeMultiplier * amortizedEntryCostPerHour;
+                    var passesMinEdge = net >= minEdgeThreshold;
+
+                    if (net >= config.OpenThreshold && passesMinEdge)
                     {
                         opportunities.Add(dto);
                     }
+                    else if (net >= config.OpenThreshold)
+                    {
+                        // Passed OpenThreshold but failed the 3x edge guardrail — record
+                        // in a dedicated counter so operators can see they need to loosen
+                        // the multiplier, not the threshold.
+                        netPositiveList.Add(dto);
+                        diagnostics.NetPositiveBelowEdgeGuardrail++;
+                    }
                     else if (net > 0)
                     {
+                        // Net-positive but below OpenThreshold.
                         netPositiveList.Add(dto);
                         diagnostics.NetPositiveBelowThreshold++;
                     }
@@ -314,7 +362,14 @@ public class SignalEngine : ISignalEngine
         }
 
         diagnostics.PairsPassing = opportunities.Count;
-        var sorted = opportunities.OrderByDescending(o => o.NetYieldPerHour).Take(26).ToList();
+        // Sort: CoinGlass-hot symbols first as priority hint, then by net yield.
+        // Matching hot symbols have corroborating evidence from CoinGlass's broader exchange
+        // universe that active arbitrage exists, so they rank above equivalent non-hot yields.
+        var sorted = opportunities
+            .OrderByDescending(o => o.IsCoinGlassHot)
+            .ThenByDescending(o => o.NetYieldPerHour)
+            .Take(26)
+            .ToList();
 
         return new OpportunityResultDto
         {

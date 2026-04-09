@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Binance.Net.Enums;
 using Binance.Net.Interfaces.Clients;
 using Binance.Net.Interfaces.Clients.UsdFuturesApi;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Enums;
@@ -124,7 +125,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                     ExchangeName = ExchangeName,
                     Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
                     RawRate = mp.FundingRate ?? 0m,
-                    RatePerHour = (mp.FundingRate ?? 0m) / intervalHours,
+                    RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, intervalHours),
                     MarkPrice = mp.MarkPrice,
                     IndexPrice = mp.IndexPrice,
                     Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),

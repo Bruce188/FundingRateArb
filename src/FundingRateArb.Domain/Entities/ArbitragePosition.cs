@@ -71,4 +71,33 @@ public class ArbitragePosition
     public Exchange LongExchange { get; set; } = null!;
     public Exchange ShortExchange { get; set; } = null!;
     public ICollection<Alert> Alerts { get; set; } = [];
+
+    /// <summary>
+    /// Directional (price-based) PnL component for normally-closed positions, derived from the
+    /// RealizedPnl accounting identity: pricePnl = RealizedPnl - AccumulatedFunding + total fees.
+    /// This separates the directional component from funding for the three-view closed PnL
+    /// model defined in Analysis Section 4.3.3: directional + funding - fees = realized.
+    /// Returns null while the position is still open, if RealizedPnl has not been set, or
+    /// for emergency-closed positions — EmergencyCloseHandler writes RealizedPnl as just
+    /// -(entryFee + exitFee) without incorporating accumulated funding, so the identity
+    /// backsolve would produce a fabricated directional component (-AccumulatedFunding)
+    /// that misrepresents the price legs which were never marketed-fill.
+    /// </summary>
+    public decimal? RealizedDirectionalPnl
+    {
+        get
+        {
+            if (RealizedPnl is null || Status == PositionStatus.EmergencyClosed)
+            {
+                return null;
+            }
+            return RealizedPnl.Value - AccumulatedFunding + EntryFeesUsdc + ExitFeesUsdc;
+        }
+    }
+
+    /// <summary>
+    /// Total fees paid across entry and exit for both legs (sum of EntryFeesUsdc and
+    /// ExitFeesUsdc). Convenience field for the three-view closed PnL display.
+    /// </summary>
+    public decimal TotalFeesUsdc => EntryFeesUsdc + ExitFeesUsdc;
 }

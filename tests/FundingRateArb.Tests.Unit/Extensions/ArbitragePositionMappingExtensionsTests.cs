@@ -199,4 +199,142 @@ public class ArbitragePositionMappingExtensionsTests
         dto.Status.Should().Be(PositionStatus.Opening);
         dto.SizeUsdc.Should().Be(2000m);
     }
+
+    // ── Closed-position three-view PnL decomposition (Section 4.3.3) ──
+
+    [Fact]
+    public void RealizedDirectionalPnl_OpenPosition_ReturnsNull()
+    {
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = null,
+            AccumulatedFunding = 5m,
+            EntryFeesUsdc = 1m,
+            ExitFeesUsdc = 1m,
+        };
+
+        pos.RealizedDirectionalPnl.Should().BeNull();
+    }
+
+    [Fact]
+    public void RealizedDirectionalPnl_ClosedPosition_ReturnsRealizedMinusFundingPlusFees()
+    {
+        // Identity: directional = realized - funding + entry fees + exit fees
+        // Backsolves the price-based component from the composite RealizedPnl.
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = 100m,
+            AccumulatedFunding = 30m,
+            EntryFeesUsdc = 5m,
+            ExitFeesUsdc = 4m,
+        };
+
+        // 100 - 30 + 5 + 4 = 79
+        pos.RealizedDirectionalPnl.Should().Be(79m);
+    }
+
+    [Fact]
+    public void RealizedDirectionalPnl_NegativeRealized_ReturnsCorrectDirectional()
+    {
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = -20m,
+            AccumulatedFunding = 5m,
+            EntryFeesUsdc = 2m,
+            ExitFeesUsdc = 3m,
+        };
+
+        // -20 - 5 + 2 + 3 = -20
+        pos.RealizedDirectionalPnl.Should().Be(-20m);
+    }
+
+    [Fact]
+    public void TotalFeesUsdc_SumsEntryAndExitFees()
+    {
+        var pos = new ArbitragePosition
+        {
+            EntryFeesUsdc = 7.25m,
+            ExitFeesUsdc = 3.75m,
+        };
+
+        pos.TotalFeesUsdc.Should().Be(11m);
+    }
+
+    [Fact]
+    public void TotalFeesUsdc_OpenPosition_HasOnlyEntryFees()
+    {
+        var pos = new ArbitragePosition
+        {
+            EntryFeesUsdc = 5m,
+            ExitFeesUsdc = 0m,
+        };
+
+        pos.TotalFeesUsdc.Should().Be(5m);
+    }
+
+    [Fact]
+    public void ToPnlDecomposition_OpenPosition_ReturnsNull()
+    {
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = null,
+            AccumulatedFunding = 10m,
+            EntryFeesUsdc = 2m,
+        };
+
+        pos.ToPnlDecomposition().Should().BeNull();
+    }
+
+    [Fact]
+    public void ToPnlDecomposition_ClosedPosition_PopulatesAllThreeComponents()
+    {
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = 50m,
+            AccumulatedFunding = 20m,
+            EntryFeesUsdc = 3m,
+            ExitFeesUsdc = 2m,
+        };
+
+        var decomp = pos.ToPnlDecomposition();
+
+        decomp.Should().NotBeNull();
+        decomp!.Directional.Should().Be(35m); // 50 - 20 + 3 + 2
+        decomp.Funding.Should().Be(20m);
+        decomp.Fees.Should().Be(5m);
+    }
+
+    [Fact]
+    public void PnlDecompositionDto_StrategyComputed_EqualsDirectionalPlusFundingMinusFees()
+    {
+        var decomp = new FundingRateArb.Application.DTOs.PnlDecompositionDto(
+            Directional: 100m, Funding: 30m, Fees: 9m);
+
+        decomp.Strategy.Should().Be(121m); // 100 + 30 - 9
+    }
+
+    [Theory]
+    [InlineData(100, 30, 5, 4)]
+    [InlineData(-20, 5, 2, 3)]
+    [InlineData(0, 0, 0, 0)]
+    [InlineData(1234.5678, 567.89, 12.34, 6.78)]
+    public void RoundTrip_PnlDecompositionStrategyEqualsRealizedPnl(
+        double realizedPnl, double accumulatedFunding, double entryFees, double exitFees)
+    {
+        // Load-bearing identity: for any closed position, decomposing and reassembling
+        // strategy PnL must equal the original RealizedPnl. This catches every sign-flip
+        // bug in the RealizedDirectionalPnl backsolve formula.
+        var pos = new ArbitragePosition
+        {
+            RealizedPnl = (decimal)realizedPnl,
+            AccumulatedFunding = (decimal)accumulatedFunding,
+            EntryFeesUsdc = (decimal)entryFees,
+            ExitFeesUsdc = (decimal)exitFees,
+        };
+
+        var decomp = pos.ToPnlDecomposition();
+
+        decomp.Should().NotBeNull();
+        decomp!.Strategy.Should().Be(pos.RealizedPnl!.Value);
+    }
 }

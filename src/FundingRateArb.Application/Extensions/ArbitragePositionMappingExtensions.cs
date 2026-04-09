@@ -52,6 +52,10 @@ public static class ArbitragePositionMappingExtensions
             CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
             AccumulatedFunding = pos.AccumulatedFunding,
             RealizedPnl = pos.RealizedPnl,
+            RealizedDirectionalPnl = pos.RealizedDirectionalPnl,
+            TotalFeesUsdc = pos.TotalFeesUsdc,
+            EntryFeesUsdc = pos.EntryFeesUsdc,
+            ExitFeesUsdc = pos.ExitFeesUsdc,
             Status = pos.Status,
             CloseReason = pos.CloseReason,
             OpenedAt = pos.OpenedAt,
@@ -59,5 +63,24 @@ public static class ArbitragePositionMappingExtensions
             Notes = pos.Notes,
             IsDryRun = pos.IsDryRun,
         };
+    }
+
+    /// <summary>
+    /// Returns the three-component PnL decomposition for a closed position per
+    /// Analysis Section 4.7: (directional, funding, fees). Returns null while the position
+    /// is still open. Strategy PnL should be reassembled from these components, never read
+    /// from a single exchange's reported PnL field.
+    /// </summary>
+    public static PnlDecompositionDto? ToPnlDecomposition(this ArbitragePosition pos)
+    {
+        if (pos.RealizedDirectionalPnl is null)
+        {
+            return null;
+        }
+
+        return new PnlDecompositionDto(
+            Directional: pos.RealizedDirectionalPnl.Value,
+            Funding: pos.AccumulatedFunding,
+            Fees: pos.TotalFeesUsdc);
     }
 }

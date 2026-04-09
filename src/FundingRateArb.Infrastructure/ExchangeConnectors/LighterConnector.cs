@@ -1622,10 +1622,105 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         }
     }
 
-    public Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
+    public async Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
     {
-        // Lighter position endpoints do not expose margin/liquidation details
-        return Task.FromResult<MarginStateDto?>(null);
+        try
+        {
+            var accountIndex = GetAccountIndex();
+            if (accountIndex <= 0)
+            {
+                return null;
+            }
+
+            var accountResponse = await GetAccountAsync(accountIndex, ct);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+            if (account is null)
+            {
+                return null;
+            }
+
+            var collateral = ParseDecimalOrZero(account.Collateral);
+            var availableBalance = ParseDecimalOrZero(account.AvailableBalance);
+            var totalAssetValue = ParseDecimalOrZero(account.TotalAssetValue);
+
+            // Lighter account-level margin used = collateral minus available (funds committed to positions)
+            var marginUsed = collateral - availableBalance;
+            if (marginUsed < 0m)
+            {
+                marginUsed = 0m;
+            }
+
+            var marginUtilizationPct = ComputeMarginUtilization(totalAssetValue, marginUsed);
+
+            // Per-position liquidation price for the requested asset
+            decimal? liquidationPrice = null;
+            if (account.Positions is not null)
+            {
+                var position = account.Positions.FirstOrDefault(p =>
+                    string.Equals(p.Symbol, asset, StringComparison.OrdinalIgnoreCase));
+                if (position is not null)
+                {
+                    var parsedLiq = ParseDecimalOrZero(position.LiquidationPrice);
+                    if (parsedLiq > 0m)
+                    {
+                        liquidationPrice = parsedLiq;
+                    }
+                }
+            }
+
+            return new MarginStateDto
+            {
+                MarginUsed = marginUsed,
+                MarginAvailable = availableBalance,
+                LiquidationPrice = liquidationPrice,
+                MarginUtilizationPct = marginUtilizationPct,
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Failed to fetch Lighter margin state for {Asset}: {Error}", asset, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Computes margin utilization with a zero-denominator safeguard. When totalAssetValue
+    /// collapses to zero with non-zero margin committed (account fully consumed by adverse
+    /// PnL), returns 1m (100% utilized) so the alert threshold fires. Reporting 0% would
+    /// mask the catastrophic state at exactly the moment the alert is most needed.
+    /// </summary>
+    internal static decimal ComputeMarginUtilization(decimal accountValue, decimal marginUsed)
+    {
+        if (accountValue > 0m)
+        {
+            return marginUsed / accountValue;
+        }
+        return marginUsed > 0m ? 1m : 0m;
+    }
+
+    internal static decimal ParseDecimalOrZero(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return 0m;
+        }
+
+        // NumberStyles.Any accepts thousands separators, hex, and parentheses — all
+        // hazards when parsing upstream API strings. Tightening to Float + LeadingSign
+        // + Exponent permits plain decimals and scientific notation only, matching the
+        // Lighter API's documented response shape.
+        const System.Globalization.NumberStyles AllowedStyles =
+            System.Globalization.NumberStyles.Float
+            | System.Globalization.NumberStyles.AllowLeadingSign
+            | System.Globalization.NumberStyles.AllowExponent;
+
+        return decimal.TryParse(value, AllowedStyles, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : 0m;
     }
 
     public Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)

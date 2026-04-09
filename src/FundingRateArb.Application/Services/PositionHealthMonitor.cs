@@ -305,9 +305,21 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     DivergencePct: pos.CurrentDivergencePct ?? 0m,
                     CollateralImbalancePct: collateralImbalancePct);
 
-                // Calculate liquidation prices and distance
+                // Fetch margin state from exchange APIs once per cycle.
+                // Reused by liquidation distance computation AND margin utilization check
+                // to avoid duplicate API calls.
+                var (longMargin, shortMargin) = await FetchMarginStateAsync(
+                    longExchangeName, shortExchangeName, assetSymbol, ct);
+
+                // Calculate liquidation prices and distance.
+                // Prefer API-pulled liquidation prices (authoritative per-exchange) when available,
+                // falling back to the leverage formula only if the exchange could not supply them.
                 var minLiquidationDistance = ComputeLiquidationDistance(
-                    pos, currentLongMark, currentShortMark);
+                    pos,
+                    currentLongMark,
+                    currentShortMark,
+                    longMargin?.LiquidationPrice,
+                    shortMargin?.LiquidationPrice);
 
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
@@ -316,7 +328,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // target, not per-exchange margin impact). This ensures consistent close logic against a single
                 // reference price, avoiding false triggers from cross-exchange price divergence.
                 _state.NegativeFundingCycles.TryGetValue(pos.Id, out var flipCount);
-                var reason = DetermineCloseReason(pos, config, unifiedUnrealizedPnl, hoursOpen, spread, minLiquidationDistance, flipCount);
+                var entryMidForClose = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+                var entrySpreadCostPctForClose = entryMidForClose > 0
+                    ? Math.Abs(pos.ShortEntryPrice - pos.LongEntryPrice) / entryMidForClose * 100m
+                    : 0m;
+                var reason = DetermineCloseReason(
+                    pos, config, unifiedUnrealizedPnl, hoursOpen, spread,
+                    minLiquidationDistance, flipCount, entrySpreadCostPctForClose);
 
                 if (reason.HasValue)
                 {
@@ -351,8 +369,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     }
                 }
 
-                // Margin utilization monitoring via exchange API
-                await CheckMarginUtilizationAsync(pos, config, longExchangeName, shortExchangeName, assetSymbol, ct);
+                // Margin utilization alerts — reuse the margin state fetched above.
+                CheckMarginUtilization(pos, config, longExchangeName, shortExchangeName, assetSymbol, longMargin, shortMargin);
 
                 // Alert if spread below alert threshold (but above close threshold)
                 if (spread < config.AlertThreshold)
@@ -548,9 +566,15 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         ArbitragePosition pos, BotConfiguration config,
         decimal unrealizedPnl, decimal hoursOpen, decimal spread,
         decimal? minLiquidationDistance = null,
-        int negativeFundingCycles = 0)
+        int negativeFundingCycles = 0,
+        decimal entrySpreadCostPct = 0m)
     {
-        // Priority: StopLoss > LiquidationRisk > PnlTargetReached > EmergencySpread > MaxHoldTime > SpreadCollapsed
+        // Priority (top wins):
+        //   StopLoss > LiquidationRisk > DivergenceCritical > PnlTargetReached(with divergence deferral)
+        //   > SpreadCollapsed(emergency path, bypasses MinHoldTime) > FundingFlipped > MaxHoldTimeReached
+        //   > SpreadCollapsed(normal path, respects MinHoldTime)
+        // Note: both SpreadCollapsed returns use the same enum value; downstream alerts can
+        // distinguish by checking the spread magnitude against EmergencyCloseSpreadThreshold.
         if (pos.MarginUsdc > 0 && unrealizedPnl < 0 && Math.Abs(unrealizedPnl) >= config.StopLossPct * pos.MarginUsdc)
         {
             return CloseReason.StopLoss;
@@ -559,6 +583,20 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationWarningPct)
         {
             return CloseReason.LiquidationRisk;
+        }
+
+        // Critical divergence close per Analysis Section 4.6: when live mark-price spread between
+        // the two exchanges exceeds 2× the alert threshold (so 4× entry spread cost by default),
+        // the basis cost to exit will dominate any remaining funding income — close immediately
+        // regardless of PnL target, because continuing to accumulate funding does not offset the
+        // widening exit slippage.
+        var currentDivergencePct = pos.CurrentDivergencePct ?? 0m;
+        var divergenceCloseThreshold = entrySpreadCostPct > 0m
+            ? entrySpreadCostPct * config.DivergenceAlertMultiplier * 2m
+            : 0m;
+        if (divergenceCloseThreshold > 0m && currentDivergencePct > divergenceCloseThreshold)
+        {
+            return CloseReason.DivergenceCritical;
         }
 
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)
@@ -578,7 +616,25 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var minutesOpen = hoursOpen * 60m;
                 if (totalPnl > 0 && minutesOpen >= config.MinHoldBeforePnlTargetMinutes)
                 {
-                    return CloseReason.PnlTargetReached;
+                    // Defer closing when divergence is above the alert threshold but not yet
+                    // critical — waiting for convergence reduces exit slippage and preserves
+                    // funding income already collected. Only skip the deferral if funding income
+                    // has accumulated far beyond the target (3× target means the position has
+                    // over-performed and extra hold risk is no longer justified).
+                    var divergenceAlertLevel = entrySpreadCostPct > 0m
+                        ? entrySpreadCostPct * config.DivergenceAlertMultiplier
+                        : 0m;
+                    var hasOverperformed = pos.AccumulatedFunding >= 3m * config.TargetPnlMultiplier * entryFee;
+                    if (divergenceAlertLevel > 0m
+                        && currentDivergencePct > divergenceAlertLevel
+                        && !hasOverperformed)
+                    {
+                        // Defer — wait for convergence
+                    }
+                    else
+                    {
+                        return CloseReason.PnlTargetReached;
+                    }
                 }
             }
         }
@@ -610,36 +666,58 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
     /// <summary>
     /// Calculates liquidation prices for both legs and returns the minimum distance
-    /// as a fraction (0.0 = at liquidation, 1.0 = 100% distance from liquidation).
-    /// Updates LongLiquidationPrice and ShortLiquidationPrice on the position.
-    /// Returns null if leverage is zero or entry prices are invalid.
+    /// as a fraction of the safe range (0.0 = at liquidation, 1.0 = entry-level).
+    /// Uses API-pulled liquidation prices when the exchange provides them
+    /// (Hyperliquid clearinghouseState, Binance positionRisk, Lighter account, Aster positionRisk);
+    /// falls back to the leverage formula only for exchanges that cannot supply them.
+    /// Updates LongLiquidationPrice and ShortLiquidationPrice on the position with the best
+    /// available value. Returns null if leverage is zero or entry prices are invalid.
     /// </summary>
     public static decimal? ComputeLiquidationDistance(
-        ArbitragePosition pos, decimal currentLongMark, decimal currentShortMark)
+        ArbitragePosition pos,
+        decimal currentLongMark,
+        decimal currentShortMark,
+        decimal? apiLongLiqPrice = null,
+        decimal? apiShortLiqPrice = null)
     {
         if (pos.Leverage <= 0 || pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
         {
             return null;
         }
 
-        // Long liquidation: price drops to entry * (1 - 1/leverage)
-        var longLiqPrice = pos.LongEntryPrice * (1m - 1m / pos.Leverage);
-        // Short liquidation: price rises to entry * (1 + 1/leverage)
-        var shortLiqPrice = pos.ShortEntryPrice * (1m + 1m / pos.Leverage);
+        // Prefer API-pulled liquidation prices (authoritative per-exchange margin engine)
+        // over the leverage-formula approximation. The formula ignores cross-margin, isolated
+        // buffers, maintenance margin tiers, and accumulated funding — all of which shift the
+        // real liquidation boundary. Fall back to the formula only when the exchange cannot
+        // supply a liquidation price.
+        var longLiqPrice = apiLongLiqPrice is > 0m
+            ? apiLongLiqPrice.Value
+            : pos.LongEntryPrice * (1m - 1m / pos.Leverage);
+        var shortLiqPrice = apiShortLiqPrice is > 0m
+            ? apiShortLiqPrice.Value
+            : pos.ShortEntryPrice * (1m + 1m / pos.Leverage);
 
         pos.LongLiquidationPrice = longLiqPrice;
         pos.ShortLiquidationPrice = shortLiqPrice;
 
-        // Distance from current mark to liquidation as fraction of entry-to-liquidation range
+        // Distance from current mark to liquidation as fraction of entry-to-liquidation range.
+        // Using CURRENT mark (not entry) as the numerator reflects the actual remaining buffer
+        // as price moves — the safe range shrinks as the position drifts toward its liquidation.
+        //
+        // When the API-pulled liquidation price has crossed the entry price (e.g., accumulated
+        // PnL or funding has shifted the cross-margin liquidation boundary past entry), the
+        // entry-to-liquidation range becomes non-positive. That position is at or past its
+        // safe range and must be treated as immediate liquidation risk — NOT as
+        // "infinitely safe" (which the previous decimal.MaxValue fallback implied).
         var longRange = pos.LongEntryPrice - longLiqPrice;
         var shortRange = shortLiqPrice - pos.ShortEntryPrice;
 
         var longDistance = longRange > 0
             ? (currentLongMark - longLiqPrice) / longRange
-            : decimal.MaxValue;
+            : 0m;
         var shortDistance = shortRange > 0
             ? (shortLiqPrice - currentShortMark) / shortRange
-            : decimal.MaxValue;
+            : 0m;
 
         return Math.Min(longDistance, shortDistance);
     }
@@ -660,17 +738,19 @@ public class PositionHealthMonitor : IPositionHealthMonitor
              + GetExchangeTakerFee(shortExchange, shortTakerFeeRate);
     }
 
-    private async Task CheckMarginUtilizationAsync(
-        ArbitragePosition pos, BotConfiguration config,
-        string longExchangeName, string shortExchangeName, string assetSymbol,
-        CancellationToken ct = default)
+    /// <summary>
+    /// Fetches live margin state for both legs in a single dispatch. Returns (null, null)
+    /// on API failure — callers must handle the null case by falling back to local formulas.
+    /// </summary>
+    private async Task<(MarginStateDto? LongMargin, MarginStateDto? ShortMargin)> FetchMarginStateAsync(
+        string longExchangeName, string shortExchangeName, string assetSymbol, CancellationToken ct)
     {
         try
         {
             var longConnector = _connectorFactory.GetConnector(longExchangeName);
             var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
-            // Deduplicate: if both legs use the same connector for the same asset, call once
+            // Deduplicate: if both legs use the same connector for the same asset, call once.
             Task<MarginStateDto?> longMarginTask;
             Task<MarginStateDto?> shortMarginTask;
             if (string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase))
@@ -686,15 +766,43 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             await Task.WhenAll(longMarginTask, shortMarginTask);
 
-            var longMargin = await longMarginTask;
-            var shortMargin = await shortMarginTask;
+            return (await longMarginTask, await shortMarginTask);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Margin state fetch failed for {Asset} on {Long}/{Short}",
+                assetSymbol, longExchangeName, shortExchangeName);
+            return (null, null);
+        }
+    }
 
-            // Check if either leg exceeds the margin utilization alert threshold
+    private void CheckMarginUtilization(
+        ArbitragePosition pos, BotConfiguration config,
+        string longExchangeName, string shortExchangeName, string assetSymbol,
+        MarginStateDto? longMargin, MarginStateDto? shortMargin)
+    {
+        try
+        {
+            // Check if either leg exceeds the margin utilization alert threshold.
             var maxUtilization = Math.Max(
                 longMargin?.MarginUtilizationPct ?? 0m,
                 shortMargin?.MarginUtilizationPct ?? 0m);
 
-            if (maxUtilization >= config.MarginUtilizationAlertPct)
+            // Split threshold per Analysis Section 7.4: at >=3x leverage, cap the alert
+            // threshold at 60% even if the operator's configured MarginUtilizationAlertPct
+            // is looser; at <3x leverage, use the operator's setting as-is. If the operator
+            // tightens the config to e.g. 0.50m, the stricter value always wins at high
+            // leverage via Math.Min. Reason: tighter buffer before liquidation at higher
+            // leverage, so we want to alert earlier.
+            var leverageAwareThreshold = pos.Leverage >= 3
+                ? Math.Min(config.MarginUtilizationAlertPct, 0.60m)
+                : config.MarginUtilizationAlertPct;
+
+            if (maxUtilization >= leverageAwareThreshold)
             {
                 // NB12: In-memory dedup before hitting the DB
                 if (_recentMarginAlerts.TryGetValue(pos.Id, out var lastAlertTime)
@@ -703,29 +811,22 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     return;
                 }
 
-                var recentMarginAlert = await _uow.Alerts.GetRecentAsync(
-                    pos.UserId, pos.Id, AlertType.MarginWarning, TimeSpan.FromHours(1));
-
-                if (recentMarginAlert is null)
+                var longPct = longMargin?.MarginUtilizationPct ?? 0m;
+                var shortPct = shortMargin?.MarginUtilizationPct ?? 0m;
+                _uow.Alerts.Add(new Alert
                 {
-                    var longPct = longMargin?.MarginUtilizationPct ?? 0m;
-                    var shortPct = shortMargin?.MarginUtilizationPct ?? 0m;
-                    _uow.Alerts.Add(new Alert
-                    {
-                        UserId = pos.UserId,
-                        ArbitragePositionId = pos.Id,
-                        Type = AlertType.MarginWarning,
-                        Severity = AlertSeverity.Warning,
-                        Message = $"Margin utilization alert: {assetSymbol} " +
-                                  $"{longExchangeName}={longPct:P0} / {shortExchangeName}={shortPct:P0} " +
-                                  $"(threshold={config.MarginUtilizationAlertPct:P0})",
-                    });
-                }
+                    UserId = pos.UserId,
+                    ArbitragePositionId = pos.Id,
+                    Type = AlertType.MarginWarning,
+                    Severity = AlertSeverity.Warning,
+                    Message = $"Margin utilization alert: {assetSymbol} " +
+                              $"{longExchangeName}={longPct:P0} / {shortExchangeName}={shortPct:P0} " +
+                              $"(threshold={leverageAwareThreshold:P0}, {pos.Leverage}x leverage)",
+                });
 
                 _recentMarginAlerts[pos.Id] = DateTime.UtcNow;
             }
         }
-        catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Margin utilization check failed for position #{Id}", pos.Id);

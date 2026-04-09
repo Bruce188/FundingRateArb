@@ -475,4 +475,165 @@ public class PositionsControllerTests
         _mockAlerts.Verify(a => a.Add(It.IsAny<Alert>()), Times.Never);
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    // ── Details: MaxSafeMovePct uses current mark price, not entry price ──
+
+    private static ArbitragePosition OpenPositionWithEntryPrices(string userId, decimal longEntry, decimal shortEntry)
+    {
+        return new ArbitragePosition
+        {
+            Id = 42,
+            UserId = userId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            LongEntryPrice = longEntry,
+            ShortEntryPrice = shortEntry,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+    }
+
+    [Fact]
+    public async Task Details_MaxSafeMovePctUsesCurrentMarkNotEntryPrice()
+    {
+        // Entry long=3000, current mark long=2700, liquidation=2400.
+        // Expected: |2700 - 2400| / 2700 * 100 ≈ 11.11%.
+        // BROKEN (entry-based) would give: |3000 - 2400| / 3000 * 100 = 20%.
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 2400m });
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 3300m });
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2700m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3100m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        // Long: |2700 - 2400| / 2700 * 100 = 11.111...
+        vm.Position.MaxSafeMovePctLong.Should().NotBeNull();
+        vm.Position.MaxSafeMovePctLong!.Value.Should().BeApproximately(11.11m, 0.01m,
+            "MaxSafeMovePct must be computed against the CURRENT mark price, not the entry price");
+        // Short: |3100 - 3300| / 3100 * 100 ≈ 6.45
+        vm.Position.MaxSafeMovePctShort.Should().NotBeNull();
+        vm.Position.MaxSafeMovePctShort!.Value.Should().BeApproximately(6.45m, 0.01m);
+    }
+
+    [Fact]
+    public async Task Details_SameExchangeBothLegs_DedupesMarkPriceCallsAndMarginFetches()
+    {
+        // Both legs on Hyperliquid — the controller's sameExchange branch should call
+        // GetMarkPriceAsync and GetPositionMarginStateAsync once, not twice.
+        var position = new ArbitragePosition
+        {
+            Id = 7,
+            UserId = "trader-id",
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 1, // same exchange
+            Status = PositionStatus.Open,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var connector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 2400m });
+        connector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2800m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        await controller.Details(position.Id);
+
+        connector.Verify(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()), Times.Once,
+            "same-exchange legs should share a single mark-price fetch");
+        connector.Verify(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()), Times.Once,
+            "same-exchange legs should share a single margin-state fetch");
+        _mockConnectorFactory.Verify(f => f.GetConnector("Hyperliquid"), Times.Once);
+    }
+
+    [Fact]
+    public async Task Details_NullLiquidationPrice_LeavesMaxSafeMovePctNull()
+    {
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        // Null LiquidationPrice for both
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = null });
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = null });
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2800m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2800m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        vm.Position.MaxSafeMovePctLong.Should().BeNull();
+        vm.Position.MaxSafeMovePctShort.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Details_ZeroCurrentMark_LeavesMaxSafeMovePctNullAndDoesNotDivideByZero()
+    {
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 2400m });
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 3300m });
+        // Zero mark — should guard against divide-by-zero
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        vm.Position.MaxSafeMovePctLong.Should().BeNull(
+            "zero current mark must not produce a divide-by-zero or nonsense value");
+        vm.Position.MaxSafeMovePctShort.Should().BeNull();
+    }
 }

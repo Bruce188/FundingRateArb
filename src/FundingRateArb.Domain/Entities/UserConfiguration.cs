@@ -12,6 +12,16 @@ public class UserConfiguration
     public decimal CloseThreshold { get; set; } = 0.00005m;
     public decimal AlertThreshold { get; set; } = 0.00015m;
     public int DefaultLeverage { get; set; } = 5;
+
+    /// <summary>
+    /// Optional per-user hard ceiling on effective leverage. When set, overrides the global
+    /// BotConfiguration.MaxLeverageCap for this user — but only downward (users can tighten
+    /// their own cap below global, never raise above global). Null means fall back to the
+    /// global cap. Enforced at order placement in ExecutionEngine.
+    /// </summary>
+    [Range(1, 50)]
+    public int? MaxLeverageCap { get; set; }
+
     public decimal TotalCapitalUsdc { get; set; } = 39m;
     public decimal MaxCapitalPerPosition { get; set; } = 0.90m;
     public int MaxConcurrentPositions { get; set; } = 1;
