@@ -561,6 +561,64 @@ public class CoinGlassScreeningServiceTests : IDisposable
             "(may need 1 extra sample before the sliding window has enough data)");
     }
 
+    // ── review-v134 Task 2.2 reopen tests (cycle 2: NB2) ──
+
+    /// <summary>
+    /// NB2 fix (review-v134): after the v4 screening breaker opens, subsequent short-circuited
+    /// calls must NOT keep emitting Warning-level log entries. The fix makes the Warning-level
+    /// entry fire exactly once on the edge transition (when <see cref="CoinGlassScreeningService.IsAvailable"/>
+    /// was still <c>true</c>); subsequent short-circuits during the same break window log
+    /// nothing at Warning level. Mirrors the v3 connector test.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassScreeningService_BrokenCircuit_RepeatedShortCircuits_LogsOnlyOnceOnEdge()
+    {
+        var fakeTime = new FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+        var (service, handler, logger) = MakeServiceWithLogger(provider);
+
+        // Seed enough failures to drive the breaker open.
+        for (int i = 0; i < 20; i++)
+        {
+            handler.Responses.Enqueue(ErrorJson(HttpStatusCode.InternalServerError, "fail"));
+        }
+
+        for (int i = 0; i < 10 && service.IsAvailable; i++)
+        {
+            await service.GetHotSymbolsAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        service.IsAvailable.Should().BeFalse();
+
+        // Exactly one edge-transition Warning entry should exist after the breaker opened.
+        var edgeOpenedWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("v4 circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        edgeOpenedWarnings.Should().Be(1,
+            "exactly one 'v4 circuit breaker OPENED' Warning should fire on the edge transition");
+
+        // Issue 10 additional short-circuited calls.
+        for (int i = 0; i < 10; i++)
+        {
+            await service.GetHotSymbolsAsync();
+        }
+
+        var openedWarningsAfter = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("v4 circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        openedWarningsAfter.Should().Be(1,
+            "subsequent short-circuits must NOT emit additional 'OPENED' Warning entries — " +
+            "operators need a clean signal during outages, not one log line per polling attempt");
+
+        // Additionally verify no pre-fix-style "short-circuited: {Body}" entries exist.
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("short-circuited", StringComparison.Ordinal),
+            "the per-call body log on short-circuit must be dropped entirely");
+    }
+
     // ── review-v133 Task 4.1 reopen tests (NB5: split pipelines) ──
 
     /// <summary>

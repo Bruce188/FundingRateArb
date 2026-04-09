@@ -150,6 +150,29 @@ public class HttpResponseBodyLoggingTests
         result.Should().Contain("REDACTED");
     }
 
+    // ── review-v134 NB3: replacement preserves JSON shape ──
+
+    /// <summary>
+    /// review-v134 NB3: the credential replacement must emit the literal "REDACTED"
+    /// with surrounding quotes so JSON field forms like <c>"apiKey":"secret"</c> are
+    /// rewritten as <c>"apiKey": "REDACTED"</c> — a JSON-parseable fragment — rather
+    /// than <c>"apiKey": REDACTED</c> which trips downstream log parsers (Kibana
+    /// field extractors, Loki JSON pipelines) on the missing closing quote.
+    /// </summary>
+    [Fact]
+    public void TruncateAndSanitize_JsonApiKeyField_OutputIsValidJsonShape()
+    {
+        var input = "{\"apiKey\":\"secret\"}";
+
+        var result = HttpResponseBodyLogging.TruncateAndSanitize(input);
+
+        result.Should().NotContain("secret");
+        result.Should().Contain("\"REDACTED\"",
+            "the replacement must emit the literal redaction token with surrounding quotes");
+        result.Should().EndWith("}",
+            "the closing brace of the JSON object must survive the substitution");
+    }
+
     // ── review-v133 NB3: surrogate-pair-safe truncation ──
 
     [Fact]

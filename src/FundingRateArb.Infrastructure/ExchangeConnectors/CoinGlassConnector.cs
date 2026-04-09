@@ -143,19 +143,31 @@ public class CoinGlassConnector : IExchangeConnector
                 },
                 ct);
         }
-        catch (BrokenCircuitException ex)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // NB1 fix (review-v134): caller-initiated cancellation must propagate cleanly —
+            // do NOT log as a failure, do NOT call RecordFailure(), do NOT count against the
+            // Polly breaker. HTTP timeouts (which surface as TaskCanceledException without
+            // ct cancellation) fall through to the generic catch below and are still treated
+            // as failures. Mirrors CoinGlassScreeningService.cs behaviour.
+            throw;
+        }
+        catch (BrokenCircuitException)
         {
             // B1 fix (review-v133): do NOT call RecordFailure() here. A short-circuit is the
             // breaker doing its job — counting it as a new upstream failure would stack the
             // manual _backoffUntil window past the Polly break duration and prevent recovery.
+            // NB2 fix (review-v134): the Warning-level entry must fire only on the edge
+            // transition (when IsAvailable was still true). Subsequent short-circuited calls
+            // during the 5-minute break window log nothing at Warning level — operators need
+            // a clean signal during outages, not 60 duplicate entries per incident. The raw
+            // ex.ToString() body is dropped entirely because a deterministic short-circuit
+            // carries no diagnostic payload.
             if (IsAvailable)
             {
-                _logger.LogInformation("CoinGlass circuit breaker OPENED — short-circuiting requests");
+                _logger.LogWarning("CoinGlass v3 circuit breaker OPENED — skipping call");
+                IsAvailable = false;
             }
-            IsAvailable = false;
-            _logger.LogWarning("CoinGlass API request short-circuited: {Body} [{ExType}]",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
-                ex.GetType().Name);
             return [];
         }
         catch (CoinGlassApiFailureException ex)
@@ -177,11 +189,15 @@ public class CoinGlassConnector : IExchangeConnector
             RecordFailure();
             return [];
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || ex is TaskCanceledException)
+        catch (Exception ex)
         {
             // NB1 fix (review-v133): same sanitization as the HttpRequestException path.
-            // TaskCanceledException is treated as a timeout (we never threw it ourselves
-            // from an external cancellation token), so we still record it as a failure.
+            // NB1 fix (review-v134): caller-initiated OperationCanceledException is handled
+            // by the dedicated catch above; anything else (including HTTP-timeout
+            // TaskCanceledException where ct was NOT cancelled) falls through here and is
+            // still recorded as a failure so the circuit breaker can count it. No exception
+            // filter here — mirrors CoinGlassScreeningService.cs where the generic catch
+            // has no filter and the caller-cancel path is already siphoned off above.
             _logger.LogWarning("CoinGlass API request failed: {Body} [{ExType}]",
                 HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
                 ex.GetType().Name);

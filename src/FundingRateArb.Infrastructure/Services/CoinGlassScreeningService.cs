@@ -99,18 +99,19 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
             // catch below) so the pipeline's circuit breaker can count them.
             throw;
         }
-        catch (BrokenCircuitException ex)
+        catch (BrokenCircuitException)
         {
+            // NB2 fix (review-v134): Warning-level entry fires only on the edge transition
+            // (when IsAvailable was still true). Subsequent short-circuits during the
+            // 5-minute break window log nothing at Warning level — a deterministic breaker
+            // short-circuit carries no diagnostic payload and 60 duplicate Warning entries
+            // per incident drown out the real signal. The v4 prefix distinguishes this
+            // entry from the connector's "CoinGlass v3 circuit breaker OPENED" message.
             if (IsAvailable)
             {
-                _logger.LogInformation("CoinGlass screening circuit breaker OPENED — short-circuiting requests");
+                _logger.LogWarning("CoinGlass v4 circuit breaker OPENED — skipping call");
+                IsAvailable = false;
             }
-            IsAvailable = false;
-            // NB1 fix (review-v133): sanitize ex.ToString() instead of passing the raw
-            // exception object so inner exceptions / stack traces cannot leak secrets.
-            _logger.LogWarning("CoinGlass arbitrage screening short-circuited: {Body} [{ExType}]",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
-                ex.GetType().Name);
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
         catch (CoinGlassScreeningFailureException ex)

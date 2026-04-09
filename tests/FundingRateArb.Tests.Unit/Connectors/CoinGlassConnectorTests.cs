@@ -1160,53 +1160,10 @@ public class CoinGlassConnectorTests : IDisposable
             "half-open probe) — a stacked manual backoff would block it first");
     }
 
-    /// <summary>
-    /// B1 fix: BrokenCircuitException must NOT increment _consecutiveFailures, because
-    /// a short-circuit is the breaker doing its job, not a new upstream failure.
-    /// </summary>
-    [Fact]
-    public async Task CoinGlassConnector_BrokenCircuitException_DoesNotIncrementConsecutiveFailures()
-    {
-        CoinGlassConnector.ResetBackoffState();
-
-        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
-        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
-
-        var handler = new Mock<HttpMessageHandler>();
-        handler.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync",
-                ItExpr.IsAny<HttpRequestMessage>(),
-                ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "oops"));
-
-        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
-
-        // Drive the breaker open
-        for (int i = 0; i < 10 && connector.IsAvailable; i++)
-        {
-            CoinGlassConnector.ResetBackoffState();
-            await connector.GetFundingRatesAsync();
-            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
-        }
-        connector.IsAvailable.Should().BeFalse();
-
-        // Reset to a known baseline (_consecutiveFailures = 0) then fire more calls —
-        // all of which will short-circuit. Pre-fix, each incremented the counter.
-        CoinGlassConnector.ResetBackoffState();
-
-        var failuresField = typeof(CoinGlassConnector).GetField("_consecutiveFailures",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-
-        for (int i = 0; i < 5; i++)
-        {
-            await connector.GetFundingRatesAsync();
-        }
-
-        var failuresAfterShortCircuits = (int)failuresField.GetValue(null)!;
-        failuresAfterShortCircuits.Should().Be(0,
-            "short-circuited calls must not increment _consecutiveFailures — the breaker " +
-            "is already doing its job, and stacking on top of it blocks recovery");
-    }
+    // NB4 fix (review-v134): deleted CoinGlassConnector_BrokenCircuitException_DoesNotIncrementConsecutiveFailures
+    // — it reached into the private static _consecutiveFailures field via reflection, the exact
+    // anti-pattern NB6 eliminated. Coverage is preserved by CircuitBrokenThenHalfOpen_DoesNotStackManualBackoff
+    // above, which observes the same invariant through the public IsAvailable flag.
 
     /// <summary>
     /// NB1 fix: inner exception messages (which may carry the API key in custom handlers
@@ -1307,6 +1264,121 @@ public class CoinGlassConnectorTests : IDisposable
         callCount.Should().BeInRange(5, 6,
             "plan-v61 specifies 5 failures trip the breaker with Polly's rolling window " +
             "(may need 1 extra sample before the sliding window has enough data)");
+    }
+
+    // ── review-v134 Task 2.1 reopen tests (cycle 2: NB1, NB2) ──
+
+    /// <summary>
+    /// NB1 fix (review-v134): caller-initiated cancellation must propagate cleanly.
+    /// Before the fix, the generic catch filter <c>when (ex is not OperationCanceledException || ex is TaskCanceledException)</c>
+    /// swallowed <see cref="TaskCanceledException"/> even when the caller's <c>ct</c> had
+    /// been cancelled — logging a spurious "failed" warning, calling <c>RecordFailure()</c>,
+    /// and counting a normal graceful-shutdown cancellation against the Polly breaker.
+    /// After the fix, an <see cref="OperationCanceledException"/> whose underlying token
+    /// matches the caller's <c>ct</c> is re-thrown unchanged and the breaker remains
+    /// closed.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CallerCancellation_PropagatesOperationCanceledException()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>(async (_, token) =>
+            {
+                // Honour the caller's cancellation token the way a real handler would.
+                await Task.Yield();
+                token.ThrowIfCancellationRequested();
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Func<Task> act = async () => await connector.GetFundingRatesAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "caller cancellation must propagate unchanged — not be swallowed as a failure");
+
+        connector.IsAvailable.Should().BeTrue(
+            "the cancellation path must NOT trip IsAvailable — it is not an upstream failure");
+
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("CoinGlass API request failed", StringComparison.Ordinal),
+            "caller cancellation must not emit a 'request failed' warning");
+    }
+
+    /// <summary>
+    /// NB2 fix (review-v134): after the circuit opens, subsequent short-circuited calls
+    /// must NOT keep emitting Warning-level log entries. The breaker state itself is the
+    /// signal — a 5-minute break window can generate 60+ polling attempts, each of which
+    /// pre-fix dumped the full Polly <c>ex.ToString()</c> body to the log. The fix makes
+    /// the Warning-level entry fire exactly once on the edge transition (when
+    /// <see cref="CoinGlassConnector.IsAvailable"/> was still <c>true</c>); subsequent
+    /// short-circuits during the same break window log nothing at Warning level.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_BrokenCircuit_RepeatedShortCircuits_LogsOnlyOnceOnEdge()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "fail"));
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler, provider);
+
+        // Drive the breaker open.
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Snapshot the edge-transition Warning so later short-circuits can be compared
+        // against this exact count. Pre-fix, each extra short-circuit added another
+        // "short-circuited: {Body}" Warning.
+        var edgeOpenedWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        edgeOpenedWarnings.Should().Be(1,
+            "exactly one Warning entry should fire on the edge transition to open");
+
+        // Issue 10 more calls — all of them short-circuit through the BrokenCircuitException
+        // path without hitting SendAsync.
+        for (int i = 0; i < 10; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+        }
+
+        var openedWarningsAfter = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        openedWarningsAfter.Should().Be(1,
+            "subsequent short-circuits must NOT emit additional 'OPENED' Warning entries — " +
+            "operators need a clean signal during outages, not one log line per polling attempt");
+
+        // Additionally verify no pre-fix-style "short-circuited: {Body}" entries exist.
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("short-circuited", StringComparison.Ordinal),
+            "the per-call body log on short-circuit must be dropped entirely");
     }
 
     /// <summary>

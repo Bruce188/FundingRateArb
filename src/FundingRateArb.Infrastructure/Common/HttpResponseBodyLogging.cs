@@ -51,7 +51,12 @@ internal static class HttpResponseBodyLogging
             return string.Empty;
         }
 
-        var sanitized = CredentialPattern.Replace(body, "$1: REDACTED");
+        // NB3 fix (review-v134): emit the replacement with literal surrounding quotes
+        // so JSON field forms like `"apiKey":"secret"` produce valid-shape JSON
+        // (`"apiKey": "REDACTED"`) instead of a bare token that trips downstream
+        // JSON-aware log parsers. Header forms (`CG-API-KEY: secret`) are unaffected —
+        // the extra quotes are harmless in a colon-delimited header line.
+        var sanitized = CredentialPattern.Replace(body, "$1: \"REDACTED\"");
         sanitized = BearerTokenPattern.Replace(sanitized, "Bearer REDACTED");
 
         if (sanitized.Length <= maxChars)
