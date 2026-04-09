@@ -1,6 +1,5 @@
 # FundingRateArb
 
-[![CI](https://github.com/Bruce188/FundingRateArb/actions/workflows/ci.yml/badge.svg)](https://github.com/Bruce188/FundingRateArb/actions/workflows/ci.yml)
 [![Deploy](https://github.com/Bruce188/FundingRateArb/actions/workflows/deploy.yml/badge.svg)](https://github.com/Bruce188/FundingRateArb/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -18,7 +17,7 @@
 ![xUnit](https://img.shields.io/badge/xUnit-512BD4?style=flat-square&logo=dotnet&logoColor=white)
 ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white)
 
-Automated funding rate arbitrage bot for perpetual futures. Monitors funding rate differentials across DEXs (Lighter, Aster, HyperLiquid), opens hedged long/short positions when spreads exceed a configurable threshold, and collects the funding rate differential as yield.
+Automated funding rate arbitrage bot for perpetual futures. Monitors funding rate differentials across DEXs (Hyperliquid, Lighter, dYdX v4, Aster) and a CEX (Binance), opens hedged long/short positions when spreads exceed a configurable threshold, and collects the funding rate differential as yield. Supplementary screening data comes from CoinGlass.
 
 ## How It Works
 
@@ -46,49 +45,106 @@ FundingRateArb.sln
 │   └── FundingRateArb.Web             # ASP.NET Core MVC, controllers, Razor views
 └── tests/
     ├── FundingRateArb.Tests.Unit         # xUnit + Moq + FluentAssertions
-    ├── FundingRateArb.Tests.Integration  # EF Core in-memory database tests
-    └── playwright/                       # End-to-end browser tests (Python)
+    ├── FundingRateArb.Tests.Integration  # Repositories, hub, dashboard, admin pages
+    ├── FundingRateArb.Tests.E2E          # xUnit + Microsoft.Playwright (.NET)
+    └── playwright/                       # Legacy end-to-end browser tests (Python)
 ```
 
 | Layer | Responsibility |
 |-------|---------------|
-| **Domain** | Entities (`ArbitragePosition`, `BotConfiguration`, `Alert`, `Asset`), enums, no external dependencies |
-| **Application** | Service interfaces, DTOs, business logic (`SignalEngine`, `PositionSizer`, `ExecutionEngine`, `YieldCalculator`) |
-| **Infrastructure** | EF Core (`AppDbContext`, migrations), exchange connectors (Lighter, Aster, HyperLiquid), SignalR hub, background services, Data Protection vault |
-| **Web** | Controllers, Razor views, `Program.cs` DI/middleware setup, static assets |
+| **Domain** | Entities (`ArbitragePosition`, `BotConfiguration`, `UserConfiguration`, `Alert`, `Asset`), enums (`BotOperatingState`, `PositionStatus`, `AllocationStrategy`), no external dependencies |
+| **Application** | Service interfaces, DTOs, business logic (`SignalEngine`, `PositionSizer`, `ExecutionEngine`, `ConnectorLifecycleManager`, `PositionCloser`, `EmergencyCloseHandler`, `PositionHealthMonitor`, `PnlReconciliationService`, `ExchangeAnalyticsService`, `YieldCalculator`), `DryRunConnectorWrapper` |
+| **Infrastructure** | EF Core (`AppDbContext`, migrations), exchange connectors (Hyperliquid, Lighter, dYdX v4, Aster, Binance, CoinGlass), `ReferencePriceProvider`, SignalR hub, six hosted background services, Data Protection vault |
+| **Web** | Controllers, Razor views, Admin area, `Program.cs` DI/middleware setup, static assets |
 
 ## Key Components
 
 | Component | Purpose |
 |-----------|---------|
 | **SignalEngine** | Scores funding rate spreads across all exchange pairs with adaptive threshold fallback and optional ML-based rate prediction |
-| **PositionSizer** | Allocates capital using configurable strategies (Concentrated, WeightedSpread, EqualSpread, RiskAdjusted) with per-asset/exchange exposure limits |
-| **ExecutionEngine** | Concurrent dual-leg order placement with pre-flight margin checks and atomic rollback on partial fills |
-| **BotOrchestrator** | Background service running 60-second trading cycles with circuit breaker, consecutive loss tracking, and alert deduplication |
-| **PositionHealthMonitor** | Monitors open positions for spread collapse, max hold time, stop loss, P&L targets, and stale price feeds |
-| **YieldCalculator** | Computes annualized yield, projected/unrealized P&L, and break-even hours |
+| **PositionSizer** | Allocates capital using configurable strategies (`Concentrated`, `WeightedSpread`, `EqualSpread`, `RiskAdjusted`) with per-asset/exchange exposure limits and `MinEdgeMultiplier` guardrail |
+| **ExecutionEngine** | Concurrent dual-leg order placement with pre-flight margin checks, leverage tier clamping, and atomic rollback on partial fills; routes through `DryRunConnectorWrapper` when dry-run is enabled |
+| **ConnectorLifecycleManager** | User-scoped connector creation, leverage tier cache warming, and dry-run wrapper application |
+| **PositionCloser** | Owns the concurrent dual-leg close path for normal and operator-initiated closes |
+| **EmergencyCloseHandler** | Closes the surviving leg when one leg fails during open, or when liquidation/drift conditions require an immediate exit |
+| **BotOrchestrator** | Background service running 60-second trading cycles with operating-state gating, circuit breaker, consecutive loss tracking, daily drawdown pause, and alert deduplication |
+| **PositionHealthMonitor** | Monitors open positions for spread collapse, funding flip, max hold time, stop loss, P&L targets, stale price feeds, liquidation risk, stablecoin depeg, and mark-price divergence |
+| **PnlReconciliationService** | Periodically reconciles bot-tracked PnL against exchange-reported realized PnL and raises alerts on divergence |
+| **ReferencePriceProvider** | Produces a single reference mark for unified PnL: Binance index when Binance is a leg, otherwise averaged DEX oracle prices |
+| **ExchangeAnalyticsService** | CoinGlass-driven exchange overviews, spread opportunities, rate comparisons, and new-coin / new-exchange discovery feed |
+| **YieldCalculator** | Computes annualized yield, projected/unrealized P&L, break-even hours, and fee-decomposed realized P&L |
 | **MarketDataCache** | In-memory cache of latest rates from both REST polling and WebSocket streams |
-| **DashboardHub** | SignalR hub pushing real-time rate updates, opportunities, position changes, and alerts to connected clients; Dashboard supports anonymous access with cached opportunities |
+| **DashboardHub** | SignalR hub pushing real-time rate updates, opportunities, position changes, balance snapshots, status explanations, and alerts to connected clients. The dashboard supports anonymous access with cached opportunities (30s TTL); authenticated users also see positions, alerts, and P&L |
 | **ApiKeyVault** | Encrypted exchange credential storage using ASP.NET Core Data Protection API |
+
+## Background Services
+
+Six hosted services run continuously alongside the web server:
+
+1. **MarketDataStreamManager** — Starts WebSocket connections to all exchanges, monitors health every 30 seconds, auto-reconnects on failure
+2. **FundingRateFetcher** — Polls funding rates via REST every 60 seconds, stores snapshots, updates the in-memory cache, signals readiness on first fetch
+3. **FundingRateReadinessSignal** — Waits for `FundingRateFetcher` to complete the first rate fetch, then signals readiness so `BotOrchestrator` can begin its trading cycle
+4. **BotOrchestrator** — Runs the trading cycle every 60 seconds: score opportunities, size positions, execute trades, monitor health
+5. **LeverageTierRefresher** — Pre-fetches and caches per-exchange leverage brackets hourly so `ExecutionEngine` can clamp leverage without blocking on API calls during order placement
+6. **DailySummaryService** — Sends daily P&L summary emails to opted-in users
 
 ## Exchange Integrations
 
-| Exchange | Type | Settlement | Connection | Auth |
-|----------|------|-----------|------------|------|
-| **HyperLiquid** | DEX | Continuous | SDK (HyperLiquid.Net) + WebSocket | Wallet-based |
-| **Lighter** | DEX | Continuous | Custom REST + WebSocket | Custom signer (zkLighter) |
-| **Aster** | DEX | Periodic (8h) | SDK (Aster.Net) + WebSocket | API key |
+| Exchange | Type | Funding Interval | Connection | Auth |
+|----------|------|------------------|------------|------|
+| **Hyperliquid** | DEX | 1h | SDK (HyperLiquid.Net) + WebSocket | Wallet-based (with optional sub-account vault) |
+| **Lighter** | DEX | 1h | Custom REST + WebSocket | Custom zkLighter signer |
+| **dYdX v4** | DEX | 1h | Cosmos indexer + user signer | Per-user credentials (Settings page) |
+| **Aster** | DEX | 8h (±15s window) | SDK (Aster.Net) + WebSocket | API key + secret |
+| **Binance** | CEX | 8h (shifts to 4h/1h in volatility) | REST + WebSocket | API key + secret |
 | **CoinGlass** | Data | N/A | REST | API key |
 
-CoinGlass provides supplementary volume data and is flagged as `IsDataOnly` (not used for trading).
+CoinGlass is a data-only source (`IsDataOnly = true`) providing supplementary volume data and the arbitrage screening feed that powers `/Admin/ExchangeAnalytics`. It implements `IExchangeConnector` but is excluded from trading.
 
-Each exchange implements `IExchangeConnector` (REST) and `IMarketDataStream` (WebSocket). The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and rate-limit cooldown.
+Each tradable exchange implements `IExchangeConnector` (REST: funding rates, orders, balance, margin state, leverage tiers, position reconciliation) and `IMarketDataStream` (WebSocket). The `ExchangeConnectorFactory` manages infrastructure-level connector lifecycle with key rotation and rate-limit cooldown tracking. `ConnectorLifecycleManager` wraps user-scoped connector creation, leverage tier caching, and `DryRunConnectorWrapper` application for paper-trading mode.
+
+## Bot Operating States
+
+`BotConfiguration.OperatingState` drives a four-state lifecycle that `BotOrchestrator` consults before each cycle:
+
+| State | Value | Opens positions | Monitors open positions | Typical trigger |
+|-------|-------|-----------------|-------------------------|-----------------|
+| `Stopped` | 0 | No | No | Manual shutdown or startup default |
+| `Armed` | 1 | No | Yes | Operator prepping the bot for trading |
+| `Trading` | 2 | Yes | Yes | Operator confirms active trading |
+| `Paused` | 3 | No | Yes | Daily drawdown limit or consecutive loss pause |
+
+Transitions from `Trading` → `Paused` are automatic (drawdown, consecutive losses). Returning to `Trading` requires explicit operator action. Health monitoring and close paths remain active in `Armed` and `Paused` so existing positions are never abandoned.
+
+## Dry Run Mode
+
+`BotConfiguration.DryRunEnabled` (global) and `UserConfiguration.DryRunEnabled` (per-user — can only enable for a user, never disable when the global flag is on) route order placement through `DryRunConnectorWrapper`. Dry-run positions use real mark prices for simulated fills, write `IsDryRun = true` on the `ArbitragePosition` row, and are excluded from balance aggregation and daily drawdown calculations. The dashboard marks dry-run positions with a distinct badge.
+
+## Unified PnL (Three-View Model)
+
+Every open position reports three PnL figures:
+
+1. **Per-exchange PnL** — raw `unrealizedPnl` as each exchange reports it. Used for margin-health and liquidation monitoring; matches what each exchange UI shows.
+2. **Unified-reference-price PnL** — strategy PnL computed against a single reference price across both legs via `ReferencePriceProvider` (Binance index when Binance is one leg, otherwise averaged DEX oracle prices). This hides the mark-price noise that makes each leg look mispriced in isolation.
+3. **Final realized PnL** — computed from actual fill prices after the position closes, decomposed into `Directional`, `Funding`, and `Fees` via `PnlDecompositionDto`.
+
+`PnlReconciliationService` cross-checks bot-tracked PnL against exchange-reported realized PnL each `ReconciliationIntervalCycles`. Divergence beyond `DivergenceAlertMultiplier` raises a critical alert.
+
+## Leverage Tier Capping
+
+`LeverageTierRefresher` pre-fetches per-exchange leverage brackets hourly. At order placement, the execution engine applies three caps in order:
+
+1. Global `BotConfiguration.MaxLeverageCap` (default **3x**)
+2. Per-user `UserConfiguration.MaxLeverageCap` (can only tighten the global cap)
+3. Exchange-specific tier max at the position's notional size
+
+The user's requested leverage is clamped to the minimum of those. This matches the safety guardrail recommended by academic research and industry practice (e.g. Gate.io hard-capping at 3x).
 
 ## Prerequisites
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - SQL Server 2022+ (or Docker)
-- Exchange API credentials (Lighter, Aster, optionally HyperLiquid)
+- Exchange API credentials for whichever exchanges you intend to trade (Hyperliquid, Lighter, Aster, Binance). dYdX v4 credentials are entered per-user via `/Settings`. CoinGlass is optional but recommended for opportunity screening.
 
 ## Quick Start
 
@@ -129,9 +185,21 @@ dotnet user-secrets set "Exchanges:Aster:ApiKey" "<your-key>"
 dotnet user-secrets set "Exchanges:Aster:ApiSecret" "<your-secret>"
 
 # Hyperliquid (DEX)
+# SubAccountAddress is optional — leave empty to trade on the main account
 dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "<0x...>"
 dotnet user-secrets set "Exchanges:Hyperliquid:PrivateKey" "<your-key>"
 dotnet user-secrets set "Exchanges:Hyperliquid:SubAccountAddress" "<0x... optional vault address>"
+
+# Binance (CEX)
+dotnet user-secrets set "Exchanges:Binance:ApiKey" "<your-key>"
+dotnet user-secrets set "Exchanges:Binance:ApiSecret" "<your-secret>"
+
+# CoinGlass (data-only — powers the analytics dashboard and opportunity screening)
+dotnet user-secrets set "Exchanges:CoinGlass:ApiKey" "<your-key>"
+
+# dYdX v4 — NOT configured via user-secrets.
+# The infrastructure connector is read-only (indexer polling). User trading
+# requires per-user credentials supplied via the /Settings page.
 ```
 
 ### 4. Run
@@ -156,6 +224,10 @@ ASTER_API_KEY=<your-key>
 ASTER_API_SECRET=<your-secret>
 HYPERLIQUID_WALLET=<0x...>
 HYPERLIQUID_KEY=<your-key>
+HYPERLIQUID_SUBACCOUNT=<0x... optional vault address>
+BINANCE_API_KEY=<your-key>
+BINANCE_API_SECRET=<your-secret>
+COINGLASS_API_KEY=<your-key>
 EOF
 
 # Build and run
@@ -169,17 +241,21 @@ The multi-stage Dockerfile builds with the .NET SDK and runs on the lightweight 
 ## Testing
 
 ```bash
-# All tests
+# All tests (unit + integration + .NET E2E)
 dotnet test
 
 # Unit tests only
 dotnet test tests/FundingRateArb.Tests.Unit
 
-# Integration tests (uses EF Core in-memory database)
+# Integration tests — most use EF Core InMemory, but CI runs them against
+# a SQL Server 2022 service container via ConnectionStrings__DefaultConnection
 dotnet test tests/FundingRateArb.Tests.Integration
+
+# .NET E2E suite (Playwright-driven, requires the app running)
+dotnet test tests/FundingRateArb.Tests.E2E
 ```
 
-### End-to-End Tests (Playwright)
+### Python End-to-End Tests (legacy)
 
 ```bash
 cd tests/playwright
@@ -194,52 +270,85 @@ Requires the app running at `http://localhost:5273` with a seeded database.
 
 | Suite | Framework | Scope |
 |-------|-----------|-------|
-| Unit (747 tests) | xUnit, Moq, FluentAssertions | SignalEngine, PositionSizer, ExecutionEngine, YieldCalculator, ConfigValidator, ApiKeyVault, Connectors |
-| Integration (28 tests) | xUnit, EF Core InMemory | Repositories, UnitOfWork, database persistence |
-| E2E | Playwright (Python), pytest | Authentication, dashboard, admin panel, settings, mobile responsiveness |
+| Unit (~1670 tests) | xUnit, Moq, FluentAssertions | Signal engine, position sizer, execution engine, closers, PnL reconciliation, yield calculator, config validator, API key vault, every exchange connector, and all background services |
+| Integration (~45 tests) | xUnit, EF Core (InMemory locally, SQL Server in CI) | Repositories, unit-of-work, hub reconnection, dashboard sections, admin pages, health endpoint, startup time |
+| .NET E2E (~5 tests) | xUnit + Microsoft.Playwright | Connectivity test page, credential balance flow |
+| Python E2E | Playwright (Python), pytest | Authentication, dashboard, admin panel, settings, mobile responsiveness |
 
 ## CI/CD
 
-Two GitHub Actions workflows automate the build and deployment pipeline:
+A single GitHub Actions workflow (`.github/workflows/deploy.yml`) runs on every push to `main` and handles both CI and CD in one pipeline. There is no separate `ci.yml` — pull requests are verified locally before merge, and the canonical CI signal is the deploy workflow running on `main`. Documentation-only changes (`documentation/**`) are skipped.
 
-**Pull Requests** (`ci.yml`) — builds the solution, checks code formatting, runs unit tests with coverage enforcement (15% threshold) and integration tests against SQL Server, scans for vulnerable packages and exposed secrets, checks license compliance, detects code duplication, verifies all NuGet packages exist on nuget.org, and verifies the Docker image builds.
+**`build-and-test` job** — restores packages, runs `dotnet format --verify-no-changes`, builds in Release, runs unit tests with XPlat code coverage (Cobertura), enforces a **14% line-coverage threshold**, runs integration tests against a SQL Server 2022 service container, scans for vulnerable NuGet packages, and regex-scans the PR diff for exposed secrets. Test results and coverage reports are uploaded as artifacts.
 
-**Deploy** (`deploy.yml`) — triggers on merge to `main`. Runs the full test suite, generates an EF Core migration bundle, and deploys to Azure App Service using OIDC federation (no stored credentials).
+**`deploy` job** — depends on `build-and-test`. Downloads the build artifact, logs in to Azure via OIDC federation (no stored credentials), runs the EF Core migration bundle against the production database, and deploys to Azure App Service via `azure/webapps-deploy@v3`.
 
 ## Resilience
 
 The application uses Polly resilience pipelines to handle exchange API failures gracefully:
 
-| Pipeline | Strategy | Use Case |
-|----------|----------|----------|
-| `ExchangeSdk` | Retry (3x exponential) + circuit breaker + 15s timeout | General exchange API calls |
-| `OrderExecution` | Circuit breaker + 30s timeout (no retry) | Order placement — prevents double fills |
-| `OrderClose` | 30s timeout only | Position close — critical path |
+| Pipeline | Retry | Circuit Breaker | Timeout | Use Case |
+|----------|-------|----------------|---------|----------|
+| `ExchangeSdk` | 3x exponential | 50% failure / 30s | 15s | General exchange API calls |
+| `OrderExecution` | None | 50% failure / 60s | 30s | Order placement — no retry to prevent double fills |
+| `OrderClose` | None | None | 30s | Position close — critical path must not be blocked |
+
+In addition, `BotOrchestrator` runs its own per-opportunity circuit breaker: failed asset+exchange pairs enter exponential-backoff cooldown, the user is paused after `ConsecutiveLossPause` failures, and the whole bot is paused when realized losses cross `DailyDrawdownPausePct`.
 
 Rate limiting is enforced at the web layer:
-- **Auth endpoints**: 10 requests/min
-- **SignalR**: 20 requests/10s with queue depth of 5
-- **General**: 200 requests/min
+- **Auth endpoints** (`auth`): 10 requests/min
+- **SignalR** (`signalr`): 20 requests/10s with queue depth of 5
+- **General** (`general`): 200 requests/min
 
 ## Configuration
 
-Bot behavior is configured via the database (`BotConfigurations` table), editable through the admin dashboard:
+Bot behavior is configured via the database (`BotConfigurations` table), editable through the admin dashboard at `/Admin/BotConfig` and validated by `IConfigValidator` before saving. The full parameter reference lives in [`documentation/trading-engine.md`](documentation/trading-engine.md); the most-tuned settings are:
+
+### Lifecycle & Capital
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `IsEnabled` | Kill switch for automated trading | `false` |
+| `OperatingState` | Four-state lifecycle: `Stopped` / `Armed` / `Trading` / `Paused` | `Stopped` |
+| `IsEnabled` | Legacy kill switch for automated trading | `false` |
+| `DryRunEnabled` | Route all order placement through `DryRunConnectorWrapper` | `false` |
 | `TotalCapitalUsdc` | Total capital budget in USDC | `39` |
 | `MaxCapitalPerPosition` | Max fraction per position (0-1) | `0.90` |
-| `DefaultLeverage` | Leverage for new positions | `5` |
+| `MaxConcurrentPositions` | Parallel position limit | `1` |
+| `AllocationStrategy` | `Concentrated` / `WeightedSpread` / `EqualSpread` / `RiskAdjusted` | `Concentrated` |
+| `DefaultLeverage` | Requested leverage for new positions | `5` |
+| `MaxLeverageCap` | Global hard cap regardless of exchange tier max | `3` |
+| `MinEdgeMultiplier` | Net edge must exceed `MinEdgeMultiplier × totalEntryCost` to open | `3.0` |
+
+### Thresholds
+
+| Setting | Description | Default |
+|---------|-------------|---------|
 | `OpenThreshold` | Min spread/hr to open a position | `0.0002` |
+| `AlertThreshold` | Spread/hr that triggers an alert | `0.0001` |
 | `CloseThreshold` | Spread/hr that triggers close | `-0.00005` |
+
+### Risk Management
+
+| Setting | Description | Default |
+|---------|-------------|---------|
 | `StopLossPct` | Max loss as fraction of margin | `0.10` |
 | `MaxHoldTimeHours` | Auto-close after this many hours | `48` |
+| `MinHoldTimeHours` | Hours before `SpreadCollapsed` close can fire | `2` |
 | `BreakevenHoursMax` | Max hours to break even on fees | `8` |
-| `MaxConcurrentPositions` | Parallel position limit | `1` |
-| `AllocationStrategy` | Capital split strategy | `Concentrated` |
+| `MinVolume24hUsdc` | Minimum 24h volume to consider | `50,000` |
+| `DailyDrawdownPausePct` | Pause bot after this daily drawdown | `0.08` |
+| `ConsecutiveLossPause` | Pause after N consecutive losses | `3` |
+| `FundingFlipExitCycles` | Close if differential stays inverted for this many cycles | `2` |
+| `DivergenceAlertMultiplier` | Mark-divergence multiplier over entry spread that forces close | `2.0` |
+| `StablecoinCriticalThresholdPct` | USDT/USDC spread that forces emergency close | `0.01` |
+| `LiquidationWarningPct` | `MaxSafeMove` threshold that triggers a liquidation-risk close | — |
+| `MarginUtilizationAlertPct` | Per-exchange margin-used threshold raising an alert | — |
 
-Exchange credentials are managed via .NET User Secrets (development) or environment variables (production). Never commit credentials to the repository.
+### Per-User Overrides (`UserConfiguration`)
+
+`MaxLeverageCap` and `DryRunEnabled` on the user config can only **tighten** the global settings — a user cannot raise their own leverage cap above the bot-wide limit, and a user cannot opt out of global dry-run mode.
+
+Exchange credentials are managed via .NET User Secrets (development) or environment variables / Azure Key Vault (production). Never commit credentials to the repository.
 
 ## Security
 
