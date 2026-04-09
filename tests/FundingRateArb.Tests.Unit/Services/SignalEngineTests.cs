@@ -2216,7 +2216,11 @@ public class SignalEngineTests
             "net is above OpenThreshold but below 3× amortized entry cost");
         result.AllNetPositive.Should().NotBeEmpty(
             "the filtered opportunity should still appear in AllNetPositive for diagnostics");
-        result.Diagnostics!.NetPositiveBelowThreshold.Should().BeGreaterThan(0);
+        // The edge-guardrail counter (not NetPositiveBelowThreshold) should increment
+        // because the opportunity passed OpenThreshold but failed the 3x edge check.
+        result.Diagnostics!.NetPositiveBelowEdgeGuardrail.Should().BeGreaterThan(0);
+        result.Diagnostics.NetPositiveBelowThreshold.Should().Be(0,
+            "this opportunity is above OpenThreshold so the threshold counter does not fire");
     }
 
     [Fact]

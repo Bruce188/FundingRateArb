@@ -8,11 +8,23 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FundingRateArb.Tests.Unit.Infrastructure;
 
-public class CoinGlassScreeningServiceTests
+public class CoinGlassScreeningServiceTests : IDisposable
 {
+    private readonly List<HttpClient> _clientsToDispose = new();
+
+    public void Dispose()
+    {
+        foreach (var client in _clientsToDispose)
+        {
+            client.Dispose();
+        }
+        _clientsToDispose.Clear();
+    }
+
     /// <summary>
     /// Records every request the service makes and returns a queued response, so tests can
     /// verify the request URL/headers and assert how the service handles each response shape.
+    /// Disposes any remaining queued responses when itself disposed (via the owning HttpClient).
     /// </summary>
     private sealed class StubHandler : HttpMessageHandler
     {
@@ -28,15 +40,29 @@ public class CoinGlassScreeningServiceTests
             }
             return Task.FromResult(Responses.Dequeue());
         }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Any responses that were queued but never consumed — dispose to avoid leaks.
+                while (Responses.Count > 0)
+                {
+                    Responses.Dequeue().Dispose();
+                }
+            }
+            base.Dispose(disposing);
+        }
     }
 
-    private static (CoinGlassScreeningService Service, StubHandler Handler) MakeService(
+    private (CoinGlassScreeningService Service, StubHandler Handler) MakeService(
         string? apiKey = "test-key",
         int investmentUsd = 10000,
         double minAprPct = 10d)
     {
         var handler = new StubHandler();
         var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        _clientsToDispose.Add(client);
         var configValues = new Dictionary<string, string?>
         {
             ["ExchangeConnectors:CoinGlass:ApiKey"] = apiKey,
@@ -228,7 +254,8 @@ public class CoinGlassScreeningServiceTests
     public async Task GetHotSymbolsAsync_TransportException_ReturnsEmptySetAndDoesNotThrow()
     {
         var handler = new ThrowingHandler();
-        using var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        var client = new HttpClient(handler) { BaseAddress = new Uri("https://open-api-v4.coinglass.com/") };
+        _clientsToDispose.Add(client);
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",

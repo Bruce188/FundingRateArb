@@ -339,11 +339,17 @@ public class SignalEngine : ISignalEngine
                     {
                         opportunities.Add(dto);
                     }
+                    else if (net >= config.OpenThreshold)
+                    {
+                        // Passed OpenThreshold but failed the 3x edge guardrail — record
+                        // in a dedicated counter so operators can see they need to loosen
+                        // the multiplier, not the threshold.
+                        netPositiveList.Add(dto);
+                        diagnostics.NetPositiveBelowEdgeGuardrail++;
+                    }
                     else if (net > 0)
                     {
-                        // Net-positive but either below OpenThreshold or failing the edge guardrail.
-                        // Surface in diagnostics via AllNetPositive so the UI can explain why the
-                        // opportunity didn't reach the "actionable" list.
+                        // Net-positive but below OpenThreshold.
                         netPositiveList.Add(dto);
                         diagnostics.NetPositiveBelowThreshold++;
                     }
