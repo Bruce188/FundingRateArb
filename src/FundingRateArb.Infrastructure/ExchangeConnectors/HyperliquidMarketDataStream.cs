@@ -265,7 +265,7 @@ public class HyperliquidMarketDataStream : IMarketDataStream
             _socketLock.Release();
         }
 
-        closeSnapshot:
+    closeSnapshot:
         foreach (var sub in snapshot)
         {
             try

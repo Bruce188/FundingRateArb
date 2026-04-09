@@ -139,56 +139,56 @@ public class DashboardController : Controller
             var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
             var needsAttentionCount = await _uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
 
-        var positionSummaries = openPositions.Select(p => p.ToSummaryDto()).ToList();
+            var positionSummaries = openPositions.Select(p => p.ToSummaryDto()).ToList();
 
-        var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
-        var bestSpread = opportunities.Count > 0
-            ? opportunities.Max(o => o.SpreadPerHour)
-            : positionSummaries.Count > 0
-                ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
-                : result.Diagnostics?.BestRawSpread ?? 0m;
+            var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
+            var bestSpread = opportunities.Count > 0
+                ? opportunities.Max(o => o.SpreadPerHour)
+                : positionSummaries.Count > 0
+                    ? positionSummaries.Max(p => p.CurrentSpreadPerHour)
+                    : result.Diagnostics?.BestRawSpread ?? 0m;
 
-        // Compute PnL progress for positions when adaptive hold is enabled
-        var pnlProgress = new Dictionary<int, decimal>();
-        if (botConfig is not null && botConfig.AdaptiveHoldEnabled)
-        {
-            foreach (var pos in openPositions)
+            // Compute PnL progress for positions when adaptive hold is enabled
+            var pnlProgress = new Dictionary<int, decimal>();
+            if (botConfig is not null && botConfig.AdaptiveHoldEnabled)
             {
-                if (pos.AccumulatedFunding > 0 && pos.SizeUsdc > 0)
+                foreach (var pos in openPositions)
                 {
-                    var fee = pos.EntryFeesUsdc > 0
-                        ? pos.EntryFeesUsdc
-                        : pos.SizeUsdc * pos.Leverage * 2m * Application.Services.PositionHealthMonitor.GetTakerFeeRate(
-                            pos.LongExchange?.Name, pos.ShortExchange?.Name,
-                            pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
-                    var target = botConfig.TargetPnlMultiplier * fee;
-                    if (target > 0)
+                    if (pos.AccumulatedFunding > 0 && pos.SizeUsdc > 0)
                     {
-                        pnlProgress[pos.Id] = Math.Min(pos.AccumulatedFunding / target, 2.0m);
+                        var fee = pos.EntryFeesUsdc > 0
+                            ? pos.EntryFeesUsdc
+                            : pos.SizeUsdc * pos.Leverage * 2m * Application.Services.PositionHealthMonitor.GetTakerFeeRate(
+                                pos.LongExchange?.Name, pos.ShortExchange?.Name,
+                                pos.LongExchange?.TakerFeeRate, pos.ShortExchange?.TakerFeeRate);
+                        var target = botConfig.TargetPnlMultiplier * fee;
+                        if (target > 0)
+                        {
+                            pnlProgress[pos.Id] = Math.Min(pos.AccumulatedFunding / target, 2.0m);
+                        }
                     }
                 }
             }
-        }
 
-        var vm = new DashboardViewModel
-        {
-            IsAuthenticated = true,
-            BotEnabled = botConfig?.OperatingState is BotOperatingState.Armed or BotOperatingState.Trading,
-            OperatingState = botConfig?.OperatingState.ToString() ?? "Stopped",
-            OpenPositionCount = openPositions.Count,
-            OpeningPositionCount = openingCount,
-            NeedsAttentionCount = needsAttentionCount,
-            TotalPnl = totalPnl,
-            BestSpread = bestSpread,
-            TotalUnreadAlerts = unreadAlerts.Count,
-            OpenPositions = positionSummaries,
-            Opportunities = opportunities,
-            Diagnostics = result.Diagnostics,
-            AdaptiveHoldEnabled = botConfig?.AdaptiveHoldEnabled ?? false,
-            RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
-            PnlProgressByPosition = pnlProgress,
-            DatabaseAvailable = result.DatabaseAvailable,
-        };
+            var vm = new DashboardViewModel
+            {
+                IsAuthenticated = true,
+                BotEnabled = botConfig?.OperatingState is BotOperatingState.Armed or BotOperatingState.Trading,
+                OperatingState = botConfig?.OperatingState.ToString() ?? "Stopped",
+                OpenPositionCount = openPositions.Count,
+                OpeningPositionCount = openingCount,
+                NeedsAttentionCount = needsAttentionCount,
+                TotalPnl = totalPnl,
+                BestSpread = bestSpread,
+                TotalUnreadAlerts = unreadAlerts.Count,
+                OpenPositions = positionSummaries,
+                Opportunities = opportunities,
+                Diagnostics = result.Diagnostics,
+                AdaptiveHoldEnabled = botConfig?.AdaptiveHoldEnabled ?? false,
+                RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
+                PnlProgressByPosition = pnlProgress,
+                DatabaseAvailable = result.DatabaseAvailable,
+            };
 
             if (User.IsInRole("Admin") && botConfig is not null)
             {

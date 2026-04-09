@@ -239,7 +239,10 @@ public class HyperliquidMarketDataStreamTests
             do
             {
                 oldMax = Volatile.Read(ref _max);
-                if (cur <= oldMax) break;
+                if (cur <= oldMax)
+                {
+                    break;
+                }
             } while (Interlocked.CompareExchange(ref _max, cur, oldMax) != oldMax);
             Interlocked.Increment(ref _total);
         }
@@ -267,7 +270,9 @@ public class HyperliquidMarketDataStreamTests
                     try
                     {
                         if (subscribeDelayMs > 0)
+                        {
                             await Task.Delay(subscribeDelayMs, ct);
+                        }
                     }
                     finally
                     {
