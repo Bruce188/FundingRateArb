@@ -72,23 +72,17 @@ public class DashboardController : Controller
                 BestSpread = bestSpreadAnon,
                 Opportunities = anonOpportunities,
                 Diagnostics = null,
-                // plan-v60 Task 3.2: surface degraded state on the anonymous landing page too.
                 DatabaseAvailable = cachedResult.DatabaseAvailable,
             };
 
             return View(anonVm);
         }
 
-        // All queries sequential — DbContext is not thread-safe (scoped UoW shared across services)
+        // All queries sequential — DbContext is not thread-safe (scoped UoW shared across services).
+        // When the SignalEngine reports DatabaseAvailable=false the result carries empty
+        // collections, so the happy-path code below stays safe and we just surface the
+        // flag on the view model to enable the degraded banner.
         var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
-
-        // plan-v60 Task 3.2: when the SignalEngine reports a degraded result (e.g. transient
-        // SQL login-phase failure), render a banner-enabled view instead of a 500 page.
-        // The result is still a valid OpportunityResultDto with empty collections, so the
-        // normal happy-path code below remains safe to execute; we only need to surface
-        // the flag on the view model.
-        var databaseAvailable = result.DatabaseAvailable;
-
         var allOpportunities = result.Opportunities;
         var botConfig = await _uow.BotConfig.GetActiveAsync();
         var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
@@ -177,7 +171,7 @@ public class DashboardController : Controller
             AdaptiveHoldEnabled = botConfig?.AdaptiveHoldEnabled ?? false,
             RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
             PnlProgressByPosition = pnlProgress,
-            DatabaseAvailable = databaseAvailable,
+            DatabaseAvailable = result.DatabaseAvailable,
         };
 
         if (User.IsInRole("Admin") && botConfig is not null)

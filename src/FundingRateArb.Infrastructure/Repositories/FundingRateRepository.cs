@@ -19,33 +19,12 @@ public class FundingRateRepository : IFundingRateRepository
         _logger = logger;
     }
 
-    // plan-v60 Task 3.2: SQL error numbers that indicate transient login-phase or
-    // connectivity failures worth surfacing as a degraded state instead of a hard 500.
-    // Mirrors the DbContext EnableRetryOnFailure allowlist.
-    private static readonly HashSet<int> TransientLoginFailureErrorCodes =
-    [
-        -2,      // timeout
-        35,      // network path not found
-        64,      // connection forcibly closed
-        233,     // pre-login handshake
-        10053,   // connection aborted
-        10054,   // connection reset
-        10060,   // connection timed out
-        10928,   // Azure SQL: resource limit reached
-        10929,   // Azure SQL: too many sessions
-        40197,   // Azure SQL: service encountered an error
-        40501,   // Azure SQL: service is busy
-        40613,   // Azure SQL: database unavailable
-    ];
-
-    private static bool IsTransientLoginFailure(SqlException ex)
-    {
-        if (TransientLoginFailureErrorCodes.Contains(ex.Number))
-        {
-            return true;
-        }
-        return ex.Message.Contains("login", StringComparison.OrdinalIgnoreCase);
-    }
+    // Matches any error number on the DbContext retry allowlist, plus a loose
+    // substring check as a last-resort catch for providers that wrap the error
+    // number in a message without populating SqlException.Number.
+    private static bool IsTransientLoginFailure(SqlException ex) =>
+        SqlTransientErrorNumbers.Contains(ex.Number)
+        || ex.Message.Contains("login", StringComparison.OrdinalIgnoreCase);
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
@@ -69,9 +48,8 @@ public class FundingRateRepository : IFundingRateRepository
         }
         catch (SqlException ex) when (IsTransientLoginFailure(ex))
         {
-            // plan-v60 Task 3.2: surface transient SQL outages as a domain exception
-            // so the Application layer (SignalEngine) can return a degraded result
-            // without taking a dependency on Microsoft.Data.SqlClient.
+            // Re-throw as a domain exception so Application-layer callers (SignalEngine)
+            // can return a degraded result without referencing Microsoft.Data.SqlClient.
             _logger?.LogWarning(ex,
                 "SQL transient login-phase failure in GetLatestPerExchangePerAssetAsync (Number={ErrorNumber}); surfacing as DatabaseUnavailable",
                 ex.Number);

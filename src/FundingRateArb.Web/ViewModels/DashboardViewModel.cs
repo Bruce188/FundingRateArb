@@ -26,6 +26,6 @@ public class DashboardViewModel
     // Per-position PnL progress: keyed by position ID
     public Dictionary<int, decimal> PnlProgressByPosition { get; set; } = new();
 
-    // plan-v60 Task 3.2: when false, the dashboard renders a "data source unavailable" banner.
+    // When false, the dashboard renders a "data source unavailable" banner.
     public bool DatabaseAvailable { get; set; } = true;
 }

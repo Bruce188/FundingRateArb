@@ -128,28 +128,23 @@ try
     builder.Services.AddApplicationInsightsTelemetry();
 
     // --- Database ---
-    // Error numbers cover the login-phase and transient SQL failures observed in Azure
-    // (see docs/analysis-v61.md): -2 (timeout), 35/64/233 (transport close), 10053/10054/10060
-    // (socket reset / peer closed / connect timeout), 10928/10929 (resource limit),
-    // 40197/40501/40613 (Azure SQL service busy / not available).
-    var sqlTransientErrorNumbers = new[]
-    {
-        -2, 35, 64, 233, 10053, 10054, 10060, 10928, 10929, 40197, 40501, 40613,
-    };
+    // Shared allowlist lives in SqlTransientErrorNumbers so DbContext retries,
+    // DatabaseHealthCheck, and FundingRateRepository all agree on which SQL
+    // error numbers count as transient login-phase / connectivity failures.
     builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseSqlServer(
             builder.Configuration.GetConnectionString("DefaultConnection"),
             sqlOpts => sqlOpts.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorNumbersToAdd: sqlTransientErrorNumbers)));
+                errorNumbersToAdd: SqlTransientErrorNumbers.All)));
     builder.Services.AddDbContextFactory<AppDbContext>(
         options => options.UseSqlServer(
             builder.Configuration.GetConnectionString("DefaultConnection"),
             sqlOpts => sqlOpts.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorNumbersToAdd: sqlTransientErrorNumbers)),
+                errorNumbersToAdd: SqlTransientErrorNumbers.All)),
         lifetime: ServiceLifetime.Scoped);
 
     // --- Identity ---

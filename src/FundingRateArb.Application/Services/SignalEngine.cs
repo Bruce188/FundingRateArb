@@ -49,10 +49,10 @@ public class SignalEngine : ISignalEngine
         }
         catch (DatabaseUnavailableException ex)
         {
-            // plan-v60 Task 3.2: the data source is temporarily unavailable (transient
-            // SQL login-phase failure, connection blip, etc.). Instead of propagating
-            // and rendering a 500 page, return a degraded result so the dashboard can
-            // show a "data source unavailable, retrying" banner.
+            // Transient DB outage — return a degraded result so the dashboard can render
+            // a banner instead of a 500 page. Callers that only need the opportunity
+            // list will see an empty collection; callers that branch on DatabaseAvailable
+            // can show a user-visible warning.
             _logger?.LogWarning(ex,
                 "SignalEngine detected database unavailable; returning degraded result");
             return new OpportunityResultDto
