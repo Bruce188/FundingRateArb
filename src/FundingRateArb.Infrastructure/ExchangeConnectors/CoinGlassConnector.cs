@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FundingRateArb.Application.Common.Exchanges;
@@ -81,7 +80,9 @@ public class CoinGlassConnector : IExchangeConnector
         _httpClient = httpClient;
         _logger = logger;
         _analyticsRepo = analyticsRepo;
-        _pipeline = pipelineProvider.GetPipeline("CoinGlass");
+        // NB5 fix (review-v133): v3 connector uses its own breaker so a v4 screening
+        // outage does not black-hole v3 funding rates and vice versa.
+        _pipeline = pipelineProvider.GetPipeline("CoinGlass-v3");
         _apiKey = configuration["ExchangeConnectors:CoinGlass:ApiKey"];
     }
 
@@ -110,7 +111,7 @@ public class CoinGlassConnector : IExchangeConnector
         HttpResponseMessage response;
         try
         {
-            // Wrap the HTTP call in the "CoinGlass" Polly circuit-breaker pipeline. Non-2xx
+            // Wrap the HTTP call in the "CoinGlass-v3" Polly circuit-breaker pipeline. Non-2xx
             // responses are converted into CoinGlassApiFailureException inside the pipeline so
             // the circuit breaker counts them as failures alongside HttpRequestException /
             // TaskCanceledException. When the circuit opens, Polly short-circuits with
@@ -144,14 +145,17 @@ public class CoinGlassConnector : IExchangeConnector
         }
         catch (BrokenCircuitException ex)
         {
+            // B1 fix (review-v133): do NOT call RecordFailure() here. A short-circuit is the
+            // breaker doing its job — counting it as a new upstream failure would stack the
+            // manual _backoffUntil window past the Polly break duration and prevent recovery.
             if (IsAvailable)
             {
                 _logger.LogInformation("CoinGlass circuit breaker OPENED — short-circuiting requests");
             }
             IsAvailable = false;
-            _logger.LogWarning("CoinGlass API request short-circuited: {Message}",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
-            RecordFailure();
+            _logger.LogWarning("CoinGlass API request short-circuited: {Body} [{ExType}]",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
+                ex.GetType().Name);
             return [];
         }
         catch (CoinGlassApiFailureException ex)
@@ -162,35 +166,60 @@ public class CoinGlassConnector : IExchangeConnector
             RecordFailure();
             return [];
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "CoinGlass API request failed: {Body}",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            // NB1 fix (review-v133): sanitize ex.ToString() (which includes inner exceptions
+            // and stack trace) instead of passing the exception object to the logger, which
+            // would serialize it verbatim via ex.ToString() inside the log sink.
+            _logger.LogWarning("CoinGlass API request failed: {Body} [{ExType}]",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
+                ex.GetType().Name);
+            RecordFailure();
+            return [];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || ex is TaskCanceledException)
+        {
+            // NB1 fix (review-v133): same sanitization as the HttpRequestException path.
+            // TaskCanceledException is treated as a timeout (we never threw it ourselves
+            // from an external cancellation token), so we still record it as a failure.
+            _logger.LogWarning("CoinGlass API request failed: {Body} [{ExType}]",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
+                ex.GetType().Name);
             RecordFailure();
             return [];
         }
 
         using (response)
         {
+            // NB4 fix (review-v133): read the body as a string FIRST, then deserialize.
+            // ReadFromJsonAsync consumes the stream and a subsequent ReadAsStringAsync
+            // returns empty on non-seekable production streams. Payloads are bounded
+            // (CoinGlass responses are a few KB) so buffering to a string is safe.
+            string responseBody;
+            try
+            {
+                responseBody = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (Exception readEx) when (readEx is not OperationCanceledException)
+            {
+                _logger.LogWarning("CoinGlass response body read failed: {Body} [{ExType}]",
+                    HttpResponseBodyLogging.TruncateAndSanitize(readEx.ToString()),
+                    readEx.GetType().Name);
+                RecordFailure();
+                return [];
+            }
+
             CoinGlassResponse? data;
             try
             {
-                data = await response.Content.ReadFromJsonAsync<CoinGlassResponse>(JsonOptions, ct);
+                data = JsonSerializer.Deserialize<CoinGlassResponse>(responseBody, JsonOptions);
             }
             catch (JsonException ex)
             {
-                string body;
-                try
-                {
-                    body = await response.Content.ReadAsStringAsync(ct);
-                }
-                catch (Exception readEx) when (readEx is not OperationCanceledException)
-                {
-                    body = ex.Message;
-                }
-
-                _logger.LogWarning(ex, "Failed to parse CoinGlass response: {Body}",
-                    HttpResponseBodyLogging.TruncateAndSanitize(body));
+                // NB1 fix: sanitize ex.ToString() too (do not pass the raw exception).
+                _logger.LogWarning("Failed to parse CoinGlass response: {Body} [{ExType}]",
+                    HttpResponseBodyLogging.TruncateAndSanitize(responseBody),
+                    ex.GetType().Name);
                 RecordFailure();
                 return [];
             }

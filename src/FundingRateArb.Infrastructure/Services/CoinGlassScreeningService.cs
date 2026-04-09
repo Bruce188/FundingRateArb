@@ -1,4 +1,3 @@
-using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using FundingRateArb.Application.Common.Exchanges;
@@ -15,8 +14,9 @@ namespace FundingRateArb.Infrastructure.Services;
 /// Calls the CoinGlass v4 /api/futures/funding-rate/arbitrage endpoint to retrieve
 /// pre-calculated cross-exchange arbitrage opportunities. Returns the set of normalized
 /// symbols above the configured APR threshold as a priority hint for SignalEngine.
-/// Wraps the HTTP call in the shared "CoinGlass" Polly circuit-breaker pipeline and
-/// exposes an <see cref="IsAvailable"/> flag so SignalEngine can skip the screening
+/// Wraps the HTTP call in the "CoinGlass-v4" Polly circuit-breaker pipeline — independent
+/// from the v3 connector's breaker so v4 rate-limits do not black-hole v3 (review-v133 NB5) —
+/// and exposes an <see cref="IsAvailable"/> flag so SignalEngine can skip the screening
 /// step cleanly when the circuit is open.
 /// </summary>
 public class CoinGlassScreeningService : ICoinGlassScreeningProvider
@@ -44,7 +44,8 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
     {
         _httpClient = httpClient;
         _logger = logger;
-        _pipeline = pipelineProvider.GetPipeline("CoinGlass");
+        // NB5 fix (review-v133): v4 screening uses its own breaker independent from v3.
+        _pipeline = pipelineProvider.GetPipeline("CoinGlass-v4");
         _apiKey = configuration["ExchangeConnectors:CoinGlass:ApiKey"];
         _investmentUsd = configuration.GetValue<int?>("ExchangeConnectors:CoinGlass:ScreeningInvestmentUsd") ?? 10000;
         _minAprThreshold = configuration.GetValue<double?>("ExchangeConnectors:CoinGlass:ScreeningMinAprPct") ?? 10d;
@@ -105,8 +106,11 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
                 _logger.LogInformation("CoinGlass screening circuit breaker OPENED — short-circuiting requests");
             }
             IsAvailable = false;
-            _logger.LogWarning("CoinGlass arbitrage screening short-circuited: {Message}",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            // NB1 fix (review-v133): sanitize ex.ToString() instead of passing the raw
+            // exception object so inner exceptions / stack traces cannot leak secrets.
+            _logger.LogWarning("CoinGlass arbitrage screening short-circuited: {Body} [{ExType}]",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
+                ex.GetType().Name);
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
         catch (CoinGlassScreeningFailureException ex)
@@ -118,32 +122,44 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "CoinGlass arbitrage screening request failed: {Body}",
-                HttpResponseBodyLogging.TruncateAndSanitize(ex.Message));
+            // NB1 fix (review-v133): same sanitization pattern — drop the `ex` parameter
+            // so no log sink serializes the raw ex.ToString() verbatim.
+            _logger.LogWarning("CoinGlass arbitrage screening request failed: {Body} [{ExType}]",
+                HttpResponseBodyLogging.TruncateAndSanitize(ex.ToString()),
+                ex.GetType().Name);
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         }
 
         using (response)
         {
+            // NB4 fix (review-v133): read the body as a string FIRST, then deserialize.
+            // ReadFromJsonAsync consumes the non-seekable production stream; a subsequent
+            // ReadAsStringAsync returns empty. Buffer to a string so the body text is
+            // available for logging on parse failure. Payloads are bounded (a few KB).
+            string responseBody;
+            try
+            {
+                responseBody = await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (Exception readEx) when (readEx is not OperationCanceledException)
+            {
+                _logger.LogWarning("CoinGlass screening response body read failed: {Body} [{ExType}]",
+                    HttpResponseBodyLogging.TruncateAndSanitize(readEx.ToString()),
+                    readEx.GetType().Name);
+                return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            }
+
             CoinGlassArbitrageResponse? data;
             try
             {
-                data = await response.Content.ReadFromJsonAsync<CoinGlassArbitrageResponse>(JsonOptions, ct);
+                data = JsonSerializer.Deserialize<CoinGlassArbitrageResponse>(responseBody, JsonOptions);
             }
             catch (JsonException ex)
             {
-                string body;
-                try
-                {
-                    body = await response.Content.ReadAsStringAsync(ct);
-                }
-                catch (Exception readEx) when (readEx is not OperationCanceledException)
-                {
-                    body = ex.Message;
-                }
-
-                _logger.LogWarning(ex, "Failed to parse CoinGlass arbitrage response: {Body}",
-                    HttpResponseBodyLogging.TruncateAndSanitize(body));
+                // NB1 fix: sanitize ex too; drop the raw ex parameter.
+                _logger.LogWarning("Failed to parse CoinGlass arbitrage response: {Body} [{ExType}]",
+                    HttpResponseBodyLogging.TruncateAndSanitize(responseBody),
+                    ex.GetType().Name);
                 return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             }
 
@@ -200,7 +216,7 @@ public class CoinGlassScreeningService : ICoinGlassScreeningProvider
 
     /// <summary>
     /// Sentinel exception thrown from inside the Polly pipeline on non-2xx responses so the
-    /// shared "CoinGlass" circuit breaker (which handles exceptions, not status codes) counts
+    /// "CoinGlass-v4" circuit breaker (which handles exceptions, not status codes) counts
     /// HTTP error responses as failures alongside network exceptions.
     /// </summary>
 #pragma warning disable CA1064 // Exceptions should be public — intentionally file-scoped sentinel

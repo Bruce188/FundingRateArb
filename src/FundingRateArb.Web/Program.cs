@@ -296,13 +296,29 @@ try
         pipelineBuilder.AddTimeout(TimeSpan.FromSeconds(15));
     });
 
-    // "CoinGlass" — third-party funding-rate aggregator (v3 + v4). Circuit-breaker only — no
-    // retry, because CoinGlass is a best-effort data source and the app must degrade gracefully
-    // when it is unavailable. 5 consecutive failures over a 60s window → 5 minute break, after
-    // which the connector's IsAvailable flag flips back to true on the first successful probe.
-    // ShouldHandle intentionally catches any non-cancellation exception so the connectors'
-    // internal sentinel exception for non-2xx responses trips the breaker too.
-    builder.Services.AddResiliencePipeline("CoinGlass", static pipelineBuilder =>
+    // "CoinGlass-v3" / "CoinGlass-v4" — third-party funding-rate aggregator. Circuit-breaker
+    // only — no retry, because CoinGlass is a best-effort data source and the app must
+    // degrade gracefully when it is unavailable. 5 consecutive failures over a 60s window
+    // → 5 minute break, after which the connector's IsAvailable flag flips back to true on
+    // the first successful probe. ShouldHandle intentionally catches any non-cancellation
+    // exception so the connectors' internal sentinel exception for non-2xx responses
+    // trips the breaker too.
+    //
+    // Two pipelines because v3 connector and v4 screening endpoint have independent
+    // availability — one rate-limit on v4 should not black-hole v3 (review-v133 NB5).
+    builder.Services.AddResiliencePipeline("CoinGlass-v3", static pipelineBuilder =>
+    {
+        pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
+        {
+            FailureRatio = 0.5,
+            SamplingDuration = TimeSpan.FromSeconds(60),
+            MinimumThroughput = 5,
+            BreakDuration = TimeSpan.FromMinutes(5),
+            ShouldHandle = new PredicateBuilder().Handle<Exception>(ex =>
+                ex is not OperationCanceledException || ex is TaskCanceledException),
+        });
+    });
+    builder.Services.AddResiliencePipeline("CoinGlass-v4", static pipelineBuilder =>
     {
         pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
         {

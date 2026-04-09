@@ -13,9 +13,18 @@ using Moq.Protected;
 
 namespace FundingRateArb.Tests.Unit.Connectors;
 
-public class CoinGlassConnectorTests
+public class CoinGlassConnectorTests : IDisposable
 {
+    // NB6/NB7 fix (review-v133): CoinGlassConnector has static _backoffUntil /
+    // _consecutiveFailures / _lastLoggedBackoffLevel. Reset between every test so
+    // a prior failure case cannot short-circuit later tests via the manual backoff
+    // path before the Polly pipeline runs.
     public CoinGlassConnectorTests()
+    {
+        CoinGlassConnector.ResetBackoffState();
+    }
+
+    public void Dispose()
     {
         CoinGlassConnector.ResetBackoffState();
     }
@@ -924,6 +933,10 @@ public class CoinGlassConnectorTests
 
         result.Should().BeEmpty();
         logger.ContainsMessage("CoinGlass API request failed", LogLevel.Warning).Should().BeTrue();
+        // NB9 fix (review-v133): assert the sanitized exception message reaches the log,
+        // not just the static template prefix. Regressions that dropped the {Body}
+        // placeholder would leave the prefix intact but hide the timeout detail.
+        logger.ContainsMessage("request timeout after 30s", LogLevel.Warning).Should().BeTrue();
     }
 
     [Fact]
@@ -956,19 +969,12 @@ public class CoinGlassConnectorTests
 
         var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
 
-        // Each call needs to reset the manual backoff (via reflection) because the real
-        // _backoffUntil field short-circuits before the Polly pipeline ever runs. We bypass it
-        // to verify the Polly circuit breaker opens independently.
-        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-
-        // Drive failures until the breaker trips. Polly's rolling health metrics may need
-        // slightly more than MinimumThroughput invocations before the sliding window has
-        // enough data to open the circuit — loop with an upper bound instead of hard-coding.
+        // NB6 fix (review-v133): use ResetBackoffState() instead of reflection. The manual
+        // backoff would otherwise early-return before the Polly pipeline runs.
         int maxAttempts = 10;
         for (int i = 0; i < maxAttempts && connector.IsAvailable; i++)
         {
-            backoffField.SetValue(null, DateTime.MinValue);
+            CoinGlassConnector.ResetBackoffState();
             await connector.GetFundingRatesAsync();
             fakeTime.Advance(TimeSpan.FromMilliseconds(100));
         }
@@ -978,10 +984,11 @@ public class CoinGlassConnectorTests
 
         var sendCountAfterOpen = handlerMock.Invocations.Count;
 
-        // Subsequent calls must not hit the handler at all.
+        // Subsequent calls must not hit the handler at all — reset manual backoff before each
+        // probe so this test verifies the *Polly* circuit breaker's short-circuit semantics.
         for (int i = 0; i < 3; i++)
         {
-            backoffField.SetValue(null, DateTime.MinValue);
+            CoinGlassConnector.ResetBackoffState();
             await connector.GetFundingRatesAsync();
         }
 
@@ -1009,13 +1016,10 @@ public class CoinGlassConnectorTests
 
         var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
 
-        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-
-        // Drive the breaker open
+        // NB6 fix: ResetBackoffState() instead of reflection.
         for (int i = 0; i < 10 && connector.IsAvailable; i++)
         {
-            backoffField.SetValue(null, DateTime.MinValue);
+            CoinGlassConnector.ResetBackoffState();
             await connector.GetFundingRatesAsync();
             fakeTime.Advance(TimeSpan.FromMilliseconds(100));
         }
@@ -1026,7 +1030,7 @@ public class CoinGlassConnectorTests
         // Advance past the 5-minute break duration — the circuit should transition to
         // half-open and allow the next call through to the handler.
         fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
-        backoffField.SetValue(null, DateTime.MinValue);
+        CoinGlassConnector.ResetBackoffState();
         await connector.GetFundingRatesAsync();
 
         callCount.Should().BeGreaterThan(failuresBeforeHalfOpen,
@@ -1060,13 +1064,10 @@ public class CoinGlassConnectorTests
 
         var (connector, _, _) = CreateWithHandlerMock(handler, provider);
 
-        var backoffField = typeof(CoinGlassConnector).GetField("_backoffUntil",
-            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-
-        // Drive the breaker open
+        // NB6 fix: ResetBackoffState() instead of reflection.
         for (int i = 0; i < 10 && connector.IsAvailable; i++)
         {
-            backoffField.SetValue(null, DateTime.MinValue);
+            CoinGlassConnector.ResetBackoffState();
             await connector.GetFundingRatesAsync();
             fakeTime.Advance(TimeSpan.FromMilliseconds(100));
         }
@@ -1074,7 +1075,7 @@ public class CoinGlassConnectorTests
 
         // Advance past break window and make a successful probe
         fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
-        backoffField.SetValue(null, DateTime.MinValue);
+        CoinGlassConnector.ResetBackoffState();
         await connector.GetFundingRatesAsync();
 
         connector.IsAvailable.Should().BeTrue("first successful call after half-open should close the circuit");
@@ -1095,5 +1096,243 @@ public class CoinGlassConnectorTests
         warningEntries.Should().NotBeEmpty();
         warningEntries.Should().NotContain(e => e.Message.Contains("secret-key-value", StringComparison.Ordinal));
         warningEntries.Should().Contain(e => e.Message.Contains("REDACTED", StringComparison.Ordinal));
+    }
+
+    // ── review-v133 Task 2.1 reopen tests ──
+
+    /// <summary>
+    /// B1 fix: after the breaker opens and Polly's 5-minute break elapses, the next call
+    /// must reach the HttpMessageHandler (the half-open probe). Before the fix, every
+    /// short-circuited call re-invoked RecordFailure() which pushed _backoffUntil further
+    /// into the future, so the manual-backoff guard blocked the probe at line 96 before
+    /// the Polly pipeline ever ran.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CircuitBrokenThenHalfOpen_DoesNotStackManualBackoff()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref callCount);
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        // Drive the breaker open (reset manual backoff between iterations so the Polly
+        // pipeline actually runs each time).
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Fire several short-circuited calls — each goes through catch (BrokenCircuitException).
+        // Pre-fix, each one called RecordFailure() which extended _backoffUntil.
+        for (int i = 0; i < 5; i++)
+        {
+            await connector.GetFundingRatesAsync();
+        }
+
+        var invocationsBeforeProbe = callCount;
+
+        // Advance past the 5-minute break duration. Do NOT reset backoff — we want to
+        // verify the fix ensures _backoffUntil has not drifted past "now" because of
+        // the stacked RecordFailure() calls inside the short-circuit catch block.
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(5));
+
+        await connector.GetFundingRatesAsync();
+
+        callCount.Should().BeGreaterThan(invocationsBeforeProbe,
+            "after the Polly break elapses the next call must reach the handler (the " +
+            "half-open probe) — a stacked manual backoff would block it first");
+    }
+
+    /// <summary>
+    /// B1 fix: BrokenCircuitException must NOT increment _consecutiveFailures, because
+    /// a short-circuit is the breaker doing its job, not a new upstream failure.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_BrokenCircuitException_DoesNotIncrementConsecutiveFailures()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "oops"));
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        // Drive the breaker open
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Reset to a known baseline (_consecutiveFailures = 0) then fire more calls —
+        // all of which will short-circuit. Pre-fix, each incremented the counter.
+        CoinGlassConnector.ResetBackoffState();
+
+        var failuresField = typeof(CoinGlassConnector).GetField("_consecutiveFailures",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+        for (int i = 0; i < 5; i++)
+        {
+            await connector.GetFundingRatesAsync();
+        }
+
+        var failuresAfterShortCircuits = (int)failuresField.GetValue(null)!;
+        failuresAfterShortCircuits.Should().Be(0,
+            "short-circuited calls must not increment _consecutiveFailures — the breaker " +
+            "is already doing its job, and stacking on top of it blocks recovery");
+    }
+
+    /// <summary>
+    /// NB1 fix: inner exception messages (which may carry the API key in custom handlers
+    /// or logging middleware) must be sanitized. Before the fix the logger was passed
+    /// the raw `ex` parameter and the log sink serialized `ex.ToString()` verbatim,
+    /// leaking the inner message.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_InnerExceptionWithSecret_NotLogged()
+    {
+        var inner = new InvalidOperationException("wrapped CG-API-KEY: innersecret123 trailing");
+        var outer = new HttpRequestException("request failed", inner);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(outer);
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        var warnings = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warnings.Should().NotBeEmpty();
+        warnings.Should().NotContain(e => e.Message.Contains("innersecret123", StringComparison.Ordinal),
+            "the inner exception message must be sanitized before logging");
+        // Also confirm the raw Exception object was NOT passed to the logger (so the sink
+        // cannot dump ex.ToString() itself): all warning entries for this call should have
+        // a null Exception column.
+        warnings.Where(e => e.Message.Contains("CoinGlass API request failed", StringComparison.Ordinal))
+            .Should().OnlyContain(e => e.Exception == null,
+                "the exception object must not be passed verbatim — only the sanitized string form");
+    }
+
+    /// <summary>
+    /// NB4 fix: JSON parse failures on non-seekable response streams used to log an empty
+    /// body because ReadFromJsonAsync consumed the stream before ReadAsStringAsync could
+    /// read it. After the fix the body is read as a string first, then deserialized,
+    /// so the malformed text is available for logging.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_MalformedJsonOnNonSeekableStream_BodyAppearsInLog()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ForwardOnlyStreamContent("{invalid json"),
+        };
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("Failed to parse CoinGlass response", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("invalid", LogLevel.Warning).Should().BeTrue(
+            "the malformed body text must appear in the log — pre-fix it was empty because " +
+            "ReadFromJsonAsync had already consumed the non-seekable stream");
+    }
+
+    /// <summary>
+    /// NB8 fix: pin the 5-failure threshold. Counts handler invocations before
+    /// IsAvailable flips to false to guard against a regression that bumped MinimumThroughput.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CircuitOpens_AtExactly5Failures()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref callCount);
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        int attempts = 0;
+        while (connector.IsAvailable && attempts < 20)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+            attempts++;
+        }
+
+        connector.IsAvailable.Should().BeFalse();
+        callCount.Should().BeInRange(5, 6,
+            "plan-v61 specifies 5 failures trip the breaker with Polly's rolling window " +
+            "(may need 1 extra sample before the sliding window has enough data)");
+    }
+
+    /// <summary>
+    /// Minimal HttpContent that exposes the body as a forward-only (non-seekable) stream,
+    /// mirroring the behavior of a real network response and ensuring NB4's fix is
+    /// exercised end-to-end.
+    /// </summary>
+    private sealed class ForwardOnlyStreamContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+
+        public ForwardOnlyStreamContent(string body)
+        {
+            _bytes = Encoding.UTF8.GetBytes(body);
+            Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+        {
+            return stream.WriteAsync(_bytes, 0, _bytes.Length);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
     }
 }
