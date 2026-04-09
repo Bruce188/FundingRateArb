@@ -3,6 +3,8 @@ name: Deploy to Azure
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'documentation/**'
   workflow_dispatch:
 
 permissions:
