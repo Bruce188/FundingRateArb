@@ -604,6 +604,14 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 .FirstOrDefault(p => string.Equals(p.Position?.Symbol, asset, StringComparison.OrdinalIgnoreCase));
             var position = positionWrapper?.Position;
 
+            // When the account value collapses to zero with non-zero margin committed
+            // (cross-margin account fully consumed by adverse PnL/funding), report 100%
+            // utilization so the alert threshold fires. Reporting 0% would mask the
+            // catastrophic state at exactly the moment the alert is most needed.
+            var utilization = accountValue > 0
+                ? totalMarginUsed / accountValue
+                : (totalMarginUsed > 0 ? 1m : 0m);
+
             if (position is null)
             {
                 // No open position — surface account-level margin only.
@@ -612,7 +620,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                     MarginUsed = totalMarginUsed,
                     MarginAvailable = withdrawable,
                     LiquidationPrice = null,
-                    MarginUtilizationPct = accountValue > 0 ? totalMarginUsed / accountValue : 0m,
+                    MarginUtilizationPct = utilization,
                 };
             }
 
@@ -621,7 +629,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 MarginUsed = position.MarginUsed ?? 0m,
                 MarginAvailable = withdrawable,
                 LiquidationPrice = position.LiquidationPrice,
-                MarginUtilizationPct = accountValue > 0 ? totalMarginUsed / accountValue : 0m,
+                MarginUtilizationPct = utilization,
             };
         }
         catch (OperationCanceledException)

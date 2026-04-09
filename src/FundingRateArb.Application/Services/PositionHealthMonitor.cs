@@ -698,15 +698,21 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // Distance from current mark to liquidation as fraction of entry-to-liquidation range.
         // Using CURRENT mark (not entry) as the numerator reflects the actual remaining buffer
         // as price moves — the safe range shrinks as the position drifts toward its liquidation.
+        //
+        // When the API-pulled liquidation price has crossed the entry price (e.g., accumulated
+        // PnL or funding has shifted the cross-margin liquidation boundary past entry), the
+        // entry-to-liquidation range becomes non-positive. That position is at or past its
+        // safe range and must be treated as immediate liquidation risk — NOT as
+        // "infinitely safe" (which the previous decimal.MaxValue fallback implied).
         var longRange = pos.LongEntryPrice - longLiqPrice;
         var shortRange = shortLiqPrice - pos.ShortEntryPrice;
 
         var longDistance = longRange > 0
             ? (currentLongMark - longLiqPrice) / longRange
-            : decimal.MaxValue;
+            : 0m;
         var shortDistance = shortRange > 0
             ? (shortLiqPrice - currentShortMark) / shortRange
-            : decimal.MaxValue;
+            : 0m;
 
         return Math.Min(longDistance, shortDistance);
     }

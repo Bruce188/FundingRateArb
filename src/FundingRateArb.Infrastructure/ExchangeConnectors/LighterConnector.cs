@@ -1650,9 +1650,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 marginUsed = 0m;
             }
 
+            // When totalAssetValue collapses to zero with non-zero margin committed
+            // (account fully consumed by adverse PnL), report 100% utilization so the
+            // alert threshold fires. Reporting 0% would mask the catastrophic state.
             var marginUtilizationPct = totalAssetValue > 0m
                 ? marginUsed / totalAssetValue
-                : 0m;
+                : (marginUsed > 0m ? 1m : 0m);
 
             // Per-position liquidation price for the requested asset
             decimal? liquidationPrice = null;

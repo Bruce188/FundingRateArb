@@ -3323,4 +3323,158 @@ public class PositionHealthMonitorTests
         result.Should().Be(CloseReason.PnlTargetReached,
             "over-performed positions skip the divergence-based deferral");
     }
+
+    // ── B-NEW-1: ComputeLiquidationDistance negative-range bug regression tests ──
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiLongLiqAboveEntry_TreatsAsImmediateRisk()
+    {
+        // When the API-pulled liquidation price has crossed the entry price (e.g., accrued
+        // adverse PnL has shifted the cross-margin liquidation past entry), the safe range
+        // becomes non-positive. The previous implementation returned decimal.MaxValue here
+        // ("infinitely safe"), masking the imminent liquidation. The fix returns 0m (at
+        // liquidation), which trips LiquidationWarningPct.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 2950m, currentShortMark: 3001m,
+            apiLongLiqPrice: 3060m, // ABOVE entry — long is past safe range
+            apiShortLiqPrice: null);
+
+        distance.Should().Be(0m, "API-reported liq above entry means the position is past its safe range");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiShortLiqBelowEntry_TreatsAsImmediateRisk()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3050m,
+            apiLongLiqPrice: null,
+            apiShortLiqPrice: 2900m); // BELOW entry — short is past safe range
+
+        distance.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ApiLiqExactlyAtEntry_TreatsAsImmediateRisk()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        // longRange = entry - liqPrice = 3000 - 3000 = 0; range > 0 is false → returns 0m
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3001m,
+            apiLongLiqPrice: 3000m,
+            apiShortLiqPrice: null);
+
+        distance.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_NegativeRangeTriggersLiquidationCloseReason()
+    {
+        // End-to-end: confirm a position with negative API-range is closed by DetermineCloseReason
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 2950m, currentShortMark: 3001m,
+            apiLongLiqPrice: 3060m,
+            apiShortLiqPrice: null);
+
+        var config = new BotConfiguration
+        {
+            LiquidationWarningPct = 0.50m,
+            StopLossPct = 0.15m,
+            CloseThreshold = -0.00005m,
+        };
+
+        var reason = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 2m, spread: 0.001m,
+            minLiquidationDistance: distance);
+
+        reason.Should().Be(CloseReason.LiquidationRisk,
+            "distance=0 must trigger LiquidationRisk close, not silently pass through");
+    }
+
+    // ── B-NEW-3: leverage-aware margin threshold discriminating tests ──────────
+
+    [Fact]
+    public async Task CheckAndAct_HighLeverage_TighterThresholdFiresEarlier()
+    {
+        // Leverage 5 (>=3) → threshold = min(0.70, 0.60) = 0.60.
+        // 0.65 utilization should fire under the new policy but would not have fired under
+        // the old fixed-70 rule.
+        var pos = MakeOpenPosition();
+        pos.Leverage = 5;
+        await SetupAndRun_MarginUtilization_TestAsync(pos, marginUtilizationPct: 0.65m);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.MarginWarning &&
+            al.Message.Contains("65"))), Times.Once,
+            "high-leverage position at 65% util should fire under the new 60% threshold");
+    }
+
+    [Fact]
+    public async Task CheckAndAct_LowLeverage_RetainsOriginalThreshold()
+    {
+        // Leverage 2 (<3) → threshold = config default 0.70.
+        // 0.65 utilization is below the threshold; no alert.
+        var pos = MakeOpenPosition();
+        pos.Leverage = 2;
+        await SetupAndRun_MarginUtilization_TestAsync(pos, marginUtilizationPct: 0.65m);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.MarginWarning)), Times.Never,
+            "low-leverage position at 65% util should not fire — threshold is 70%");
+    }
+
+    [Fact]
+    public async Task CheckAndAct_LowLeverage_FiresAtOriginalThreshold()
+    {
+        // Leverage 2 (<3) → threshold = 0.70. 0.72 should fire.
+        var pos = MakeOpenPosition();
+        pos.Leverage = 2;
+        await SetupAndRun_MarginUtilization_TestAsync(pos, marginUtilizationPct: 0.72m);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.MarginWarning)), Times.Once,
+            "low-leverage position at 72% util should fire (>70% threshold)");
+    }
+
+    /// <summary>
+    /// Helper that sets up a single-position monitor cycle with a specified margin utilization
+    /// from both connectors and runs CheckAndActAsync.
+    /// </summary>
+    private async Task SetupAndRun_MarginUtilization_TestAsync(ArbitragePosition pos, decimal marginUtilizationPct)
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            MarginUtilizationAlertPct = 0.70m,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            DivergenceAlertMultiplier = 2.0m,
+        });
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync(new List<ArbitragePosition> { pos });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+        _mockAlerts.Setup(a => a.GetRecentByPositionIdsAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<IEnumerable<AlertType>>(), It.IsAny<TimeSpan>()))
+            .ReturnsAsync(new Dictionary<(int, AlertType), Alert>());
+        SetupMarkPrices();
+
+        var marginState = new MarginStateDto
+        {
+            MarginUsed = 100m,
+            MarginAvailable = 50m,
+            MarginUtilizationPct = marginUtilizationPct,
+        };
+        _mockLongConnector.Setup(c => c.GetPositionMarginStateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+        _mockShortConnector.Setup(c => c.GetPositionMarginStateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+
+        await _sut.CheckAndActAsync();
+    }
 }
