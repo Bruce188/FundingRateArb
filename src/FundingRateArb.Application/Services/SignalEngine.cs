@@ -14,6 +14,7 @@ public class SignalEngine : ISignalEngine
     private readonly IRatePredictionService? _predictionService;
     private readonly ILeverageTierProvider? _tierProvider;
     private readonly ICoinGlassScreeningProvider? _screeningProvider;
+    private readonly IExchangeSymbolConstraintsProvider? _symbolConstraintsProvider;
     private readonly ILogger<SignalEngine>? _logger;
 
     public SignalEngine(
@@ -22,6 +23,7 @@ public class SignalEngine : ISignalEngine
         IRatePredictionService? predictionService = null,
         ILeverageTierProvider? tierProvider = null,
         ICoinGlassScreeningProvider? screeningProvider = null,
+        IExchangeSymbolConstraintsProvider? symbolConstraintsProvider = null,
         ILogger<SignalEngine>? logger = null)
     {
         _uow = uow;
@@ -29,8 +31,21 @@ public class SignalEngine : ISignalEngine
         _predictionService = predictionService;
         _tierProvider = tierProvider;
         _screeningProvider = screeningProvider;
+        _symbolConstraintsProvider = symbolConstraintsProvider;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Only exchanges in this set expose a per-symbol notional cap today. The SignalEngine
+    /// uses this as a synchronous pre-filter so non-capped pairs skip both async state-machine
+    /// allocations inside the O(n²) inner loop. Keep in sync with
+    /// <see cref="FundingRateArb.Infrastructure.Services.ExchangeSymbolConstraintsProvider"/>.
+    /// </summary>
+    private static readonly HashSet<string> ExchangesWithNotionalCaps =
+        new(StringComparer.OrdinalIgnoreCase) { "Aster" };
+
+    private static bool HasKnownSymbolCap(string longExchange, string shortExchange) =>
+        ExchangesWithNotionalCaps.Contains(longExchange) || ExchangesWithNotionalCaps.Contains(shortExchange);
 
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
@@ -40,8 +55,33 @@ public class SignalEngine : ISignalEngine
 
     public async Task<OpportunityResultDto> GetOpportunitiesWithDiagnosticsAsync(CancellationToken ct = default)
     {
-        var config = await _uow.BotConfig.GetActiveAsync();
-        var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        BotConfiguration config;
+        List<FundingRateSnapshot> latestRates;
+        try
+        {
+            config = await _uow.BotConfig.GetActiveAsync();
+            latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        }
+        catch (DatabaseUnavailableException ex)
+        {
+            // Transient DB outage — return a degraded result so the dashboard can render
+            // a banner instead of a 500 page. Callers that only need the opportunity
+            // list will see an empty collection; callers that branch on DatabaseAvailable
+            // can show a user-visible warning.
+            _logger?.LogWarning(ex,
+                "SignalEngine detected database unavailable; returning degraded result");
+            return new OpportunityResultDto
+            {
+                IsSuccess = false,
+                DatabaseAvailable = false,
+                FailureReason = SignalEngineFailureReason.DatabaseUnavailable,
+                Error = "database temporarily unavailable",
+                Opportunities = [],
+                AllNetPositive = [],
+                Diagnostics = null,
+            };
+        }
+
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
 
         var diagnostics = new PipelineDiagnosticsDto
@@ -276,6 +316,49 @@ public class SignalEngine : ISignalEngine
                     {
                         diagnostics.PairsFilteredByBreakeven++;
                         continue;
+                    }
+
+                    // Exchange per-symbol notional cap filter: if either leg's exchange exposes a
+                    // MAX_NOTIONAL_VALUE (e.g. Aster's WLFI cap), reject candidates whose sized
+                    // notional would exceed the cap BEFORE execution. Prevents the 2026-04-09
+                    // WLFI failure mode where the Aster leg rejected after the Lighter leg had
+                    // already opened, forcing an emergency close.
+                    //
+                    // NB6 from review-v131: synchronous pre-filter — the provider only returns
+                    // a non-null cap for exchanges that expose one (Aster today), so for the
+                    // common non-Aster pairs we skip both async state-machine allocations.
+                    // This keeps the O(n²) inner loop cheap.
+                    //
+                    // N3 from review-v131: `cappedLeverageForCap` is an upper bound on the
+                    // leverage actually used at execution (the tier provider may cap further).
+                    // That makes this filter conservative-safe — it may over-reject, never
+                    // under-reject. The opposite direction would allow orders that hit the
+                    // cap at execution, which defeats the whole point of the filter.
+                    if (_symbolConstraintsProvider is not null && HasKnownSymbolCap(longR.Exchange.Name, shortR.Exchange.Name))
+                    {
+                        var cappedLeverageForCap = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
+                        var sizedNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;
+                        var longMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
+                            longR.Exchange.Name, symbol!, ct);
+                        var shortMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
+                            shortR.Exchange.Name, symbol!, ct);
+                        var cappedBy = string.Empty;
+                        if (longMaxNotional.HasValue && sizedNotional > longMaxNotional.Value)
+                        {
+                            cappedBy = longR.Exchange.Name;
+                        }
+                        else if (shortMaxNotional.HasValue && sizedNotional > shortMaxNotional.Value)
+                        {
+                            cappedBy = shortR.Exchange.Name;
+                        }
+                        if (!string.IsNullOrEmpty(cappedBy))
+                        {
+                            diagnostics.PairsFilteredByExchangeSymbolCap++;
+                            _logger?.LogDebug(
+                                "Opportunity {Asset} {Long}/{Short} filtered: sized notional {Notional} exceeds {Exchange} MAX_NOTIONAL_VALUE cap",
+                                symbol, longR.Exchange.Name, shortR.Exchange.Name, sizedNotional, cappedBy);
+                            continue;
+                        }
                     }
 
                     // Trend analysis: check if funding spread has been favorable for N consecutive snapshots.

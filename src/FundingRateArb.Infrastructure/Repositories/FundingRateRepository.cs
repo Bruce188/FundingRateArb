@@ -1,15 +1,33 @@
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
 public class FundingRateRepository : IFundingRateRepository
 {
     private readonly AppDbContext _context;
+    private readonly ILogger<FundingRateRepository>? _logger;
 
-    public FundingRateRepository(AppDbContext context) => _context = context;
+    public FundingRateRepository(AppDbContext context, ILogger<FundingRateRepository>? logger = null)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    // NB2 from review-v131: rely exclusively on SqlTransientErrorNumbers.Contains —
+    // the previous ex.Message.Contains("login") heuristic could false-match non-transient
+    // authz errors ("login not permitted") and keep the service in degraded mode.
+    private static bool IsTransientLoginFailure(SqlException ex) =>
+        SqlTransientErrorNumbers.Contains(ex.Number);
+
+    // NB9 from review-v131: cap the degraded path at 10s so the banner renders promptly
+    // instead of waiting up to 150s for EF's 5-retry × 30s-delay policy to exhaust.
+    private static readonly TimeSpan DegradedReadTimeout = TimeSpan.FromSeconds(10);
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
@@ -19,15 +37,40 @@ public class FundingRateRepository : IFundingRateRepository
             .GroupBy(f => new { f.ExchangeId, f.AssetId })
             .Select(g => new { g.Key.ExchangeId, g.Key.AssetId, MaxAt = g.Max(x => x.RecordedAt) });
 
-        return await _context.FundingRateSnapshots
-            .Join(maxTimes,
-                f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
-                m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
-                (f, _) => f)
-            .Include(f => f.Exchange)
-            .Include(f => f.Asset)
-            .AsNoTracking()
-            .ToListAsync();
+        using var timeoutCts = new CancellationTokenSource(DegradedReadTimeout);
+
+        try
+        {
+            return await _context.FundingRateSnapshots
+                .Join(maxTimes,
+                    f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
+                    m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
+                    (f, _) => f)
+                .Include(f => f.Exchange)
+                .Include(f => f.Asset)
+                .AsNoTracking()
+                .ToListAsync(timeoutCts.Token);
+        }
+        catch (SqlException ex) when (IsTransientLoginFailure(ex))
+        {
+            // Re-throw as a domain exception so Application-layer callers (SignalEngine)
+            // can return a degraded result without referencing Microsoft.Data.SqlClient.
+            // NB2: log only the structural metadata — the full SqlException.Message
+            // commonly contains server name + username on login-phase failures.
+            _logger?.LogWarning(
+                "SQL transient login-phase failure in GetLatestPerExchangePerAssetAsync Number={ErrorNumber} Type={ExType}",
+                ex.Number, ex.GetType().Name);
+            throw new DatabaseUnavailableException(
+                "Database temporarily unavailable during funding rate read.", ex);
+        }
+        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+        {
+            _logger?.LogWarning(
+                "GetLatestPerExchangePerAssetAsync timed out after {TimeoutSeconds}s; surfacing as DatabaseUnavailable",
+                DegradedReadTimeout.TotalSeconds);
+            throw new DatabaseUnavailableException(
+                $"Database read exceeded {DegradedReadTimeout.TotalSeconds:0}s timeout.");
+        }
     }
 
     public Task<List<FundingRateSnapshot>> GetHistoryAsync(

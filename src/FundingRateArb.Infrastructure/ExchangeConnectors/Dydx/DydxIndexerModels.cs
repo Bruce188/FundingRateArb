@@ -192,6 +192,13 @@ public sealed class StringDecimalConverter : JsonConverter<decimal>
 {
     public override decimal Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
+        if (reader.TokenType == JsonTokenType.Null)
+        {
+            // dYdX returns null oraclePrice for markets that are inactive (e.g. WTI-USD outside trading hours).
+            // Normalize to 0; downstream consumers must check market Status == "ACTIVE" before trusting the price
+            // (see DydxConnector.GetFundingRatesAsync which filters on status).
+            return 0m;
+        }
         if (reader.TokenType == JsonTokenType.String)
         {
             var str = reader.GetString();

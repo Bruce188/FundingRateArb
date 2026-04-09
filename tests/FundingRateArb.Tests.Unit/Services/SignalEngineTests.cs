@@ -2475,4 +2475,187 @@ public class SignalEngineTests
         await act.Should().ThrowAsync<OperationCanceledException>(
             "cancellation must propagate, not be swallowed");
     }
+
+    [Fact]
+    public async Task SignalEngine_DbResilience_ReturnsFailureResult_OnDatabaseUnavailable()
+    {
+        // Azure production stabilization (plan-v60 Task 3.2): when the repository surfaces a
+        // database-unavailable failure (transient SQL login-phase errors, etc.) the signal
+        // engine must NOT rethrow — it must return a degraded OpportunityResultDto so the
+        // dashboard can render a banner instead of a 500 page.
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ThrowsAsync(new FundingRateArb.Application.Common.DatabaseUnavailableException(
+                "simulated login-phase transient failure"));
+
+        // Act — must not throw
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert — degraded result with the new failure signalling
+        result.Should().NotBeNull();
+        result.DatabaseAvailable.Should().BeFalse();
+        result.IsSuccess.Should().BeFalse();
+        result.FailureReason.Should().Be(SignalEngineFailureReason.DatabaseUnavailable);
+        result.Opportunities.Should().BeEmpty();
+        result.AllNetPositive.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SignalEngine_DbResilience_DefaultSuccessResult_WhenRepositoryReturnsData()
+    {
+        // Regression: the new DatabaseAvailable / IsSuccess flags must default to "OK"
+        // on the happy path so the dashboard does not render the degraded banner when
+        // nothing is wrong.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.DatabaseAvailable.Should().BeTrue();
+        result.IsSuccess.Should().BeTrue();
+        result.FailureReason.Should().Be(SignalEngineFailureReason.None);
+    }
+
+    // ── Exchange per-symbol MAX_NOTIONAL_VALUE filter (plan-v60 task 6.1) ────
+    //
+    // Prevents the 2026-04-09 WLFI failure mode where the Aster leg rejected
+    // after the Lighter leg had already opened, forcing an emergency close.
+    // A candidate whose sized notional exceeds ANY leg's cap must be filtered
+    // out pre-execution and recorded under PairsFilteredByExchangeSymbolCap.
+
+    [Fact]
+    public async Task GetOpportunities_NotionalCapFilter_ExcludesCandidate_WhenSizeExceedsAsterCap()
+    {
+        var mockConstraints = new Mock<IExchangeSymbolConstraintsProvider>();
+        mockConstraints
+            .Setup(p => p.GetMaxNotionalAsync("Aster", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1_000m); // very tight cap forces the filter
+        mockConstraints
+            .Setup(p => p.GetMaxNotionalAsync("Lighter", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((decimal?)null);
+
+        var sut = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            predictionService: null,
+            tierProvider: null,
+            screeningProvider: null,
+            symbolConstraintsProvider: mockConstraints.Object);
+
+        // sizedNotional = TotalCapital * MaxCapitalPerPosition * cappedLeverage
+        //               = 10000 * 0.5 * 3 = 15000 > 1000 cap → filtered
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 3,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Lighter", 1, "WLFI",  0.0001m),
+            MakeRate(2, "Aster",   1, "WLFI",  0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty();
+        result.Diagnostics!.PairsFilteredByExchangeSymbolCap.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_NotionalCapFilter_PassesCandidate_WhenWithinCap()
+    {
+        var mockConstraints = new Mock<IExchangeSymbolConstraintsProvider>();
+        mockConstraints
+            .Setup(p => p.GetMaxNotionalAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1_000_000m); // generous cap — passes
+
+        var sut = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            predictionService: null,
+            tierProvider: null,
+            screeningProvider: null,
+            symbolConstraintsProvider: mockConstraints.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 3,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+            MinEdgeMultiplier = 1m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Lighter", 1, "WLFI",  0.0001m),
+            MakeRate(2, "Aster",   1, "WLFI",  0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().HaveCount(1);
+        result.Diagnostics!.PairsFilteredByExchangeSymbolCap.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_NotionalCapFilter_NullCap_DoesNotFilterCandidate()
+    {
+        // Provider returns null for every call → "no cap known", candidate must pass.
+        var mockConstraints = new Mock<IExchangeSymbolConstraintsProvider>();
+        mockConstraints
+            .Setup(p => p.GetMaxNotionalAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((decimal?)null);
+
+        var sut = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            predictionService: null,
+            tierProvider: null,
+            screeningProvider: null,
+            symbolConstraintsProvider: mockConstraints.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 3,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+            MinEdgeMultiplier = 1m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Lighter", 1, "WLFI",  0.0001m),
+            MakeRate(2, "Aster",   1, "WLFI",  0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().HaveCount(1);
+        result.Diagnostics!.PairsFilteredByExchangeSymbolCap.Should().Be(0);
+    }
 }

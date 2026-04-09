@@ -17,6 +17,7 @@ using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
 using FundingRateArb.Infrastructure.Seed;
 using FundingRateArb.Infrastructure.Services;
+using FundingRateArb.Web.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
@@ -43,6 +44,14 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+    // Register last-ditch handlers as the very first work inside the try block so they
+    // cover any managed exception raised during builder construction, DI wiring, or
+    // background-service start. These cannot prevent native crashes (SIGSEGV), but they
+    // log any managed exception at Fatal level before process teardown. See
+    // UnhandledExceptionHandlers for handler details.
+    AppDomain.CurrentDomain.UnhandledException += UnhandledExceptionHandlers.OnAppDomainUnhandled;
+    TaskScheduler.UnobservedTaskException += UnhandledExceptionHandlers.OnTaskUnobserved;
+
     Log.Information("Starting FundingRateArb application");
 
     var builder = WebApplication.CreateBuilder(args);
@@ -119,13 +128,24 @@ try
     builder.Services.AddApplicationInsightsTelemetry();
 
     // --- Database ---
+    // Shared allowlist lives in SqlTransientErrorNumbers so DbContext retries,
+    // DatabaseHealthCheck, and FundingRateRepository all agree on which SQL
+    // error numbers count as transient login-phase / connectivity failures.
     builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseSqlServer(
             builder.Configuration.GetConnectionString("DefaultConnection"),
             sqlOpts => sqlOpts.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorNumbersToAdd: null)));
+                errorNumbersToAdd: SqlTransientErrorNumbers.All)));
+    builder.Services.AddDbContextFactory<AppDbContext>(
+        options => options.UseSqlServer(
+            builder.Configuration.GetConnectionString("DefaultConnection"),
+            sqlOpts => sqlOpts.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: SqlTransientErrorNumbers.All)),
+        lifetime: ServiceLifetime.Scoped);
 
     // --- Identity ---
     builder.Services.AddDefaultIdentity<ApplicationUser>(options =>
@@ -336,6 +356,7 @@ try
     // See: dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "0x..."
     builder.Services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
     builder.Services.AddSingleton<ILeverageTierProvider, LeverageTierCache>();
+    builder.Services.AddScoped<IExchangeSymbolConstraintsProvider, ExchangeSymbolConstraintsProvider>();
     builder.Services.AddScoped<HyperliquidConnector>();
     builder.Services.AddHttpClient<LighterConnector>(client =>
     {
@@ -508,7 +529,7 @@ try
         options.Filters.Add(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute()));
 
     builder.Services.AddHealthChecks()
-        .AddDbContextCheck<AppDbContext>()
+        .AddCheck<DatabaseHealthCheck>("database")
         .AddCheck<WebSocketStreamHealthCheck>("websocket-streams");
 
     var app = builder.Build();
