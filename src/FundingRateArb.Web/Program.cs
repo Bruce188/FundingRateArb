@@ -17,6 +17,7 @@ using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
 using FundingRateArb.Infrastructure.Seed;
 using FundingRateArb.Infrastructure.Services;
+using FundingRateArb.Web.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
@@ -43,6 +44,14 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+    // Register last-ditch handlers as the very first work inside the try block so they
+    // cover any managed exception raised during builder construction, DI wiring, or
+    // background-service start. These cannot prevent native crashes (SIGSEGV), but they
+    // log any managed exception at Fatal level before process teardown. See
+    // UnhandledExceptionHandlers for handler details.
+    AppDomain.CurrentDomain.UnhandledException += UnhandledExceptionHandlers.OnAppDomainUnhandled;
+    TaskScheduler.UnobservedTaskException += UnhandledExceptionHandlers.OnTaskUnobserved;
+
     Log.Information("Starting FundingRateArb application");
 
     var builder = WebApplication.CreateBuilder(args);
