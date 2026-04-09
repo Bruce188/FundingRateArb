@@ -1,6 +1,8 @@
 using System.Net;
+using System.Reflection;
 using Aster.Net.Interfaces.Clients;
 using Aster.Net.Interfaces.Clients.FuturesApi;
+using Aster.Net.Objects;
 using Aster.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
 using CryptoExchange.Net.Objects.Errors;
@@ -1430,5 +1432,159 @@ public class AsterConnectorTests
         var precision = await sut.GetQuantityPrecisionAsync("ETH");
 
         precision.Should().Be(3, "default fallback precision is 3 when exchange info is unavailable");
+    }
+
+    // ── Task 5.1: GetSymbolConstraintsAsync ─────────────────────────────────────
+
+    private static WebCallResult<AsterExchangeInfo> SuccessExchangeInfo(AsterExchangeInfo data)
+        => new WebCallResult<AsterExchangeInfo>(
+            HttpStatusCode.OK, null, null, null, null, null, null, null, null,
+            null, null, ResultDataSource.Server, data, null);
+
+    private static WebCallResult<AsterExchangeInfo> FailExchangeInfo(string message)
+        => new WebCallResult<AsterExchangeInfo>(
+            new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
+
+    private static AsterExchangeInfo BuildExchangeInfoWithMaxNotional(
+        string symbol,
+        decimal maxNotional,
+        decimal minQty = 1m,
+        decimal stepSize = 1m)
+        => new AsterExchangeInfo
+        {
+            Symbols = new[]
+            {
+                new AsterSymbol
+                {
+                    Name = symbol,
+                    Filters = new AsterSymbolFilter[]
+                    {
+                        new AsterSymbolMaxNotionalFilter { MaxNotional = maxNotional },
+                        new AsterSymbolLotSizeFilter
+                        {
+                            MinQuantity = minQty,
+                            StepSize = stepSize,
+                            MaxQuantity = 1_000_000m,
+                        },
+                    },
+                },
+            },
+        };
+
+    /// <summary>
+    /// Builds a fully wired Aster client with both GetMarkPricesAsync and GetExchangeInfoAsync,
+    /// so tests of GetSymbolConstraintsAsync can mock exchange info responses.
+    /// </summary>
+    private static (Mock<IAsterRestClient> client,
+                    Mock<IAsterRestClientFuturesApiExchangeData> exchangeData)
+        BuildClientWithExchangeInfo(WebCallResult<AsterExchangeInfo> exchangeInfoResult)
+    {
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(exchangeInfoResult);
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([]));
+        exchangeDataMock
+            .Setup(x => x.GetTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessTickers([]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        return (clientMock, exchangeDataMock);
+    }
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_ReturnsMaxNotional_FromExchangeInfo()
+    {
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 1_000_000m);
+        var (client, _) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var constraints = await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+
+        constraints.Should().NotBeNull();
+        constraints.Symbol.Should().Be("WLFIUSDT");
+        constraints.MaxNotionalValue.Should().Be(1_000_000m);
+    }
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_CachesPerSymbol_WithTtl()
+    {
+        // Two calls within the TTL must hit the exchangeInfo endpoint only once.
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 1_000_000m);
+        var (client, exchangeData) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+        await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+
+        exchangeData.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "second call within TTL must be served from cache");
+    }
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_TtlExpired_RefreshesFromExchange()
+    {
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 1_000_000m);
+        var (client, exchangeData) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+
+        // Force TTL expiry via reflection (no IClock abstraction in the connector yet).
+        var expiryField = typeof(AsterConnector)
+            .GetField("_symbolConstraintsExpiry", BindingFlags.NonPublic | BindingFlags.Instance);
+        expiryField.Should().NotBeNull("constraints expiry field is required for Task 5.1");
+        expiryField!.SetValue(sut, DateTime.UtcNow.AddMinutes(-1));
+
+        await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+
+        exchangeData.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "after TTL expiry the connector must refresh from the exchange");
+    }
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_RefreshFails_ReturnsCachedValue()
+    {
+        // First call succeeds and populates the cache. Then the next refresh throws —
+        // the connector must return the previously-cached value instead of propagating.
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 750_000m);
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .SetupSequence(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessExchangeInfo(info))
+            .ThrowsAsync(new InvalidOperationException("simulated network failure"));
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var first = await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+        first.MaxNotionalValue.Should().Be(750_000m);
+
+        // Force TTL expiry so the next call attempts a refresh.
+        var expiryField = typeof(AsterConnector)
+            .GetField("_symbolConstraintsExpiry", BindingFlags.NonPublic | BindingFlags.Instance);
+        expiryField!.SetValue(sut, DateTime.UtcNow.AddMinutes(-1));
+
+        var second = await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+
+        second.MaxNotionalValue.Should().Be(750_000m, "refresh failed — cached value must survive");
     }
 }

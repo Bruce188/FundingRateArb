@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Aster.Net.Enums;
 using Aster.Net.Interfaces.Clients;
+using Aster.Net.Objects;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
@@ -13,20 +14,49 @@ using Polly.Registry;
 namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 
 /// <summary>
+/// Per-symbol trading constraints surfaced from the Aster exchangeInfo endpoint.
+/// Used by upstream filters (e.g. SignalEngine) to reject candidates whose notional
+/// exceeds the exchange-imposed cap.
+/// </summary>
+public sealed record AsterSymbolConstraints
+{
+    public required string Symbol { get; init; }
+
+    /// <summary>
+    /// MAX_NOTIONAL_VALUE filter — the maximum allowed notional (quote currency) for
+    /// a single order on this symbol. When no filter is present or the exchange info
+    /// cannot be fetched on a cold start, this falls back to <see cref="decimal.MaxValue"/>
+    /// (no cap) as a safe default.
+    /// </summary>
+    public required decimal MaxNotionalValue { get; init; }
+
+    /// <summary>Minimum order quantity from the LOT_SIZE filter, if available.</summary>
+    public decimal MinQuantity { get; init; }
+
+    /// <summary>Quantity step size from the LOT_SIZE filter, if available.</summary>
+    public decimal StepSize { get; init; }
+}
+
+/// <summary>
 /// Aster DEX connector. Aster publishes 8-hour funding rates; all rates are
 /// normalised to per-hour before being returned (<see cref="FundingRateDto.RatePerHour"/> = rawRate / 8).
 /// Funding is settled periodically at 8-hour boundaries (00:00, 08:00, 16:00 UTC).
 /// </summary>
 public class AsterConnector : IExchangeConnector, IDisposable
 {
+    private static readonly TimeSpan SymbolConstraintsTtl = TimeSpan.FromHours(6);
+
     private readonly IAsterRestClient _restClient;
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly ILogger<AsterConnector> _logger;
     private readonly IMarkPriceCache _markPriceCache;
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
+    private readonly ConcurrentDictionary<string, AsterSymbolConstraints> _symbolConstraintsCache = new();
     private readonly SemaphoreSlim _symbolInfoLock = new(1, 1);
+    private readonly SemaphoreSlim _symbolConstraintsLock = new(1, 1);
     private volatile bool _symbolInfoLoaded;
+    private DateTime _symbolConstraintsExpiry = DateTime.MinValue;
 
     public AsterConnector(
         IAsterRestClient restClient,
@@ -571,6 +601,16 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
         await EnsureSymbolInfoCachedAsync(symbol, ct);
         return _tickSizeCache.GetValueOrDefault(symbol, 0.01m);
+    }
+
+    /// <summary>
+    /// Returns trading constraints (max notional, step size, min qty) for a symbol.
+    /// Stub — implemented in the green phase of Task 4.1 (plan-v60).
+    /// </summary>
+    public virtual Task<AsterSymbolConstraints> GetSymbolConstraintsAsync(
+        string symbol, CancellationToken ct = default)
+    {
+        throw new NotImplementedException("GetSymbolConstraintsAsync not yet implemented (Task 5.1).");
     }
 
     private async Task EnsureSymbolInfoCachedAsync(string symbol, CancellationToken ct)
