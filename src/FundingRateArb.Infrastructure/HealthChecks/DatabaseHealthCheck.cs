@@ -63,13 +63,23 @@ public class DatabaseHealthCheck : IHealthCheck
     }
 
     /// <summary>
-    /// Runs the actual <c>SELECT 1</c> probe. Virtual so tests can override without
-    /// needing a real SQL Server connection — the production path below uses the
-    /// injected <see cref="IDbContextFactory{AppDbContext}"/>.
+    /// Runs the actual probe. Virtual so tests can override without needing a real
+    /// SQL Server connection. On relational providers (production SQL Server) we
+    /// execute <c>SELECT 1</c> which exercises the full login + query path. On
+    /// non-relational providers (e.g. the in-memory EF provider used by integration
+    /// tests) we fall back to <see cref="DatabaseFacade.CanConnectAsync"/>, which is
+    /// a no-op that always reports true for the in-memory store.
     /// </summary>
     protected virtual async Task ProbeAsync(CancellationToken ct)
     {
         await using var db = await _factory.CreateDbContextAsync(ct).ConfigureAwait(false);
-        _ = await db.Database.ExecuteSqlRawAsync("SELECT 1", ct).ConfigureAwait(false);
+        if (db.Database.IsRelational())
+        {
+            _ = await db.Database.ExecuteSqlRawAsync("SELECT 1", ct).ConfigureAwait(false);
+        }
+        else
+        {
+            _ = await db.Database.CanConnectAsync(ct).ConfigureAwait(false);
+        }
     }
 }
