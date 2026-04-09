@@ -1713,12 +1713,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
         // hazards when parsing upstream API strings. Tightening to Float + LeadingSign
         // + Exponent permits plain decimals and scientific notation only, matching the
         // Lighter API's documented response shape.
-        const System.Globalization.NumberStyles AllowedStyles =
+        const System.Globalization.NumberStyles allowedStyles =
             System.Globalization.NumberStyles.Float
             | System.Globalization.NumberStyles.AllowLeadingSign
             | System.Globalization.NumberStyles.AllowExponent;
 
-        return decimal.TryParse(value, AllowedStyles, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+        return decimal.TryParse(value, allowedStyles, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
             ? parsed
             : 0m;
     }
