@@ -128,13 +128,29 @@ try
     builder.Services.AddApplicationInsightsTelemetry();
 
     // --- Database ---
+    // Error numbers cover the login-phase and transient SQL failures observed in Azure
+    // (see docs/analysis-v61.md): -2 (timeout), 35/64/233 (transport close), 10053/10054/10060
+    // (socket reset / peer closed / connect timeout), 10928/10929 (resource limit),
+    // 40197/40501/40613 (Azure SQL service busy / not available).
+    var sqlTransientErrorNumbers = new[]
+    {
+        -2, 35, 64, 233, 10053, 10054, 10060, 10928, 10929, 40197, 40501, 40613,
+    };
     builder.Services.AddDbContext<AppDbContext>(options =>
         options.UseSqlServer(
             builder.Configuration.GetConnectionString("DefaultConnection"),
             sqlOpts => sqlOpts.EnableRetryOnFailure(
                 maxRetryCount: 5,
                 maxRetryDelay: TimeSpan.FromSeconds(30),
-                errorNumbersToAdd: null)));
+                errorNumbersToAdd: sqlTransientErrorNumbers)));
+    builder.Services.AddDbContextFactory<AppDbContext>(
+        options => options.UseSqlServer(
+            builder.Configuration.GetConnectionString("DefaultConnection"),
+            sqlOpts => sqlOpts.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(30),
+                errorNumbersToAdd: sqlTransientErrorNumbers)),
+        lifetime: ServiceLifetime.Scoped);
 
     // --- Identity ---
     builder.Services.AddDefaultIdentity<ApplicationUser>(options =>
@@ -517,7 +533,7 @@ try
         options.Filters.Add(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute()));
 
     builder.Services.AddHealthChecks()
-        .AddDbContextCheck<AppDbContext>()
+        .AddCheck<DatabaseHealthCheck>("database")
         .AddCheck<WebSocketStreamHealthCheck>("websocket-streams");
 
     var app = builder.Build();
