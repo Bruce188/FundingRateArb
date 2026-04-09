@@ -40,8 +40,33 @@ public class SignalEngine : ISignalEngine
 
     public async Task<OpportunityResultDto> GetOpportunitiesWithDiagnosticsAsync(CancellationToken ct = default)
     {
-        var config = await _uow.BotConfig.GetActiveAsync();
-        var latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        BotConfiguration config;
+        List<FundingRateSnapshot> latestRates;
+        try
+        {
+            config = await _uow.BotConfig.GetActiveAsync();
+            latestRates = await _uow.FundingRates.GetLatestPerExchangePerAssetAsync();
+        }
+        catch (DatabaseUnavailableException ex)
+        {
+            // plan-v60 Task 3.2: the data source is temporarily unavailable (transient
+            // SQL login-phase failure, connection blip, etc.). Instead of propagating
+            // and rendering a 500 page, return a degraded result so the dashboard can
+            // show a "data source unavailable, retrying" banner.
+            _logger?.LogWarning(ex,
+                "SignalEngine detected database unavailable; returning degraded result");
+            return new OpportunityResultDto
+            {
+                IsSuccess = false,
+                DatabaseAvailable = false,
+                FailureReason = SignalEngineFailureReason.DatabaseUnavailable,
+                Error = "database temporarily unavailable",
+                Opportunities = [],
+                AllNetPositive = [],
+                Diagnostics = null,
+            };
+        }
+
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
 
         var diagnostics = new PipelineDiagnosticsDto

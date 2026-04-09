@@ -1,15 +1,51 @@
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
 public class FundingRateRepository : IFundingRateRepository
 {
     private readonly AppDbContext _context;
+    private readonly ILogger<FundingRateRepository>? _logger;
 
-    public FundingRateRepository(AppDbContext context) => _context = context;
+    public FundingRateRepository(AppDbContext context, ILogger<FundingRateRepository>? logger = null)
+    {
+        _context = context;
+        _logger = logger;
+    }
+
+    // plan-v60 Task 3.2: SQL error numbers that indicate transient login-phase or
+    // connectivity failures worth surfacing as a degraded state instead of a hard 500.
+    // Mirrors the DbContext EnableRetryOnFailure allowlist.
+    private static readonly HashSet<int> TransientLoginFailureErrorCodes =
+    [
+        -2,      // timeout
+        35,      // network path not found
+        64,      // connection forcibly closed
+        233,     // pre-login handshake
+        10053,   // connection aborted
+        10054,   // connection reset
+        10060,   // connection timed out
+        10928,   // Azure SQL: resource limit reached
+        10929,   // Azure SQL: too many sessions
+        40197,   // Azure SQL: service encountered an error
+        40501,   // Azure SQL: service is busy
+        40613,   // Azure SQL: database unavailable
+    ];
+
+    private static bool IsTransientLoginFailure(SqlException ex)
+    {
+        if (TransientLoginFailureErrorCodes.Contains(ex.Number))
+        {
+            return true;
+        }
+        return ex.Message.Contains("login", StringComparison.OrdinalIgnoreCase);
+    }
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
@@ -19,15 +55,29 @@ public class FundingRateRepository : IFundingRateRepository
             .GroupBy(f => new { f.ExchangeId, f.AssetId })
             .Select(g => new { g.Key.ExchangeId, g.Key.AssetId, MaxAt = g.Max(x => x.RecordedAt) });
 
-        return await _context.FundingRateSnapshots
-            .Join(maxTimes,
-                f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
-                m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
-                (f, _) => f)
-            .Include(f => f.Exchange)
-            .Include(f => f.Asset)
-            .AsNoTracking()
-            .ToListAsync();
+        try
+        {
+            return await _context.FundingRateSnapshots
+                .Join(maxTimes,
+                    f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
+                    m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
+                    (f, _) => f)
+                .Include(f => f.Exchange)
+                .Include(f => f.Asset)
+                .AsNoTracking()
+                .ToListAsync();
+        }
+        catch (SqlException ex) when (IsTransientLoginFailure(ex))
+        {
+            // plan-v60 Task 3.2: surface transient SQL outages as a domain exception
+            // so the Application layer (SignalEngine) can return a degraded result
+            // without taking a dependency on Microsoft.Data.SqlClient.
+            _logger?.LogWarning(ex,
+                "SQL transient login-phase failure in GetLatestPerExchangePerAssetAsync (Number={ErrorNumber}); surfacing as DatabaseUnavailable",
+                ex.Number);
+            throw new DatabaseUnavailableException(
+                "Database temporarily unavailable during funding rate read.", ex);
+        }
     }
 
     public Task<List<FundingRateSnapshot>> GetHistoryAsync(
