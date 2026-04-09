@@ -34,6 +34,18 @@ dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "<0x...>"
 dotnet user-secrets set "Exchanges:Hyperliquid:PrivateKey" "<your-key>"
 dotnet user-secrets set "Exchanges:Hyperliquid:SubAccountAddress" "<0x... optional vault address>"
 
+# Binance (CEX)
+dotnet user-secrets set "Exchanges:Binance:ApiKey" "<your-key>"
+dotnet user-secrets set "Exchanges:Binance:ApiSecret" "<your-secret>"
+
+# CoinGlass (data-only — powers the analytics dashboard and opportunity screening)
+dotnet user-secrets set "Exchanges:CoinGlass:ApiKey" "<your-key>"
+
+# dYdX v4
+# The infrastructure-level dYdX connector is read-only (indexer polls only).
+# User trading requires per-user credentials supplied via the Settings page,
+# not via user-secrets.
+
 # OAuth — optional
 dotnet user-secrets set "Authentication:Google:ClientId" "<id>"
 dotnet user-secrets set "Authentication:Google:ClientSecret" "<secret>"
@@ -68,6 +80,13 @@ Exchanges__Aster__ApiSecret="..."
 Exchanges__Hyperliquid__WalletAddress="0x..."
 Exchanges__Hyperliquid__PrivateKey="..."
 Exchanges__Hyperliquid__SubAccountAddress="0x... (optional)"
+
+# Binance (CEX)
+Exchanges__Binance__ApiKey="..."
+Exchanges__Binance__ApiSecret="..."
+
+# CoinGlass (data-only)
+Exchanges__CoinGlass__ApiKey="..."
 
 # Azure Key Vault (auto-loads all secrets when set)
 KeyVaultName="your-keyvault-name"

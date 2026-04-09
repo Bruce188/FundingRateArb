@@ -59,8 +59,14 @@ FundingRateArb follows **Clean Architecture** with strict dependency inversion. 
    +------v----------------v------+
    |        Service Layer          |
    |  SignalEngine, ExecutionEngine|
-   |  PositionSizer, YieldCalc,   |
-   |  BalanceAggregator            |
+   |  ConnectorLifecycleManager,   |
+   |  PositionCloser,              |
+   |  EmergencyCloseHandler,       |
+   |  PositionHealthMonitor,       |
+   |  PnlReconciliationService,    |
+   |  ExchangeAnalyticsService,    |
+   |  ReferencePriceProvider,      |
+   |  PositionSizer, YieldCalc     |
    +------+-----------+-----------+
           |           |
    +------v------+  +-v-----------+
@@ -76,33 +82,14 @@ FundingRateArb follows **Clean Architecture** with strict dependency inversion. 
 
 ## Background Services
 
-Five hosted services run continuously alongside the web server:
-
-```
-+-------------------+     signals ready     +-------------------------+
-| FundingRateFetcher|--------------------->| FundingRateReadiness    |
-| (60s poll cycle)  |                      | Signal                  |
-+-------------------+                      +------------+------------+
-        |                                               |
-        v                                    signals ready
-+-------------------+                      +------------v------------+
-| MarketDataStream  |                      | BotOrchestrator         |
-| Manager           |                      | (60s trade cycle)       |
-| (WebSocket mgmt)  |                      +-------------------------+
-+-------------------+                               |
-                                                     v
-                                             +-------------------+
-                                             | DailySummary      |
-                                             | Service           |
-                                             | (email reports)   |
-                                             +-------------------+
-```
+Six hosted services run continuously alongside the web server:
 
 1. **MarketDataStreamManager** - Starts WebSocket connections to all exchanges, monitors health every 30 seconds, auto-reconnects on failure
 2. **FundingRateFetcher** - Polls funding rates via REST every 60 seconds, stores snapshots, updates the in-memory cache, signals readiness on first fetch
-3. **BotOrchestrator** - Waits for FundingRateFetcher readiness, then runs the trading cycle every 60 seconds: score opportunities, size positions, execute trades, monitor health
-4. **DailySummaryService** - Sends daily P&L summary emails to opted-in users
-5. **FundingRateReadinessSignal** - Waits for FundingRateFetcher to complete the first rate fetch, then signals readiness so BotOrchestrator can begin its trading cycle
+3. **FundingRateReadinessSignal** - Waits for FundingRateFetcher to complete the first rate fetch, then signals readiness so BotOrchestrator can begin its trading cycle
+4. **BotOrchestrator** - Waits for FundingRateFetcher readiness, then runs the trading cycle every 60 seconds: score opportunities, size positions, execute trades, monitor health
+5. **LeverageTierRefresher** - Pre-fetches and caches per-exchange leverage brackets hourly so `ExecutionEngine` can clamp leverage without blocking on API calls during order placement
+6. **DailySummaryService** - Sends daily P&L summary emails to opted-in users
 
 ## Data Flow: Trading Cycle
 
@@ -135,19 +122,21 @@ Five hosted services run continuously alongside the web server:
 
 Each exchange implements two interfaces:
 
-- **`IExchangeConnector`** (REST) - Funding rates, order placement, balance queries
+- **`IExchangeConnector`** (REST) - Funding rates, order placement, balance queries, margin state, leverage tiers, position reconciliation
 - **`IMarketDataStream`** (WebSocket) - Real-time rate streaming
 
-The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and rate-limit cooldown tracking.
+The `ExchangeConnectorFactory` manages connector lifecycle with key rotation and rate-limit cooldown tracking. `ConnectorLifecycleManager` wraps user-scoped connector creation, leverage tier caching, and `DryRunConnectorWrapper` application for paper-trading mode.
 
-| Exchange | Type | Settlement | Auth |
-|----------|------|-----------|------|
-| HyperLiquid | DEX | Continuous | Wallet-based (HyperLiquid.Net SDK) |
-| Lighter | DEX | Continuous | Custom signer (zkLighter protocol) |
-| Aster | DEX | Periodic (8h) | API key (Aster.Net SDK) |
+| Exchange | Type | Funding Interval | Auth |
+|----------|------|------------------|------|
+| Hyperliquid | DEX | 1h | Wallet-based (HyperLiquid.Net SDK) |
+| Lighter | DEX | 1h | Custom zkLighter signer |
+| dYdX v4 | DEX | 1h | Cosmos indexer + user signer |
+| Aster | DEX | 8h (with 15s window deviation) | API key (Aster.Net SDK) |
+| Binance | CEX | 8h (shifts to 4h/1h in volatility) | API key + secret |
 | CoinGlass | Data | N/A | API key (REST only) |
 
-CoinGlass is a data-only source (`IsDataOnly = true`) providing supplementary volume data. It implements `IExchangeConnector` but is excluded from trading.
+CoinGlass is a data-only source (`IsDataOnly = true`) providing supplementary volume data and the arbitrage screening feed. It implements `IExchangeConnector` but is excluded from trading.
 
 ## Resilience
 
@@ -173,16 +162,18 @@ The `DashboardHub` (SignalR) pushes updates to connected clients:
 
 SQL Server 2022 with EF Core 8 (code-first migrations). Key tables:
 
-- `ArbitragePositions` - Trading positions with full lifecycle
+- `ArbitragePositions` - Trading positions with full lifecycle, including unified/exchange PnL split, liquidation price, margin utilization, and leg-level fee tracking
 - `FundingRateSnapshots` - Point-in-time rate data (48h retention)
 - `FundingRateHourlyAggregates` - Hourly aggregated rates (30-day retention)
-- `BotConfigurations` - Global bot settings
-- `UserConfigurations` - Per-user overrides
+- `BotConfigurations` - Global bot settings including `OperatingState`, `MaxLeverageCap`, `MinEdgeMultiplier`, `DryRunEnabled`
+- `UserConfigurations` - Per-user overrides (leverage cap and dry-run flag can only tighten the global settings)
 - `UserExchangeCredentials` - Encrypted API keys
 - `Alerts` - Notification history
 - `Exchanges`, `Assets` - Reference data
 - `ExchangeAssetConfigs` - Per-exchange asset configuration (min size, fee overrides)
 - `OpportunitySnapshots` - Historical opportunity records
+- `CoinGlassExchangeRate` - Cached CoinGlass funding/volume snapshots for the analytics dashboard
+- `CoinGlassDiscoveryEvent` - New exchange / new coin discovery log sourced from CoinGlass
 
 ## Authentication and Authorization
 

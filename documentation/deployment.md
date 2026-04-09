@@ -69,24 +69,28 @@ The multi-stage Dockerfile:
 
 ### CI/CD Pipeline
 
-Two GitHub Actions workflows:
+A single GitHub Actions workflow (`.github/workflows/deploy.yml`) runs on every push to `main` and handles both CI and CD in one job. There is no separate `ci.yml`; pull requests are currently verified locally before merge, and the canonical CI signal is the deploy workflow running on main.
 
-**`ci.yml`** (Pull Requests):
-- Restores dependencies and verifies all NuGet packages exist on nuget.org
-- Checks code formatting (`dotnet format`)
-- Builds the solution (Release)
-- Runs unit tests with code coverage enforcement (15% threshold)
-- Runs integration tests against SQL Server
-- Scans for vulnerable NuGet packages
-- Scans for exposed secrets in the diff
-- Checks package license compliance (advisory)
-- Detects code duplication with jscpd (advisory)
-- Verifies Docker image builds and starts
+**`deploy.yml`** (push to `main`, `workflow_dispatch`):
 
-**`deploy.yml`** (Merge to main):
-- Runs full test suite
-- Generates EF Core migration bundle (self-contained)
-- Deploys to Azure App Service via OIDC federation (no stored credentials)
+CI steps (`build-and-test` job):
+1. Checkout
+2. Setup .NET 8
+3. Restore NuGet packages
+4. `dotnet format --verify-no-changes` (format gate)
+5. `dotnet build -c Release`
+6. Unit tests with XPlat code coverage (Cobertura)
+7. Coverage threshold check — fails below **14%** line coverage
+8. Integration tests against a SQL Server 2022 service container
+9. Upload TRX + coverage artifacts
+10. `dotnet list package --vulnerable --include-transitive` (fails on vulnerable packages)
+11. Secret scan on the PR diff (regex for AWS keys, API keys, private keys, `Password=...`)
+
+Deploy steps (`deploy` job, depends on `build-and-test`):
+1. Download build artifacts
+2. Azure login via OIDC federation (no stored credentials)
+3. Run EF Core migration bundle against the production database
+4. Deploy to Azure App Service via `azure/webapps-deploy@v3`
 
 ### Azure Resources
 
@@ -145,16 +149,19 @@ dotnet ef migrations bundle \
 ## Testing
 
 ```bash
-# All tests
+# All tests (unit + integration + .NET E2E)
 dotnet test
 
 # Unit tests only
 dotnet test tests/FundingRateArb.Tests.Unit
 
-# Integration tests (EF Core in-memory)
+# Integration tests (SQL Server required)
 dotnet test tests/FundingRateArb.Tests.Integration
 
-# E2E (requires running app)
+# .NET E2E (Playwright-driven, requires running app)
+dotnet test tests/FundingRateArb.Tests.E2E
+
+# Python E2E suite (legacy, requires running app)
 cd tests/playwright
 pip install playwright pytest
 playwright install chromium

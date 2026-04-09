@@ -43,9 +43,13 @@ FundingRateArb is a server-rendered MVC application with SignalR for real-time u
 
 | Method | Route | Auth | Description |
 |--------|-------|------|-------------|
-| GET | `/Analytics` | Yes | Analytics views |
-| GET | `/Analytics/RateAnalytics` | Yes | Funding rate trends and statistics |
-| GET | `/Analytics/TradeAnalytics` | Yes | Trade performance metrics |
+| GET | `/Analytics?skip&take&days` | Yes | Trade performance metrics and hourly spread history per position |
+
+### Diagnostics
+
+| Method | Route | Auth | Description |
+|--------|-------|------|-------------|
+| GET | `/Diagnostics` | Yes | Pipeline diagnostics banner: ratings loaded, filtered, edge-guardrail rejections, passing count |
 
 ### Authentication
 
@@ -108,21 +112,50 @@ All admin routes require the `Admin` role.
 | GET | `/Admin/Users` | List all users with roles |
 | POST | `/Admin/Users/AssignRole` | Assign role to user |
 
+### Exchange Analytics
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/Admin/ExchangeAnalytics` | CoinGlass-driven view of exchange overviews, spread opportunities, rate comparisons, and discovery events |
+
+### Connectivity Test
+
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/Admin/ConnectivityTest` | Admin diagnostics UI for testing per-user exchange connectivity |
+| POST | `/Admin/ConnectivityTest/RunTest` | Runs a live test against a specific `(userId, exchangeId)` credential pair |
+| GET | `/Admin/ConnectivityTest/GetUserExchanges?userId=` | Lists the exchanges a user has credentials for |
+
 ## SignalR Hub
 
 **Endpoint:** `/hubs/dashboard`
 
 The `DashboardHub` pushes real-time updates to connected clients. All messages are server-to-client.
 
+### Hub Methods
+
+The hub joins every connection to the `MarketData` group, a user-scoped group (`user-{userId}`), and — for admins — the `Admins` group.
+
+| Method | Description |
+|--------|-------------|
+| `OnConnectedAsync` | Joins MarketData / user / Admins groups |
+| `RejoinGroups` | Explicit re-join (client calls after reconnect) |
+| `RequestFullUpdate` | Returns the current `DashboardDto` for the caller |
+
 ### Client Methods (IDashboardClient)
 
 | Method | Payload | Trigger |
 |--------|---------|---------|
-| `ReceiveRateUpdate` | `FundingRateDto` | New funding rate received |
-| `ReceiveOpportunity` | `ArbitrageOpportunityDto` | New opportunity above threshold |
+| `ReceiveDashboardUpdate` | `DashboardDto` | Full dashboard refresh (bot state, positions, PnL, alerts) |
+| `ReceiveFundingRateUpdate` | `List<FundingRateDto>` | New or updated funding rates |
+| `ReceiveOpportunityUpdate` | `OpportunityResultDto` | Opportunity scan completed |
 | `ReceivePositionUpdate` | `PositionSummaryDto` | Position opened, closed, or status changed |
+| `ReceivePositionRemoval` | `int` (position id) | Position removed from dashboard view |
+| `ReceiveBalanceUpdate` | `BalanceSnapshotDto` | Aggregated balance snapshot refreshed |
 | `ReceiveAlert` | `AlertDto` | New alert created |
-| `ReceiveBotStatus` | `{ enabled: bool }` | Bot enabled/disabled |
+| `ReceiveNotification` | `string` | General notification toast |
+| `ReceiveStatusExplanation` | `(string message, string severity)` | Bot status rationale (e.g. why trading is paused) |
+| `ReceiveConnectivityLog` | `(string exchangeName, string message)` | Admin connectivity-test log line |
 
 ### Connection
 
@@ -142,25 +175,47 @@ await connection.start();
 
 ### IExchangeConnector
 
-Uniform REST API interface for all exchanges:
+Uniform REST API interface for all exchanges. Optional members (default to stub implementations) let individual connectors opt in to capabilities like PnL queries or exchange-side position reconciliation.
 
 ```csharp
 public interface IExchangeConnector
 {
     string ExchangeName { get; }
+    bool IsEstimatedFillExchange { get; }
+
+    // Market data
     Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default);
+    Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default);
+    Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default);
+
+    // Trading
     Task<OrderResultDto> PlaceMarketOrderAsync(string asset, Side side,
         decimal sizeUsdc, int leverage, CancellationToken ct = default);
+    Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(string asset, Side side,
+        decimal quantity, int leverage, CancellationToken ct = default);
     Task<OrderResultDto> ClosePositionAsync(string asset, Side side,
         CancellationToken ct = default);
-    Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default);
+
+    // Account / margin
     Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default);
     Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default);
-    Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default);
+    Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default);
+    Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default);
+    Task<int> GetQuantityPrecisionAsync(string asset, CancellationToken ct = default);
+
+    // Position verification / reconciliation
+    Task<bool> VerifyPositionOpenedAsync(string asset, Side side, CancellationToken ct = default);
+    Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default);
+    Task<bool?> CheckPositionExistsAsync(string asset, Side side, /* baseline args */ CancellationToken ct = default);
+    Task<IReadOnlyDictionary<(string Symbol, string Side), decimal>?> CapturePositionSnapshotAsync(CancellationToken ct = default);
+
+    // PnL / funding history (optional)
+    Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default);
+    Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default);
 }
 ```
 
-Implementations: `HyperliquidConnector`, `AsterConnector`, `LighterConnector`, `CoinGlassConnector` (data-only)
+Implementations: `HyperliquidConnector`, `AsterConnector`, `LighterConnector`, `BinanceConnector`, `DydxConnector`, `CoinGlassConnector` (data-only).
 
 ### IMarketDataStream
 
@@ -212,10 +267,12 @@ Volume24hUsd, NextSettlementUtc
 
 ### ArbitrageOpportunityDto
 ```
-AssetSymbol, LongExchangeName, ShortExchangeName,
+AssetSymbol, LongExchangeName/Id, ShortExchangeName/Id,
 LongRatePerHour, ShortRatePerHour, SpreadPerHour, NetYieldPerHour,
-AnnualizedYield, Volume24h, MarkPrices,
-PredictedSpread, PredictionConfidence, MinutesToNextSettlement
+BoostedNetYieldPerHour, AnnualizedYield, Volume24h, MarkPrices,
+PredictedRate, PredictedTrend, TrendUnconfirmed,
+MinutesToNextSettlement, EffectiveLeverage, BreakEvenHours,
+IsCoinGlassHot
 ```
 
 ### OrderResultDto
@@ -225,7 +282,53 @@ Success, OrderId, ExecutedPrice, ExecutedSize, Error
 
 ### PositionSummaryDto
 ```
-Id, AssetSymbol, LongExchangeName, ShortExchangeName, SizeUsdc,
+Id, AssetSymbol, LongExchangeName, ShortExchangeName, SizeUsdc, MarginUsdc,
 EntrySpreadPerHour, CurrentSpreadPerHour, AccumulatedFunding,
-UnrealizedPnl, RealizedPnl, Status, OpenedAt
+UnrealizedPnl, ExchangePnl, UnifiedPnl, DivergencePct, RealizedPnl,
+Status, OpenedAt, ClosedAt, IsDryRun, WarningLevel, WarningTypes,
+CollateralImbalancePct
 ```
+
+### PositionDetailsDto
+```
+Id, AssetSymbol/Id, LongExchange/Id, ShortExchange/Id,
+SizeUsdc, MarginUsdc, Leverage,
+LongEntryPrice, ShortEntryPrice, EntrySpreadPerHour, CurrentSpreadPerHour,
+AccumulatedFunding, RealizedPnl, RealizedDirectionalPnl,
+TotalFeesUsdc, EntryFeesUsdc, ExitFeesUsdc,
+Status, CloseReason, OpenedAt, ClosedAt, Notes, IsDryRun,
+LongMarginUtilizationPct, ShortMarginUtilizationPct,
+MaxSafeMovePctLong, MaxSafeMovePctShort, CyclesUntilLiquidation
+```
+
+### MarginStateDto
+```
+MarginUsed, MarginAvailable, LiquidationPrice, MarginUtilizationPct
+```
+
+### PnlDecompositionDto
+```
+Directional, Funding, Fees
+Strategy = Directional + Funding - Fees
+```
+
+### PipelineDiagnosticsDto
+```
+TotalRatesLoaded, RatesAfterStalenessFilter,
+TotalPairsEvaluated, PairsFilteredByVolume, PairsFilteredByThreshold,
+NetPositiveBelowThreshold, NetPositiveBelowEdgeGuardrail,
+PairsFilteredByBreakeven, PairsPassing,
+BestRawSpread, StalenessMinutes, MinVolumeThreshold, OpenThreshold
+```
+
+### DashboardDto
+```
+BotEnabled, OperatingState, OpenPositionCount, OpeningPositionCount,
+NeedsAttentionCount, TotalPnl, BestSpread, TotalAlerts
+```
+
+### Exchange Analytics DTOs
+- `ExchangeOverviewDto` — `ExchangeName, CoinCount, HasDirectConnector, StatusBadge`
+- `SpreadOpportunityDto` — `Symbol, LongExchange, ShortExchange, SpreadPerHour, NetYieldPerHour, ConnectorStatus`
+- `RateComparisonDto` — `Symbol, DirectRate, CoinGlassRate, DivergencePercent`
+- `DiscoveryEventDto` — `EventType, ExchangeName, Symbol, DiscoveredAt`
