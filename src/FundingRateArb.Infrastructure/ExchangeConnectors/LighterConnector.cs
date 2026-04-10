@@ -367,13 +367,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 return new PositionMatchResult(true, false, size, baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
             }
 
-            // Position at baseline size — check if expected quantity matches the delta
-            if (expectedQuantity > 0 && absSize >= baselineSize + expectedQuantity * 0.9m)
-            {
-                return new PositionMatchResult(true, false, size, baselineSize);
-            }
-
-            // Position exists at baseline size — not new or increased
+            // Position exists at baseline size — size-based matching cannot distinguish
+            // "order not filled" from "order filled but concurrent close offset the increase."
+            // Reconciliation logging in ExecutionEngine handles this ambiguous case.
             return new PositionMatchResult(false, true, size, baselineSize);
         }
 
