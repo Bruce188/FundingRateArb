@@ -70,7 +70,7 @@ public class CoinGlassScreeningServiceHttpIntegrationTests
 
         if (includeApiKey)
         {
-            configDict["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key";
+            configDict["ExchangeConnectors:CoinGlass:ApiKey"] = "FAKE_API_KEY_FOR_TESTS";
         }
 
         var config = new ConfigurationBuilder()

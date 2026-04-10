@@ -165,17 +165,17 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
     /// </summary>
     private sealed class AlwaysFailingUnitOfWork : IUnitOfWork
     {
-        public IExchangeRepository Exchanges => throw new NotImplementedException();
-        public IAssetRepository Assets => throw new NotImplementedException();
-        public IFundingRateRepository FundingRates => throw new NotImplementedException();
-        public IPositionRepository Positions => throw new NotImplementedException();
-        public IAlertRepository Alerts => throw new NotImplementedException();
+        public IExchangeRepository Exchanges => throw new InvalidOperationException("Not expected in this test scenario");
+        public IAssetRepository Assets => throw new InvalidOperationException("Not expected in this test scenario");
+        public IFundingRateRepository FundingRates => throw new InvalidOperationException("Not expected in this test scenario");
+        public IPositionRepository Positions => throw new InvalidOperationException("Not expected in this test scenario");
+        public IAlertRepository Alerts => throw new InvalidOperationException("Not expected in this test scenario");
         public IBotConfigRepository BotConfig => new FailingBotConfigRepository();
-        public IExchangeAssetConfigRepository ExchangeAssetConfigs => throw new NotImplementedException();
-        public IUserExchangeCredentialRepository UserCredentials => throw new NotImplementedException();
-        public IUserConfigurationRepository UserConfigurations => throw new NotImplementedException();
-        public IUserPreferenceRepository UserPreferences => throw new NotImplementedException();
-        public IOpportunitySnapshotRepository OpportunitySnapshots => throw new NotImplementedException();
+        public IExchangeAssetConfigRepository ExchangeAssetConfigs => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserExchangeCredentialRepository UserCredentials => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserConfigurationRepository UserConfigurations => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserPreferenceRepository UserPreferences => throw new InvalidOperationException("Not expected in this test scenario");
+        public IOpportunitySnapshotRepository OpportunitySnapshots => throw new InvalidOperationException("Not expected in this test scenario");
         public Task<int> SaveAsync(CancellationToken ct = default) => Task.FromResult(0);
         public void Dispose() { }
 
@@ -197,17 +197,17 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
     {
         private int _callCount;
 
-        public IExchangeRepository Exchanges => throw new NotImplementedException();
-        public IAssetRepository Assets => throw new NotImplementedException();
+        public IExchangeRepository Exchanges => throw new InvalidOperationException("Not expected in this test scenario");
+        public IAssetRepository Assets => throw new InvalidOperationException("Not expected in this test scenario");
         public IFundingRateRepository FundingRates => new CounterFundingRateRepository(this);
-        public IPositionRepository Positions => throw new NotImplementedException();
-        public IAlertRepository Alerts => throw new NotImplementedException();
+        public IPositionRepository Positions => throw new InvalidOperationException("Not expected in this test scenario");
+        public IAlertRepository Alerts => throw new InvalidOperationException("Not expected in this test scenario");
         public IBotConfigRepository BotConfig => new CounterBotConfigRepository(this);
-        public IExchangeAssetConfigRepository ExchangeAssetConfigs => throw new NotImplementedException();
-        public IUserExchangeCredentialRepository UserCredentials => throw new NotImplementedException();
-        public IUserConfigurationRepository UserConfigurations => throw new NotImplementedException();
-        public IUserPreferenceRepository UserPreferences => throw new NotImplementedException();
-        public IOpportunitySnapshotRepository OpportunitySnapshots => throw new NotImplementedException();
+        public IExchangeAssetConfigRepository ExchangeAssetConfigs => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserExchangeCredentialRepository UserCredentials => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserConfigurationRepository UserConfigurations => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserPreferenceRepository UserPreferences => throw new InvalidOperationException("Not expected in this test scenario");
+        public IOpportunitySnapshotRepository OpportunitySnapshots => throw new InvalidOperationException("Not expected in this test scenario");
         public Task<int> SaveAsync(CancellationToken ct = default) => Task.FromResult(0);
         public void Dispose() { }
 

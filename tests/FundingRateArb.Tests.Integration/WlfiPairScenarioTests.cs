@@ -17,7 +17,7 @@ using Microsoft.Extensions.Hosting;
 namespace FundingRateArb.Tests.Integration;
 
 [Collection("IntegrationTests")]
-public class WlfiPairScenarioTests : IDisposable
+public class WlfiPairScenarioTests
 {
     private readonly string _dbName = $"WlfiPairTest_{Guid.NewGuid()}";
 
@@ -56,8 +56,6 @@ public class WlfiPairScenarioTests : IDisposable
         result.Diagnostics!.PairsFilteredByExchangeSymbolCap.Should().Be(0);
         result.Opportunities.Should().Contain(o => o.AssetSymbol == "WLFI");
     }
-
-    public void Dispose() { }
 
     private async Task SeedDatabaseAsync()
     {

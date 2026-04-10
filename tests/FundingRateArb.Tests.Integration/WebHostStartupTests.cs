@@ -137,7 +137,8 @@ public class WebHostStartupTests : IClassFixture<WebHostStartupTests.WebHostStar
                 foreach (var d in services)
                 {
                     var implType = d.ImplementationType ?? d.ServiceType;
-                    if (implType is not null && !implType.IsInterface && !implType.IsAbstract)
+                    if (implType is not null && !implType.IsInterface && !implType.IsAbstract
+                        && implType.Namespace?.StartsWith("FundingRateArb", StringComparison.Ordinal) == true)
                     {
                         CapturedServiceTypes.Add(implType);
                     }

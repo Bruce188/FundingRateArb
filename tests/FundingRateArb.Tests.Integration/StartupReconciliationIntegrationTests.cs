@@ -16,7 +16,7 @@ using Microsoft.Extensions.Hosting;
 namespace FundingRateArb.Tests.Integration;
 
 [Collection("IntegrationTests")]
-public class StartupReconciliationIntegrationTests : IDisposable
+public class StartupReconciliationIntegrationTests
 {
     private readonly string _dbName = $"ReconciliationTest_{Guid.NewGuid()}";
 
@@ -64,8 +64,6 @@ public class StartupReconciliationIntegrationTests : IDisposable
         position.CloseReason.Should().Be(CloseReason.ExchangeDrift);
         position.ClosedAt.Should().NotBeNull();
     }
-
-    public void Dispose() { }
 
     private async Task<int> SeedPositionAsync(PositionStatus status)
     {
