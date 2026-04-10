@@ -52,18 +52,37 @@ public class PnlReconciliationService : IPnlReconciliationService
         var longFunding = await longFundingTask;
         var shortFunding = await shortFundingTask;
 
-        // Sum available PnL from both legs
+        // Compute full exchange PnL only when BOTH legs report — partial data
+        // produces misleading divergence (e.g. Lighter returns null for PnL queries).
         decimal? exchangePnl = null;
-        if (longPnl.HasValue || shortPnl.HasValue)
+        if (longPnl.HasValue && shortPnl.HasValue)
         {
-            exchangePnl = (longPnl ?? 0m) + (shortPnl ?? 0m);
+            exchangePnl = longPnl.Value + shortPnl.Value;
+        }
+        else if (longPnl.HasValue || shortPnl.HasValue)
+        {
+            position.ExchangeReportedPnl = (longPnl ?? 0m) + (shortPnl ?? 0m);
+            // Clear any stale divergence from a prior reconciliation — partial data
+            // cannot produce a meaningful divergence percentage.
+            position.PnlDivergence = null;
+            _logger.LogDebug(
+                "Skipping PnL divergence for position #{PositionId} ({Asset}): " +
+                "one leg returned null (long={LongHasValue}, short={ShortHasValue})",
+                position.Id, assetSymbol, longPnl.HasValue, shortPnl.HasValue);
         }
 
-        // Sum available funding from both legs
+        // Sum available funding from both legs only when both report
         decimal? exchangeFunding = null;
-        if (longFunding.HasValue || shortFunding.HasValue)
+        if (longFunding.HasValue && shortFunding.HasValue)
         {
-            exchangeFunding = (longFunding ?? 0m) + (shortFunding ?? 0m);
+            exchangeFunding = longFunding.Value + shortFunding.Value;
+        }
+        else if (longFunding.HasValue || shortFunding.HasValue)
+        {
+            _logger.LogDebug(
+                "Skipping funding reconciliation for position #{PositionId} ({Asset}): " +
+                "one leg returned null (long={LongHasValue}, short={ShortHasValue})",
+                position.Id, assetSymbol, longFunding.HasValue, shortFunding.HasValue);
         }
 
         // Store exchange-reported PnL and compute divergence
