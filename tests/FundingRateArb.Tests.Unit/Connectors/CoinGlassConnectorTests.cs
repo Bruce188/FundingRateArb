@@ -4,16 +4,27 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Moq.Protected;
 
 namespace FundingRateArb.Tests.Unit.Connectors;
 
-public class CoinGlassConnectorTests
+public class CoinGlassConnectorTests : IDisposable
 {
+    // NB6/NB7 fix (review-v133): CoinGlassConnector has static _backoffUntil /
+    // _consecutiveFailures / _lastLoggedBackoffLevel. Reset between every test so
+    // a prior failure case cannot short-circuit later tests via the manual backoff
+    // path before the Polly pipeline runs.
     public CoinGlassConnectorTests()
+    {
+        CoinGlassConnector.ResetBackoffState();
+    }
+
+    public void Dispose()
     {
         CoinGlassConnector.ResetBackoffState();
     }
@@ -51,7 +62,12 @@ public class CoinGlassConnectorTests
         var analyticsRepo = new Mock<ICoinGlassAnalyticsRepository>();
         analyticsRepo.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, analyticsRepo.Object);
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            analyticsRepo.Object,
+            TestResiliencePipelineProvider.NoOp());
         return (connector, handler);
     }
 
@@ -386,7 +402,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         await sut.GetFundingRatesAsync();
 
@@ -419,7 +440,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -481,7 +507,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         var rates = await sut.GetFundingRatesAsync();
 
@@ -595,7 +626,12 @@ public class CoinGlassConnectorTests
             })
             .Build();
 
-        var sut = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var sut = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
         await sut.GetFundingRatesAsync();
 
         capturedRequest.Should().NotBeNull();
@@ -671,7 +707,12 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         // First call fails — sets backoff
         await connector.GetFundingRatesAsync();
@@ -716,7 +757,12 @@ public class CoinGlassConnectorTests
                 ["ExchangeConnectors:CoinGlass:ApiKey"] = ""
             })
             .Build();
-        var connector = new CoinGlassConnector(client, config, NullLogger<CoinGlassConnector>.Instance, CreateMockAnalyticsRepo());
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            NullLogger<CoinGlassConnector>.Instance,
+            CreateMockAnalyticsRepo(),
+            TestResiliencePipelineProvider.NoOp());
 
         // First call — triggers backoff
         await connector.GetFundingRatesAsync();
@@ -779,5 +825,586 @@ public class CoinGlassConnectorTests
         // Cap is 900 seconds (15 minutes)
         backoffDuration.TotalSeconds.Should().BeLessOrEqualTo(905, "backoff should be capped at 900 seconds");
         backoffDuration.TotalSeconds.Should().BeGreaterOrEqualTo(895, "after many failures backoff should approach cap");
+    }
+
+    // ── plan-v61 Task 2.1: body logging, IsAvailable, Polly circuit breaker ──
+
+    private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler, ListLogger<CoinGlassConnector> Logger)
+        CreateConnectorWithLogger(
+            HttpResponseMessage response,
+            Polly.Registry.ResiliencePipelineProvider<string>? pipelineProvider = null)
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(response);
+
+        return CreateWithHandlerMock(handler, pipelineProvider);
+    }
+
+    private static (CoinGlassConnector Connector, Mock<HttpMessageHandler> Handler, ListLogger<CoinGlassConnector> Logger)
+        CreateWithHandlerMock(
+            Mock<HttpMessageHandler> handler,
+            Polly.Registry.ResiliencePipelineProvider<string>? pipelineProvider = null)
+    {
+        var client = new HttpClient(handler.Object)
+        {
+            BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
+        };
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ExchangeConnectors:CoinGlass:ApiKey"] = "test-key",
+            })
+            .Build();
+
+        var analyticsRepo = new Mock<ICoinGlassAnalyticsRepository>();
+        analyticsRepo.Setup(r => r.GetKnownPairsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<(string Exchange, string Symbol)>());
+
+        var logger = new ListLogger<CoinGlassConnector>();
+        var connector = new CoinGlassConnector(
+            client,
+            config,
+            logger,
+            analyticsRepo.Object,
+            pipelineProvider ?? TestResiliencePipelineProvider.NoOp());
+        return (connector, handler, logger);
+    }
+
+    private static HttpResponseMessage ErrorResponse(HttpStatusCode status, string body) =>
+        new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns401_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.Unauthorized, "{\"error\":\"unauthorized\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("401", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("unauthorized", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns429_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.TooManyRequests, "{\"error\":\"rate limited\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("429", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("rate limited", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Returns500_LogsBodyAndReturnsUnavailable()
+    {
+        var response = ErrorResponse(HttpStatusCode.InternalServerError, "{\"error\":\"internal\"}");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("500", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("internal", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_Timeout_LogsAndReturnsUnavailable()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(new TaskCanceledException("request timeout after 30s"));
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("CoinGlass API request failed", LogLevel.Warning).Should().BeTrue();
+        // NB9 fix (review-v133): assert the sanitized exception message reaches the log,
+        // not just the static template prefix. Regressions that dropped the {Body}
+        // placeholder would leave the prefix intact but hide the timeout detail.
+        logger.ContainsMessage("request timeout after 30s", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_MalformedJson_LogsBodyAndReturnsUnavailable()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{invalid json", Encoding.UTF8, "application/json"),
+        };
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("Failed to parse CoinGlass response", LogLevel.Warning).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitOpens_After5ConsecutiveFailures()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "oops"));
+
+        var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
+
+        // NB6 fix (review-v133): use ResetBackoffState() instead of reflection. The manual
+        // backoff would otherwise early-return before the Polly pipeline runs.
+        int maxAttempts = 10;
+        for (int i = 0; i < maxAttempts && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+
+        connector.IsAvailable.Should().BeFalse(
+            "circuit breaker should have opened after enough consecutive failures (>= 5)");
+
+        var sendCountAfterOpen = handlerMock.Invocations.Count;
+
+        // Subsequent calls must not hit the handler at all — reset manual backoff before each
+        // probe so this test verifies the *Polly* circuit breaker's short-circuit semantics.
+        for (int i = 0; i < 3; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+        }
+
+        handlerMock.Invocations.Count.Should().Be(sendCountAfterOpen,
+            "open circuit should short-circuit all subsequent calls without hitting SendAsync");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitHalfOpens_After5Minutes()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, handlerMock, _) = CreateWithHandlerMock(handler, provider);
+
+        // NB6 fix: ResetBackoffState() instead of reflection.
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        var failuresBeforeHalfOpen = callCount;
+
+        // Advance past the 5-minute break duration — the circuit should transition to
+        // half-open and allow the next call through to the handler.
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        CoinGlassConnector.ResetBackoffState();
+        await connector.GetFundingRatesAsync();
+
+        callCount.Should().BeGreaterThan(failuresBeforeHalfOpen,
+            "after the break window the pipeline should allow one probe through");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_CircuitCloses_OnFirstSuccessAfterHalfOpen()
+    {
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                callCount++;
+                if (callCount <= 5)
+                {
+                    return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"code":"0","data":[]}""", Encoding.UTF8, "application/json"),
+                };
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        // NB6 fix: ResetBackoffState() instead of reflection.
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Advance past break window and make a successful probe
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(1));
+        CoinGlassConnector.ResetBackoffState();
+        await connector.GetFundingRatesAsync();
+
+        connector.IsAvailable.Should().BeTrue("first successful call after half-open should close the circuit");
+    }
+
+    [Fact]
+    public async Task CoinGlassConnector_BodyLogging_RedactsCgApiKey()
+    {
+        var response = ErrorResponse(
+            HttpStatusCode.Unauthorized,
+            "CG-API-KEY: secret-key-value\nerror: invalid key");
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        var warningEntries = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warningEntries.Should().NotBeEmpty();
+        warningEntries.Should().NotContain(e => e.Message.Contains("secret-key-value", StringComparison.Ordinal));
+        warningEntries.Should().Contain(e => e.Message.Contains("REDACTED", StringComparison.Ordinal));
+    }
+
+    // ── review-v133 Task 2.1 reopen tests ──
+
+    /// <summary>
+    /// B1 fix: after the breaker opens and Polly's 5-minute break elapses, the next call
+    /// must reach the HttpMessageHandler (the half-open probe). Before the fix, every
+    /// short-circuited call re-invoked RecordFailure() which pushed _backoffUntil further
+    /// into the future, so the manual-backoff guard blocked the probe at line 96 before
+    /// the Polly pipeline ever ran.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CircuitBrokenThenHalfOpen_DoesNotStackManualBackoff()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref callCount);
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        // Drive the breaker open (reset manual backoff between iterations so the Polly
+        // pipeline actually runs each time).
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Fire several short-circuited calls — each goes through catch (BrokenCircuitException).
+        // Pre-fix, each one called RecordFailure() which extended _backoffUntil.
+        for (int i = 0; i < 5; i++)
+        {
+            await connector.GetFundingRatesAsync();
+        }
+
+        var invocationsBeforeProbe = callCount;
+
+        // Advance past the 5-minute break duration. Do NOT reset backoff — we want to
+        // verify the fix ensures _backoffUntil has not drifted past "now" because of
+        // the stacked RecordFailure() calls inside the short-circuit catch block.
+        fakeTime.Advance(TimeSpan.FromMinutes(5) + TimeSpan.FromSeconds(5));
+
+        await connector.GetFundingRatesAsync();
+
+        callCount.Should().BeGreaterThan(invocationsBeforeProbe,
+            "after the Polly break elapses the next call must reach the handler (the " +
+            "half-open probe) — a stacked manual backoff would block it first");
+    }
+
+    // NB4 fix (review-v134): deleted CoinGlassConnector_BrokenCircuitException_DoesNotIncrementConsecutiveFailures
+    // — it reached into the private static _consecutiveFailures field via reflection, the exact
+    // anti-pattern NB6 eliminated. Coverage is preserved by CircuitBrokenThenHalfOpen_DoesNotStackManualBackoff
+    // above, which observes the same invariant through the public IsAvailable flag.
+
+    /// <summary>
+    /// NB1 fix: inner exception messages (which may carry the API key in custom handlers
+    /// or logging middleware) must be sanitized. Before the fix the logger was passed
+    /// the raw `ex` parameter and the log sink serialized `ex.ToString()` verbatim,
+    /// leaking the inner message.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_InnerExceptionWithSecret_NotLogged()
+    {
+        var inner = new InvalidOperationException("wrapped CG-API-KEY: innersecret123 trailing");
+        var outer = new HttpRequestException("request failed", inner);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ThrowsAsync(outer);
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        var warnings = logger.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warnings.Should().NotBeEmpty();
+        warnings.Should().NotContain(e => e.Message.Contains("innersecret123", StringComparison.Ordinal),
+            "the inner exception message must be sanitized before logging");
+        // Also confirm the raw Exception object was NOT passed to the logger (so the sink
+        // cannot dump ex.ToString() itself): all warning entries for this call should have
+        // a null Exception column.
+        warnings.Where(e => e.Message.Contains("CoinGlass API request failed", StringComparison.Ordinal))
+            .Should().OnlyContain(e => e.Exception == null,
+                "the exception object must not be passed verbatim — only the sanitized string form");
+    }
+
+    /// <summary>
+    /// NB4 fix: JSON parse failures on non-seekable response streams used to log an empty
+    /// body because ReadFromJsonAsync consumed the stream before ReadAsStringAsync could
+    /// read it. After the fix the body is read as a string first, then deserialized,
+    /// so the malformed text is available for logging.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_MalformedJsonOnNonSeekableStream_BodyAppearsInLog()
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ForwardOnlyStreamContent("{invalid json"),
+        };
+        var (connector, _, logger) = CreateConnectorWithLogger(response);
+
+        var result = await connector.GetFundingRatesAsync();
+
+        result.Should().BeEmpty();
+        logger.ContainsMessage("Failed to parse CoinGlass response", LogLevel.Warning).Should().BeTrue();
+        logger.ContainsMessage("invalid", LogLevel.Warning).Should().BeTrue(
+            "the malformed body text must appear in the log — pre-fix it was empty because " +
+            "ReadFromJsonAsync had already consumed the non-seekable stream");
+    }
+
+    /// <summary>
+    /// NB8 fix: pin the 5-failure threshold. Counts handler invocations before
+    /// IsAvailable flips to false to guard against a regression that bumped MinimumThroughput.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CircuitOpens_AtExactly5Failures()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var callCount = 0;
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref callCount);
+                return ErrorResponse(HttpStatusCode.InternalServerError, "fail");
+            });
+
+        var (connector, _, _) = CreateWithHandlerMock(handler, provider);
+
+        int attempts = 0;
+        while (connector.IsAvailable && attempts < 20)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+            attempts++;
+        }
+
+        connector.IsAvailable.Should().BeFalse();
+        callCount.Should().BeInRange(5, 6,
+            "plan-v61 specifies 5 failures trip the breaker with Polly's rolling window " +
+            "(may need 1 extra sample before the sliding window has enough data)");
+    }
+
+    // ── review-v134 Task 2.1 reopen tests (cycle 2: NB1, NB2) ──
+
+    /// <summary>
+    /// NB1 fix (review-v134): caller-initiated cancellation must propagate cleanly.
+    /// Before the fix, the generic catch filter <c>when (ex is not OperationCanceledException || ex is TaskCanceledException)</c>
+    /// swallowed <see cref="TaskCanceledException"/> even when the caller's <c>ct</c> had
+    /// been cancelled — logging a spurious "failed" warning, calling <c>RecordFailure()</c>,
+    /// and counting a normal graceful-shutdown cancellation against the Polly breaker.
+    /// After the fix, an <see cref="OperationCanceledException"/> whose underlying token
+    /// matches the caller's <c>ct</c> is re-thrown unchanged and the breaker remains
+    /// closed.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_CallerCancellation_PropagatesOperationCanceledException()
+    {
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .Returns<HttpRequestMessage, CancellationToken>(async (_, token) =>
+            {
+                // Honour the caller's cancellation token the way a real handler would.
+                await Task.Yield();
+                token.ThrowIfCancellationRequested();
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Func<Task> act = async () => await connector.GetFundingRatesAsync(cts.Token);
+
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "caller cancellation must propagate unchanged — not be swallowed as a failure");
+
+        connector.IsAvailable.Should().BeTrue(
+            "the cancellation path must NOT trip IsAvailable — it is not an upstream failure");
+
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("CoinGlass API request failed", StringComparison.Ordinal),
+            "caller cancellation must not emit a 'request failed' warning");
+    }
+
+    /// <summary>
+    /// NB2 fix (review-v134): after the circuit opens, subsequent short-circuited calls
+    /// must NOT keep emitting Warning-level log entries. The breaker state itself is the
+    /// signal — a 5-minute break window can generate 60+ polling attempts, each of which
+    /// pre-fix dumped the full Polly <c>ex.ToString()</c> body to the log. The fix makes
+    /// the Warning-level entry fire exactly once on the edge transition (when
+    /// <see cref="CoinGlassConnector.IsAvailable"/> was still <c>true</c>); subsequent
+    /// short-circuits during the same break window log nothing at Warning level.
+    /// </summary>
+    [Fact]
+    public async Task CoinGlassConnector_BrokenCircuit_RepeatedShortCircuits_LogsOnlyOnceOnEdge()
+    {
+        CoinGlassConnector.ResetBackoffState();
+
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        var provider = TestResiliencePipelineProvider.WithCircuitBreaker(fakeTime);
+
+        var handler = new Mock<HttpMessageHandler>();
+        handler.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.IsAny<HttpRequestMessage>(),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(() => ErrorResponse(HttpStatusCode.InternalServerError, "fail"));
+
+        var (connector, _, logger) = CreateWithHandlerMock(handler, provider);
+
+        // Drive the breaker open.
+        for (int i = 0; i < 10 && connector.IsAvailable; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+            fakeTime.Advance(TimeSpan.FromMilliseconds(100));
+        }
+        connector.IsAvailable.Should().BeFalse();
+
+        // Snapshot the edge-transition Warning so later short-circuits can be compared
+        // against this exact count. Pre-fix, each extra short-circuit added another
+        // "short-circuited: {Body}" Warning.
+        var edgeOpenedWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        edgeOpenedWarnings.Should().Be(1,
+            "exactly one Warning entry should fire on the edge transition to open");
+
+        // Issue 10 more calls — all of them short-circuit through the BrokenCircuitException
+        // path without hitting SendAsync.
+        for (int i = 0; i < 10; i++)
+        {
+            CoinGlassConnector.ResetBackoffState();
+            await connector.GetFundingRatesAsync();
+        }
+
+        var openedWarningsAfter = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning
+                        && e.Message.Contains("circuit breaker OPENED", StringComparison.Ordinal))
+            .Count();
+        openedWarningsAfter.Should().Be(1,
+            "subsequent short-circuits must NOT emit additional 'OPENED' Warning entries — " +
+            "operators need a clean signal during outages, not one log line per polling attempt");
+
+        // Additionally verify no pre-fix-style "short-circuited: {Body}" entries exist.
+        logger.Entries.Should().NotContain(
+            e => e.Level == LogLevel.Warning
+                 && e.Message.Contains("short-circuited", StringComparison.Ordinal),
+            "the per-call body log on short-circuit must be dropped entirely");
+    }
+
+    /// <summary>
+    /// Minimal HttpContent that exposes the body as a forward-only (non-seekable) stream,
+    /// mirroring the behavior of a real network response and ensuring NB4's fix is
+    /// exercised end-to-end.
+    /// </summary>
+    private sealed class ForwardOnlyStreamContent : HttpContent
+    {
+        private readonly byte[] _bytes;
+
+        public ForwardOnlyStreamContent(string body)
+        {
+            _bytes = Encoding.UTF8.GetBytes(body);
+            Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+        {
+            return stream.WriteAsync(_bytes, 0, _bytes.Length);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = -1;
+            return false;
+        }
     }
 }

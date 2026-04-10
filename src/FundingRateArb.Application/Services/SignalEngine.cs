@@ -130,6 +130,18 @@ public class SignalEngine : ISignalEngine
             {
                 _logger?.LogWarning(ex, "Failed to load CoinGlass screening data; continuing without priority hints");
             }
+
+            // plan-v61 Task 3.1: once-per-cycle "skipped (unavailable)" log. When the
+            // underlying Polly circuit breaker on CoinGlassScreeningService has opened,
+            // GetHotSymbolsAsync short-circuits with an empty set and flips IsAvailable=false.
+            // Emit exactly one warning per cycle (here, outside the nested candidate loop)
+            // so we do not spam the log with one entry per candidate pair.
+            if (!_screeningProvider.IsAvailable)
+            {
+                _logger?.LogWarning(
+                    "CoinGlass screening skipped (unavailable) — continuing without screening for this cycle");
+                hotSymbols = null;
+            }
         }
 
         // Lazy-load funding rate history for trend analysis (sequential — DbContext is not thread-safe).
