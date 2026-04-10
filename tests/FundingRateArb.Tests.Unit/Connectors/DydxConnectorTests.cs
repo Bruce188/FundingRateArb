@@ -235,6 +235,8 @@ public class DydxConnectorTests
         dto.NextSettlementUtc!.Value.Should().BeAfter(before, "NextSettlementUtc must be in the future");
         dto.NextSettlementUtc.Value.Minute.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
         dto.NextSettlementUtc.Value.Second.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+        dto.NextSettlementUtc.Value.Kind.Should().Be(DateTimeKind.Utc, "settlement times must be UTC");
+        (dto.NextSettlementUtc.Value - DateTime.UtcNow).TotalMinutes.Should().BeInRange(0, 60, "NextSettlementUtc must be no more than one hour away");
     }
 
     [Fact]
