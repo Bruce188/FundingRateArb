@@ -970,6 +970,36 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
+    public async Task ReadOnlyCheck_MarkPriceFails_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(markPriceThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Mode.Should().Be("DryRun");
+        result.Error.Should().Contain("Mark price check failed");
+    }
+
+    [Fact]
+    public async Task ReadOnlyCheck_FundingRateFails_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(fundingRatesThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Mode.Should().Be("DryRun");
+        result.Error.Should().Contain("Funding rate check failed");
+    }
+
+    [Fact]
     public async Task ConcurrentLock_PreventsOverlappingTests()
     {
         var exchange = CreateTestExchange();

@@ -212,7 +212,7 @@ public class ConnectivityTestService : IConnectivityTestService
         Func<string, Task> log, CancellationToken ct)
     {
         // Step 1 — Balance (verifies API auth and account access)
-        await log("Dry-run Step 1: Checking available balance...");
+        await log("[ConnectivityTest] Dry-run Step 1: Checking available balance...");
         decimal balance;
         try
         {
@@ -229,7 +229,7 @@ public class ConnectivityTestService : IConnectivityTestService
         }
 
         // Step 2 — Mark price (verifies market data access)
-        await log("Dry-run Step 2: Fetching ETH mark price...");
+        await log("[ConnectivityTest] Dry-run Step 2: Fetching ETH mark price...");
         decimal markPrice;
         try
         {
@@ -246,7 +246,7 @@ public class ConnectivityTestService : IConnectivityTestService
         }
 
         // Step 3 — Funding rates (verifies read-only data endpoint)
-        await log("Dry-run Step 3: Fetching funding rates...");
+        await log("[ConnectivityTest] Dry-run Step 3: Fetching funding rates...");
         try
         {
             var rates = await connector.GetFundingRatesAsync(ct);
@@ -261,7 +261,7 @@ public class ConnectivityTestService : IConnectivityTestService
             return new ConnectivityTestResult(false, exchangeName, msg, Mode: mode);
         }
 
-        await log("PASS - Dry-run OK");
+        await log("[ConnectivityTest] PASS - Dry-run OK");
         return new ConnectivityTestResult(true, exchangeName,
             $"Dry-run OK: balance={balance:F2}, ETH mark={markPrice:F2}", Mode: mode);
     }

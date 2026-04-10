@@ -337,4 +337,28 @@ public class ConnectivityTestControllerTests
             s => s.RunTestAsync("admin-123", "user-1", 1, true, It.IsAny<CancellationToken>()),
             Times.Once);
     }
+
+    [Fact]
+    public async Task RunTest_ValidAdmin_ForwardsDryRunFalseFlag()
+    {
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
+        var expectedResult = new ConnectivityTestResult(true, "Hyperliquid", Mode: "LiveTrade");
+        _mockConnectivityService
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
+
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.RunTest("user-1", 1, dryRun: false);
+
+        result.Should().BeOfType<JsonResult>();
+
+        _mockConnectivityService.Verify(
+            s => s.RunTestAsync("admin-123", "user-1", 1, false, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
 }
