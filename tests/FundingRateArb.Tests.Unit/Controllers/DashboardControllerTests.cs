@@ -1,15 +1,19 @@
 using System.Security.Claims;
 using FluentAssertions;
+using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.Data;
+using FundingRateArb.Tests.Unit.Helpers;
 using FundingRateArb.Web.Controllers;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -360,6 +364,43 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.PnlProgressByPosition.Should().ContainKey(1);
         model.PnlProgressByPosition[1].Should().Be(2.0m);
+    }
+
+    // ── NT1: Degraded-mode catch blocks ──────────────────────────────────
+
+    [Fact]
+    public async Task Index_WhenDatabaseUnavailableException_ReturnsDegradedView()
+    {
+        // Arrange — signal engine throws DatabaseUnavailableException (first call in try block)
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DatabaseUnavailableException("test db unavailable"));
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        viewResult.ViewName.Should().Be("Index");
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.DatabaseAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Index_WhenTransientSqlException_ReturnsDegradedView()
+    {
+        // Arrange — signal engine throws a transient SqlException (number 10928 is in SqlTransientErrorNumbers.All)
+        var transientEx = SqlExceptionFactory.Create(10928);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(transientEx);
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        viewResult.ViewName.Should().Be("Index");
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.DatabaseAvailable.Should().BeFalse();
     }
 
     // ── Data-only exchange (CoinGlass) visibility ──────────────────────

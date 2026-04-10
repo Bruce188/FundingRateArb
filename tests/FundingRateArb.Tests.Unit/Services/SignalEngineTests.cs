@@ -2796,4 +2796,38 @@ public class SignalEngineTests
         logger.CountMessages(LogLevel.Warning, CoinGlassUnavailableMessage).Should().Be(0,
             "the unavailable warning must not fire when the provider is available");
     }
+
+    // ── NT9: Non-Aster pair skips IExchangeSymbolConstraintsProvider entirely ─────
+
+    [Fact]
+    public async Task GetOpportunities_NotionalCapFilter_NonAsterPair_SkipsProviderEntirely()
+    {
+        // Arrange: strict mock — ANY call to the provider will throw MockException
+        var strictProvider = new Mock<IExchangeSymbolConstraintsProvider>(MockBehavior.Strict);
+
+        // Rates for Hyperliquid (long) vs Binance (short) — neither is "Aster"
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "Binance",     1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var sut = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            symbolConstraintsProvider: strictProvider.Object);
+
+        // Act — if the pre-filter works, the strict mock is never called and no MockException fires
+        var result = await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: result is non-empty (spread is above threshold) and strict mock had no calls
+        result.Should().NotBeEmpty(
+            "spread between Hyperliquid and Binance is above threshold; opportunity must be returned");
+        strictProvider.VerifyNoOtherCalls();
+    }
 }

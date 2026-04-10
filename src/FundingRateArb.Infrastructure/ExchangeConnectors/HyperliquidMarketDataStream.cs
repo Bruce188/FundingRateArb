@@ -249,7 +249,15 @@ public class HyperliquidMarketDataStream : IMarketDataStream
             // Best-effort snapshot without the lock — accepting that a concurrent
             // subscribe may mutate the list. Shutdown is imminent; consistency is less
             // important than progress.
-            snapshot = _subscriptions.ToList();
+            try
+            {
+                snapshot = _subscriptions.ToList();
+            }
+            catch (Exception)
+            {
+                // Torn-list read during concurrent write — fall back to an empty snapshot.
+                snapshot = new List<UpdateSubscription>();
+            }
             _subscriptions.Clear();
             _subscriptionCount = 0;
             goto closeSnapshot;
