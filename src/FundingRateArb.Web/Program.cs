@@ -153,7 +153,9 @@ try
         "health-check",
         (sp, _) =>
         {
-            var connStr = builder.Configuration.GetConnectionString("DefaultConnection");
+            var connStr = builder.Configuration.GetConnectionString("DefaultConnection")
+                ?? throw new InvalidOperationException(
+                    "Connection string 'DefaultConnection' is not configured.");
             var options = new DbContextOptionsBuilder<AppDbContext>()
                 .UseSqlServer(connStr)
                 .Options;
