@@ -694,7 +694,7 @@ public class LighterConnectorTests
             OrderBookDetailsJson,
             onFirstCall: completionSource);
 
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -723,7 +723,7 @@ public class LighterConnectorTests
     {
         // Two sequential calls within TTL must only issue one HTTP request.
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -785,7 +785,7 @@ public class LighterConnectorTests
         // When the cache is empty (first call), multiple concurrent callers must result
         // in exactly one HTTP fetch, not N fetches (thundering-herd prevention).
         var handler = new CountingHttpMessageHandler(OrderBookDetailsJson);
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -1134,7 +1134,7 @@ public class LighterConnectorTests
         // Status 1 = Pending after 3 polls → should return (true, 1) — treat as likely executing
         var pendingJson = """{"code": 200, "status": 1}""";
         var handler = new CountingHttpMessageHandler(pendingJson);
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -1393,7 +1393,7 @@ public class LighterConnectorTests
         };
 
         var handler = new SequentialStatusHttpMessageHandler(responses);
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -1590,7 +1590,7 @@ public class LighterConnectorTests
         responses.Add(("{}", HttpStatusCode.InternalServerError)); // grace check — 500
 
         var handler = new SequentialStatusHttpMessageHandler(responses);
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };
@@ -2236,7 +2236,7 @@ public class ExchangeConnectorFactoryTests
             .Build();
 
         var handler = new MockHttpMessageHandler("{}");
-        var httpClient = new HttpClient(handler)
+        using var httpClient = new HttpClient(handler)
         {
             BaseAddress = new Uri("https://test.invalid/api/v1/")
         };

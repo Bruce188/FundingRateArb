@@ -390,7 +390,7 @@ public class CoinGlassConnectorTests : IDisposable
             .Callback<HttpRequestMessage, CancellationToken>((req, _) => capturedRequest = req)
             .ReturnsAsync(response);
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
@@ -428,7 +428,7 @@ public class CoinGlassConnectorTests : IDisposable
                 ItExpr.IsAny<CancellationToken>())
             .ThrowsAsync(new HttpRequestException("Network timeout"));
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
@@ -495,7 +495,7 @@ public class CoinGlassConnectorTests : IDisposable
                 ItExpr.IsAny<CancellationToken>())
             .ThrowsAsync(new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"));
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
@@ -614,7 +614,7 @@ public class CoinGlassConnectorTests : IDisposable
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             });
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
@@ -697,7 +697,7 @@ public class CoinGlassConnectorTests : IDisposable
                 };
             });
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
@@ -747,7 +747,7 @@ public class CoinGlassConnectorTests : IDisposable
                 ItExpr.IsAny<CancellationToken>())
             .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.InternalServerError));
 
-        var client = new HttpClient(handler.Object)
+        using var client = new HttpClient(handler.Object)
         {
             BaseAddress = new Uri("https://open-api-v3.coinglass.com/")
         };
