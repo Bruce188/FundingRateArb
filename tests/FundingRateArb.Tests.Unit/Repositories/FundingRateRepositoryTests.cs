@@ -58,10 +58,10 @@ public class FundingRateRepositoryTests
         var completedTask = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, timeoutCts.Token));
         completedTask.Should().Be(task, "repository must complete within 12s via its internal 10s CTS");
 
-        // Assert — must throw DatabaseUnavailableException, not the raw OperationCanceledException
-        await sut.Invoking(r => r.GetLatestPerExchangePerAssetAsync())
-            .Should().ThrowAsync<DatabaseUnavailableException>(
-                "timeout from internal 10s CTS must surface as DatabaseUnavailableException");
+        // Assert — unwrap the completed task and verify the exception type
+        var act = async () => await task;
+        await act.Should().ThrowAsync<DatabaseUnavailableException>(
+            "timeout from internal 10s CTS must surface as DatabaseUnavailableException");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
