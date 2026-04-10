@@ -17,7 +17,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// Uses a custom HttpClient for REST API calls and the native lighter-signer
 /// library (via P/Invoke) for cryptographic order signing.
 /// </summary>
-public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDisposable
+public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpectedFillAware, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<LighterConnector> _logger;
@@ -42,6 +42,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     // Last predicted settlement time from SendTransactionAsync, used for smarter verification delays
     private double _lastPredictedSettlementMs;
+
+    // Expected fill quantity set by ExecutionEngine before verification, used for delta-based matching
+    private decimal _pendingExpectedQuantity;
+    private readonly object _expectedQtyLock = new();
 
     // In-flight refresh task — prevents thundering-herd when multiple callers see an expired cache.
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
@@ -80,6 +84,21 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
 
     public bool IsEstimatedFillExchange => true;
 
+    /// <summary>
+    /// Sets the expected fill quantity so TryMatchPosition can detect fills
+    /// even when the current size matches the baseline.
+    /// </summary>
+    public void SetExpectedFillQuantity(decimal quantity)
+    {
+        lock (_expectedQtyLock) { _pendingExpectedQuantity = quantity; }
+    }
+
+    /// <summary>Clears the pending expected fill quantity after verification completes.</summary>
+    public void ClearExpectedFillQuantity()
+    {
+        lock (_expectedQtyLock) { _pendingExpectedQuantity = 0; }
+    }
+
     /// <inheritdoc />
     /// <remarks>
     /// Waits for the zk-rollup transaction to settle using a dynamic initial delay
@@ -113,11 +132,17 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     }
                 }
             }
+
+            _logger.LogDebug("Verify baseline for {Asset}: {Baseline}",
+                asset, string.Join(", ", baseline.Select(kv => $"{kv.Key.Symbol}/{kv.Key.Side}={kv.Value}")));
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to capture baseline positions for {Asset} verification — proceeding without baseline", asset);
         }
+
+        decimal expectedQty;
+        lock (_expectedQtyLock) { expectedQty = _pendingExpectedQuantity; }
 
         // Allow time for the zk-rollup transaction to settle before polling
         var predictedMs = Volatile.Read(ref _lastPredictedSettlementMs);
@@ -171,7 +196,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                     continue;
                 }
 
-                var matchResult = TryMatchPosition(nonZeroPositions, asset, side, baseline);
+                _logger.LogDebug("Verify poll {Attempt}/{Max} positions: {Positions}",
+                    attempt + 1, maxAttempts,
+                    string.Join(", ", nonZeroPositions.Select(p => $"{p.Symbol}/{(decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var s) && s > 0 ? "Long" : "Short")}={p.Position}")));
+
+                var matchResult = TryMatchPosition(nonZeroPositions, asset, side, baseline, expectedQty);
 
                 if (matchResult.IsNewOrIncreased)
                 {
@@ -222,7 +251,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
             var graceAccount = graceResponse?.Accounts?.FirstOrDefault();
             if (graceAccount?.Positions is not null)
             {
-                var graceResult = TryMatchPosition(graceAccount.Positions, asset, side, baseline);
+                var graceResult = TryMatchPosition(graceAccount.Positions, asset, side, baseline, expectedQty);
                 if (graceResult.IsNewOrIncreased)
                 {
                     _logger.LogInformation(
@@ -303,11 +332,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
     /// Checks whether any position in the list matches the target asset and side,
     /// and whether its size is new or increased compared to the baseline snapshot.
     /// </summary>
-    private static PositionMatchResult TryMatchPosition(
+    internal static PositionMatchResult TryMatchPosition(
         IEnumerable<LighterAccountPosition> positions,
         string asset,
         Side side,
-        Dictionary<(string Symbol, string Side), decimal> baseline)
+        Dictionary<(string Symbol, string Side), decimal> baseline,
+        decimal expectedQuantity = 0)
     {
         foreach (var p in positions)
         {
@@ -337,14 +367,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IDispos
                 return new PositionMatchResult(true, false, size, baseline.ContainsKey(baselineKey) ? baselineSize : 0m);
             }
 
-            // Position exists at baseline size — not new or increased
+            // Position exists at baseline size — size-based matching cannot distinguish
+            // "order not filled" from "order filled but concurrent close offset the increase."
+            // Reconciliation logging in ExecutionEngine handles this ambiguous case.
             return new PositionMatchResult(false, true, size, baselineSize);
         }
 
         return new PositionMatchResult(false, false, 0m, 0m);
     }
 
-    private readonly record struct PositionMatchResult(
+    internal readonly record struct PositionMatchResult(
         bool IsNewOrIncreased,
         bool FoundAtBaseline,
         decimal Size,
