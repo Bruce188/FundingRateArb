@@ -79,12 +79,16 @@ public class StartupReconciliationIntegrationTests
 
         var longExchange = new Exchange
         {
-            Id = 1, Name = "Lighter", ApiBaseUrl = "https://lighter.test",
+            Id = 1,
+            Name = "Lighter",
+            ApiBaseUrl = "https://lighter.test",
             WsBaseUrl = "wss://lighter.test"
         };
         var shortExchange = new Exchange
         {
-            Id = 2, Name = "Aster", ApiBaseUrl = "https://aster.test",
+            Id = 2,
+            Name = "Aster",
+            ApiBaseUrl = "https://aster.test",
             WsBaseUrl = "wss://aster.test"
         };
         db.Exchanges.Add(longExchange);
