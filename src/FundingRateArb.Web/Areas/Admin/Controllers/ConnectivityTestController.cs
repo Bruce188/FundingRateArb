@@ -55,7 +55,7 @@ public class ConnectivityTestController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> RunTest(string userId, int exchangeId)
+    public async Task<IActionResult> RunTest(string userId, int exchangeId, bool dryRun = true)
     {
         if (string.IsNullOrEmpty(userId))
         {
@@ -83,7 +83,7 @@ public class ConnectivityTestController : Controller
         }
 
         var result = await _connectivityTestService.RunTestAsync(
-            adminUserId, userId, exchangeId, HttpContext.RequestAborted);
+            adminUserId, userId, exchangeId, dryRun, HttpContext.RequestAborted);
 
         return Json(result);
     }

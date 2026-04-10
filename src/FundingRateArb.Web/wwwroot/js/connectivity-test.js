@@ -130,12 +130,23 @@
 
         if (!userId) return Promise.resolve();
 
+        var dryRunInput = document.getElementById("dryRunInput");
+        var dryRunValue = dryRunInput ? dryRunInput.value : "true";
+
+        if (dryRunValue === "false") {
+            var confirmed = window.confirm(
+                "This will place a real $10 order on mainnet using your API credentials.\nProceed?"
+            );
+            if (!confirmed) return Promise.resolve();
+        }
+
         setButtonState(btn, "running");
         appendLog(exchangeName, "Starting connectivity test...", "color: #64b5f6;");
 
         var formData = new FormData();
         formData.append("userId", userId);
         formData.append("exchangeId", exchangeId);
+        formData.append("dryRun", dryRunValue);
         formData.append("__RequestVerificationToken", getAntiForgeryToken());
 
         return fetch("/Admin/ConnectivityTest/RunTest", {
@@ -146,13 +157,23 @@
             if (!res.ok) throw new Error("Server returned " + res.status);
             return res.json();
         })
-        .then(function (result) {
-            if (result.success) {
+        .then(function (data) {
+            var badge = document.getElementById("modeBadge");
+            if (badge && data.mode) {
+                if (data.mode === "DryRun") {
+                    badge.textContent = "DRY RUN";
+                    badge.className = "badge bg-success ms-2";
+                } else if (data.mode === "LiveTrade") {
+                    badge.textContent = "LIVE TEST";
+                    badge.className = "badge bg-warning text-dark ms-2";
+                }
+            }
+            if (data.success) {
                 setButtonState(btn, "pass");
                 appendLog(exchangeName, "TEST PASSED", "color: #4caf50; font-weight: bold;");
             } else {
                 setButtonState(btn, "fail");
-                appendLog(exchangeName, "TEST FAILED: " + (result.error || "Unknown error"), "color: #f44336; font-weight: bold;");
+                appendLog(exchangeName, "TEST FAILED: " + (data.error || "Unknown error"), "color: #f44336; font-weight: bold;");
             }
         })
         .catch(function (err) {
