@@ -14,31 +14,33 @@ test('availability: probe / and /healthz every 60s for 15 minutes', async () => 
 
   const ctx = await request.newContext({ baseURL: BASE_URL });
 
-  for (let i = 1; i <= PROBE_COUNT; i++) {
-    for (const path of ['/', '/healthz']) {
-      const start = Date.now();
-      const response = await ctx.get(path);
-      const elapsed = Date.now() - start;
+  try {
+    for (let i = 1; i <= PROBE_COUNT; i++) {
+      for (const path of ['/', '/healthz']) {
+        const start = Date.now();
+        const response = await ctx.get(path);
+        const elapsed = Date.now() - start;
 
-      expect(
-        response.status(),
-        `Iteration ${i}, ${path}: expected 2xx, got ${response.status()} after ${elapsed}ms`
-      ).toBeGreaterThanOrEqual(200);
-      expect(
-        response.status(),
-        `Iteration ${i}, ${path}: expected 2xx, got ${response.status()} after ${elapsed}ms`
-      ).toBeLessThan(300);
+        expect(
+          response.status(),
+          `Iteration ${i}, ${path}: expected 2xx, got ${response.status()} after ${elapsed}ms`
+        ).toBeGreaterThanOrEqual(200);
+        expect(
+          response.status(),
+          `Iteration ${i}, ${path}: expected 2xx, got ${response.status()} after ${elapsed}ms`
+        ).toBeLessThan(300);
 
-      expect(
-        elapsed,
-        `Iteration ${i}, ${path}: response time ${elapsed}ms exceeded ${MAX_RESPONSE_MS}ms`
-      ).toBeLessThan(MAX_RESPONSE_MS);
+        expect(
+          elapsed,
+          `Iteration ${i}, ${path}: response time ${elapsed}ms exceeded ${MAX_RESPONSE_MS}ms`
+        ).toBeLessThan(MAX_RESPONSE_MS);
+      }
+
+      if (i < PROBE_COUNT) {
+        await new Promise((resolve) => setTimeout(resolve, PROBE_INTERVAL_MS));
+      }
     }
-
-    if (i < PROBE_COUNT) {
-      await new Promise((resolve) => setTimeout(resolve, PROBE_INTERVAL_MS));
-    }
+  } finally {
+    await ctx.dispose();
   }
-
-  await ctx.dispose();
 });
