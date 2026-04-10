@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -32,6 +33,9 @@ public class DashboardControllerTests
     private readonly Mock<IBotControl> _mockBotControl;
     private readonly Mock<IUserSettingsService> _mockUserSettings;
     private readonly Mock<ICircuitBreakerManager> _mockCircuitBreaker;
+    private readonly Mock<IServiceScopeFactory> _mockScopeFactory;
+    private readonly Mock<IServiceScope> _mockScope;
+    private readonly Mock<IServiceProvider> _mockScopeProvider;
     private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
@@ -83,7 +87,16 @@ public class DashboardControllerTests
 
         _cache = new MemoryCache(new MemoryCacheOptions());
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object);
+        _mockScopeFactory = new Mock<IServiceScopeFactory>();
+        _mockScope = new Mock<IServiceScope>();
+        _mockScopeProvider = new Mock<IServiceProvider>();
+
+        _mockScopeProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(_mockUow.Object);
+        _mockScopeProvider.Setup(p => p.GetService(typeof(IUserSettingsService))).Returns(_mockUserSettings.Object);
+        _mockScope.Setup(s => s.ServiceProvider).Returns(_mockScopeProvider.Object);
+        _mockScopeFactory.Setup(f => f.CreateScope()).Returns(_mockScope.Object);
+
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -823,5 +836,21 @@ public class DashboardControllerTests
         var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
         model.DatabaseAvailable.Should().BeFalse(
             "the controller must surface the degraded signal to the view");
+    }
+
+    // ── Authenticated opportunity caching ────────────────────────────────
+
+    [Fact]
+    public async Task Index_Authenticated_CachesOpportunities_WithinTTL()
+    {
+        // First call
+        await _controller.Index();
+        // Second call (within 5s TTL)
+        await _controller.Index();
+
+        _mockSignalEngine.Verify(
+            s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Opportunities should be cached on second call within TTL");
     }
 }
