@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Http.Resilience;
 using Polly;
 using Polly.CircuitBreaker;
@@ -146,6 +147,20 @@ try
                 maxRetryDelay: TimeSpan.FromSeconds(30),
                 errorNumbersToAdd: SqlTransientErrorNumbers.All)),
         lifetime: ServiceLifetime.Scoped);
+
+    // Retry-less factory for DatabaseHealthCheck — no EnableRetryOnFailure.
+    builder.Services.AddKeyedSingleton<IDbContextFactory<AppDbContext>>(
+        "health-check",
+        (sp, _) =>
+        {
+            var connStr = builder.Configuration.GetConnectionString("DefaultConnection")
+                ?? throw new InvalidOperationException(
+                    "Connection string 'DefaultConnection' is not configured.");
+            var options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseSqlServer(connStr)
+                .Options;
+            return new PooledDbContextFactory<AppDbContext>(options);
+        });
 
     // --- Identity ---
     builder.Services.AddDefaultIdentity<ApplicationUser>(options =>

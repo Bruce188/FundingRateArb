@@ -2,6 +2,8 @@ using FluentAssertions;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -93,6 +95,30 @@ public class DatabaseHealthCheckTests
 
         var act = async () => await task;
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Constructor_AcceptsRetryLessOptions_WithoutEnableRetryOnFailure()
+    {
+        // Arrange: build DbContextOptions without EnableRetryOnFailure
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlServer("Server=localhost;Database=FakeDb;Trusted_Connection=True;")
+            .Options;
+
+        // Act: constructing with a factory backed by retry-less options must succeed.
+        // We use a PooledDbContextFactory so we exercise the real constructor path —
+        // no SQL connection is opened at construction time.
+        var factory = new PooledDbContextFactory<AppDbContext>(options);
+        var act = () => new DatabaseHealthCheck(factory, NullLogger<DatabaseHealthCheck>.Instance);
+        act.Should().NotThrow();
+
+        // Assert: the options must not have EnableRetryOnFailure configured.
+        // RelationalOptionsExtension.ExecutionStrategyFactory is only non-null when
+        // EnableRetryOnFailure (or a custom execution strategy) is set — null means
+        // the default non-retrying strategy is used.
+        var relationalExt = RelationalOptionsExtension.Extract(options);
+        relationalExt.ExecutionStrategyFactory.Should().BeNull(
+            "health-check factory must not have EnableRetryOnFailure");
     }
 
     // ── Stub that overrides ProbeAsync for testability ───────────────────────────

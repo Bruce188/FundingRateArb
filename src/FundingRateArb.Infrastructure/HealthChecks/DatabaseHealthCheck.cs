@@ -1,5 +1,6 @@
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 
@@ -19,7 +20,7 @@ public class DatabaseHealthCheck : IHealthCheck
     private readonly ILogger<DatabaseHealthCheck> _logger;
 
     public DatabaseHealthCheck(
-        IDbContextFactory<AppDbContext> factory,
+        [FromKeyedServices("health-check")] IDbContextFactory<AppDbContext> factory,
         ILogger<DatabaseHealthCheck> logger)
     {
         _factory = factory;
