@@ -190,9 +190,10 @@ public class PnlReconciliationServiceTests
     }
 
     [Fact]
-    public async Task Reconcile_WhenOnlyOneLegReportsData_UsesAvailableData()
+    public async Task Reconcile_WhenOnlyOneLegReportsPnl_StoresPartialButSkipsDivergence()
     {
-        // Long connector returns PnL, short returns null → uses partial data
+        // Long connector returns PnL, short returns null (e.g. Lighter)
+        // Partial PnL stored for debugging, but divergence NOT computed
         var position = CreatePosition(realizedPnl: 10m);
         SetupConnectorPnl(_mockLongConnector, 7m);
         SetupConnectorPnl(_mockShortConnector, null);
@@ -201,10 +202,44 @@ public class PnlReconciliationServiceTests
 
         await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
 
-        // Partial data: only long leg's PnL available (null treated as 0)
-        position.ExchangeReportedPnl.Should().Be(7m);
-        position.ExchangeReportedFunding.Should().Be(3m);
+        position.ExchangeReportedPnl.Should().Be(7m, "partial PnL stored for debugging");
+        position.PnlDivergence.Should().BeNull("divergence requires both legs");
+        position.ExchangeReportedFunding.Should().BeNull("funding requires both legs");
         position.ReconciledAt.Should().NotBeNull();
+        _capturedAlerts.Should().BeEmpty("no divergence alert for partial data");
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenBothLegsReportPnl_ComputesDivergenceNormally()
+    {
+        // Both legs report → divergence computed as before
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 4m);
+        SetupConnectorFunding(_mockLongConnector, 2m);
+        SetupConnectorFunding(_mockShortConnector, 1.5m);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedPnl.Should().Be(9m);
+        position.PnlDivergence.Should().NotBeNull("both legs reported → divergence computed");
+        position.ExchangeReportedFunding.Should().Be(3.5m);
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenOnlyOneLegReportsFunding_StoresNullFunding()
+    {
+        // Both legs report PnL but only one reports funding
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, 3m);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedPnl.Should().Be(10m);
+        position.ExchangeReportedFunding.Should().BeNull("funding requires both legs to report");
     }
 
     // ── B5: Null/empty symbol handling (N2 changed signature to accept assetSymbol) ──

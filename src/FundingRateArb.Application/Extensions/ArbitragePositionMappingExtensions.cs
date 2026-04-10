@@ -1,5 +1,6 @@
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Application.Extensions;
 
@@ -19,10 +20,11 @@ public static class ArbitragePositionMappingExtensions
             EntrySpreadPerHour = pos.EntrySpreadPerHour,
             CurrentSpreadPerHour = pos.CurrentSpreadPerHour,
             AccumulatedFunding = pos.AccumulatedFunding,
-            // PnL values are computed live in the health monitor loop and set by the caller
+            // For open positions: PnL is computed live by the health monitor and overridden by the caller.
+            // For closed positions: use RealizedPnl as the final settled value (no live mark price).
             UnrealizedPnl = 0m,
-            ExchangePnl = 0m,
-            UnifiedPnl = 0m,
+            ExchangePnl = IsClosedStatus(pos.Status) ? pos.RealizedPnl ?? 0m : 0m,
+            UnifiedPnl = IsClosedStatus(pos.Status) ? pos.RealizedPnl ?? 0m : 0m,
             DivergencePct = pos.CurrentDivergencePct ?? 0m,
             RealizedPnl = pos.RealizedPnl,
             Status = pos.Status,
@@ -64,6 +66,9 @@ public static class ArbitragePositionMappingExtensions
             IsDryRun = pos.IsDryRun,
         };
     }
+
+    private static bool IsClosedStatus(PositionStatus status) =>
+        status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated;
 
     /// <summary>
     /// Returns the three-component PnL decomposition for a closed position per

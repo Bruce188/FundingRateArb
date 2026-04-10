@@ -200,6 +200,74 @@ public class ArbitragePositionMappingExtensionsTests
         dto.SizeUsdc.Should().Be(2000m);
     }
 
+    // ── Closed-position PnL display in summary DTO ──
+
+    [Fact]
+    public void ToSummaryDto_ClosedPosition_PopulatesPnlFromRealizedPnl()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Closed;
+        pos.RealizedPnl = -0.1047m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(-0.1047m);
+        dto.ExchangePnl.Should().Be(-0.1047m);
+        dto.UnrealizedPnl.Should().Be(0m, "unrealized is always 0 for closed positions");
+    }
+
+    [Fact]
+    public void ToSummaryDto_EmergencyClosedPosition_PopulatesPnlFromRealizedPnl()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.EmergencyClosed;
+        pos.RealizedPnl = -5.25m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(-5.25m);
+        dto.ExchangePnl.Should().Be(-5.25m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_ClosedPositionWithNullRealizedPnl_DefaultsToZero()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Closed;
+        pos.RealizedPnl = null;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(0m);
+        dto.ExchangePnl.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_OpenPositionWithRealizedPnl_PnlFieldsStayZero()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Open;
+        pos.RealizedPnl = 25m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(0m, "open positions get PnL from health monitor, not RealizedPnl");
+        dto.ExchangePnl.Should().Be(0m);
+    }
+
+    [Fact]
+    public void ToSummaryDto_LiquidatedPosition_PopulatesPnlFromRealizedPnl()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Liquidated;
+        pos.RealizedPnl = -100m;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(-100m);
+        dto.ExchangePnl.Should().Be(-100m);
+    }
+
     // ── Closed-position three-view PnL decomposition (Section 4.3.3) ──
 
     [Fact]
