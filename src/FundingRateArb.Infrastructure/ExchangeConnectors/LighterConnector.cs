@@ -606,6 +606,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             .ToDictionary(s => s.Symbol, s => s.DailyQuoteTokenVolume)
             ?? new Dictionary<string, decimal>();
 
+        var now = DateTime.UtcNow;
+        var nextSettlement = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+
         // The endpoint returns rates for all reference exchanges; keep only Lighter's own rates
         return allRates
             .Where(r => r.Exchange.Equals("lighter", StringComparison.OrdinalIgnoreCase))
@@ -617,6 +620,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 RatePerHour = r.Rate / 8m,
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
                 MarkPrice = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
+                NextSettlementUtc = nextSettlement,
             }).ToList();
     }
 
