@@ -268,6 +268,24 @@ public class ArbitragePositionMappingExtensionsTests
         dto.ExchangePnl.Should().Be(-100m);
     }
 
+    [Theory]
+    [InlineData(PositionStatus.Opening)]
+    [InlineData(PositionStatus.Closing)]
+    [InlineData(PositionStatus.Failed)]
+    public void ToSummaryDto_NonTerminalStatuses_PnlFieldsStayZero(PositionStatus status)
+    {
+        // Transitional/failed statuses must NOT inherit RealizedPnl — they have no
+        // settled PnL yet. Only Closed/EmergencyClosed/Liquidated are terminal.
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = status;
+        pos.RealizedPnl = 50m; // should be ignored for non-terminal
+
+        var dto = pos.ToSummaryDto();
+
+        dto.UnifiedPnl.Should().Be(0m);
+        dto.ExchangePnl.Should().Be(0m);
+    }
+
     // ── Closed-position three-view PnL decomposition (Section 4.3.3) ──
 
     [Fact]

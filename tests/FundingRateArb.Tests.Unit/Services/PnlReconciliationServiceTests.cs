@@ -242,6 +242,57 @@ public class PnlReconciliationServiceTests
         position.ExchangeReportedFunding.Should().BeNull("funding requires both legs to report");
     }
 
+    [Fact]
+    public async Task Reconcile_WhenOnlyShortLegReportsPnl_StoresPartialButSkipsDivergence()
+    {
+        // Mirror of Reconcile_WhenOnlyOneLegReportsPnl: short reports, long null
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, null);
+        SetupConnectorPnl(_mockShortConnector, 4m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, 2m);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedPnl.Should().Be(4m);
+        position.PnlDivergence.Should().BeNull();
+        position.ExchangeReportedFunding.Should().BeNull();
+        _capturedAlerts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenOnlyLongLegReportsFunding_StoresNullFunding()
+    {
+        // Mirror of Reconcile_WhenOnlyOneLegReportsFunding: long reports, short null
+        var position = CreatePosition(realizedPnl: 10m);
+        SetupConnectorPnl(_mockLongConnector, 5m);
+        SetupConnectorPnl(_mockShortConnector, 5m);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, 3m);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.ExchangeReportedFunding.Should().BeNull("funding requires both legs to report");
+    }
+
+    [Fact]
+    public async Task Reconcile_WhenPriorDivergenceExists_ClearsOnPartialReconciliation()
+    {
+        // Regression guard: if a position has a stale PnlDivergence from a prior
+        // reconciliation, a subsequent partial-data reconciliation must clear it.
+        var position = CreatePosition(realizedPnl: 10m);
+        position.PnlDivergence = 15m; // stale value from a prior run
+        SetupConnectorPnl(_mockLongConnector, 7m);
+        SetupConnectorPnl(_mockShortConnector, null);
+        SetupConnectorFunding(_mockLongConnector, null);
+        SetupConnectorFunding(_mockShortConnector, null);
+
+        await _sut.ReconcileAsync(position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        position.PnlDivergence.Should().BeNull("stale divergence must be cleared when data is partial");
+        position.ExchangeReportedPnl.Should().Be(7m);
+    }
+
     // ── B5: Null/empty symbol handling (N2 changed signature to accept assetSymbol) ──
 
     [Fact]

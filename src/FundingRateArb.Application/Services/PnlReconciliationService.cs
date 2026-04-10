@@ -62,6 +62,9 @@ public class PnlReconciliationService : IPnlReconciliationService
         else if (longPnl.HasValue || shortPnl.HasValue)
         {
             position.ExchangeReportedPnl = (longPnl ?? 0m) + (shortPnl ?? 0m);
+            // Clear any stale divergence from a prior reconciliation — partial data
+            // cannot produce a meaningful divergence percentage.
+            position.PnlDivergence = null;
             _logger.LogDebug(
                 "Skipping PnL divergence for position #{PositionId} ({Asset}): " +
                 "one leg returned null (long={LongHasValue}, short={ShortHasValue})",
