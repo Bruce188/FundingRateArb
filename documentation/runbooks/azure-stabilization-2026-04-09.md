@@ -238,19 +238,43 @@ Capture the output and file a follow-up fix based on the native frame. Typical s
 - `LeverageTierRefresher` or `CoinGlassScreeningService` HttpClient interop
 - Application Insights Snapshot Debugger (which Step 2 should have disabled — if the crash recurs WITH Step 2 applied, the Snapshot Debugger is cleared as a suspect)
 
-## Step 7 — Run Playwright availability test against production
+## Step 7 — Run Playwright specs against production
 
-After the rest of the runbook is complete and the app is stable, run the long-duration availability check:
+After the rest of the runbook is complete and the app is stable, run the Playwright specs.
+
+### Pre-conditions
+
+Set these environment variables before running the Playwright specs:
+
+| Variable | Purpose | Required by |
+|----------|---------|-------------|
+| `E2E_AZURE_BASE_URL` | Target Azure URL (`https://fundingratearb.azurewebsites.net`) | All three specs |
+| `E2E_ADMIN_EMAIL` | Admin login email (default: `admin@fundingratearb.com`) | Specs 2, 3 |
+| `E2E_ADMIN_PASSWORD` | Admin login password | Specs 2, 3 |
+| `E2E_DIAGNOSTICS_KEY` | `X-Diagnostics-Key` header value for admin API calls | Specs 2, 3 |
 
 ```bash
 E2E_AZURE_BASE_URL=https://fundingratearb.azurewebsites.net \
+E2E_ADMIN_EMAIL=admin@fundingratearb.com \
+E2E_ADMIN_PASSWORD=<password-from-keyvault> \
+E2E_DIAGNOSTICS_KEY=<key-from-keyvault> \
     npx playwright test \
-        tests/FundingRateArb.Tests.E2E/availability-after-deploy.spec.ts
+        tests/FundingRateArb.Tests.E2E/availability-after-deploy.spec.ts \
+        tests/FundingRateArb.Tests.E2E/positions-page-reconciliation.spec.ts \
+        tests/FundingRateArb.Tests.E2E/dashboard-degraded-on-db-outage.spec.ts
 ```
 
-Pass criteria: 15 successful probes on `/` and `/healthz`, no response > 30 s, zero non-2xx.
+### Dependencies (missing admin endpoints)
 
-If the test file does not exist yet, it is a deferred item from plan-v60 Task 9.2 (see "Deferred work" below).
+Two specs depend on admin endpoints that are not yet implemented:
+
+- **`positions-page-reconciliation.spec.ts`** requires `POST /api/diagnostics/actions` with body `{ "action": "seed_phantom_position" }`. Until this action is added to `src/FundingRateArb.Web/Controllers/DiagnosticsController.cs`, the spec will skip itself gracefully (HTTP 404 triggers `test.skip`).
+
+- **`dashboard-degraded-on-db-outage.spec.ts`** requires `POST /api/diagnostics/actions` with body `{ "action": "toggle_db_outage" }`. Same controller, same graceful-skip behavior on 404.
+
+Implement both actions in `DiagnosticsController` and update the TODO comments in the spec files when the endpoints are ready.
+
+Pass criteria: all three specs complete without failures. The availability spec requires 15 successful probes on `/` and `/healthz`, no response > 30 s, zero non-2xx. The reconciliation and degraded-banner specs require the missing endpoints to be implemented first.
 
 ## Step 8 — Bisect PR #122 if Steps 1-4 do not stabilize
 
