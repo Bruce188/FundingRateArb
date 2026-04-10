@@ -2,6 +2,7 @@ using FluentAssertions;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.HealthChecks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -93,6 +94,22 @@ public class DatabaseHealthCheckTests
 
         var act = async () => await task;
         await act.Should().ThrowAsync<OperationCanceledException>();
+    }
+
+    [Fact]
+    public void Constructor_AcceptsRetryLessOptions_DoesNotThrow()
+    {
+        // Arrange: build DbContextOptions without EnableRetryOnFailure
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlServer("Server=localhost;Database=FakeDb;Trusted_Connection=True;")
+            .Options;
+
+        // Act & Assert: constructing with a factory backed by retry-less options must succeed.
+        // We use a PooledDbContextFactory so we exercise the real constructor path —
+        // no SQL connection is opened at construction time.
+        var factory = new PooledDbContextFactory<AppDbContext>(options);
+        var act = () => new DatabaseHealthCheck(factory, NullLogger<DatabaseHealthCheck>.Instance);
+        act.Should().NotThrow();
     }
 
     // ── Stub that overrides ProbeAsync for testability ───────────────────────────
