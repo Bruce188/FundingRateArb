@@ -108,3 +108,16 @@ public interface IPositionVerifiable
         CancellationToken ct = default)
         => Task.FromResult<bool?>(null);
 }
+
+/// <summary>
+/// Implemented by connectors that support setting an expected fill quantity
+/// to improve position verification when baseline size matches current size.
+/// </summary>
+public interface IExpectedFillAware
+{
+    /// <summary>Sets the expected fill quantity before verification.</summary>
+    void SetExpectedFillQuantity(decimal quantity);
+
+    /// <summary>Clears the expected fill quantity after verification completes.</summary>
+    void ClearExpectedFillQuantity();
+}

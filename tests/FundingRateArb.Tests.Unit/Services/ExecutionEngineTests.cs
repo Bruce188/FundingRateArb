@@ -3563,4 +3563,74 @@ public class ExecutionEngineTests
                 It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    // ── Reconciliation logging after verification failure ──────────────
+
+    [Fact]
+    public async Task VerificationFailed_ReconciliationDetectsMismatch_LogsWarning()
+    {
+        // Short connector is estimated fill + verifiable, verification fails but HasOpenPositionAsync returns true
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        // Reconciliation check returns true — position exists despite verification failure
+        mockVerifiableShort
+            .Setup(c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        // Verify HasOpenPositionAsync was called for reconciliation
+        mockVerifiableShort.Verify(
+            c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce,
+            "Reconciliation should call HasOpenPositionAsync when verification fails");
+    }
+
+    [Fact]
+    public async Task VerificationFailed_ReconciliationConfirmsAbsent_NoWarning()
+    {
+        // Short connector is estimated fill + verifiable, verification fails and HasOpenPositionAsync returns false
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        // Reconciliation check returns false — position truly absent
+        mockVerifiableShort
+            .Setup(c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        // Verify HasOpenPositionAsync was still called (for the reconciliation check)
+        mockVerifiableShort.Verify(
+            c => c.HasOpenPositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()),
+            Times.AtLeastOnce,
+            "Reconciliation should call HasOpenPositionAsync even when position is absent");
+    }
 }

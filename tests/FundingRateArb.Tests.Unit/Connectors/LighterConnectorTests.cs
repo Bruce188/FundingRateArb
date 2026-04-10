@@ -2,6 +2,7 @@ using System.Net;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Infrastructure.ExchangeConnectors.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1873,6 +1874,178 @@ public class LighterConnectorTests
         var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline: null);
 
         result.Should().BeTrue("null baseline falls back to legacy behavior — any match returns true");
+    }
+
+    // ── TryMatchPosition direct tests (internal via InternalsVisibleTo) ──────────
+
+    [Fact]
+    public async Task VerifyPosition_MultiplePositions_MatchesCorrectOne()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        // Baseline has BTC Long at 0.01 only; poll adds ETH Long at 0.5
+        var baselineJson = MakeMultiPositionAccountJson(("BTC", 0.01m), ("ETH", null));
+        var pollJson = MakeMultiPositionAccountJson(("BTC", 0.01m), ("ETH", 0.5m));
+
+        var sut = CreateSequentialConnector(new[] { baselineJson, pollJson });
+
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+
+        result.Should().BeTrue("ETH Long was absent from baseline but appeared in poll alongside existing BTC position");
+    }
+
+    [Fact]
+    public void TryMatchPosition_WithExpectedQuantity_SizeEqualsBaseline_ReturnsTrue()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.5000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>
+        {
+            { ("ETH", "Long"), 0.4m }
+        };
+
+        // absSize 0.5 >= baselineSize 0.4 + 0.1 * 0.9 = 0.49 → true
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline, expectedQuantity: 0.1m);
+
+        result.IsNewOrIncreased.Should().BeTrue(
+            "absSize 0.5 >= baseline 0.4 + expectedQty 0.1 * 0.9 = 0.49");
+    }
+
+    [Fact]
+    public void TryMatchPosition_WithExpectedQuantity_BelowThreshold_ReturnsFalse()
+    {
+        // absSize == baselineSize (no change observed), but expectedQty is large
+        // → absSize 0.4 < baselineSize 0.4 + 0.5 * 0.9 = 0.85 → below threshold → false
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.4000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>
+        {
+            { ("ETH", "Long"), 0.4m }
+        };
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline, expectedQuantity: 0.5m);
+
+        result.IsNewOrIncreased.Should().BeFalse(
+            "absSize 0.4 < baseline 0.4 + expectedQty 0.5 * 0.9 = 0.85");
+        result.FoundAtBaseline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryMatchPosition_NoExpectedQuantity_SizeEqualsBaseline_ReturnsFalse()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.5000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>
+        {
+            { ("ETH", "Long"), 0.5m }
+        };
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline);
+
+        result.IsNewOrIncreased.Should().BeFalse(
+            "size equals baseline and no expected quantity — not new or increased");
+        result.FoundAtBaseline.Should().BeTrue();
+    }
+
+    [Fact]
+    public void TryMatchPosition_FreshPair_AnyNonZeroSize_ReturnsTrue()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.1000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>();
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline);
+
+        result.IsNewOrIncreased.Should().BeTrue("fresh pair not in baseline → new");
+    }
+
+    [Fact]
+    public void TryMatchPosition_SizeIncreased_ReturnsTrue()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.8000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>
+        {
+            { ("ETH", "Long"), 0.5m }
+        };
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline);
+
+        result.IsNewOrIncreased.Should().BeTrue("size 0.8 > baseline 0.5 → increased");
+    }
+
+    [Fact]
+    public void TryMatchPosition_WrongSide_DoesNotMatch()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "ETH", Position = "0.5000" } // positive = Long
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>();
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Short, baseline);
+
+        result.IsNewOrIncreased.Should().BeFalse("Long position does not match Short target");
+    }
+
+    [Fact]
+    public void TryMatchPosition_CaseInsensitiveSymbol_StillMatches()
+    {
+        var positions = new List<LighterAccountPosition>
+        {
+            new() { Symbol = "eth", Position = "0.5000" }
+        };
+        var baseline = new Dictionary<(string Symbol, string Side), decimal>();
+
+        var result = LighterConnector.TryMatchPosition(
+            positions, "ETH", Domain.Enums.Side.Long, baseline);
+
+        result.IsNewOrIncreased.Should().BeTrue("symbol matching is case-insensitive");
+    }
+
+    private static string MakeMultiPositionAccountJson(params (string symbol, decimal? size)[] entries)
+    {
+        var positionItems = new List<string>();
+        foreach (var (symbol, size) in entries)
+        {
+            if (size.HasValue && size.Value != 0)
+            {
+                positionItems.Add(
+                    "{\"symbol\":\"" + symbol + "\",\"position\":\"" +
+                    size.Value.ToString("F4", System.Globalization.CultureInfo.InvariantCulture) +
+                    "\",\"margin\":\"10\",\"entry_price\":\"3000\"}");
+            }
+        }
+
+        var positionsJson = "[" + string.Join(",", positionItems) + "]";
+        return
+            "{\n" +
+            "  \"code\": 200,\n" +
+            "  \"total\": 1,\n" +
+            "  \"accounts\": [\n" +
+            "    {\n" +
+            "      \"account_index\": 281474976624240,\n" +
+            "      \"available_balance\": \"100.00\",\n" +
+            "      \"positions\": " + positionsJson + "\n" +
+            "    }\n" +
+            "  ]\n" +
+            "}";
     }
 }
 

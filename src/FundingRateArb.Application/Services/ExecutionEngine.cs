@@ -339,9 +339,36 @@ public class ExecutionEngine : IExecutionEngine
                 // If first leg is estimated fill, verify it actually executed on-chain
                 if (firstResult.IsEstimatedFill && firstConnector is IPositionVerifiable verifiable)
                 {
+                    if (firstConnector is IExpectedFillAware fillAware)
+                    {
+                        fillAware.SetExpectedFillQuantity(firstResult.FilledQuantity);
+                    }
+
                     var verified = await verifiable.VerifyPositionOpenedAsync(opp.AssetSymbol, firstSide, ct);
+
+                    if (firstConnector is IExpectedFillAware fillAwareClear)
+                    {
+                        fillAwareClear.ClearExpectedFillQuantity();
+                    }
+
                     if (!verified)
                     {
+                        // Reconciliation check: query position state to detect false negatives
+                        try
+                        {
+                            var reconciliationCheck = await firstConnector.HasOpenPositionAsync(opp.AssetSymbol, firstSide, ct);
+                            if (reconciliationCheck == true)
+                            {
+                                _logger.LogWarning(
+                                    "RECONCILIATION ALERT: Verification failed but position exists on {Exchange} for {Asset} {Side}. Possible orphaned position.",
+                                    firstExchangeName, opp.AssetSymbol, firstSide);
+                            }
+                        }
+                        catch (Exception reconciliationEx)
+                        {
+                            _logger.LogDebug(reconciliationEx, "Reconciliation check failed for {Asset} on {Exchange}", opp.AssetSymbol, firstExchangeName);
+                        }
+
                         _logger.LogWarning("Position verification failed for {Asset} on {Exchange} — performing final existence check",
                             opp.AssetSymbol, firstExchangeName);
 
