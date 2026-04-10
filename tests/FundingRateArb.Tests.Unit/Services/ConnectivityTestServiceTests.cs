@@ -30,6 +30,7 @@ public class ConnectivityTestServiceTests
     private readonly Mock<ILogger<ConnectivityTestService>> _mockLogger = new();
     private readonly Mock<IExchangeRepository> _mockExchangeRepo = new();
     private readonly Mock<IUserExchangeCredentialRepository> _mockCredentialRepo = new();
+    private readonly Mock<IPositionRepository> _mockPositionRepo = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
     private readonly ConnectivityTestService _sut;
@@ -41,6 +42,11 @@ public class ConnectivityTestServiceTests
 
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchangeRepo.Object);
         _mockUow.Setup(u => u.UserCredentials).Returns(_mockCredentialRepo.Object);
+        // Default: no open positions (active-trade lock should not block)
+        _mockUow.Setup(u => u.Positions).Returns(_mockPositionRepo.Object);
+        _mockPositionRepo
+            .Setup(r => r.GetOpenByUserAsync(It.IsAny<string>()))
+            .ReturnsAsync(new List<ArbitragePosition>());
 
         _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
         _mockHubClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockDashboardClient.Object);
@@ -152,7 +158,7 @@ public class ConnectivityTestServiceTests
         SetupExchangeAndCredential(exchange, credential);
         CreateMockConnector();
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
         result.ExchangeName.Should().Be("Hyperliquid");
@@ -194,7 +200,7 @@ public class ConnectivityTestServiceTests
         SetupExchangeAndCredential(exchange, credential);
         var mockConnector = CreateMockConnector(openSuccess: false, openError: "Insufficient margin");
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeFalse();
         // Error message now surfaces actual exchange error for diagnosis
@@ -234,7 +240,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("STRANDED POSITION");
@@ -356,7 +362,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeFalse();
         result.ExchangeName.Should().Be("Hyperliquid");
@@ -375,11 +381,11 @@ public class ConnectivityTestServiceTests
         CreateMockConnector();
 
         // First call should succeed
-        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         firstResult.Success.Should().BeTrue();
 
         // Second call within cooldown period should be rate-limited
-        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         secondResult.Success.Should().BeFalse();
         secondResult.Error.Should().Contain("Rate limited");
         // NB5: Early cooldown uses "Unknown" since exchange lookup is skipped
@@ -396,12 +402,12 @@ public class ConnectivityTestServiceTests
         CreateMockConnector();
 
         // First admin runs test for target:exchange — should succeed
-        var firstResult = await _sut.RunTestAsync("admin-1", TargetUserId, TestExchangeId);
+        var firstResult = await _sut.RunTestAsync("admin-1", TargetUserId, TestExchangeId, dryRun: false);
         firstResult.Success.Should().BeTrue();
 
         // Second admin runs test for same target:exchange — should be rate-limited
         // because cooldown key is scoped to targetUserId:exchangeId, not adminUserId
-        var secondResult = await _sut.RunTestAsync("admin-2", TargetUserId, TestExchangeId);
+        var secondResult = await _sut.RunTestAsync("admin-2", TargetUserId, TestExchangeId, dryRun: false);
         secondResult.Success.Should().BeFalse();
         secondResult.Error.Should().Contain("Rate limited");
     }
@@ -418,14 +424,14 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync((IExchangeConnector?)null);
 
-        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         firstResult.Success.Should().BeFalse();
         firstResult.Error.Should().Contain("invalid credentials");
 
         // Second call: factory returns valid connector — should proceed (not rate-limited)
         CreateMockConnector();
 
-        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         secondResult.Success.Should().BeTrue("factory failure should not have consumed the cooldown slot");
     }
 
@@ -456,7 +462,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
 
@@ -474,7 +480,7 @@ public class ConnectivityTestServiceTests
         SetupExchangeAndCredential(exchange, credential);
         CreateMockConnector();
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
 
@@ -520,7 +526,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false, cts.Token);
 
         result.Success.Should().BeTrue("close should succeed even after cancellation during settlement");
 
@@ -614,13 +620,13 @@ public class ConnectivityTestServiceTests
         // Simulate concurrent request that left an expired entry
         ConnectivityTestService.SeedCooldown(TargetUserId, TestExchangeId, expiredTime);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue("expired concurrent cooldown entry should be overwritten");
 
         // NB9: Confirm the overwrite populated the cooldown by making a second immediate call
         // (no ClearCooldowns) — it should be rate-limited
-        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var secondResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         secondResult.Success.Should().BeFalse();
         secondResult.Error.Should().Contain("Rate limited");
     }
@@ -652,7 +658,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx"))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
 
@@ -682,7 +688,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockDisposableConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
         mockDisposable.Verify(d => d.Dispose(), Times.Once);
@@ -744,7 +750,7 @@ public class ConnectivityTestServiceTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
             .ReturnsAsync(mockConnector.Object);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, cts.Token);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false, cts.Token);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("STRANDED POSITION");
@@ -763,7 +769,7 @@ public class ConnectivityTestServiceTests
         SetupExchangeAndCredential(exchange, credential);
         var mockConnector = CreateMockConnector(balance: 7.99m);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue("connectivity itself works, only margin is low");
         result.ExchangeName.Should().Be("Hyperliquid");
@@ -784,7 +790,7 @@ public class ConnectivityTestServiceTests
         SetupExchangeAndCredential(exchange, credential);
         var mockConnector = CreateMockConnector(balance: 10.00m);
 
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         result.Success.Should().BeTrue();
 
@@ -819,7 +825,7 @@ public class ConnectivityTestServiceTests
         lastPurgeField.SetValue(null, 0L);
 
         // RunTestAsync triggers purge check at the start
-        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
         result.Success.Should().BeTrue();
 
         // Verify expired entries were purged: calling RunTestAsync for an expired key
@@ -847,12 +853,199 @@ public class ConnectivityTestServiceTests
         ConnectivityTestService.SeedCooldown("fresh-user-1", 97, freshTime);
         lastPurgeField.SetValue(null, 0L);
 
-        await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
+        await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
 
         // Verify: expired entries removed, fresh entry retained, plus the new entry from RunTestAsync
         cooldowns.ContainsKey("expired-user-1|99").Should().BeFalse("expired entry should be purged");
         cooldowns.ContainsKey("expired-user-2|98").Should().BeFalse("expired entry should be purged");
         cooldowns.ContainsKey("fresh-user-1|97").Should().BeTrue("fresh entry should survive purge");
         cooldowns.ContainsKey($"{TargetUserId}|{TestExchangeId}").Should().BeTrue("current test should add its own cooldown");
+    }
+
+    // ─── Dry-run and active-trade lock tests ─────────────────────────────────────
+
+    private Mock<IExchangeConnector> CreateDryRunConnector(
+        decimal balance = 100m,
+        decimal markPrice = 3000m,
+        bool balanceThrows = false,
+        bool markPriceThrows = false,
+        bool fundingRatesThrows = false)
+    {
+        var mock = new Mock<IExchangeConnector>();
+
+        if (balanceThrows)
+        {
+            mock.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Exception("Auth failure"));
+        }
+        else
+        {
+            mock.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(balance);
+        }
+
+        if (markPriceThrows)
+        {
+            mock.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Exception("Market data unavailable"));
+        }
+        else
+        {
+            mock.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(markPrice);
+        }
+
+        if (fundingRatesThrows)
+        {
+            mock.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new Exception("Funding rate endpoint down"));
+        }
+        else
+        {
+            mock.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new List<FundingRateArb.Application.DTOs.FundingRateDto>());
+        }
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .ReturnsAsync(mock.Object);
+
+        return mock;
+    }
+
+    [Fact]
+    public async Task DryRunMode_DoesNotPlaceRealOrders()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        var mockConnector = CreateDryRunConnector();
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeTrue();
+        result.Mode.Should().Be("DryRun");
+
+        // Read-only methods should each be called once
+        mockConnector.Verify(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()), Times.Once);
+        mockConnector.Verify(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
+        mockConnector.Verify(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()), Times.Once);
+
+        // Trading methods must never be called in dry-run mode
+        mockConnector.Verify(
+            c => c.PlaceMarketOrderAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        mockConnector.Verify(
+            c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task ReadOnlyCheck_ValidatesApiKey_AllSucceed_ReturnsSuccess()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(balance: 250m, markPrice: 3500m);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeTrue();
+        result.Mode.Should().Be("DryRun");
+    }
+
+    [Fact]
+    public async Task ReadOnlyCheck_ValidatesApiKey_BalanceFails_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(balanceThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Mode.Should().Be("DryRun");
+        result.Error.Should().Contain("Balance check failed");
+    }
+
+    [Fact]
+    public async Task ReadOnlyCheck_MarkPriceFails_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(markPriceThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Mode.Should().Be("DryRun");
+        result.Error.Should().Contain("Mark price check failed");
+    }
+
+    [Fact]
+    public async Task ReadOnlyCheck_FundingRateFails_ReturnsFail()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(fundingRatesThrows: true);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Mode.Should().Be("DryRun");
+        result.Error.Should().Contain("Funding rate check failed");
+    }
+
+    [Fact]
+    public async Task ConcurrentLock_PreventsOverlappingTests()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+
+        // Mock an open position for the same (userId, exchangeId) pair
+        var openPosition = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = TargetUserId,
+            LongExchangeId = TestExchangeId,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open
+        };
+        _mockPositionRepo
+            .Setup(r => r.GetOpenByUserAsync(TargetUserId))
+            .ReturnsAsync(new List<ArbitragePosition> { openPosition });
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeFalse();
+        result.Error!.ToLowerInvariant().Should().Contain("open position");
+
+        // No connector methods should be called
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task RealTradeMode_PlacesRealOrders_AndReturnsLiveTradeMode()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        var mockConnector = CreateMockConnector();
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
+
+        result.Mode.Should().Be("LiveTrade");
+
+        // PlaceMarketOrderAsync IS called in live-trade mode
+        mockConnector.Verify(
+            c => c.PlaceMarketOrderAsync("ETH", Side.Long, 10m, 1, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

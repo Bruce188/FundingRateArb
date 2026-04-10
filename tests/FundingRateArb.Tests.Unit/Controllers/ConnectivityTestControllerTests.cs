@@ -98,7 +98,7 @@ public class ConnectivityTestControllerTests
 
         var expectedResult = new ConnectivityTestResult(true, "Hyperliquid");
         _mockConnectivityService
-            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<CancellationToken>()))
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedResult);
 
         var controller = CreateController(CreateAdminUser());
@@ -109,7 +109,7 @@ public class ConnectivityTestControllerTests
         jsonResult.Value.Should().Be(expectedResult);
 
         _mockConnectivityService.Verify(
-            s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<CancellationToken>()),
+            s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -253,7 +253,7 @@ public class ConnectivityTestControllerTests
 
         var expectedResult = new ConnectivityTestResult(true, "Hyperliquid");
         _mockConnectivityService
-            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<CancellationToken>()))
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedResult);
 
         using var cts = new CancellationTokenSource();
@@ -263,7 +263,7 @@ public class ConnectivityTestControllerTests
         var result = await controller.RunTest("user-1", 1);
 
         _mockConnectivityService.Verify(
-            s => s.RunTestAsync("admin-123", "user-1", 1, It.Is<CancellationToken>(t => t == cts.Token)),
+            s => s.RunTestAsync("admin-123", "user-1", 1, It.IsAny<bool>(), It.Is<CancellationToken>(t => t == cts.Token)),
             Times.Once);
     }
 
@@ -309,5 +309,56 @@ public class ConnectivityTestControllerTests
         var jsonResult = result.Should().BeOfType<JsonResult>().Subject;
         var exchangeIds = jsonResult.Value.Should().BeAssignableTo<List<int>>().Subject;
         exchangeIds.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RunTest_ValidAdmin_ForwardsDryRunFlagAndResponseIncludesMode()
+    {
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
+        var expectedResult = new ConnectivityTestResult(true, "Hyperliquid", Mode: "DryRun");
+        _mockConnectivityService
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
+
+        var controller = CreateController(CreateAdminUser());
+
+        // Default dryRun is true
+        var result = await controller.RunTest("user-1", 1, dryRun: true);
+
+        var jsonResult = result.Should().BeOfType<JsonResult>().Subject;
+        var resultValue = jsonResult.Value.Should().BeOfType<ConnectivityTestResult>().Subject;
+        resultValue.Mode.Should().Be("DryRun");
+
+        _mockConnectivityService.Verify(
+            s => s.RunTestAsync("admin-123", "user-1", 1, true, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task RunTest_ValidAdmin_ForwardsDryRunFalseFlag()
+    {
+        var targetUser = new ApplicationUser { Id = "user-1", UserName = "testuser" };
+        _mockUserManager
+            .Setup(m => m.FindByIdAsync("user-1"))
+            .ReturnsAsync(targetUser);
+
+        var expectedResult = new ConnectivityTestResult(true, "Hyperliquid", Mode: "LiveTrade");
+        _mockConnectivityService
+            .Setup(s => s.RunTestAsync("admin-123", "user-1", 1, false, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expectedResult);
+
+        var controller = CreateController(CreateAdminUser());
+
+        var result = await controller.RunTest("user-1", 1, dryRun: false);
+
+        result.Should().BeOfType<JsonResult>();
+
+        _mockConnectivityService.Verify(
+            s => s.RunTestAsync("admin-123", "user-1", 1, false, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

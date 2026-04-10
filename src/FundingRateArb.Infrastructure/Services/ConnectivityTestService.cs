@@ -51,7 +51,7 @@ public class ConnectivityTestService : IConnectivityTestService
     }
 
     public async Task<ConnectivityTestResult> RunTestAsync(
-        string adminUserId, string targetUserId, int exchangeId, CancellationToken ct = default)
+        string adminUserId, string targetUserId, int exchangeId, bool dryRun = true, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(adminUserId);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetUserId);
@@ -81,7 +81,8 @@ public class ConnectivityTestService : IConnectivityTestService
             {
                 var remaining = CooldownPeriod - (now - lastRun);
                 return new ConnectivityTestResult(false, "Unknown",
-                    $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+                    $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange",
+                    Mode: dryRun ? "DryRun" : "LiveTrade");
             }
 
             // Lazy eviction: remove expired entry
@@ -94,10 +95,12 @@ public class ConnectivityTestService : IConnectivityTestService
 
         if (exchange is null)
         {
-            return new ConnectivityTestResult(false, "Unknown", "Exchange not found");
+            return new ConnectivityTestResult(false, "Unknown", "Exchange not found",
+                Mode: dryRun ? "DryRun" : "LiveTrade");
         }
 
         var exchangeName = exchange.Name;
+        var mode = dryRun ? "DryRun" : "LiveTrade";
 
         async Task Log(string msg)
         {
@@ -111,14 +114,28 @@ public class ConnectivityTestService : IConnectivityTestService
             if (exchange.IsDataOnly)
             {
                 await Log("Skipped: data-only exchange, no trading support");
-                return new ConnectivityTestResult(false, exchangeName, "Data-only exchange, no trading support");
+                return new ConnectivityTestResult(false, exchangeName, "Data-only exchange, no trading support", Mode: mode);
             }
 
             // Check credentials
             if (credential is null || !credential.IsActive)
             {
                 await Log("No active credentials found for this user/exchange combination");
-                return new ConnectivityTestResult(false, exchangeName, "No active credentials found");
+                return new ConnectivityTestResult(false, exchangeName, "No active credentials found", Mode: mode);
+            }
+
+            // Active-trade lock: block connectivity test if the bot has an open position
+            // on the same (userId, exchangeId) pair to prevent interfering with live trades.
+            var openPositions = await _uow.Positions.GetOpenByUserAsync(targetUserId);
+            var hasOpenPosition = openPositions.Any(p =>
+                p.LongExchangeId == exchangeId || p.ShortExchangeId == exchangeId);
+
+            if (hasOpenPosition)
+            {
+                await Log("Cannot run connectivity test: bot has an open position on this exchange. Try again after the position is closed.");
+                return new ConnectivityTestResult(false, exchangeName,
+                    "Cannot run connectivity test: bot has an open position on this exchange. Try again after the position is closed.",
+                    Mode: mode);
             }
 
             await Log("Decrypting credentials...");
@@ -133,7 +150,8 @@ public class ConnectivityTestService : IConnectivityTestService
                 {
                     var remaining = CooldownPeriod - (now - existingTs);
                     return new ConnectivityTestResult(false, exchangeName,
-                        $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange");
+                        $"Rate limited — wait {(int)remaining.TotalSeconds}s before retesting this exchange",
+                        Mode: mode);
                 }
 
                 // Expired entry from concurrent path — overwrite
@@ -155,93 +173,19 @@ public class ConnectivityTestService : IConnectivityTestService
                 // Remove cooldown entry so a failed factory call doesn't consume the slot
                 Cooldowns.TryRemove(cooldownKey, out _);
                 await Log("Failed to create connector - invalid credentials");
-                return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials");
+                return new ConnectivityTestResult(false, exchangeName, "Failed to create connector - invalid credentials", Mode: mode);
             }
 
             try
             {
-
-                // Step 1 - Balance check
-                const decimal testSizeUsdc = 10m;
-                await Log("Step 1: Checking available balance...");
-                decimal balance;
-                try
+                if (dryRun)
                 {
-                    balance = await connector.GetAvailableBalanceAsync(ct);
-                    _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
-                    await Log($"Balance: ${balance:F2} USDC");
+                    return await RunDryRunPathAsync(connector, exchangeName, mode, Log, ct);
                 }
-                catch (Exception ex)
+                else
                 {
-                    _logger.LogError(ex, "Balance check failed for {Exchange}", exchangeName);
-                    var msg = $"Balance check failed: {Truncate(ex.Message)}";
-                    await Log(msg);
-                    return new ConnectivityTestResult(false, exchangeName, msg);
+                    return await RunLiveTradePathAsync(connector, exchangeName, mode, Log, ct);
                 }
-
-                if (balance < testSizeUsdc)
-                {
-                    var skipMsg = $"Skipping trade test — available balance ${balance:F2} below required ${testSizeUsdc:F2}";
-                    await Log(skipMsg);
-                    return new ConnectivityTestResult(true, exchangeName, $"API connectivity OK (${balance:F2} USDC), trade test skipped (below ${testSizeUsdc:F2} minimum)");
-                }
-
-                // Step 2 - Open position
-                await Log($"Step 2: Opening ${testSizeUsdc} ETH Long 1x position...");
-                var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, testSizeUsdc, 1, ct);
-                if (!openResult.Success)
-                {
-                    _logger.LogWarning("Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
-                    var openMsg = $"Open failed: {Truncate(openResult.Error)}";
-                    await Log(openMsg);
-                    return new ConnectivityTestResult(false, exchangeName, openMsg);
-                }
-                _logger.LogDebug("Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
-                    exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
-                await Log("Open SUCCESS");
-
-                // Settlement uses the caller's token for early cancellation (caught below),
-                // while close always uses CancellationToken.None to prevent request cancellation
-                // (e.g., browser navigation) from stranding an open position.
-
-                // Step 3 - Wait for settlement
-                await Log("Step 3: Waiting for settlement (5s)...");
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(5), ct);
-                }
-                catch (OperationCanceledException)
-                {
-                    _logger.LogWarning("Settlement wait cancelled for {Exchange} — proceeding to close", exchangeName);
-                    await Log("Settlement wait cancelled — proceeding to close position...");
-                }
-
-                // Step 4 - Close position (with retry on failure)
-                // Uses CancellationToken.None to ensure close is always attempted after open
-                await Log("Step 4: Closing position...");
-                var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
-                if (!closeResult.Success)
-                {
-                    _logger.LogWarning("Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
-                    await Log($"Close attempt 1 failed: {Truncate(closeResult.Error)} — retrying in 3 seconds...");
-                    await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
-
-                    closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
-                    if (!closeResult.Success)
-                    {
-                        _logger.LogError("Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",
-                            exchangeName, closeResult.Error);
-                        var strandedMsg = $"STRANDED POSITION — close failed: {Truncate(closeResult.Error)}. Manual intervention required!";
-                        await Log(strandedMsg);
-                        return new ConnectivityTestResult(false, exchangeName, strandedMsg);
-                    }
-                }
-                _logger.LogInformation("Close succeeded for {Exchange}: OrderId={OrderId}",
-                    exchangeName, closeResult.OrderId);
-                await Log("Close SUCCESS");
-
-                await Log("PASS - All steps completed successfully");
-                return new ConnectivityTestResult(true, exchangeName, null, null);
             }
             finally
             {
@@ -259,8 +203,156 @@ public class ConnectivityTestService : IConnectivityTestService
         {
             _logger.LogError(ex, "Connectivity test failed for {Exchange}", exchangeName);
             await Log("Unexpected error during connectivity test");
-            return new ConnectivityTestResult(false, exchangeName, "Unexpected error during connectivity test");
+            return new ConnectivityTestResult(false, exchangeName, "Unexpected error during connectivity test", Mode: mode);
         }
+    }
+
+    private async Task<ConnectivityTestResult> RunDryRunPathAsync(
+        IExchangeConnector connector, string exchangeName, string mode,
+        Func<string, Task> log, CancellationToken ct)
+    {
+        // Step 1 — Balance (verifies API auth and account access)
+        await log("[ConnectivityTest] Dry-run Step 1: Checking available balance...");
+        decimal balance;
+        try
+        {
+            balance = await connector.GetAvailableBalanceAsync(ct);
+            _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+            await log($"Balance: ${balance:F2} USDC");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[ConnectivityTest] Balance check failed for {Exchange}", exchangeName);
+            var msg = $"Balance check failed: {Truncate(ex.Message)}";
+            await log(msg);
+            return new ConnectivityTestResult(false, exchangeName, msg, Mode: mode);
+        }
+
+        // Step 2 — Mark price (verifies market data access)
+        await log("[ConnectivityTest] Dry-run Step 2: Fetching ETH mark price...");
+        decimal markPrice;
+        try
+        {
+            markPrice = await connector.GetMarkPriceAsync("ETH", ct);
+            _logger.LogTrace("[ConnectivityTest] [{Exchange}] ETH mark price: ${Price:F2}", exchangeName, markPrice);
+            await log($"ETH mark price: ${markPrice:F2}");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[ConnectivityTest] Mark price fetch failed for {Exchange}", exchangeName);
+            var msg = $"Mark price check failed: {Truncate(ex.Message)}";
+            await log(msg);
+            return new ConnectivityTestResult(false, exchangeName, msg, Mode: mode);
+        }
+
+        // Step 3 — Funding rates (verifies read-only data endpoint)
+        await log("[ConnectivityTest] Dry-run Step 3: Fetching funding rates...");
+        try
+        {
+            var rates = await connector.GetFundingRatesAsync(ct);
+            _logger.LogTrace("[ConnectivityTest] [{Exchange}] Funding rates count: {Count}", exchangeName, rates?.Count ?? 0);
+            await log($"Funding rates: {rates?.Count ?? 0} entries");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[ConnectivityTest] Funding rate fetch failed for {Exchange}", exchangeName);
+            var msg = $"Funding rate check failed: {Truncate(ex.Message)}";
+            await log(msg);
+            return new ConnectivityTestResult(false, exchangeName, msg, Mode: mode);
+        }
+
+        await log("[ConnectivityTest] PASS - Dry-run OK");
+        return new ConnectivityTestResult(true, exchangeName,
+            $"Dry-run OK: balance={balance:F2}, ETH mark={markPrice:F2}", Mode: mode);
+    }
+
+    private async Task<ConnectivityTestResult> RunLiveTradePathAsync(
+        IExchangeConnector connector, string exchangeName, string mode,
+        Func<string, Task> log, CancellationToken ct)
+    {
+        // Step 1 - Balance check
+        const decimal testSizeUsdc = 10m;
+        await log("[ConnectivityTest] Step 1: Checking available balance...");
+        decimal balance;
+        try
+        {
+            balance = await connector.GetAvailableBalanceAsync(ct);
+            _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
+            await log($"[ConnectivityTest] Balance: ${balance:F2} USDC");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[ConnectivityTest] Balance check failed for {Exchange}", exchangeName);
+            var msg = $"Balance check failed: {Truncate(ex.Message)}";
+            await log(msg);
+            return new ConnectivityTestResult(false, exchangeName, msg, Mode: mode);
+        }
+
+        if (balance < testSizeUsdc)
+        {
+            var skipMsg = $"[ConnectivityTest] Skipping trade test — available balance ${balance:F2} below required ${testSizeUsdc:F2}";
+            await log(skipMsg);
+            return new ConnectivityTestResult(true, exchangeName,
+                $"API connectivity OK (${balance:F2} USDC), trade test skipped (below ${testSizeUsdc:F2} minimum)",
+                Mode: mode);
+        }
+
+        // Step 2 - Open position
+        await log($"[ConnectivityTest] Step 2: Opening ${testSizeUsdc} ETH Long 1x position...");
+        var openResult = await connector.PlaceMarketOrderAsync("ETH", Side.Long, testSizeUsdc, 1, ct);
+        if (!openResult.Success)
+        {
+            _logger.LogWarning("[ConnectivityTest] Open failed for {Exchange}: {Error}", exchangeName, openResult.Error);
+            var openMsg = $"[ConnectivityTest] Open failed: {Truncate(openResult.Error)}";
+            await log(openMsg);
+            return new ConnectivityTestResult(false, exchangeName, openMsg, Mode: mode);
+        }
+        _logger.LogDebug("[ConnectivityTest] Open succeeded for {Exchange}: OrderId={OrderId} Price={Price} Qty={Qty}",
+            exchangeName, openResult.OrderId, openResult.FilledPrice, openResult.FilledQuantity);
+        await log("[ConnectivityTest] Open SUCCESS");
+
+        // Settlement uses the caller's token for early cancellation (caught below),
+        // while close always uses CancellationToken.None to prevent request cancellation
+        // (e.g., browser navigation) from stranding an open position.
+
+        // Step 3 - Wait for settlement
+        await log("[ConnectivityTest] Step 3: Waiting for settlement (5s)...");
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(5), ct);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("[ConnectivityTest] Settlement wait cancelled for {Exchange} — proceeding to close", exchangeName);
+            await log("[ConnectivityTest] Settlement wait cancelled — proceeding to close position...");
+        }
+
+        // Step 4 - Close position (with retry on failure)
+        // Uses CancellationToken.None to ensure close is always attempted after open
+        await log("[ConnectivityTest] Step 4: Closing position...");
+        var closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
+        if (!closeResult.Success)
+        {
+            _logger.LogWarning("[ConnectivityTest] Close attempt 1 failed for {Exchange}: {Error}", exchangeName, closeResult.Error);
+            await log($"[ConnectivityTest] Close attempt 1 failed: {Truncate(closeResult.Error)} — retrying in 3 seconds...");
+            await Task.Delay(TimeSpan.FromSeconds(3), CancellationToken.None);
+
+            closeResult = await connector.ClosePositionAsync("ETH", Side.Long, CancellationToken.None);
+            if (!closeResult.Success)
+            {
+                _logger.LogError("[ConnectivityTest] Close attempt 2 failed for {Exchange}: {Error}. STRANDED POSITION.",
+                    exchangeName, closeResult.Error);
+                var strandedMsg = $"[ConnectivityTest] STRANDED POSITION — close failed: {Truncate(closeResult.Error)}. Manual intervention required!";
+                await log(strandedMsg);
+                return new ConnectivityTestResult(false, exchangeName, strandedMsg, Mode: mode);
+            }
+        }
+        _logger.LogInformation("[ConnectivityTest] Close succeeded for {Exchange}: OrderId={OrderId}",
+            exchangeName, closeResult.OrderId);
+        await log("[ConnectivityTest] Close SUCCESS");
+
+        await log("[ConnectivityTest] PASS - All steps completed successfully");
+        return new ConnectivityTestResult(true, exchangeName, null, null, mode);
     }
 
     private static string Truncate(string? s, int max = 500) =>

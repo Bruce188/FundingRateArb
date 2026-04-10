@@ -40,6 +40,35 @@
     </div>
 </div>
 
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white">
+        <i class="bi bi-toggles"></i> Test Mode
+    </div>
+    <div class="card-body">
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="dryRunRadio" id="radioDryRun" value="true" checked
+                       onclick="document.getElementById('dryRunInput').value='true'; document.getElementById('liveTradeWarning').style.display='none';" />
+                <label class="form-check-label" for="radioDryRun">
+                    <i class="bi bi-shield-check text-success"></i> Dry Run <small class="text-muted">(read-only)</small>
+                </label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="dryRunRadio" id="radioLiveTrade" value="false"
+                       onclick="document.getElementById('dryRunInput').value='false'; document.getElementById('liveTradeWarning').style.display='';" />
+                <label class="form-check-label" for="radioLiveTrade">
+                    <i class="bi bi-exclamation-triangle text-warning"></i> Live Trade <small class="text-muted">(real orders)</small>
+                </label>
+            </div>
+        </div>
+        <input type="hidden" id="dryRunInput" value="true" />
+        <div id="liveTradeWarning" class="alert alert-warning mt-3 mb-0" style="display:none;">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <strong>Warning:</strong> Live Trade mode places a real $10 order on mainnet using your API credentials. Use only for diagnostics.
+        </div>
+    </div>
+</div>
+
 <div class="row mb-4" id="exchangeCards">
     @foreach (var exchange in exchanges)
     {
@@ -65,7 +94,7 @@
 
 <div class="card shadow-sm">
     <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-terminal"></i> Log Output</span>
+        <span><i class="bi bi-terminal"></i> Log Output <span id="modeBadge" class="badge ms-2"></span></span>
         <button id="btnClearLog" class="btn btn-sm btn-outline-light">
             <i class="bi bi-trash"></i> Clear
         </button>
