@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using Aster.Net.Interfaces.Clients;
@@ -1586,5 +1587,92 @@ public class AsterConnectorTests
         var second = await sut.GetSymbolConstraintsAsync("WLFIUSDT");
 
         second.MaxNotionalValue.Should().Be(750_000m, "refresh failed — cached value must survive");
+    }
+
+    // ── NT2: Single-flight concurrency ─────────────────────────────────────────
+
+    [Fact]
+    public async Task GetSymbolConstraintsAsync_ConcurrentCallers_OnlyOneRefreshOccurs()
+    {
+        // Arrange
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 500_000m);
+        var (client, exchangeData) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        // Expire the TTL so all concurrent callers hit the refresh path.
+        typeof(AsterConnector)
+            .GetField("_symbolConstraintsExpiry", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(sut, DateTime.UtcNow.AddMinutes(-1));
+
+        // Act — 50 concurrent callers
+        var tasks = Enumerable.Range(0, 50)
+            .Select(_ => Task.Run(() => sut.GetSymbolConstraintsAsync("WLFIUSDT", CancellationToken.None)))
+            .ToArray();
+        await Task.WhenAll(tasks);
+
+        // Assert — exactly one HTTP call despite 50 callers
+        exchangeData.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once(),
+            "single-flight must ensure only one HTTP refresh fires regardless of concurrent callers");
+    }
+
+    // ── NT3: Negative sentinel test ────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetSymbolConstraintsAsync_UnknownSymbol_ReturnsSentinelWithMaxNotional()
+    {
+        // Arrange — exchange info only contains BTCUSDT, not UNKNOWNSYM
+        var info = BuildExchangeInfoWithMaxNotional("BTCUSDT", maxNotional: 2_000_000m);
+        var (client, _) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        // Act
+        var result = await sut.GetSymbolConstraintsAsync("UNKNOWNSYM");
+
+        // Assert — no-cap sentinel returned for unknown symbol
+        result.MaxNotionalValue.Should().Be(decimal.MaxValue,
+            "unknown symbol must return sentinel with MaxNotionalValue == decimal.MaxValue");
+        result.StepSize.Should().Be(0m,
+            "unknown symbol sentinel must have StepSize == 0");
+    }
+
+    // ── NT4: Cache-cap test ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetSymbolConstraintsAsync_CacheAtCap_DoesNotAddNewEntry()
+    {
+        // Arrange — pre-fill the cache with exactly 10 000 entries
+        var info = BuildExchangeInfoWithMaxNotional("NEWSYM", maxNotional: 100_000m);
+        var (client, _) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var cache = (ConcurrentDictionary<string, AsterSymbolConstraints>)
+            typeof(AsterConnector)
+                .GetField("_symbolConstraintsCache", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(sut)!;
+
+        var placeholder = new AsterSymbolConstraints
+        {
+            Symbol = "placeholder",
+            MaxNotionalValue = 1m,
+            MinQuantity = 1m,
+            StepSize = 1m,
+        };
+
+        for (var i = 0; i < 10_000; i++)
+        {
+            cache.TryAdd($"SYM{i}", placeholder);
+        }
+
+        cache.Count.Should().Be(10_000, "precondition: cache must be full before the test call");
+
+        // Act — call with a symbol NOT already in the cache
+        var result = await sut.GetSymbolConstraintsAsync("NEWSYM");
+
+        // Assert — cache count unchanged; no new entry written; no exception
+        cache.Count.Should().Be(10_000,
+            "cache at cap must not grow when a new symbol entry would be written");
+        result.Should().NotBeNull("a result (sentinel or real) must always be returned");
     }
 }

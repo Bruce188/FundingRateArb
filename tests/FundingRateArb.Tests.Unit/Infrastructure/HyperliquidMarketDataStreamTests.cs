@@ -1,3 +1,4 @@
+using System.Reflection;
 using CryptoExchange.Net.Objects;
 using CryptoExchange.Net.Objects.Errors;
 using CryptoExchange.Net.Objects.Sockets;
@@ -201,6 +202,99 @@ public class HyperliquidMarketDataStreamTests
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.AtLeastOnce,
             "a Warning log must be emitted when the disconnect churn threshold trips");
+    }
+
+    // ── NT6: IsConnected non-blocking ────────────────────────────────────────────
+
+    [Fact]
+    public async Task IsConnected_DoesNotBlock_WhenSocketLockIsHeld()
+    {
+        var stream = CreateStream(out _, out _);
+
+        // Acquire _socketLock on a background task so IsConnected would deadlock if it tried
+        // to acquire the same lock.
+        var socketLock = (SemaphoreSlim)typeof(HyperliquidMarketDataStream)
+            .GetField("_socketLock", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(stream)!;
+
+        await socketLock.WaitAsync();
+        try
+        {
+            // IsConnected must return immediately (within 50 ms) without acquiring the lock.
+            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+            var isConnectedTask = Task.Run(() => stream.IsConnected, cts.Token);
+            var completed = await Task.WhenAny(isConnectedTask, Task.Delay(50));
+
+            completed.Should().Be(isConnectedTask,
+                "IsConnected is backed by a volatile field and must not acquire _socketLock");
+            var isConnectedValue = await isConnectedTask;
+            isConnectedValue.Should().BeFalse("stream has not been started");
+        }
+        finally
+        {
+            socketLock.Release();
+        }
+    }
+
+    // ── NT7: Threshold boundary lower (19 disconnects = not throttled) ────────────
+
+    [Fact]
+    public async Task IsThrottled_AtNineteenDisconnects_IsNotThrottled()
+    {
+        var stream = CreateStream(out _, out _);
+
+        for (var i = 0; i < 19; i++)
+        {
+            await stream.RecordDisconnectForTestAsync($"SYM{i}", CancellationToken.None);
+        }
+
+        stream.IsThrottledForTest.Should().BeFalse(
+            "19 disconnect events is one below the threshold of 20 — must not throttle");
+    }
+
+    // ── NT8: Threshold boundary exact (20 disconnects = throttled) ────────────────
+
+    [Fact]
+    public async Task IsThrottled_AtTwentyDisconnects_IsThrottled()
+    {
+        var stream = CreateStream(out _, out _);
+
+        for (var i = 0; i < 20; i++)
+        {
+            await stream.RecordDisconnectForTestAsync($"SYM{i}", CancellationToken.None);
+        }
+
+        stream.IsThrottledForTest.Should().BeTrue(
+            "exactly 20 disconnect events must trip the churn throttle");
+    }
+
+    // ── StopAsync lock-timeout fallback ──────────────────────────────────────────
+
+    [Fact]
+    public async Task StopAsync_WhenLockHeld_CompletesViaBestEffortPath()
+    {
+        var stream = CreateStream(out _, out _);
+
+        var socketLock = (SemaphoreSlim)typeof(HyperliquidMarketDataStream)
+            .GetField("_socketLock", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(stream)!;
+
+        // Hold the lock for the duration of the test so StopAsync cannot acquire it.
+        await socketLock.WaitAsync();
+        try
+        {
+            // StopAsync must complete via the best-effort path (5s internal CTS fires).
+            var stopTask = stream.StopAsync();
+            var completed = await Task.WhenAny(stopTask, Task.Delay(10_000));
+
+            completed.Should().Be(stopTask,
+                "StopAsync must complete within 10s via the best-effort fallback when lock is held");
+            await stopTask; // propagate any exception
+        }
+        finally
+        {
+            socketLock.Release();
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────

@@ -721,11 +721,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
             if (result.Success && result.Data?.Symbols is { } symbols)
             {
                 var written = 0;
+                // NP2: hoist Count before the loop — ConcurrentDictionary.Count acquires all
+                // segment locks on every call, so reading it once prevents O(N) lock-churn.
+                var currentCacheCount = _symbolConstraintsCache.Count;
                 foreach (var s in symbols)
                 {
                     // NB5 defensive cap against unbounded cache growth from a misbehaving
                     // upstream response. Aster lists ~200 symbols in production.
-                    if (_symbolConstraintsCache.Count >= SymbolConstraintsCacheMaxSize &&
+                    if (currentCacheCount >= SymbolConstraintsCacheMaxSize &&
                         !_symbolConstraintsCache.ContainsKey(s.Name))
                     {
                         continue;
