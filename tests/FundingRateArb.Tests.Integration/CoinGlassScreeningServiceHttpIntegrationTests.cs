@@ -115,7 +115,10 @@ public class CoinGlassScreeningServiceHttpIntegrationTests
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) _response.Dispose();
+            if (disposing)
+            {
+                _response.Dispose();
+            }
             base.Dispose(disposing);
         }
     }

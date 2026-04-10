@@ -224,7 +224,9 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
             public Task<BotConfiguration> GetActiveAsync()
             {
                 if (_owner.ShouldFail())
+                {
                     throw new DatabaseUnavailableException("simulated transient failure");
+                }
 
                 return Task.FromResult(new BotConfiguration
                 {
