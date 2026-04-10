@@ -156,6 +156,30 @@ public class HyperliquidConnectorTests
             .WithMessage("*Exchange API unavailable*");
     }
 
+    [Fact]
+    public async Task GetFundingRatesAsync_ReturnsNextSettlementUtc_AtNextHourBoundary()
+    {
+        // Arrange
+        var tickers = new[]
+        {
+            CreateTicker("ETH", fundingRate: 0.0001m, markPrice: 3000m, notionalVolume: 1m, oraclePrice: 3000m),
+        };
+        SetupExchangeInfoSuccess(tickers);
+
+        var before = DateTime.UtcNow;
+
+        // Act
+        var result = await _sut.GetFundingRatesAsync();
+
+        // Assert
+        result.Should().HaveCount(1);
+        var dto = result[0];
+        dto.NextSettlementUtc.Should().HaveValue();
+        dto.NextSettlementUtc!.Value.Should().BeAfter(before, "NextSettlementUtc must be in the future");
+        dto.NextSettlementUtc.Value.Minute.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+        dto.NextSettlementUtc.Value.Second.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+    }
+
     // ── PlaceMarketOrderAsync ─────────────────────────────────────────────────
 
     [Fact]

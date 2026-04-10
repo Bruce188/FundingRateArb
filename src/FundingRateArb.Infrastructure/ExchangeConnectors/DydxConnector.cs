@@ -95,6 +95,9 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
             return resp?.Markets ?? new Dictionary<string, DydxPerpetualMarket>();
         }, ct);
 
+        var now = DateTime.UtcNow;
+        var nextSettlement = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+
         var result = new List<FundingRateDto>();
         foreach (var (_, market) in markets)
         {
@@ -117,6 +120,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
                 MarkPrice = market.OraclePrice,
                 IndexPrice = market.OraclePrice,
                 Volume24hUsd = 0m, // Indexer does not include 24h volume in perpetualMarkets
+                NextSettlementUtc = nextSettlement,
             });
         }
 

@@ -218,6 +218,26 @@ public class DydxConnectorTests
     }
 
     [Fact]
+    public async Task GetFundingRatesAsync_ReturnsNextSettlementUtc_AtNextHourBoundary()
+    {
+        var handler = new MultiRouteHttpMessageHandler();
+        handler.AddRoute("perpetualMarkets", BuildPerpetualMarketsJson(nextFundingRate: 0.0001m));
+
+        using var connector = BuildConnector(indexerHandler: handler);
+
+        var before = DateTime.UtcNow;
+
+        var rates = await connector.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(1);
+        var dto = rates[0];
+        dto.NextSettlementUtc.Should().HaveValue();
+        dto.NextSettlementUtc!.Value.Should().BeAfter(before, "NextSettlementUtc must be in the future");
+        dto.NextSettlementUtc.Value.Minute.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+        dto.NextSettlementUtc.Value.Second.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+    }
+
+    [Fact]
     public async Task GetAvailableBalance_ReturnsFreeCollateral()
     {
         var handler = new MultiRouteHttpMessageHandler();

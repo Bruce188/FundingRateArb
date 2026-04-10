@@ -548,6 +548,30 @@ public class LighterConnectorTests
         btc.MarkPrice.Should().Be(69750.000000m, "BTC had a valid index_price, no fallback needed");
     }
 
+    [Fact]
+    public async Task GetFundingRatesAsync_ReturnsNextSettlementUtc_AtNextHourBoundary()
+    {
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", FundingRatesJson);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
+        });
+
+        var before = DateTime.UtcNow;
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().NotBeEmpty();
+        foreach (var dto in rates)
+        {
+            dto.NextSettlementUtc.Should().HaveValue();
+            dto.NextSettlementUtc!.Value.Should().BeAfter(before, "NextSettlementUtc must be in the future");
+            dto.NextSettlementUtc.Value.Minute.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+            dto.NextSettlementUtc.Value.Second.Should().Be(0, "NextSettlementUtc must be on an hour boundary");
+        }
+    }
+
     // ── GetMarkPriceAsync ─────────────────────────────────────────
 
     [Fact]

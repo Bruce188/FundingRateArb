@@ -53,6 +53,9 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             throw new InvalidOperationException(result.Error!.ToString());
         }
 
+        var now = DateTime.UtcNow;
+        var nextSettlement = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
+
         return result.Data.Tickers.Select(t => new FundingRateDto
         {
             ExchangeName = ExchangeName,
@@ -63,6 +66,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             MarkPrice = t.MarkPrice,
             IndexPrice = t.OraclePrice ?? 0m,
             Volume24hUsd = t.NotionalVolume,
+            NextSettlementUtc = nextSettlement,
         }).ToList();
     }
 
