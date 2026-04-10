@@ -5,6 +5,7 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Extensions;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Web.ViewModels;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FundingRateArb.Web.Controllers;
 
@@ -25,8 +27,10 @@ public class DashboardController : Controller
     private readonly IUserSettingsService _userSettings;
     private readonly IMemoryCache _cache;
     private readonly ICircuitBreakerManager _circuitBreakerManager;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
+    private const string AuthenticatedOpportunityCacheKey = "dashboard:auth:opportunities";
 
     public DashboardController(
         IUnitOfWork uow,
@@ -35,7 +39,8 @@ public class DashboardController : Controller
         IBotControl botControl,
         IUserSettingsService userSettings,
         IMemoryCache cache,
-        ICircuitBreakerManager circuitBreakerManager)
+        ICircuitBreakerManager circuitBreakerManager,
+        IServiceScopeFactory scopeFactory)
     {
         _uow = uow;
         _logger = logger;
@@ -44,6 +49,7 @@ public class DashboardController : Controller
         _userSettings = userSettings;
         _cache = cache;
         _circuitBreakerManager = circuitBreakerManager;
+        _scopeFactory = scopeFactory;
     }
 
     [AllowAnonymous]
@@ -84,7 +90,7 @@ public class DashboardController : Controller
             return View(anonVm);
         }
 
-        // All queries sequential — DbContext is not thread-safe (scoped UoW shared across services).
+        // Parallel DB queries via IServiceScopeFactory — each Task.Run creates its own scope/DbContext.
         // Any DatabaseUnavailableException or transient SqlException propagated by the
         // downstream repositories short-circuits into a degraded view with a banner
         // instead of a 500 page. This is the B1/B4 fix from review-v131 — the previous
@@ -92,57 +98,128 @@ public class DashboardController : Controller
         // calls that can all fail during a sustained outage.
         try
         {
-            var result = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+            var result = await _cache.GetOrCreateAsync(AuthenticatedOpportunityCacheKey, async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
+                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+            });
 
             // B1: short-circuit immediately when the SignalEngine already detected a
             // degraded database — every subsequent DB call below will rethrow the same
             // failure and tear the whole request back to 500 if we proceed.
-            if (!result.DatabaseAvailable)
+            if (!result!.DatabaseAvailable)
             {
                 return DegradedDashboardView();
             }
 
             var allOpportunities = result.Opportunities;
-            var botConfig = await _uow.BotConfig.GetActiveAsync();
-            var userConfig = await _userSettings.GetOrCreateConfigAsync(userId!);
-            var enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
-            // NB4: Admin loads all positions; non-admin pushes user filter to SQL
-            var openPositions = User.IsInRole("Admin")
-                ? await _uow.Positions.GetOpenAsync()
-                : await _uow.Positions.GetOpenByUserAsync(userId!);
-            var unreadAlerts = await _uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
+            var isAdmin = User.IsInRole("Admin");
+
+            // Run independent DB queries in parallel — each task gets its own DbContext scope
+            BotConfiguration? botConfig = null;
+            UserConfiguration? userConfig = null;
+            List<int>? enabledExchangeIds = null;
+            List<ArbitragePosition>? openPositions = null;
+            List<Alert>? unreadAlerts = null;
+
+            await Task.WhenAll(
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    botConfig = await uow.BotConfig.GetActiveAsync();
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var settings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
+                    userConfig = await settings.GetOrCreateConfigAsync(userId!);
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var settings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
+                    enabledExchangeIds = await settings.GetUserEnabledExchangeIdsAsync(userId!);
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    openPositions = isAdmin
+                        ? await uow.Positions.GetOpenAsync()
+                        : await uow.Positions.GetOpenByUserAsync(userId!);
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    unreadAlerts = await uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
+                }, ct)
+            );
 
             // Lazy initialization: ensure user has default settings on first visit
-            if (enabledExchangeIds.Count == 0)
+            if (enabledExchangeIds!.Count == 0)
             {
                 await _userSettings.InitializeDefaultsForNewUserAsync(userId!);
                 enabledExchangeIds = await _userSettings.GetUserEnabledExchangeIdsAsync(userId!);
             }
 
             // Filter opportunities by user's enabled exchanges and assets (non-admin)
+            // Parallelize counts and non-admin filtering data fetch
+            int openingCount = 0;
+            int needsAttentionCount = 0;
+            List<int>? dataOnlyExchangeIds = null;
+            List<int>? enabledAssetIds = null;
+
+            var secondGroup = new List<Task>();
+            secondGroup.Add(Task.Run(async () =>
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                openingCount = await uow.Positions.CountByStatusAsync(PositionStatus.Opening);
+            }, ct));
+            secondGroup.Add(Task.Run(async () =>
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                needsAttentionCount = await uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
+            }, ct));
+            if (!isAdmin)
+            {
+                secondGroup.Add(Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var settings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
+                    dataOnlyExchangeIds = (await settings.GetDataOnlyExchangeIdsAsync()).ToList();
+                }, ct));
+                secondGroup.Add(Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var settings = scope.ServiceProvider.GetRequiredService<IUserSettingsService>();
+                    enabledAssetIds = (await settings.GetUserEnabledAssetIdsAsync(userId!)).ToList();
+                }, ct));
+            }
+            await Task.WhenAll(secondGroup);
+
             List<ArbitrageOpportunityDto> opportunities;
-            if (User.IsInRole("Admin"))
+            if (isAdmin)
             {
                 opportunities = allOpportunities;
             }
             else
             {
                 var enabledExchangeIdSet = enabledExchangeIds.ToHashSet();
-                var dataOnlyExchangeIds = await _userSettings.GetDataOnlyExchangeIdsAsync();
-                enabledExchangeIdSet.UnionWith(dataOnlyExchangeIds);
-                var enabledAssetIds = (await _userSettings.GetUserEnabledAssetIdsAsync(userId!)).ToHashSet();
+                enabledExchangeIdSet.UnionWith(dataOnlyExchangeIds!);
+                var enabledAssetIdSet = enabledAssetIds!.ToHashSet();
 
                 opportunities = allOpportunities
                     .Where(o => enabledExchangeIdSet.Contains(o.LongExchangeId)
                              && enabledExchangeIdSet.Contains(o.ShortExchangeId))
-                    .Where(o => enabledAssetIds.Contains(o.AssetId))
+                    .Where(o => enabledAssetIdSet.Contains(o.AssetId))
                     .ToList();
             }
 
-            var openingCount = await _uow.Positions.CountByStatusAsync(PositionStatus.Opening);
-            var needsAttentionCount = await _uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
-
-            var positionSummaries = openPositions.Select(p => p.ToSummaryDto()).ToList();
+            var positionSummaries = openPositions!.Select(p => p.ToSummaryDto()).ToList();
 
             var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
             var bestSpread = opportunities.Count > 0
@@ -155,7 +232,7 @@ public class DashboardController : Controller
             var pnlProgress = new Dictionary<int, decimal>();
             if (botConfig is not null && botConfig.AdaptiveHoldEnabled)
             {
-                foreach (var pos in openPositions)
+                foreach (var pos in openPositions!)
                 {
                     if (pos.AccumulatedFunding > 0 && pos.SizeUsdc > 0)
                     {
@@ -178,12 +255,12 @@ public class DashboardController : Controller
                 IsAuthenticated = true,
                 BotEnabled = botConfig?.OperatingState is BotOperatingState.Armed or BotOperatingState.Trading,
                 OperatingState = botConfig?.OperatingState.ToString() ?? "Stopped",
-                OpenPositionCount = openPositions.Count,
+                OpenPositionCount = openPositions!.Count,
                 OpeningPositionCount = openingCount,
                 NeedsAttentionCount = needsAttentionCount,
                 TotalPnl = totalPnl,
                 BestSpread = bestSpread,
-                TotalUnreadAlerts = unreadAlerts.Count,
+                TotalUnreadAlerts = unreadAlerts!.Count,
                 OpenPositions = positionSummaries,
                 Opportunities = opportunities,
                 Diagnostics = result.Diagnostics,
