@@ -112,5 +112,11 @@ public class CoinGlassScreeningServiceHttpIntegrationTests
         {
             return Task.FromResult(_response);
         }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) _response.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

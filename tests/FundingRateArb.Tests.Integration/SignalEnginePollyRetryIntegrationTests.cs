@@ -29,7 +29,7 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
     [Fact]
     public async Task SignalEngine_DatabaseUnavailable_ReturnsDegradedResult()
     {
-        var factory = _factory.WithWebHostBuilder(builder =>
+        using var factory = _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
@@ -53,7 +53,7 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
     {
         var counterUow = new CounterBasedUnitOfWork();
 
-        var factory = _factory.WithWebHostBuilder(builder =>
+        using var factory = _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
