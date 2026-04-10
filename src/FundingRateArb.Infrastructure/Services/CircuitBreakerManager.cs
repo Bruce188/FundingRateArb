@@ -189,6 +189,21 @@ public class CircuitBreakerManager : ICircuitBreakerManager
             .ToList();
     }
 
+    public IReadOnlyList<ActiveCooldownDto> GetActivePairCooldowns()
+    {
+        var now = DateTime.UtcNow;
+        return _failedOpCooldowns
+            .Where(kvp => kvp.Value.CooldownUntil > now)
+            .Select(kvp => new ActiveCooldownDto
+            {
+                CooldownKey = kvp.Key,
+                ExpiresAt = kvp.Value.CooldownUntil,
+                RemainingMinutes = (int)Math.Ceiling((kvp.Value.CooldownUntil - now).TotalMinutes),
+            })
+            .OrderBy(c => c.ExpiresAt)
+            .ToList();
+    }
+
     public void ClearCooldowns() => _failedOpCooldowns.Clear();
 
     public HashSet<int> GetCircuitBrokenExchangeIds()

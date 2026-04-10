@@ -283,6 +283,12 @@
                             <span asp-validation-for="TargetPnlMultiplier" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
+                            <label asp-for="PnlTargetCooldownMinutes" class="form-label"></label>
+                            <input asp-for="PnlTargetCooldownMinutes" class="form-control" type="number" min="5" max="1440" />
+                            <div class="form-text">Minutes before a pair can be re-entered after hitting PnL target</div>
+                            <span asp-validation-for="PnlTargetCooldownMinutes" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
                             <div class="form-check form-switch mt-4">
                                 <input asp-for="AdaptiveHoldEnabled" class="form-check-input" type="checkbox" />
                                 <label asp-for="AdaptiveHoldEnabled" class="form-check-label"></label>

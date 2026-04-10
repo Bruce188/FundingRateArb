@@ -18,6 +18,7 @@ public interface ICircuitBreakerManager
     void IncrementAssetExchangeFailure(int assetId, int exchangeId);
     void RecordCloseResult(decimal realizedPnl, string? userId);
     IReadOnlyList<CircuitBreakerStatusDto> GetCircuitBreakerStates();
+    IReadOnlyList<ActiveCooldownDto> GetActivePairCooldowns();
     void ClearCooldowns();
     HashSet<int> GetCircuitBrokenExchangeIds();
     bool IsOnCooldown(string cooldownKey, out TimeSpan remaining);

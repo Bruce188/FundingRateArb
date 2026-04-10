@@ -60,7 +60,8 @@ public class BotConfigController : Controller
             RebalanceMinImprovement = config.RebalanceMinImprovement,
             MaxRebalancesPerCycle = config.MaxRebalancesPerCycle,
             MaxLeverageCap = config.MaxLeverageCap,
-            MarginUtilizationAlertPct = config.MarginUtilizationAlertPct
+            MarginUtilizationAlertPct = config.MarginUtilizationAlertPct,
+            PnlTargetCooldownMinutes = config.PnlTargetCooldownMinutes,
         };
 
         return View(model);
@@ -116,6 +117,7 @@ public class BotConfigController : Controller
         config.MaxRebalancesPerCycle = model.MaxRebalancesPerCycle!.Value;
         config.MaxLeverageCap = model.MaxLeverageCap;
         config.MarginUtilizationAlertPct = model.MarginUtilizationAlertPct;
+        config.PnlTargetCooldownMinutes = model.PnlTargetCooldownMinutes!.Value;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)

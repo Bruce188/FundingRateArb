@@ -86,6 +86,9 @@ public class BotConfigViewModel
     [Required, Range(0.5, 100.0), Display(Name = "Target PnL Multiplier")]
     public decimal? TargetPnlMultiplier { get; set; } = 2.0m;
 
+    [Required, Range(5, 1440), Display(Name = "PnL Target Cooldown (minutes)")]
+    public int? PnlTargetCooldownMinutes { get; set; } = 30;
+
     [Display(Name = "Adaptive Hold Enabled")]
     public bool AdaptiveHoldEnabled { get; set; } = true;
 

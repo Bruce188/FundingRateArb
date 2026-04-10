@@ -24,6 +24,7 @@ public class DashboardController : Controller
     private readonly IBotControl _botControl;
     private readonly IUserSettingsService _userSettings;
     private readonly IMemoryCache _cache;
+    private readonly ICircuitBreakerManager _circuitBreakerManager;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
 
@@ -33,7 +34,8 @@ public class DashboardController : Controller
         ISignalEngine signalEngine,
         IBotControl botControl,
         IUserSettingsService userSettings,
-        IMemoryCache cache)
+        IMemoryCache cache,
+        ICircuitBreakerManager circuitBreakerManager)
     {
         _uow = uow;
         _logger = logger;
@@ -41,6 +43,7 @@ public class DashboardController : Controller
         _botControl = botControl;
         _userSettings = userSettings;
         _cache = cache;
+        _circuitBreakerManager = circuitBreakerManager;
     }
 
     [AllowAnonymous]
@@ -188,6 +191,9 @@ public class DashboardController : Controller
                 RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
                 PnlProgressByPosition = pnlProgress,
                 DatabaseAvailable = result.DatabaseAvailable,
+                ActiveCooldowns = _circuitBreakerManager.GetActivePairCooldowns().ToList(),
+                CircuitBreakerStates = _circuitBreakerManager.GetCircuitBreakerStates().ToList(),
+                LastFundingRateFetch = result.Diagnostics is not null ? DateTime.UtcNow : null,
             };
 
             if (User.IsInRole("Admin") && botConfig is not null)

@@ -31,6 +31,7 @@ public class DashboardControllerTests
     private readonly Mock<ISignalEngine> _mockSignalEngine;
     private readonly Mock<IBotControl> _mockBotControl;
     private readonly Mock<IUserSettingsService> _mockUserSettings;
+    private readonly Mock<ICircuitBreakerManager> _mockCircuitBreaker;
     private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
@@ -45,6 +46,9 @@ public class DashboardControllerTests
         _mockSignalEngine = new Mock<ISignalEngine>();
         _mockBotControl = new Mock<IBotControl>();
         _mockUserSettings = new Mock<IUserSettingsService>();
+        _mockCircuitBreaker = new Mock<ICircuitBreakerManager>();
+        _mockCircuitBreaker.Setup(m => m.GetActivePairCooldowns()).Returns([]);
+        _mockCircuitBreaker.Setup(m => m.GetCircuitBreakerStates()).Returns([]);
 
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { IsEnabled = false });
@@ -79,7 +83,7 @@ public class DashboardControllerTests
 
         _cache = new MemoryCache(new MemoryCacheOptions());
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache);
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
