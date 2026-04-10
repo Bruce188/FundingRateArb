@@ -74,6 +74,13 @@ public class PnlReconciliationService : IPnlReconciliationService
         {
             exchangeFunding = longFunding.Value + shortFunding.Value;
         }
+        else if (longFunding.HasValue || shortFunding.HasValue)
+        {
+            _logger.LogDebug(
+                "Skipping funding reconciliation for position #{PositionId} ({Asset}): " +
+                "one leg returned null (long={LongHasValue}, short={ShortHasValue})",
+                position.Id, assetSymbol, longFunding.HasValue, shortFunding.HasValue);
+        }
 
         // Store exchange-reported PnL and compute divergence
         if (exchangePnl.HasValue)
