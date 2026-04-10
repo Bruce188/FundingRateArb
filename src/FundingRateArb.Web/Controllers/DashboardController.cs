@@ -90,7 +90,7 @@ public class DashboardController : Controller
             return View(anonVm);
         }
 
-        // All queries sequential — DbContext is not thread-safe (scoped UoW shared across services).
+        // Parallel DB queries via IServiceScopeFactory — each Task.Run creates its own scope/DbContext.
         // Any DatabaseUnavailableException or transient SqlException propagated by the
         // downstream repositories short-circuits into a degraded view with a banner
         // instead of a 500 page. This is the B1/B4 fix from review-v131 — the previous
