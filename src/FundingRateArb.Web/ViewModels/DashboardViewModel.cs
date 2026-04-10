@@ -28,4 +28,9 @@ public class DashboardViewModel
 
     // When false, the dashboard renders a "data source unavailable" banner.
     public bool DatabaseAvailable { get; set; } = true;
+
+    // System health data — populated for authenticated users only
+    public List<ActiveCooldownDto> ActiveCooldowns { get; set; } = [];
+    public List<CircuitBreakerStatusDto> CircuitBreakerStates { get; set; } = [];
+    public DateTime? LastFundingRateFetch { get; set; }
 }

@@ -360,6 +360,48 @@
             }
         }
 
+        // Update circuit breaker health panel list-group
+        var cbPanel = document.getElementById("circuit-breaker-panel");
+        if (cbPanel) {
+            var cbList = cbPanel.querySelector(".list-group");
+            var cbHealthMsg = cbPanel.querySelector("p.text-success");
+            var breakers = data.circuitBreakers || [];
+            if (breakers.length === 0) {
+                if (cbList) cbList.remove();
+                if (!cbHealthMsg) {
+                    var p = document.createElement("p");
+                    p.className = "text-success mb-0 small";
+                    p.textContent = "All exchanges healthy.";
+                    var panelBody = cbPanel.querySelector(".card-body");
+                    if (panelBody) panelBody.appendChild(p);
+                }
+            } else {
+                if (cbHealthMsg) cbHealthMsg.remove();
+                var panelBody = cbPanel.querySelector(".card-body");
+                if (panelBody) {
+                    var ul = panelBody.querySelector(".list-group") || document.createElement("ul");
+                    ul.className = "list-group list-group-flush";
+                    ul.replaceChildren();
+                    breakers.forEach(function (cb) {
+                        var li = document.createElement("li");
+                        li.className = "list-group-item d-flex justify-content-between align-items-center px-0 py-1";
+                        var nameSpan = document.createElement("span");
+                        nameSpan.className = "small";
+                        nameSpan.textContent = cb.exchangeName;
+                        li.appendChild(nameSpan);
+                        var badge = document.createElement("span");
+                        badge.className = "badge bg-danger";
+                        badge.textContent = "Open \u2014 " + (cb.remainingMinutes || 0) + " min";
+                        li.appendChild(badge);
+                        ul.appendChild(li);
+                    });
+                    if (!panelBody.querySelector(".list-group")) {
+                        panelBody.appendChild(ul);
+                    }
+                }
+            }
+        }
+
         var tbody = document.getElementById("opportunities-table-body");
         var cardsContainer = document.getElementById("opportunities-cards");
 

@@ -22,7 +22,21 @@
 }
 
 <div class="d-flex justify-content-between align-items-center mb-3">
-    <h1 class="h3 mb-0">Dashboard</h1>
+    <div class="d-flex align-items-center">
+        <h1 class="h3 mb-0">Dashboard</h1>
+        @if (Model.IsAuthenticated)
+        {
+            var headingBadgeColor = Model.OperatingState switch
+            {
+                "Stopped" => "secondary",
+                "Armed" => "info",
+                "Trading" => "success",
+                "Paused" => "warning",
+                _ => "dark"
+            };
+            <span id="heading-bot-state" class="badge bg-@headingBadgeColor ms-2">@Model.OperatingState</span>
+        }
+    </div>
     @if (User.IsInRole("Admin"))
     {
         @Html.AntiForgeryToken()
@@ -89,6 +103,23 @@
                             <span id="bot-status" class="badge @stateColor fs-6">
                                 @Model.OperatingState.ToUpperInvariant()
                             </span>
+                            @if (User.IsInRole("Admin"))
+                            {
+                                <div class="mt-2 d-flex gap-1">
+                                    <form asp-area="Admin" asp-controller="BotConfig" asp-action="SetState" method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="newState" value="Armed" />
+                                        <button type="submit" class="btn btn-outline-primary btn-sm py-0 px-2"
+                                                @(Model.OperatingState is "Armed" or "Trading" ? "disabled" : "")>Arm</button>
+                                    </form>
+                                    <form asp-area="Admin" asp-controller="BotConfig" asp-action="SetState" method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="newState" value="Stopped" />
+                                        <button type="submit" class="btn btn-outline-danger btn-sm py-0 px-2"
+                                                @(Model.OperatingState == "Stopped" ? "disabled" : "")>Disarm</button>
+                                    </form>
+                                </div>
+                            }
                         </div>
                         <div class="text-muted">
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" class="bi bi-robot" viewBox="0 0 16 16">
@@ -589,6 +620,82 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@if (Model.IsAuthenticated)
+{
+    <div class="row mt-4">
+        @* Active Cooldowns Panel *@
+        <div class="col-md-6 mb-3" id="active-cooldowns-panel">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">Active Cooldowns</h6>
+                    <span class="badge bg-secondary">@Model.ActiveCooldowns.Count</span>
+                </div>
+                <div class="card-body p-0">
+                    @if (Model.ActiveCooldowns.Count == 0)
+                    {
+                        <p class="text-muted text-center py-3 mb-0 small">No active cooldowns.</p>
+                    }
+                    else
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th class="small">Pair</th>
+                                        <th class="small">Remaining</th>
+                                        <th class="small">Expires At</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var cd in Model.ActiveCooldowns)
+                                    {
+                                        <tr>
+                                            <td class="small text-break">@cd.CooldownKey</td>
+                                            <td class="small">@cd.RemainingMinutes min</td>
+                                            <td class="small"><time class="local-time" datetime="@cd.ExpiresAt.ToString("o")">@cd.ExpiresAt.ToString("HH:mm") UTC</time></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        @* Circuit Breaker Health Panel *@
+        <div class="col-md-6 mb-3" id="circuit-breaker-panel">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">Exchange Health</h6>
+                    @if (Model.LastFundingRateFetch.HasValue)
+                    {
+                        <small class="text-muted">Last fetch: <time class="local-time" datetime="@Model.LastFundingRateFetch.Value.ToString("o")">@Model.LastFundingRateFetch.Value.ToString("HH:mm") UTC</time></small>
+                    }
+                </div>
+                <div class="card-body">
+                    @if (Model.CircuitBreakerStates.Count == 0)
+                    {
+                        <p class="text-success mb-0 small">All exchanges healthy.</p>
+                    }
+                    else
+                    {
+                        <ul class="list-group list-group-flush">
+                            @foreach (var cb in Model.CircuitBreakerStates)
+                            {
+                                <li class="list-group-item d-flex justify-content-between align-items-center px-0 py-1">
+                                    <span class="small">@cb.ExchangeName</span>
+                                    <span class="badge bg-danger">Open &mdash; @cb.RemainingMinutes min</span>
+                                </li>
+                            }
+                        </ul>
+                    }
                 </div>
             </div>
         </div>
