@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using FluentAssertions;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Domain.Entities;
@@ -8,7 +9,6 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
-using System.Linq.Expressions;
 
 namespace FundingRateArb.Tests.Unit.Repositories;
 
@@ -96,7 +96,10 @@ internal sealed class ThrowingFundingRateContext : AppDbContext
         where T : class
     {
         if (typeof(T) == typeof(FundingRateSnapshot))
+        {
             return (DbSet<T>)(object)new ThrowingDbSet<FundingRateSnapshot>(_exceptionToThrow);
+        }
+
         return base.Set<T>();
     }
 }
@@ -112,7 +115,10 @@ internal sealed class StallingFundingRateContext : AppDbContext
         where T : class
     {
         if (typeof(T) == typeof(FundingRateSnapshot))
+        {
             return (DbSet<T>)(object)new StallingDbSet<FundingRateSnapshot>(_delaySeconds);
+        }
+
         return base.Set<T>();
     }
 }
