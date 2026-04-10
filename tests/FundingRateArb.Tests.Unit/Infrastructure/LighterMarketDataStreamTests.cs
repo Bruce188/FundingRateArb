@@ -185,8 +185,8 @@ public class LighterMarketDataStreamTests
 
         var cached = cache.GetLatest("Lighter", "SOL");
         cached.Should().NotBeNull();
-        cached!.RawRate.Should().BeNegative();
-        cached.RatePerHour.Should().BeNegative();
+        cached!.RawRate.Should().Be(-0.0004m);
+        cached.RatePerHour.Should().Be(-0.00005m, "-0.0004 / 8 = -0.00005");
     }
 
     [Fact]
@@ -212,6 +212,30 @@ public class LighterMarketDataStreamTests
         cached.Should().NotBeNull();
         cached!.RawRate.Should().Be(-0.0008m);
         cached.RatePerHour.Should().Be(-0.0001m, "-0.0008 / 8 = -0.0001");
+    }
+
+    [Fact]
+    public void WebSocketFundingRateNormalization_BothPropertiesAbsent_DefaultsToZero()
+    {
+        var cache = new MarketDataCache();
+        var stream = CreateStreamWithCache(cache);
+        stream.SetMarketMapping(0, "BTC");
+
+        var json = JsonDocument.Parse("""
+            {
+                "market_index": 0,
+                "index_price": "69000.00",
+                "mark_price": "69050.00",
+                "volume_24h": "50000000"
+            }
+            """);
+
+        stream.TryParseMarketStat(json.RootElement);
+
+        var cached = cache.GetLatest("Lighter", "BTC");
+        cached.Should().NotBeNull();
+        cached!.RawRate.Should().Be(0m, "both funding_rate_current and funding_rate absent defaults to 0");
+        cached.RatePerHour.Should().Be(0m);
     }
 
     private static LighterMarketDataStream CreateStreamWithCache(MarketDataCache cache)
