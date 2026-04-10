@@ -336,4 +336,35 @@ public class OpportunityFilterTests
 
         result.Should().BeEmpty();
     }
+
+    // ── PnlTarget cooldown integration ──────────────────────────────────────
+
+    [Fact]
+    public void FilterCandidates_ExcludesOpportunityOnPnlTargetCooldown()
+    {
+        var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
+        // Cooldown key format: {userId}:{assetId}_{longExId}_{shortExId} — mirrors OpportunityFilter internals
+        _circuitBreaker.SetCooldown("user1:1_1_2", DateTime.UtcNow.AddMinutes(30), 0);
+        var tracker = new SkipReasonTracker();
+
+        var result = _sut.FilterCandidates([opp], new HashSet<string>(), "user1", tracker, out var cooldownSkips);
+
+        result.Should().BeEmpty("a PnlTarget cooldown should suppress re-entry of the same opportunity");
+        cooldownSkips.Should().HaveCount(1);
+        tracker.CooldownKeys.Should().Contain("1_1_2");
+    }
+
+    [Fact]
+    public void FilterCandidates_AllowsOpportunityAfterCooldownExpiry()
+    {
+        var opp = MakeOpp(assetId: 1, longExId: 1, shortExId: 2);
+        // Expired cooldown — should not suppress the opportunity
+        _circuitBreaker.SetCooldown("user1:1_1_2", DateTime.UtcNow.AddMinutes(-1), 0);
+        var tracker = new SkipReasonTracker();
+
+        var result = _sut.FilterCandidates([opp], new HashSet<string>(), "user1", tracker, out var cooldownSkips);
+
+        result.Should().HaveCount(1, "an expired cooldown should not suppress re-entry");
+        cooldownSkips.Should().BeEmpty();
+    }
 }

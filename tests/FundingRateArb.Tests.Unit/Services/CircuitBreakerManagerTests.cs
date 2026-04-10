@@ -367,4 +367,24 @@ public class CircuitBreakerManagerTests
 
         _sut.GetConsecutiveLosses("user1").Should().Be(2);
     }
+
+    // ── PnlTarget cooldown ────────────────────────────────────────────────────
+
+    [Fact]
+    public void SetCooldown_PnlTargetReason_UsesConfiguredDuration()
+    {
+        const string key = "user1:BTC:exchange1:exchange2";
+
+        // Active cooldown — IsOnCooldown must return true
+        _sut.SetCooldown(key, DateTime.UtcNow.AddMinutes(30), 0);
+        _sut.IsOnCooldown(key, out var remaining).Should().BeTrue(
+            "cooldown should be active immediately after SetCooldown with a future expiry");
+        remaining.Should().BeGreaterThan(TimeSpan.Zero);
+
+        // Simulate expiry by writing a past time; IsOnCooldown must return false
+        _sut.SetCooldown(key, DateTime.UtcNow.AddMinutes(-1), 0);
+        _sut.IsOnCooldown(key, out var remainingAfterExpiry).Should().BeFalse(
+            "cooldown should not suppress re-entry once the expiry time has passed");
+        remainingAfterExpiry.Should().Be(TimeSpan.Zero);
+    }
 }

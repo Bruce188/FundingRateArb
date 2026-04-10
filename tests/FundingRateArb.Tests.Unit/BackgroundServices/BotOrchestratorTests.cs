@@ -2250,4 +2250,131 @@ public class BotOrchestratorTests
 
         _circuitBreaker.AssetExchangeCooldowns.Should().BeEmpty("asset cooldowns should be cleared on successful open");
     }
+
+    // ── PnL Target Cooldown ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task PnlTargetClose_AppliesCooldown_PreventsImmediateReEntry()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            RealizedPnl = null,
+        };
+
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                new[] { (pos, CloseReason.PnlTargetReached) },
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
+
+        _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.PnlTargetReached, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                pos.Status = PositionStatus.Closed;
+                pos.RealizedPnl = 50m; // profitable close
+            })
+            .Returns(Task.CompletedTask);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Cooldown key must match what FilterCandidates checks: {userId}:{assetId}_{longExId}_{shortExId}
+        var cooldownKey = $"{TestUserId}:1_1_2";
+        _circuitBreaker.IsOnCooldown(cooldownKey, out _).Should().BeTrue(
+            "a PnlTargetReached close should place the pair on cooldown to prevent immediate re-entry");
+    }
+
+    [Fact]
+    public async Task LosingClose_AppliesCooldown_AsExistingBehavior()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 2,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            RealizedPnl = null,
+        };
+
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                new[] { (pos, CloseReason.SpreadCollapsed) },
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
+
+        _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.SpreadCollapsed, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                pos.Status = PositionStatus.Closed;
+                pos.RealizedPnl = -20m; // losing close
+            })
+            .Returns(Task.CompletedTask);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Existing losing-trade path uses colon-separated key: {userId}:{assetId}:{longExId}:{shortExId}
+        var losingKey = $"{TestUserId}:1:1:2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(losingKey,
+            "losing-trade close must still register a cooldown under the existing key format");
+    }
+
+    [Fact]
+    public async Task PnlTargetCooldown_Expires_AllowsReEntry()
+    {
+        var pos = new ArbitragePosition
+        {
+            Id = 3,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            Status = PositionStatus.Open,
+            RealizedPnl = null,
+        };
+
+        _mockHealthMonitor.Setup(h => h.CheckAndActAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthCheckResult(
+                new[] { (pos, CloseReason.PnlTargetReached) },
+                Array.Empty<(int, string, int, int, PositionStatus)>(),
+                new Dictionary<int, ComputedPositionPnl>()));
+
+        _mockExecEngine.Setup(e => e.ClosePositionAsync(TestUserId, pos, CloseReason.PnlTargetReached, It.IsAny<CancellationToken>()))
+            .Callback(() =>
+            {
+                pos.Status = PositionStatus.Closed;
+                pos.RealizedPnl = 50m;
+            })
+            .Returns(Task.CompletedTask);
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto());
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Manually expire the PnlTarget cooldown
+        var cooldownKey = $"{TestUserId}:1_1_2";
+        _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow.AddMinutes(-1), 0);
+
+        _circuitBreaker.IsOnCooldown(cooldownKey, out _).Should().BeFalse(
+            "cooldown should not suppress re-entry after the configured duration has elapsed");
+    }
 }
