@@ -161,6 +161,15 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     var opKey = $"{pos.UserId}:{pos.AssetId}:{pos.LongExchangeId}:{pos.ShortExchangeId}";
                     _circuitBreaker.SetCooldown(opKey, DateTime.UtcNow.Add(_circuitBreaker.BaseCooldownDuration), 1);
                 }
+                else if (reason == CloseReason.PnlTargetReached)
+                {
+                    var opKey = $"{pos.UserId}:{pos.AssetId}_{pos.LongExchangeId}_{pos.ShortExchangeId}";
+                    var cooldownUntil = DateTime.UtcNow.AddMinutes(globalConfig.PnlTargetCooldownMinutes);
+                    _circuitBreaker.SetCooldown(opKey, cooldownUntil, 0);
+                    _logger.LogInformation(
+                        "PnL target cooldown applied for key {CooldownKey} until {CooldownUntil}",
+                        opKey, cooldownUntil);
+                }
             }
         }
 

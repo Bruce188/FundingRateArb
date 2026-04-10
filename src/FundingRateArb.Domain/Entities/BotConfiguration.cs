@@ -108,6 +108,10 @@ public class BotConfiguration
     [Range(0, 1440)]
     public int MinHoldBeforePnlTargetMinutes { get; set; } = 60;
 
+    /// <summary>Minutes a pair is excluded from re-entry after closing at PnL target. Prevents immediate re-open.</summary>
+    [Range(5, 1440)]
+    public int PnlTargetCooldownMinutes { get; set; } = 30;
+
     /// <summary>Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours. Deeply negative = emergency.</summary>
     [Range(-1.0, 0)]
     public decimal EmergencyCloseSpreadThreshold { get; set; } = -0.001m;
