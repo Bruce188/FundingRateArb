@@ -42,7 +42,9 @@ public class HealthEndpointTests : IClassFixture<HealthEndpointTests.HealthTestF
         // With stub stream connected, expect 200
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync();
-        body.Should().Be("Healthy");
+        // InMemoryDatabase cannot execute raw SQL (SELECT 1), so DatabaseHealthCheck
+        // returns Degraded. Both Healthy and Degraded map to 200 OK.
+        body.Should().BeOneOf("Healthy", "Degraded");
     }
 
     [Fact]
