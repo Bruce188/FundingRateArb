@@ -608,6 +608,57 @@ public class ExecutionEngine : IExecutionEngine
             position.LongFilledQuantity = longResult.FilledQuantity;
             position.ShortFilledQuantity = shortResult.FilledQuantity;
 
+            // Guard: filled quantities must be non-zero before transitioning to Open.
+            // A connector that returns Success=true with FilledQuantity=0 (IOC limit
+            // expired, server-side min-notional/lot-size rejection, connector bug)
+            // would otherwise leave this position with an asymmetric fill, running
+            // as a naked hedge until drift detection reaps it. F2 fixed the Aster
+            // connector; this guard is defense in depth for any remaining or future
+            // connector with the same failure mode.
+            var longQty = position.LongFilledQuantity ?? 0m;
+            var shortQty = position.ShortFilledQuantity ?? 0m;
+            if (longQty <= 0m || shortQty <= 0m)
+            {
+                _logger.LogCritical(
+                    "Position #{Id} has zero filled quantity after fill: Long={LongQty}, Short={ShortQty}. " +
+                    "Emergency-closing the surviving leg (if any).",
+                    position.Id, longQty, shortQty);
+
+                if (longQty > 0m && shortQty <= 0m)
+                {
+                    var neverExistedLong = await _emergencyClose.TryEmergencyCloseWithRetryAsync(
+                        longConnector, opp.AssetSymbol, Side.Long, userId, ct);
+                    if (!neverExistedLong)
+                    {
+                        EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                    }
+                }
+                else if (shortQty > 0m && longQty <= 0m)
+                {
+                    var neverExistedShort = await _emergencyClose.TryEmergencyCloseWithRetryAsync(
+                        shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
+                    if (!neverExistedShort)
+                    {
+                        EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                    }
+                }
+
+                position.Status = PositionStatus.EmergencyClosed;
+                position.CloseReason = CloseReason.EmergencyLegFailed;
+                position.ClosedAt = DateTime.UtcNow;
+                _uow.Positions.Update(position);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = userId,
+                    ArbitragePositionId = position.Id,
+                    Type = AlertType.LegFailed,
+                    Severity = AlertSeverity.Critical,
+                    Message = $"Position #{position.Id} — leg filled zero quantity (Long={longQty}, Short={shortQty}). Emergency closed.",
+                });
+                await _uow.SaveAsync(ct);
+                return (false, "Leg filled zero quantity — emergency closed");
+            }
+
             // Guard: entry prices must be non-zero before transitioning to Open
             if (position.LongEntryPrice <= 0 || position.ShortEntryPrice <= 0)
             {
