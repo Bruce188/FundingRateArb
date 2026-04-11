@@ -19,7 +19,8 @@ public interface ISignalRNotifier
         List<ArbitrageOpportunityDto> opportunities,
         BotOperatingState operatingState,
         int openingCount,
-        int needsAttentionCount);
+        int needsAttentionCount,
+        OpportunityResultDto? opportunityResult = null);
 
     Task PushPositionUpdatesAsync(
         List<ArbitragePosition> openPositions,

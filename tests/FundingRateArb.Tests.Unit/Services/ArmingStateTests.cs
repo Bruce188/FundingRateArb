@@ -262,7 +262,7 @@ public class ArmingStateTests
             .ReturnsAsync(new decimal[] { 100m });
 
         // Wire notifier defaults
-        mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<BotOperatingState>(), It.IsAny<int>(), It.IsAny<int>())).Returns(Task.CompletedTask);
+        mockNotifier.Setup(n => n.PushDashboardUpdateAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<List<ArbitrageOpportunityDto>>(), It.IsAny<BotOperatingState>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<OpportunityResultDto?>())).Returns(Task.CompletedTask);
         mockNotifier.Setup(n => n.PushPositionUpdatesAsync(It.IsAny<List<ArbitragePosition>>(), It.IsAny<BotConfiguration>(), It.IsAny<IReadOnlyDictionary<int, ComputedPositionPnl>?>())).Returns(Task.CompletedTask);
         mockNotifier.Setup(n => n.PushPositionRemovalsAsync(It.IsAny<IReadOnlyList<(int, string, int, int, PositionStatus)>>(), It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
         mockNotifier.Setup(n => n.PushRebalanceRemovalsAsync(It.IsAny<List<(int, string)>>())).Returns(Task.CompletedTask);
@@ -409,7 +409,8 @@ public class ArmingStateTests
             It.IsAny<List<ArbitrageOpportunityDto>>(),
             BotOperatingState.Paused,
             It.IsAny<int>(),
-            It.IsAny<int>()), Times.Once);
+            It.IsAny<int>(),
+            It.IsAny<OpportunityResultDto?>()), Times.Once);
 
         // Position opening should NOT happen
         mockExecEngine.Verify(e => e.OpenPositionAsync(

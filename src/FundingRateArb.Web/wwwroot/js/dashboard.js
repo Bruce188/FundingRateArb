@@ -71,9 +71,10 @@
                 bestSpread.textContent = "Bot off";
             } else {
                 var spread = data.bestSpread ?? 0;
-                bestSpread.textContent = spread > 0
-                    ? (spread * 100).toFixed(4) + "%"
-                    : "N/A";
+                if (spread > 0) {
+                    bestSpread.textContent = (spread * 100).toFixed(4) + "%";
+                }
+                // When spread <= 0 and bot is enabled, preserve current display value
             }
         }
     });

@@ -53,14 +53,17 @@ public class SignalRNotifier : ISignalRNotifier
         List<ArbitrageOpportunityDto> opportunities,
         BotOperatingState operatingState,
         int openingCount,
-        int needsAttentionCount)
+        int needsAttentionCount,
+        OpportunityResultDto? opportunityResult = null)
     {
         try
         {
             var totalPnl = openPositions.Sum(p => p.AccumulatedFunding);
             var bestSpread = opportunities.Count > 0
                 ? opportunities.Max(o => o.SpreadPerHour)
-                : 0m;
+                : openPositions.Count > 0
+                    ? openPositions.Max(p => p.CurrentSpreadPerHour)
+                    : opportunityResult?.Diagnostics?.BestRawSpread ?? 0m;
 
             var dto = new DashboardDto
             {
