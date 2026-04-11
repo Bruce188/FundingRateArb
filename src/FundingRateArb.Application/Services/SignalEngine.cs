@@ -438,11 +438,15 @@ public class SignalEngine : ISignalEngine
                     // Gated behind UseBreakEvenSizeFilter — ops opt in via admin UI
                     // because the filter is strictly more aggressive than the legacy
                     // passesMinEdge check.
-                    var minHoldHoursForFloor = (decimal)Math.Max(config.MinHoldTimeHours, 1);
+                    //
+                    // MinHoldTimeHours=0 is a legal config value meaning "no worst-case
+                    // floor at all". With the filter enabled, that semantic is
+                    // incoherent (if the bot could exit immediately, it would never
+                    // amortize any fees) so we fail-closed: no opportunity passes.
                     var breakEvenSizeFloor = minEdgeMultiplier * totalEntryCost;
-                    var minHoldYield = net * minHoldHoursForFloor;
+                    var minHoldYield = net * config.MinHoldTimeHours;
                     var passesBreakEvenSize = !config.UseBreakEvenSizeFilter
-                        || minHoldYield >= breakEvenSizeFloor;
+                        || (config.MinHoldTimeHours > 0 && minHoldYield >= breakEvenSizeFloor);
 
                     if (net >= config.OpenThreshold && passesBreakEvenSize && passesMinEdge)
                     {
