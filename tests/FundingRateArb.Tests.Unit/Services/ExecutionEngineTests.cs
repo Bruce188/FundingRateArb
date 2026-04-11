@@ -339,21 +339,35 @@ public class ExecutionEngineTests
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse("zero-fill long leg must not transition to Open");
+        result.Error.Should().Contain("zero quantity");
         savedPos.Should().NotBeNull();
         savedPos!.Status.Should().Be(PositionStatus.EmergencyClosed);
         savedPos.CloseReason.Should().Be(CloseReason.EmergencyLegFailed);
+        // DefaultOpp's ShortExchangeName is "Lighter" which has a 0m taker fee rate
+        // (see ExchangeFeeConstants), so SetEmergencyCloseFees writes 0 fees here even
+        // when called correctly. Fee-accounting regression is guarded by the mirror
+        // test OpenPosition_ShortLegZeroFill_EmergencyClosesLongLeg_MarksEmergencyClosed
+        // whose surviving LONG leg is Hyperliquid (fee rate 0.00045m > 0).
         _mockShortConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()),
-            Times.AtLeastOnce(),
-            "the SHORT leg filled positively and must be emergency-closed");
+            Times.Once,
+            "the SHORT leg must be emergency-closed exactly once");
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never,
             "the LONG leg filled zero quantity — nothing to emergency-close");
+        _mockPositions.Verify(
+            p => p.Update(It.Is<ArbitragePosition>(pos => pos.Status == PositionStatus.EmergencyClosed)),
+            Times.Once,
+            "the guard must call Update with the EmergencyClosed state");
         _mockAlerts.Verify(
             a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed && al.Severity == AlertSeverity.Critical)),
-            Times.AtLeastOnce(),
-            "a critical LegFailed alert must be raised");
+            Times.Once,
+            "exactly one critical LegFailed alert must be raised");
+        _mockUow.Verify(
+            u => u.SaveAsync(It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Opening persist + EmergencyClosed persist — exactly two saves on this path");
     }
 
     [Fact]
@@ -376,17 +390,29 @@ public class ExecutionEngineTests
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero quantity");
         savedPos.Should().NotBeNull();
         savedPos!.Status.Should().Be(PositionStatus.EmergencyClosed);
         savedPos.CloseReason.Should().Be(CloseReason.EmergencyLegFailed);
+        savedPos.EntryFeesUsdc.Should().BeGreaterThan(0m,
+            "the surviving long leg's fees must be recorded on the emergency-closed position");
+        savedPos.ExitFeesUsdc.Should().BeGreaterThan(0m);
+        savedPos.RealizedPnl.Should().BeLessThan(0m);
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()),
-            Times.AtLeastOnce(),
-            "the LONG leg filled positively and must be emergency-closed");
+            Times.Once,
+            "the LONG leg must be emergency-closed exactly once");
         _mockShortConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never,
             "the SHORT leg filled zero quantity — nothing to emergency-close");
+        _mockPositions.Verify(
+            p => p.Update(It.Is<ArbitragePosition>(pos => pos.Status == PositionStatus.EmergencyClosed)),
+            Times.Once);
+        _mockUow.Verify(
+            u => u.SaveAsync(It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Opening persist + EmergencyClosed persist");
     }
 
     [Fact]
@@ -406,9 +432,13 @@ public class ExecutionEngineTests
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse();
+        result.Error.Should().Contain("zero quantity");
         savedPos.Should().NotBeNull();
         savedPos!.Status.Should().Be(PositionStatus.EmergencyClosed);
         savedPos.CloseReason.Should().Be(CloseReason.EmergencyLegFailed);
+        savedPos.EntryFeesUsdc.Should().Be(0m,
+            "both legs filled zero — no surviving leg to record fees against");
+        savedPos.ExitFeesUsdc.Should().Be(0m);
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never,
@@ -417,6 +447,13 @@ public class ExecutionEngineTests
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never,
             "both legs filled zero quantity — nothing to emergency-close on short");
+        _mockPositions.Verify(
+            p => p.Update(It.Is<ArbitragePosition>(pos => pos.Status == PositionStatus.EmergencyClosed)),
+            Times.Once);
+        _mockUow.Verify(
+            u => u.SaveAsync(It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Opening persist + EmergencyClosed persist");
     }
 
     [Fact]
