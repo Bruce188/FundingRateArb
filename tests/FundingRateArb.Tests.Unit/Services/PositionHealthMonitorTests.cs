@@ -51,6 +51,9 @@ public class PositionHealthMonitorTests
         _mockFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(_mockLongConnector.Object);
         _mockFactory.Setup(f => f.GetConnector("Lighter")).Returns(_mockShortConnector.Object);
 
+        _mockLongConnector.Setup(c => c.HasCredentials).Returns(true);
+        _mockShortConnector.Setup(c => c.HasCredentials).Returns(true);
+
         // Default: no stale positions for M4 reaper
         _mockPositions.Setup(p => p.GetByStatusAsync(It.IsAny<PositionStatus>()))
             .ReturnsAsync([]);
@@ -2161,6 +2164,31 @@ public class PositionHealthMonitorTests
             minLiquidationDistance: null);
 
         reason.Should().BeNull();
+    }
+
+    // ── HasCredentials guard skips margin state fetch ─────────────────────────
+
+    [Fact]
+    public async Task FetchMarginState_SkipsCall_WhenConnectorLacksCredentials()
+    {
+        // Arrange: long connector has no credentials
+        _mockLongConnector.Setup(c => c.HasCredentials).Returns(false);
+
+        var pos = MakeOpenPosition();
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices();
+
+        // Act
+        await _sut.CheckAndActAsync();
+
+        // Assert: margin state was never fetched
+        _mockLongConnector.Verify(
+            c => c.GetPositionMarginStateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        _mockShortConnector.Verify(
+            c => c.GetPositionMarginStateAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     // ── Margin utilization alert fires at configured threshold ─────────────────

@@ -40,6 +40,8 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
 
     public bool IsEstimatedFillExchange => false;
 
+    public bool HasCredentials => !string.IsNullOrEmpty(_vaultAddress);
+
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
