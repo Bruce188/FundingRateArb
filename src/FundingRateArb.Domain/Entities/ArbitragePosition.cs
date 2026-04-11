@@ -60,6 +60,27 @@ public class ArbitragePosition
     /// <summary>Actual filled quantity on the short exchange (for audit trail).</summary>
     public decimal? ShortFilledQuantity { get; set; }
 
+    /// <summary>
+    /// Price at which the long leg closed. Populated by PositionCloser on the retry round
+    /// that actually closes the long leg (may be a different round than the short leg).
+    /// Consumed by the PnL computation path so multi-round closes reconstruct the full
+    /// price-PnL component even when FinalizeClosedPositionAsync runs in a later cycle.
+    /// Null for positions closed before this field was added or positions still open.
+    /// </summary>
+    public decimal? LongExitPrice { get; set; }
+
+    /// <summary>Quantity actually filled when the long leg closed. See <see cref="LongExitPrice"/>.</summary>
+    public decimal? LongExitQty { get; set; }
+
+    /// <summary>
+    /// Price at which the short leg closed. Populated by PositionCloser on the retry round
+    /// that actually closes the short leg. See <see cref="LongExitPrice"/> for semantics.
+    /// </summary>
+    public decimal? ShortExitPrice { get; set; }
+
+    /// <summary>Quantity actually filled when the short leg closed. See <see cref="ShortExitPrice"/>.</summary>
+    public decimal? ShortExitQty { get; set; }
+
     public DateTime OpenedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>

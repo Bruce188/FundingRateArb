@@ -158,13 +158,18 @@ public class PositionCloser : IPositionCloser
                     return;
                 }
 
-                // Exactly one leg failed — mark the successful leg as closed, leave in Closing for retry
+                // Exactly one leg failed — mark the successful leg as closed, leave in Closing for retry.
+                // Capture the successful leg's exit price/quantity so the next cycle's PnL
+                // computation (or FinalizeClosedPositionAsync) can reconstruct the full
+                // price-PnL rather than silently dropping this round's fill data.
                 if (!longFailed && needLongClose)
                 {
                     var longResult = longCloseTask.IsCompletedSuccessfully ? longCloseTask.Result : null;
                     if (longResult?.Success == true)
                     {
                         position.LongLegClosed = true;
+                        position.LongExitPrice = longResult.FilledPrice;
+                        position.LongExitQty = longResult.FilledQuantity;
                     }
                 }
                 if (!shortFailed && needShortClose)
@@ -173,6 +178,8 @@ public class PositionCloser : IPositionCloser
                     if (shortResult?.Success == true)
                     {
                         position.ShortLegClosed = true;
+                        position.ShortExitPrice = shortResult.FilledPrice;
+                        position.ShortExitQty = shortResult.FilledQuantity;
                     }
                 }
 
@@ -213,14 +220,20 @@ public class PositionCloser : IPositionCloser
                 shortClose.FilledQuantity = position.ShortFilledQuantity ?? 0m;
             }
 
-            // Track successful legs — persist even on partial failure for retry
+            // Track successful legs — persist even on partial failure for retry.
+            // Capture exit price/qty so a subsequent cycle (or FinalizeClosedPositionAsync)
+            // can reconstruct the full price-PnL across multi-cycle closes.
             if (longClose.Success && needLongClose)
             {
                 position.LongLegClosed = true;
+                position.LongExitPrice = longClose.FilledPrice;
+                position.LongExitQty = longClose.FilledQuantity;
             }
             if (shortClose.Success && needShortClose)
             {
                 position.ShortLegClosed = true;
+                position.ShortExitPrice = shortClose.FilledPrice;
+                position.ShortExitQty = shortClose.FilledQuantity;
             }
 
             if (!longClose.Success || !shortClose.Success)
@@ -275,19 +288,49 @@ public class PositionCloser : IPositionCloser
                 return;
             }
 
-            // Both legs succeeded this round — compute PnL
-            // For legs that were already closed in a prior round (needLongClose=false or needShortClose=false),
-            // use zero for that leg's PnL contribution since it was already accounted for.
-            var longPnl = needLongClose
-                ? (longClose.FilledPrice - position.LongEntryPrice) * longClose.FilledQuantity
-                : 0m;
-            var shortPnl = needShortClose
-                ? (position.ShortEntryPrice - shortClose.FilledPrice) * shortClose.FilledQuantity
-                : 0m;
+            // Both legs succeeded this round — compute PnL.
+            // For legs that already closed in a prior round (needLongClose=false or needShortClose=false),
+            // the close task in this cycle is a stub (FilledPrice=0, FilledQuantity=0). Reconstruct
+            // that leg's price-PnL contribution from the stored LongExitPrice / ShortExitPrice that
+            // were captured on the cycle that actually closed it. Without this, multi-cycle closes
+            // silently drop the first-round leg's price-PnL component.
+            decimal longExitPrice;
+            decimal longExitQty;
+            if (needLongClose)
+            {
+                longExitPrice = longClose.FilledPrice;
+                longExitQty = longClose.FilledQuantity;
+                position.LongExitPrice = longExitPrice;
+                position.LongExitQty = longExitQty;
+            }
+            else
+            {
+                longExitPrice = position.LongExitPrice ?? 0m;
+                longExitQty = position.LongExitQty ?? 0m;
+            }
 
-            // Record exit fees — reuse exchange names resolved at method entry
-            var longCloseNotional = longClose.FilledPrice * longClose.FilledQuantity;
-            var shortCloseNotional = shortClose.FilledPrice * shortClose.FilledQuantity;
+            decimal shortExitPrice;
+            decimal shortExitQty;
+            if (needShortClose)
+            {
+                shortExitPrice = shortClose.FilledPrice;
+                shortExitQty = shortClose.FilledQuantity;
+                position.ShortExitPrice = shortExitPrice;
+                position.ShortExitQty = shortExitQty;
+            }
+            else
+            {
+                shortExitPrice = position.ShortExitPrice ?? 0m;
+                shortExitQty = position.ShortExitQty ?? 0m;
+            }
+
+            var longPnl = (longExitPrice - position.LongEntryPrice) * longExitQty;
+            var shortPnl = (position.ShortEntryPrice - shortExitPrice) * shortExitQty;
+
+            // Record exit fees — based on the actual (stored-or-fresh) notional per leg.
+            // Reuse exchange names resolved at method entry.
+            var longCloseNotional = longExitPrice * longExitQty;
+            var shortCloseNotional = shortExitPrice * shortExitQty;
             position.ExitFeesUsdc = (longCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(longExchangeName))
                                   + (shortCloseNotional * ExchangeFeeConstants.GetTakerFeeRate(shortExchangeName));
 
@@ -359,36 +402,71 @@ public class PositionCloser : IPositionCloser
 
     /// <summary>
     /// Finalizes a position where both legs are already marked as closed (retry edge case).
-    /// Since leg close data was not captured in prior rounds, uses accumulated funding minus fees as PnL.
+    /// Reconstructs the price-PnL component from the stored LongExitPrice / ShortExitPrice
+    /// fields captured on the cycles that actually closed each leg. Falls back to the legacy
+    /// funding-minus-fees formula only when the stored exit fields are null (pre-migration
+    /// rows or positions that reached this path without the new persistence in place).
+    /// Reconciliation is still skipped here — connectors are not available in the fallback path.
     /// </summary>
     private async Task FinalizeClosedPositionAsync(
         ArbitragePosition position, CloseReason reason,
         string longExchangeName, string shortExchangeName, string assetSymbol,
         CancellationToken ct)
     {
-        // NB2: PnL here is approximate — price-based component is lost because
-        // legs were closed in separate retries without capturing fill data.
-        // Reconciliation skipped — connectors not available in this fallback path.
-        position.RealizedPnl = position.AccumulatedFunding - position.EntryFeesUsdc - position.ExitFeesUsdc;
+        var longExitPrice = position.LongExitPrice ?? 0m;
+        var longExitQty = position.LongExitQty ?? 0m;
+        var shortExitPrice = position.ShortExitPrice ?? 0m;
+        var shortExitQty = position.ShortExitQty ?? 0m;
+
+        var longPnl = longExitPrice > 0m && longExitQty > 0m
+            ? (longExitPrice - position.LongEntryPrice) * longExitQty
+            : 0m;
+        var shortPnl = shortExitPrice > 0m && shortExitQty > 0m
+            ? (position.ShortEntryPrice - shortExitPrice) * shortExitQty
+            : 0m;
+        var pricePnl = longPnl + shortPnl;
+
+        var reconstructed = longExitPrice > 0m && shortExitPrice > 0m;
+
+        position.RealizedPnl = pricePnl + position.AccumulatedFunding
+                             - position.EntryFeesUsdc - position.ExitFeesUsdc;
         position.Status = PositionStatus.Closed;
         position.CloseReason = reason;
         position.ClosedAt = DateTime.UtcNow;
         _uow.Positions.Update(position);
 
-        _logger.LogCritical(
-            "Position #{Id} finalized without price-based PnL or exit fees (legs closed in prior retries). " +
-            "RealizedPnl={Pnl:F4} is approximate: funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4} (exit fees likely 0 — unrecorded)",
-            position.Id, position.RealizedPnl, position.AccumulatedFunding, position.EntryFeesUsdc, position.ExitFeesUsdc);
-
-        _uow.Alerts.Add(new Alert
+        if (reconstructed)
         {
-            UserId = position.UserId,
-            ArbitragePositionId = position.Id,
-            Type = AlertType.LegFailed,
-            Severity = AlertSeverity.Critical,
-            Message = $"Position #{position.Id} closed without price-based PnL (legs closed in separate retries). " +
-                      $"RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
-        });
+            _logger.LogInformation(
+                "Position #{Id} finalized from stored exit prices (legs closed across retries). " +
+                "RealizedPnl={Pnl:F4}: pricePnl={PricePnl:F4}, funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4}",
+                position.Id, position.RealizedPnl, pricePnl, position.AccumulatedFunding,
+                position.EntryFeesUsdc, position.ExitFeesUsdc);
+        }
+        else
+        {
+            _logger.LogCritical(
+                "Position #{Id} finalized with missing exit data (legs closed before exit-capture was added). " +
+                "RealizedPnl={Pnl:F4} is approximate: pricePnl={PricePnl:F4} (partial or zero), funding={Funding:F4}, entryFees={EntryFees:F4}, exitFees={ExitFees:F4}",
+                position.Id, position.RealizedPnl, pricePnl, position.AccumulatedFunding,
+                position.EntryFeesUsdc, position.ExitFeesUsdc);
+        }
+
+        if (!reconstructed)
+        {
+            // Only raise the Critical LegFailed alert on the true fallback path where
+            // exit data is missing. A reconstructed multi-cycle close is a correct close,
+            // not a failure — surfacing it as Critical would train operators to ignore
+            // real leg failures.
+            _uow.Alerts.Add(new Alert
+            {
+                UserId = position.UserId,
+                ArbitragePositionId = position.Id,
+                Type = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message = $"Position #{position.Id} closed without complete exit data. RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
+            });
+        }
 
         _uow.Alerts.Add(new Alert
         {
