@@ -98,6 +98,12 @@ public class PositionCloserTests
         position.CloseReason.Should().Be(CloseReason.Manual);
         position.RealizedPnl.Should().NotBeNull();
         position.ClosedAt.Should().NotBeNull();
+        // Exit-capture fields must be populated on the happy path (profitability-fixes F5):
+        // both legs closed successfully in one cycle → fresh fill data is persisted.
+        position.LongExitPrice.Should().Be(3005m);
+        position.LongExitQty.Should().Be(0.166m);
+        position.ShortExitPrice.Should().Be(2995m);
+        position.ShortExitQty.Should().Be(0.166m);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionClosed)), Times.Once);
     }
 
@@ -370,6 +376,13 @@ public class PositionCloserTests
         _mockLongConnector.Verify(
             c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()),
             Times.Never);
+        // A reconstructed multi-cycle close is a correct close — it must NOT raise a
+        // Critical LegFailed alert; that would train operators to ignore real failures.
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)),
+            Times.Never,
+            "reconstructed multi-cycle close must not emit Critical LegFailed alerts");
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.PositionClosed)), Times.Once);
     }
 
     [Fact]

@@ -452,16 +452,21 @@ public class PositionCloser : IPositionCloser
                 position.EntryFeesUsdc, position.ExitFeesUsdc);
         }
 
-        _uow.Alerts.Add(new Alert
+        if (!reconstructed)
         {
-            UserId = position.UserId,
-            ArbitragePositionId = position.Id,
-            Type = AlertType.LegFailed,
-            Severity = AlertSeverity.Critical,
-            Message = reconstructed
-                ? $"Position #{position.Id} finalized across multi-cycle close with reconstructed price-PnL. RealizedPnl: {position.RealizedPnl:F2} USDC."
-                : $"Position #{position.Id} closed without complete exit data. RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
-        });
+            // Only raise the Critical LegFailed alert on the true fallback path where
+            // exit data is missing. A reconstructed multi-cycle close is a correct close,
+            // not a failure — surfacing it as Critical would train operators to ignore
+            // real leg failures.
+            _uow.Alerts.Add(new Alert
+            {
+                UserId = position.UserId,
+                ArbitragePositionId = position.Id,
+                Type = AlertType.LegFailed,
+                Severity = AlertSeverity.Critical,
+                Message = $"Position #{position.Id} closed without complete exit data. RealizedPnl is approximate: {position.RealizedPnl:F2} USDC.",
+            });
+        }
 
         _uow.Alerts.Add(new Alert
         {
