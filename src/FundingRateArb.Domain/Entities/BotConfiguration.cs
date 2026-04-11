@@ -136,6 +136,14 @@ public class BotConfiguration
     [Range(0.5, 10.0)]
     public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;
 
+    /// <summary>
+    /// When true (default), DivergenceCritical close only fires when the position is past
+    /// its MinHoldTimeHours AND the liquidation distance has fallen below
+    /// LiquidationWarningPct * 2. Set to false to revert to the pre-fix behavior where
+    /// any divergence breach fires an immediate close regardless of hold time or liquidation.
+    /// </summary>
+    public bool UseRiskBasedDivergenceClose { get; set; } = true;
+
     /// <summary>Consecutive snapshots with positive funding spread required before entry.</summary>
     [Range(1, 20)]
     public int MinConsecutiveFavorableCycles { get; set; } = 3;
