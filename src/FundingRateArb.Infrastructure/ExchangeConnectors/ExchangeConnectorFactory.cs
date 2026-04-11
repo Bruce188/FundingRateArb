@@ -20,6 +20,10 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private readonly ILogger<ExchangeConnectorFactory> _logger;
     private readonly ConcurrentDictionary<string, KeyPool> _keyPools = new(StringComparer.OrdinalIgnoreCase);
 
+    // ── Test hook (internal; InternalsVisibleTo FundingRateArb.Tests.Unit) ───────
+    // Set by CreateAsterConnector so tests can assert which credential variant was used.
+    internal AsterCredentials? LastAsterCredentials { get; private set; }
+
     private static readonly Dictionary<string, Type> ConnectorTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         { "Hyperliquid", typeof(HyperliquidConnector) },
@@ -195,6 +199,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             options.ApiCredentials = credentials;
         });
 
+        LastAsterCredentials = credentials;
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
         var logger = _serviceProvider.GetRequiredService<ILogger<AsterConnector>>();
         var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
