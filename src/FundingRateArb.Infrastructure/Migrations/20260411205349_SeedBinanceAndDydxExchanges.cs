@@ -2,18 +2,18 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace FundingRateArb.Infrastructure.Migrations
+namespace FundingRateArb.Infrastructure.Migrations;
+
+/// <inheritdoc />
+public partial class SeedBinanceAndDydxExchanges : Migration
 {
     /// <inheritdoc />
-    public partial class SeedBinanceAndDydxExchanges : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            // Insert Binance exchange if it doesn't already exist.
-            // Values match DbSeeder.cs lines 115-130.
-            // FundingInterval: EightHourly = 2, FundingSettlementType: Periodic = 1
-            migrationBuilder.Sql(@"
+        // Insert Binance exchange if it doesn't already exist.
+        // Values match DbSeeder.cs lines 115-130.
+        // FundingInterval: EightHourly = 2, FundingSettlementType: Periodic = 1
+        migrationBuilder.Sql(@"
                 IF NOT EXISTS (SELECT 1 FROM Exchanges WHERE Name = 'Binance')
                 BEGIN
                     INSERT INTO Exchanges
@@ -27,10 +27,10 @@ namespace FundingRateArb.Infrastructure.Migrations
                 END
             ");
 
-            // Insert dYdX exchange if it doesn't already exist.
-            // Values match DbSeeder.cs lines 131-141.
-            // FundingInterval: Hourly = 1, FundingSettlementType: Continuous = 0, FundingNotionalPriceType: OraclePrice = 1
-            migrationBuilder.Sql(@"
+        // Insert dYdX exchange if it doesn't already exist.
+        // Values match DbSeeder.cs lines 131-141.
+        // FundingInterval: Hourly = 1, FundingSettlementType: Continuous = 0, FundingNotionalPriceType: OraclePrice = 1
+        migrationBuilder.Sql(@"
                 IF NOT EXISTS (SELECT 1 FROM Exchanges WHERE Name = 'dYdX')
                 BEGIN
                     INSERT INTO Exchanges
@@ -43,14 +43,13 @@ namespace FundingRateArb.Infrastructure.Migrations
                          'dYdX v4 — Cosmos appchain, USDC collateral, hourly funding', 0.0003)
                 END
             ");
-        }
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            // Down is intentionally a no-op.
-            // Removing exchange rows would orphan any UserExchangeCredential rows that reference them.
-            // If you need to reverse this migration, delete credential rows first, then remove the exchanges manually.
-        }
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        // Down is intentionally a no-op.
+        // Removing exchange rows would orphan any UserExchangeCredential rows that reference them.
+        // If you need to reverse this migration, delete credential rows first, then remove the exchanges manually.
     }
 }
