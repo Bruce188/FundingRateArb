@@ -14,6 +14,7 @@ public class UserExchangeCredential
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastUpdatedAt { get; set; }
+    public DateTime? LastUsedAt { get; set; }
 
     // Navigation
     public ApplicationUser User { get; set; } = null!;
