@@ -2191,7 +2191,7 @@ public class LighterConnectorTests
     }
 
     [Fact]
-    public async Task GetFundingPaymentsAsync_PaginatesUntilWindowClosed()
+    public async Task GetFundingPaymentsAsync_PaginatesUntilWindowClosed_AndForwardsCursor()
     {
         const string page1 = """
             {
@@ -2217,6 +2217,7 @@ public class LighterConnectorTests
             """;
 
         var callCount = 0;
+        var capturedUrls = new List<string>();
         var sut = CreateLighterConnectorWithDelegatingHandler(req =>
         {
             var path = req.RequestUri!.PathAndQuery;
@@ -2230,6 +2231,7 @@ public class LighterConnectorTests
             if (path.Contains("positionFunding", StringComparison.OrdinalIgnoreCase))
             {
                 callCount++;
+                capturedUrls.Add(path);
                 var body = callCount == 1 ? page1 : page2;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -2246,6 +2248,43 @@ public class LighterConnectorTests
 
         result.Should().Be(1.00m); // 0.10 + 0.20 + 0.30 + 0.40
         callCount.Should().Be(2);
+
+        capturedUrls[0].Should().Contain("account_index=1");
+        capturedUrls[0].Should().Contain("market_id=0");
+        capturedUrls[0].Should().NotContain("cursor=");
+        capturedUrls[1].Should().Contain("cursor=p2");
+    }
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_NormalizesMillisecondTimestamps()
+    {
+        // Lighter docs declare `timestamp: int64` without a unit. This test locks in
+        // that millisecond-scale timestamps are normalized to seconds in the window filter.
+        const string fundingJson = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744387200000, "amount": "-0.05", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744383600000, "amount": "0.02",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380500000, "amount": "0.03",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380000000, "amount": "-0.01", "rate": "0", "position_id": 1 }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("positionFunding", fundingJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380100).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744384000).UtcDateTime;
+
+        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0.05m); // 0.02 + 0.03 (same window as the seconds-scale test)
     }
 
     [Fact]
@@ -2392,6 +2431,66 @@ public class LighterConnectorTests
             "ZZZ", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
 
         result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsZero_WhenAllTradesReportZeroString()
+    {
+        // Disambiguation between "Lighter returned no PnL" (null) and
+        // "Lighter returned zero PnL" (explicit "0") — load-bearing for reconciliation.
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": "0" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": "0" }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsZero_WhenTradesOffset()
+    {
+        // Two offsetting trades must sum to zero, not null — null must only mean
+        // "no trade in the window carried realized_pnl".
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": "5.00" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": "-5.00" }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0m);
     }
 }
 

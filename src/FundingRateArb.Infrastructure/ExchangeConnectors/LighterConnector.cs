@@ -1760,6 +1760,23 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     }
 
     /// <summary>
+    /// Normalizes a Lighter wire timestamp to unix seconds regardless of whether
+    /// the server returned it in seconds or milliseconds. Lighter documentation
+    /// declares <c>timestamp</c> / <c>executed_at</c> as <c>int64</c> without an
+    /// explicit unit; adjacent perp DEXes on this project (Aster, Hyperliquid) use
+    /// milliseconds, and a silent unit mismatch would cause every reconciliation
+    /// to miss its window. Any value past ~Nov 2286 in seconds must actually be
+    /// milliseconds.
+    /// </summary>
+    private static long NormalizeLighterTimestampToSeconds(long raw)
+    {
+        // 10^12 is ~Nov 2286 in unix seconds (1.0e12 s ≈ 31,688 years after epoch),
+        // so a legitimate seconds-precision timestamp is always below this.
+        const long MillisecondThreshold = 1_000_000_000_000L;
+        return raw >= MillisecondThreshold ? raw / 1000L : raw;
+    }
+
+    /// <summary>
     /// Sums realized PnL reported by Lighter across trades in [from, to] for the given asset.
     /// The <paramref name="side"/> parameter is ignored: Lighter's <c>realized_pnl</c> on a trade
     /// is already signed from the account's perspective.
@@ -1822,8 +1839,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 var oldestTsOnPage = long.MaxValue;
                 foreach (var trade in payload.Trades)
                 {
-                    if (trade.Timestamp < oldestTsOnPage) oldestTsOnPage = trade.Timestamp;
-                    if (trade.Timestamp < fromUnix || trade.Timestamp > toUnix) continue;
+                    var ts = NormalizeLighterTimestampToSeconds(trade.Timestamp);
+                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
+                    if (ts < fromUnix || ts > toUnix) continue;
                     if (string.IsNullOrEmpty(trade.RealizedPnl)) continue;
 
                     total += ParseDecimalOrZero(trade.RealizedPnl);
@@ -1912,8 +1930,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 var oldestTsOnPage = long.MaxValue;
                 foreach (var entry in payload.PositionFunding)
                 {
-                    if (entry.Timestamp < oldestTsOnPage) oldestTsOnPage = entry.Timestamp;
-                    if (entry.Timestamp >= fromUnix && entry.Timestamp <= toUnix)
+                    var ts = NormalizeLighterTimestampToSeconds(entry.Timestamp);
+                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
+                    if (ts >= fromUnix && ts <= toUnix)
                     {
                         total += ParseDecimalOrZero(entry.Amount);
                     }
