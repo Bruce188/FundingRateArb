@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FluentAssertions;
 using FundingRateArb.Application.Common;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
@@ -36,6 +37,7 @@ public class DashboardControllerTests
     private readonly Mock<IServiceScopeFactory> _mockScopeFactory;
     private readonly Mock<IServiceScope> _mockScope;
     private readonly Mock<IServiceProvider> _mockScopeProvider;
+    private readonly Mock<IMarketDataCache> _mockMarketDataCache;
     private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
@@ -96,7 +98,10 @@ public class DashboardControllerTests
         _mockScope.Setup(s => s.ServiceProvider).Returns(_mockScopeProvider.Object);
         _mockScopeFactory.Setup(f => f.CreateScope()).Returns(_mockScope.Object);
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object);
+        _mockMarketDataCache = new Mock<IMarketDataCache>();
+        _mockMarketDataCache.Setup(m => m.GetLastFetchTime()).Returns((DateTime?)null);
+
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -852,5 +857,26 @@ public class DashboardControllerTests
             s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()),
             Times.Once,
             "Opportunities should be cached on second call within TTL");
+    }
+
+    [Fact]
+    public async Task Index_SetsLastFundingRateFetch_FromMarketDataCache()
+    {
+        // Arrange
+        var fetchTime = new DateTime(2026, 4, 11, 12, 0, 0, DateTimeKind.Utc);
+        _mockMarketDataCache.Setup(m => m.GetLastFetchTime()).Returns(fetchTime);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                DatabaseAvailable = true,
+                Diagnostics = new PipelineDiagnosticsDto(),
+            });
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert
+        var vm = result.Should().BeOfType<ViewResult>().Subject.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        vm.LastFundingRateFetch.Should().Be(fetchTime);
     }
 }

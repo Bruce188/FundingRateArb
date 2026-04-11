@@ -58,7 +58,7 @@
             <dd class="col-sm-7">@pos.Leverage x</dd>
 
             <dt class="col-sm-5">Opened At</dt>
-            <dd class="col-sm-7">@pos.OpenedAt.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
+            <dd class="col-sm-7">@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
 
             @if (pos.ClosedAt.HasValue)
             {

@@ -18,4 +18,10 @@ public interface IMarketDataCache
 
     bool IsStale(string exchangeName, string symbol, TimeSpan maxAge);
     bool IsStaleForExchange(string exchangeName, TimeSpan maxAge);
+
+    /// <summary>
+    /// Returns the most recent cache-update timestamp across all cached entries.
+    /// Returns null when the cache is empty.
+    /// </summary>
+    DateTime? GetLastFetchTime();
 }

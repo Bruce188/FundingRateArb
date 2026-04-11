@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Extensions;
@@ -28,6 +29,7 @@ public class DashboardController : Controller
     private readonly IMemoryCache _cache;
     private readonly ICircuitBreakerManager _circuitBreakerManager;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IMarketDataCache _marketDataCache;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
     private const string AuthenticatedOpportunityCacheKey = "dashboard:auth:opportunities";
@@ -40,7 +42,8 @@ public class DashboardController : Controller
         IUserSettingsService userSettings,
         IMemoryCache cache,
         ICircuitBreakerManager circuitBreakerManager,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        IMarketDataCache marketDataCache)
     {
         _uow = uow;
         _logger = logger;
@@ -50,6 +53,7 @@ public class DashboardController : Controller
         _cache = cache;
         _circuitBreakerManager = circuitBreakerManager;
         _scopeFactory = scopeFactory;
+        _marketDataCache = marketDataCache;
     }
 
     [AllowAnonymous]
@@ -270,7 +274,7 @@ public class DashboardController : Controller
                 DatabaseAvailable = result.DatabaseAvailable,
                 ActiveCooldowns = _circuitBreakerManager.GetActivePairCooldowns().ToList(),
                 CircuitBreakerStates = _circuitBreakerManager.GetCircuitBreakerStates().ToList(),
-                LastFundingRateFetch = result.Diagnostics is not null ? DateTime.UtcNow : null,
+                LastFundingRateFetch = result.Diagnostics is not null ? _marketDataCache.GetLastFetchTime() : null,
             };
 
             if (User.IsInRole("Admin") && botConfig is not null)

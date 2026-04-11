@@ -61,6 +61,14 @@ public class ArbitragePosition
     public decimal? ShortFilledQuantity { get; set; }
 
     public DateTime OpenedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// UTC timestamp when both exchange legs confirmed execution.
+    /// Null for historical positions (pre-migration) or while still in Opening status.
+    /// Display as: ConfirmedAtUtc ?? OpenedAt.
+    /// </summary>
+    public DateTime? ConfirmedAtUtc { get; set; }
+
     public DateTime? ClosedAt { get; set; }
 
     [MaxLength(500)]

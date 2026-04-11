@@ -287,6 +287,7 @@ public class WlfiPairScenarioTests
 
         public bool IsStale(string exchangeName, string symbol, TimeSpan maxAge) => false;
         public bool IsStaleForExchange(string exchangeName, TimeSpan maxAge) => false;
+        public DateTime? GetLastFetchTime() => null;
     }
 
     private sealed class StubLeverageTierProvider : ILeverageTierProvider

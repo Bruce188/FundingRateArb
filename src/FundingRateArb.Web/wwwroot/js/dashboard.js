@@ -158,11 +158,12 @@
         tr.appendChild(tdFunding);
 
         var tdTime = document.createElement("td");
-        if (position.openedAt) {
+        var openedValue = position.confirmedAtUtc || position.openedAt;
+        if (openedValue) {
             var time = document.createElement("time");
             time.className = "local-time";
-            time.setAttribute("datetime", position.openedAt);
-            time.textContent = new Date(position.openedAt).toLocaleString();
+            time.setAttribute("datetime", openedValue);
+            time.textContent = new Date(openedValue).toLocaleString();
             tdTime.appendChild(time);
         }
         tr.appendChild(tdTime);
