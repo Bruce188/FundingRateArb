@@ -168,6 +168,27 @@ else
                                            placeholder="Enter the private key for this API key index" />
                                 </div>
                             }
+                            else if (exchange.ExchangeType == "dydx")
+                            {
+                                @* dYdX: BIP39 mnemonic (24-word secret phrase) *@
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Secret Phrase</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedPrivateKey is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedPrivateKey
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing phrase.</div>
+                                    }
+                                    <textarea class="form-control" name="privateKey"
+                                              autocomplete="new-password"
+                                              rows="3"
+                                              placeholder="Enter your 24-word dYdX Chain secret phrase (space-separated)"></textarea>
+                                    <small class="text-muted">Your dYdX Chain address is derived from this phrase and stored securely. The phrase is never shown after saving.</small>
+                                </div>
+                            }
                             else if (exchange.ExchangeType == "aster-v3")
                             {
                                 @* V1 legacy migration banner — shown only for users with old HMAC credentials *@

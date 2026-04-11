@@ -112,6 +112,21 @@ public class SettingsController : Controller
             }
         }
 
+        // Per-exchange validation: look up the exchange name by ID to determine the exchange type
+        var exchanges = await _settings.GetAvailableExchangesAsync();
+        var exchange = exchanges.FirstOrDefault(e => e.Id == exchangeId);
+        var exchangeType = exchange is not null ? GetExchangeType(exchange.Name) : "cex";
+
+        if (exchangeType == "dydx" && !string.IsNullOrWhiteSpace(privateKey))
+        {
+            var wordCount = privateKey.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+            if (wordCount != 12 && wordCount != 24)
+            {
+                TempData["Error"] = "dYdX mnemonic must be exactly 12 or 24 words.";
+                return RedirectToAction(nameof(ApiKeys));
+            }
+        }
+
         await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex);
         TempData["Success"] = "API key saved successfully.";
         _logger.LogInformation("User {UserId} saved credentials for exchange {ExchangeId}", userId, exchangeId);
@@ -170,6 +185,13 @@ public class SettingsController : Controller
                 hasLegacyV1Credentials = !string.IsNullOrEmpty(decrypted.ApiKey)
                     && string.IsNullOrEmpty(decrypted.WalletAddress);
             }
+            else if (exchangeType == "dydx")
+            {
+                // dYdX stores a BIP39 mnemonic in PrivateKey — mask it entirely.
+                // Partial reveal would leak word-boundary information.
+                maskedWallet = MaskSecret(decrypted.WalletAddress);
+                maskedPrivateKey = MaskPrivateKey(decrypted.PrivateKey);
+            }
             else
             {
                 maskedWallet = MaskSecret(decrypted.WalletAddress);
@@ -201,6 +223,7 @@ public class SettingsController : Controller
             "hyperliquid" => "hyperliquid",
             "lighter" => "lighter",
             "aster" => "aster-v3",
+            "dydx" => "dydx",
             _ => "cex"
         };
 
