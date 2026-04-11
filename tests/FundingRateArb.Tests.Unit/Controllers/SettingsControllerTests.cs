@@ -417,6 +417,118 @@ public class SettingsControllerTests
             null, null), Times.Once);
     }
 
+    // ── dYdX + Binance controller tests ──────────────────────────────────────────
+
+    [Fact]
+    public async Task SaveApiKey_Dydx_AcceptsValid24WordMnemonic()
+    {
+        // Arrange
+        // BIP39 canonical test vector 3 (23 × "abandon" + "art") — valid 24-word phrase accepted by NBitcoin.
+        const string mnemonic24 =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon art";
+        SetupAuthenticatedUser();
+        _mockSettings
+            .Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { new() { Id = 10, Name = "dYdX", IsActive = true, IsDataOnly = false } });
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 10,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: null,
+            privateKey: mnemonic24,
+            subAccountAddress: null,
+            apiKeyIndex: null);
+
+        // Assert — no error, redirected to ApiKeys
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().BeNull("a valid 24-word mnemonic must not produce an error");
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 10, null, null, null, mnemonic24, null, null), Times.Once);
+    }
+
+    [Fact]
+    public async Task SaveApiKey_Dydx_RejectsMnemonicWithWrongWordCount()
+    {
+        // Arrange — 3-word phrase is clearly invalid
+        SetupAuthenticatedUser();
+        _mockSettings
+            .Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { new() { Id = 10, Name = "dYdX", IsActive = true, IsDataOnly = false } });
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 10,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: null,
+            privateKey: "abandon abandon abandon",
+            subAccountAddress: null,
+            apiKeyIndex: null);
+
+        // Assert — error must mention "12 or 24"
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().NotBeNull();
+        _controller.TempData["Error"]!.ToString().Should().Contain("12 or 24");
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            It.IsAny<string>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<string?>(),
+            It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SaveApiKey_Binance_RoundTripsApiKeyAndSecret()
+    {
+        // Arrange — Binance uses the default "cex" exchange type (falls through the switch)
+        SetupAuthenticatedUser();
+        _mockSettings
+            .Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { new() { Id = 20, Name = "Binance", IsActive = true, IsDataOnly = false } });
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 20,
+            apiKey: "testkey",
+            apiSecret: "testsecret",
+            walletAddress: null,
+            privateKey: null,
+            subAccountAddress: null,
+            apiKeyIndex: null);
+
+        // Assert — no error, SaveCredentialAsync called with correct args
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().BeNull();
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 20, "testkey", "testsecret", null, null, null, null), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetExchangeType_ReturnsDydx_ForDydxName()
+    {
+        // Tested indirectly through SaveApiKey: a 3-word mnemonic triggers the dYdX validation
+        // path (returns error), confirming that GetExchangeType("dYdX") returns "dydx".
+        SetupAuthenticatedUser();
+        _mockSettings
+            .Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { new() { Id = 10, Name = "dYdX", IsActive = true, IsDataOnly = false } });
+
+        // 3-word phrase — rejected only if GetExchangeType resolves to "dydx"
+        var result = await _controller.SaveApiKey(
+            exchangeId: 10, apiKey: null, apiSecret: null,
+            walletAddress: null, privateKey: "abandon abandon abandon",
+            subAccountAddress: null, apiKeyIndex: null);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().NotBeNull(
+            "dYdX word-count validation must fire, proving GetExchangeType returned \"dydx\"");
+    }
+
     [Fact]
     public async Task ApiKeys_AsterWithV1Credentials_DisplaysLegacyBanner()
     {

@@ -14,7 +14,7 @@ public class ExchangeCredentialItem
 
     /// <summary>
     /// Identifies the exchange type for per-exchange form rendering.
-    /// Values: "cex", "hyperliquid", "lighter", "aster-v3".
+    /// Values: "cex", "hyperliquid", "lighter", "aster-v3", "dydx".
     /// </summary>
     public string ExchangeType { get; set; } = "cex";
 
