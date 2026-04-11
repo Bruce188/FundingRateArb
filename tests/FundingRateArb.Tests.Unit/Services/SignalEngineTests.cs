@@ -2203,6 +2203,11 @@ public class SignalEngineTests
             FeeAmortizationHours = 12,
             MinConsecutiveFavorableCycles = 1,
             MinEdgeMultiplier = 3m,
+            // F8: enable the opt-in break-even-size filter + raise MinHoldTimeHours
+            // above FeeAmortizationHours so the new check passes at these inputs,
+            // leaving the edge-guardrail counter as the one that fires.
+            UseBreakEvenSizeFilter = true,
+            MinHoldTimeHours = 48,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
@@ -2219,10 +2224,13 @@ public class SignalEngineTests
         result.AllNetPositive.Should().NotBeEmpty(
             "the filtered opportunity should still appear in AllNetPositive for diagnostics");
         // The edge-guardrail counter (not NetPositiveBelowThreshold) should increment
-        // because the opportunity passed OpenThreshold but failed the 3x edge check.
+        // because the opportunity passed OpenThreshold and the break-even-size floor
+        // but still failed the 3x edge check.
         result.Diagnostics!.NetPositiveBelowEdgeGuardrail.Should().BeGreaterThan(0);
         result.Diagnostics.NetPositiveBelowThreshold.Should().Be(0,
             "this opportunity is above OpenThreshold so the threshold counter does not fire");
+        result.Diagnostics.PairsFilteredByBreakEvenSize.Should().Be(0,
+            "MinHoldTimeHours=48 makes the break-even-size check permissive enough to pass");
     }
 
     [Fact]
@@ -2829,5 +2837,214 @@ public class SignalEngineTests
         result.Should().NotBeEmpty(
             "spread between Hyperliquid and Binance is above threshold; opportunity must be returned");
         strictProvider.VerifyNoOtherCalls();
+    }
+
+    // ── F8: break-even-size filter (profitability-fixes) ─────────────
+
+    [Fact]
+    public async Task SignalEngine_FiltersOpportunity_WhenMinHoldYieldBelowFeeFloor()
+    {
+        // Opportunity that passes OpenThreshold and the edge-guardrail (FeeAmortizationHours=12)
+        // but fails the new break-even-size check (MinHoldTimeHours=2).
+        // Inputs: takerFee 0.0004 per leg → totalEntryCost ≈ 0.0016.
+        //   breakEvenSizeFloor = 3 × 0.0016 = 0.0048
+        //   spread ≈ 0.0006 → net ≈ 0.000467
+        //   minHoldYield = 0.000467 × 2 = 0.000934 → FAIL (< 0.0048)
+        //   minEdgeThreshold = 3 × 0.0016/12 ≈ 0.0004 → net 0.000467 ≥ 0.0004 → PASS
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0006m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+            MinHoldTimeHours = 2,
+            UseBreakEvenSizeFilter = true,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty(
+            "net × MinHoldTimeHours (≈0.0009) is below MinEdgeMultiplier × totalEntryCost (≈0.0048)");
+        result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(1);
+        result.Diagnostics.NetPositiveBelowEdgeGuardrail.Should().Be(0,
+            "the new counter must take the opportunity before the old counter can fire");
+    }
+
+    [Fact]
+    public async Task SignalEngine_AdmitsOpportunity_WhenMinHoldYieldCoversFeeFloor()
+    {
+        // Opportunity with net high enough that both checks pass.
+        //   totalEntryCost ≈ 0.0016, MinHoldTimeHours = 2, MinEdgeMultiplier = 3
+        //   breakEvenSizeFloor = 3 × 0.0016 = 0.0048
+        //   spread = 0.0030 → net ≈ 0.00287
+        //   minHoldYield = 0.00287 × 2 = 0.00573 ≥ 0.0048 ✓
+        //   minEdgeThreshold = 0.0004 → net 0.00287 ≥ 0.0004 ✓
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+            MinHoldTimeHours = 2,
+            UseBreakEvenSizeFilter = true,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0030m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().HaveCount(1);
+        result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(0);
+        result.Diagnostics.NetPositiveBelowEdgeGuardrail.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task SignalEngine_CountsEdgeGuardrail_WhenBreakEvenPasses_ButFeeAmortFails()
+    {
+        // Ordering guard: when MinHoldTimeHours is high enough that the break-even-size
+        // check passes but FeeAmortizationHours is short enough that the edge-guardrail
+        // still fails, the old counter must still fire.
+        //   MinHoldTimeHours = 24 (unusually high), FeeAmortizationHours = 12
+        //   totalEntryCost ≈ 0.0016
+        //   breakEvenSizeFloor = 3 × 0.0016 = 0.0048
+        //   net ≈ 0.000267 → minHoldYield = 0.000267 × 24 = 0.00640 ≥ 0.0048 ✓ BreakEven PASS
+        //   minEdgeThreshold = 3 × 0.0016/12 = 0.0004 → net 0.000267 < 0.0004 ✗ MinEdge FAIL
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0004m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 48,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+            MinHoldTimeHours = 24,
+            UseBreakEvenSizeFilter = true,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0004m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty(
+            "net passes break-even-size with minHoldHours=24 but still fails the 3x edge guardrail");
+        result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(0);
+        result.Diagnostics.NetPositiveBelowEdgeGuardrail.Should().Be(1,
+            "when break-even-size passes but edge-guardrail fails, the original counter must still fire");
+    }
+
+    [Fact]
+    public async Task SignalEngine_CountsOnlyBreakEvenSize_WhenBothChecksFail()
+    {
+        // Regression guard on the ordering of the classification chain: if an
+        // opportunity fails BOTH the break-even-size floor AND the edge-guardrail,
+        // only the stricter (break-even-size) counter increments. A reordering
+        // bug would silently re-route the count into the edge-guardrail bucket.
+        //   totalEntryCost ≈ 0.0016 (0.04% taker × 2 × 2 legs)
+        //   MinHoldTimeHours = 2, MinEdgeMultiplier = 3 → breakEvenFloor = 0.0048
+        //   FeeAmortizationHours = 12 → minEdgeThreshold = 0.0004
+        //   Choose spread = 0.0004:
+        //     fees per hour ≈ 0.000133 → net ≈ 0.000267
+        //     net (0.000267) >= OpenThreshold (0.0001) ✓
+        //     minHoldYield = 0.000267 × 2 = 0.000534 < 0.0048 ✗ break-even fails
+        //     passesMinEdge: 0.000267 < 0.0004 ✗ edge-guardrail fails
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0004m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+            MinHoldTimeHours = 2,
+            UseBreakEvenSizeFilter = true,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0002m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty();
+        result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(1,
+            "stricter filter takes the counter first");
+        result.Diagnostics.NetPositiveBelowEdgeGuardrail.Should().Be(0,
+            "legacy counter must not double-count an opportunity already taken by the stricter filter");
+    }
+
+    [Fact]
+    public async Task SignalEngine_BreakEvenFilter_FailsClosed_WhenMinHoldTimeHoursIsZero()
+    {
+        // When MinHoldTimeHours=0 with the filter enabled, the semantic is incoherent —
+        // a zero worst-case hold can never amortize any fees — so the filter fails-closed
+        // and rejects every opportunity that would have passed OpenThreshold.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m, takerFeeRate: 0.0004m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 24,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+            MinEdgeMultiplier = 3m,
+            MinHoldTimeHours = 0,
+            UseBreakEvenSizeFilter = true,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0030m } });
+
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Opportunities.Should().BeEmpty(
+            "MinHoldTimeHours=0 with filter on must reject every opportunity");
+        result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(1);
     }
 }

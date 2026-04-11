@@ -327,13 +327,24 @@
                                                     @dx.PairsFilteredByVolume pairs filtered &mdash; volume below $@dx.MinVolumeThreshold.ToString("N0") on one or both legs.
                                                 </div>
                                             }
-                                            else if (dx.PairsPassing == 0 && (dx.PairsFilteredByThreshold > 0 || dx.NetPositiveBelowThreshold > 0 || dx.NetPositiveBelowEdgeGuardrail > 0))
+                                            else if (dx.PairsPassing == 0 && (dx.PairsFilteredByThreshold > 0 || dx.NetPositiveBelowThreshold > 0 || dx.NetPositiveBelowEdgeGuardrail > 0 || dx.PairsFilteredByBreakEvenSize > 0))
                                             {
                                                 <div class="alert alert-info mb-0 d-inline-block">
-                                                    @(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold + dx.NetPositiveBelowEdgeGuardrail) pairs below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold.
+                                                    @(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold + dx.NetPositiveBelowEdgeGuardrail + dx.PairsFilteredByBreakEvenSize) pairs rejected by profitability filters.
+                                                    @if (dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold > 0)
+                                                    {
+                                                        <br />
+                                                        <strong>@(dx.PairsFilteredByThreshold + dx.NetPositiveBelowThreshold) below @((dx.OpenThreshold * 100).ToString("F3"))% net yield threshold</strong><span>.</span>
+                                                    }
                                                     @if (dx.NetPositiveBelowThreshold > 0)
                                                     {
-                                                        <strong>@dx.NetPositiveBelowThreshold profitable (adaptive eligible).</strong>
+                                                        <strong> @dx.NetPositiveBelowThreshold profitable (adaptive eligible).</strong>
+                                                    }
+                                                    @if (dx.PairsFilteredByBreakEvenSize > 0)
+                                                    {
+                                                        <br />
+                                                        <strong>@dx.PairsFilteredByBreakEvenSize filtered by break-even-size floor</strong>
+                                                        <span> &mdash; net &times; MinHoldTimeHours below MinEdgeMultiplier &times; fees.</span>
                                                     }
                                                     @if (dx.NetPositiveBelowEdgeGuardrail > 0)
                                                     {
@@ -341,7 +352,7 @@
                                                         <strong>@dx.NetPositiveBelowEdgeGuardrail above threshold but below the 3&times; edge guardrail</strong>
                                                         <span> &mdash; loosen MinEdgeMultiplier to surface.</span>
                                                     }
-                                                    Best raw spread: @((dx.BestRawSpread * 100).ToString("F4"))%.
+                                                    <br />Best raw spread: @((dx.BestRawSpread * 100).ToString("F4"))%.
                                                 </div>
                                             }
                                             else

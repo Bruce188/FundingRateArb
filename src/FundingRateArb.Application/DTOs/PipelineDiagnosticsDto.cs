@@ -17,6 +17,15 @@ public class PipelineDiagnosticsDto
     /// </summary>
     public int NetPositiveBelowEdgeGuardrail { get; set; }
 
+    /// <summary>
+    /// Opportunities filtered because net yield × MinHoldTimeHours would not cover
+    /// MinEdgeMultiplier × totalEntryCost — the bot cannot realistically profit from
+    /// these inside its worst-case hold window, regardless of position size. Distinct
+    /// from NetPositiveBelowEdgeGuardrail, which uses the more forgiving
+    /// FeeAmortizationHours as its denominator.
+    /// </summary>
+    public int PairsFilteredByBreakEvenSize { get; set; }
+
     public int PairsFilteredByBreakeven { get; set; }
 
     /// <summary>
