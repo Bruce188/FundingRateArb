@@ -587,16 +587,31 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Critical divergence close per Analysis Section 4.6: when live mark-price spread between
         // the two exchanges exceeds 2× the alert threshold (so 4× entry spread cost by default),
-        // the basis cost to exit will dominate any remaining funding income — close immediately
-        // regardless of PnL target, because continuing to accumulate funding does not offset the
-        // widening exit slippage.
+        // the basis cost to exit will dominate any remaining funding income. Profitability-fixes
+        // F4: in a delta-neutral hedge, mark-price divergence alone is NOT a closure signal — the
+        // real risks are liquidation, funding sign flip, and leg drift. So when
+        // UseRiskBasedDivergenceClose is true (default), we require both a minimum hold window
+        // and an unhealthy liquidation distance before escalating to a close. The old
+        // threshold-only behavior is preserved behind the feature flag for rollback safety.
         var currentDivergencePct = pos.CurrentDivergencePct ?? 0m;
         var divergenceCloseThreshold = entrySpreadCostPct > 0m
             ? entrySpreadCostPct * config.DivergenceAlertMultiplier * 2m
             : 0m;
         if (divergenceCloseThreshold > 0m && currentDivergencePct > divergenceCloseThreshold)
         {
-            return CloseReason.DivergenceCritical;
+            if (!config.UseRiskBasedDivergenceClose)
+            {
+                // Legacy behavior: fire immediately on threshold breach.
+                return CloseReason.DivergenceCritical;
+            }
+
+            var pastMinHoldTime = hoursOpen >= (decimal)config.MinHoldTimeHours;
+            var liquidationUnhealthy = minLiquidationDistance.HasValue
+                && minLiquidationDistance.Value < config.LiquidationWarningPct * 2m;
+            if (pastMinHoldTime && liquidationUnhealthy)
+            {
+                return CloseReason.DivergenceCritical;
+            }
         }
 
         if (config.AdaptiveHoldEnabled && pos.AccumulatedFunding > 0)

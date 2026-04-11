@@ -101,6 +101,7 @@ public class BotConfigRepository : IBotConfigRepository
         LiquidationWarningPct = src.LiquidationWarningPct,
         ReconciliationIntervalCycles = src.ReconciliationIntervalCycles,
         DivergenceAlertMultiplier = src.DivergenceAlertMultiplier,
+        UseRiskBasedDivergenceClose = src.UseRiskBasedDivergenceClose,
         MinConsecutiveFavorableCycles = src.MinConsecutiveFavorableCycles,
         FundingFlipExitCycles = src.FundingFlipExitCycles,
         StablecoinAlertThresholdPct = src.StablecoinAlertThresholdPct,

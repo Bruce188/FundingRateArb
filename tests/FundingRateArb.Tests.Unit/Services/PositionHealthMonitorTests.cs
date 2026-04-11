@@ -783,6 +783,119 @@ public class PositionHealthMonitorTests
         PositionHealthMonitor.GetTakerFeeRate("Hyperliquid", "Aster").Should().Be(0.00085m);   // 0.00045 + 0.0004
     }
 
+    // ── DivergenceCritical risk-based close (profitability-fixes F4) ─────────
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceCritical_PreHoldTime_DoesNotFire()
+    {
+        // 30-minute hold, 2.8% divergence, healthy liquidation → suppress.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3021m);
+        pos.CurrentDivergencePct = 2.8m;
+
+        var config = new BotConfiguration
+        {
+            MinHoldTimeHours = 2,
+            DivergenceAlertMultiplier = 2.0m,
+            LiquidationWarningPct = 0.50m,
+            UseRiskBasedDivergenceClose = true,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Threshold = 0.697% * 2.0 * 2 = 2.79%; divergence 2.8% > threshold → legacy would fire.
+        // hoursOpen = 0.5 < MinHoldTimeHours = 2 → risk-based gate suppresses close.
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 0.5m, spread: 0.001m,
+            minLiquidationDistance: 0.95m, negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.697m);
+
+        result.Should().NotBe(CloseReason.DivergenceCritical,
+            "divergence close must be suppressed when hoursOpen < MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceCritical_HealthyLiquidation_DoesNotFire()
+    {
+        // 3-hour hold (past MinHoldTime), 2.8% divergence, distance above 2x warning → suppress.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3021m);
+        pos.CurrentDivergencePct = 2.8m;
+
+        var config = new BotConfiguration
+        {
+            MinHoldTimeHours = 2,
+            DivergenceAlertMultiplier = 2.0m,
+            LiquidationWarningPct = 0.50m,
+            UseRiskBasedDivergenceClose = true,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Distance scale: 0 = at liquidation, 1 = at entry, >1 = moved past entry favourably.
+        // Liquidation distance 1.5 > LiquidationWarningPct * 2 = 1.0 → healthy → do not escalate.
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 3m, spread: 0.001m,
+            minLiquidationDistance: 1.5m, negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.697m);
+
+        result.Should().NotBe(CloseReason.DivergenceCritical,
+            "divergence close must be suppressed when liquidation distance is healthy");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceCritical_PastHoldAndLiquidationRisky_FiresClose()
+    {
+        // All gates pass: past MinHoldTime, distance in the 2x risky band → fire.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3021m);
+        pos.CurrentDivergencePct = 2.8m;
+
+        var config = new BotConfiguration
+        {
+            MinHoldTimeHours = 2,
+            DivergenceAlertMultiplier = 2.0m,
+            LiquidationWarningPct = 0.50m,
+            UseRiskBasedDivergenceClose = true,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        // Distance 0.75 sits between LiquidationWarningPct (0.50) and 2x warning (1.0):
+        // high enough that LiquidationRisk does NOT pre-empt, low enough that the divergence
+        // risk gate is tripped (distance < 1.0).
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 3m, spread: 0.001m,
+            minLiquidationDistance: 0.75m, negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.697m);
+
+        result.Should().Be(CloseReason.DivergenceCritical,
+            "divergence close must fire when both hold-time and liquidation gates are met");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_DivergenceCritical_FlagOff_UsesLegacySemantics()
+    {
+        // 30-minute hold, flag off → legacy immediate close fires regardless of hold time.
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3021m);
+        pos.CurrentDivergencePct = 2.8m;
+
+        var config = new BotConfiguration
+        {
+            MinHoldTimeHours = 2,
+            DivergenceAlertMultiplier = 2.0m,
+            LiquidationWarningPct = 0.50m,
+            UseRiskBasedDivergenceClose = false,
+            MaxHoldTimeHours = 72,
+            CloseThreshold = -0.00005m,
+        };
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config, unrealizedPnl: 0m, hoursOpen: 0.5m, spread: 0.001m,
+            minLiquidationDistance: 0.95m, negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.697m);
+
+        result.Should().Be(CloseReason.DivergenceCritical,
+            "feature flag off must preserve the legacy threshold-only semantics");
+    }
+
     // ── F15: StopLoss priority over PnlTarget ────────────────────
 
     [Fact]
@@ -3218,6 +3331,10 @@ public class PositionHealthMonitorTests
             DivergenceAlertMultiplier = 2.0m,
             StopLossPct = 0.15m,
             CloseThreshold = -0.00005m,
+            // Legacy threshold-only semantics — divergence close fires on threshold breach
+            // regardless of hold time or liquidation distance. The new risk-based gates
+            // (default) are exercised by DetermineCloseReason_DivergenceCritical_* tests.
+            UseRiskBasedDivergenceClose = false,
         };
 
         // entrySpreadCostPct = 0.1, alert threshold = 0.1 * 2 = 0.2, critical = 0.4
