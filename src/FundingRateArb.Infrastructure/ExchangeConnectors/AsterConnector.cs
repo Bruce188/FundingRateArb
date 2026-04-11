@@ -305,6 +305,22 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
 
         var order = result.Data!;
+
+        // The Aster limit IOC order can return Success=true with QuantityFilled=0 when
+        // the order expires unfilled (price outside top-of-book) or the server rejects
+        // it for min-notional / lot-size reasons. Surface this as a failure so the
+        // ExecutionEngine does not mark the leg as filled and proceed to run a naked
+        // hedge — see positions #13/14/15 in the profitability evidence.
+        if (order.QuantityFilled <= 0m)
+        {
+            return new OrderResultDto
+            {
+                Success = false,
+                Error = $"Aster returned zero fill quantity for {asset} order (orderId={order.Id}, " +
+                        $"limit IOC expired or server-side min-notional/lot-size rejection).",
+            };
+        }
+
         return new OrderResultDto
         {
             Success = true,
@@ -623,10 +639,15 @@ public class AsterConnector : IExchangeConnector, IDisposable
     {
         ct.ThrowIfCancellationRequested();
 
+        // Normalize the input so callers can pass either the normalized asset form ("WLFI")
+        // or the raw Aster form ("WLFIUSDT"); both land in the same cache slot because
+        // RefreshConstraintsCacheAsync also normalizes on populate.
+        var normalized = NormalizeSymbol(symbol);
+
         // Fast path: cache is still within TTL and contains this symbol. This path hits
         // a ConcurrentDictionary read + one DateTime compare — no lock, no async hop.
         if (DateTime.UtcNow < _symbolConstraintsExpiry &&
-            _symbolConstraintsCache.TryGetValue(symbol, out var cached))
+            _symbolConstraintsCache.TryGetValue(normalized, out var cached))
         {
             return cached;
         }
@@ -636,7 +657,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
         // serialized HTTP round-trips, no 30-second Polly retry stalling the whole cycle.
         await EnsureConstraintsRefreshedAsync(ct).ConfigureAwait(false);
 
-        if (_symbolConstraintsCache.TryGetValue(symbol, out var afterRefresh))
+        if (_symbolConstraintsCache.TryGetValue(normalized, out var afterRefresh))
         {
             return afterRefresh;
         }
@@ -646,7 +667,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
         // on every subsequent call for this unknown symbol until TTL expiry.
         var sentinel = new AsterSymbolConstraints
         {
-            Symbol = symbol,
+            Symbol = normalized,
             MaxNotionalValue = decimal.MaxValue,
             MinQuantity = 0m,
             StepSize = 0m,
@@ -655,13 +676,20 @@ public class AsterConnector : IExchangeConnector, IDisposable
         // unbounded cache growth from a misbehaving upstream or attacker-controlled symbol).
         if (_symbolConstraintsCache.Count < SymbolConstraintsCacheMaxSize)
         {
-            _symbolConstraintsCache.TryAdd(symbol, sentinel);
+            _symbolConstraintsCache.TryAdd(normalized, sentinel);
         }
         _logger.LogWarning(
             "Aster symbol constraints unavailable for {Symbol}; caching no-cap sentinel until next refresh.",
-            symbol);
+            normalized);
         return sentinel;
     }
+
+    // Strip the case-insensitive "USDT" suffix so cache keys match the normalized
+    // form used by SignalEngine / ExchangeSymbolConstraintsProvider.
+    private static string NormalizeSymbol(string symbol) =>
+        symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
+            ? symbol[..^"USDT".Length]
+            : symbol;
 
     /// <summary>
     /// Single-flight refresh of the constraints cache. Concurrent callers share one
@@ -726,14 +754,20 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 var currentCacheCount = _symbolConstraintsCache.Count;
                 foreach (var s in symbols)
                 {
+                    // Normalize the exchangeInfo key to match the lookup form in
+                    // GetSymbolConstraintsAsync ("WLFIUSDT" → "WLFI"); otherwise the
+                    // cache is populated under a key shape that upstream callers never
+                    // query with, and every lookup falls through to the no-cap sentinel.
+                    var key = NormalizeSymbol(s.Name);
+
                     // NB5 defensive cap against unbounded cache growth from a misbehaving
                     // upstream response. Aster lists ~200 symbols in production.
                     if (currentCacheCount >= SymbolConstraintsCacheMaxSize &&
-                        !_symbolConstraintsCache.ContainsKey(s.Name))
+                        !_symbolConstraintsCache.ContainsKey(key))
                     {
                         continue;
                     }
-                    _symbolConstraintsCache[s.Name] = BuildConstraints(s);
+                    _symbolConstraintsCache[key] = BuildConstraints(s);
                     written++;
                 }
                 _symbolConstraintsExpiry = DateTime.UtcNow + SymbolConstraintsTtl;
