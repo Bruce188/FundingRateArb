@@ -8,11 +8,11 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using HyperLiquid.Net.Interfaces.Clients;
 using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
-using IHLFuturesExchangeData = HyperLiquid.Net.Interfaces.Clients.FuturesApi.IHyperLiquidSocketClientFuturesApiExchangeData;
 using HyperLiquid.Net.Objects.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using IHLFuturesExchangeData = HyperLiquid.Net.Interfaces.Clients.FuturesApi.IHyperLiquidSocketClientFuturesApiExchangeData;
 
 namespace FundingRateArb.Tests.Unit.Infrastructure;
 
