@@ -1759,16 +1759,197 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             : 0m;
     }
 
-    public Task<decimal?> GetRealizedPnlAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    /// <summary>
+    /// Normalizes a Lighter wire timestamp to unix seconds regardless of whether
+    /// the server returned it in seconds or milliseconds. Lighter documentation
+    /// declares <c>timestamp</c> / <c>executed_at</c> as <c>int64</c> without an
+    /// explicit unit; adjacent perp DEXes on this project (Aster, Hyperliquid) use
+    /// milliseconds, and a silent unit mismatch would cause every reconciliation
+    /// to miss its window. Any value past ~Nov 2286 in seconds must actually be
+    /// milliseconds.
+    /// </summary>
+    private static long NormalizeLighterTimestampToSeconds(long raw)
     {
-        _logger.LogDebug("Lighter does not support PnL queries — reconciliation skipped for {Asset}", asset);
-        return Task.FromResult<decimal?>(null);
+        // 10^12 is ~Nov 2286 in unix seconds (1.0e12 s ≈ 31,688 years after epoch),
+        // so a legitimate seconds-precision timestamp is always below this.
+        const long MillisecondThreshold = 1_000_000_000_000L;
+        return raw >= MillisecondThreshold ? raw / 1000L : raw;
     }
 
-    public Task<decimal?> GetFundingPaymentsAsync(string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    /// <summary>
+    /// Sums realized PnL reported by Lighter across trades in [from, to] for the given asset.
+    /// The <paramref name="side"/> parameter is ignored: Lighter's <c>realized_pnl</c> on a trade
+    /// is already signed from the account's perspective.
+    /// Returns null on HTTP failure, unknown market, or when no trade in the window exposes a
+    /// <c>realized_pnl</c> field — <see cref="PnlReconciliationService"/> handles the null-leg
+    /// fallback path gracefully.
+    /// </summary>
+    public async Task<decimal?> GetRealizedPnlAsync(
+        string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
     {
-        _logger.LogDebug("Lighter does not support funding payment queries — reconciliation skipped for {Asset}", asset);
-        return Task.FromResult<decimal?>(null);
+        _ = side;
+
+        try
+        {
+            var marketDetail = await GetMarketDetailAsync(asset, ct);
+            if (marketDetail is null)
+            {
+                _logger.LogDebug(
+                    "Lighter GetRealizedPnlAsync: unknown market for {Asset} — returning null",
+                    asset);
+                return null;
+            }
+
+            var accountIndex = GetAccountIndex();
+            var fromUnix = new DateTimeOffset(DateTime.SpecifyKind(from, DateTimeKind.Utc)).ToUnixTimeSeconds();
+            var toUnix = new DateTimeOffset(DateTime.SpecifyKind(to, DateTimeKind.Utc)).ToUnixTimeSeconds();
+
+            const int maxPages = 50;
+            const int pageSize = 100;
+
+            decimal total = 0m;
+            var sawAnyRealized = false;
+            string? cursor = null;
+
+            for (var page = 0; page < maxPages; page++)
+            {
+                var url = $"trades?account_index={accountIndex}&market_id={marketDetail.MarketId}&limit={pageSize}";
+                if (!string.IsNullOrEmpty(cursor))
+                {
+                    url += $"&cursor={Uri.EscapeDataString(cursor)}";
+                }
+
+                var response = await _httpClient.GetAsync(url, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning(
+                        "Lighter trades returned {Status} for {Asset} (page {Page})",
+                        (int)response.StatusCode, asset, page);
+                    return null;
+                }
+
+                var payload = await response.Content
+                    .ReadFromJsonAsync<LighterTradesResponse>(JsonOptions, ct);
+
+                if (payload?.Trades is null || payload.Trades.Count == 0)
+                {
+                    break;
+                }
+
+                var oldestTsOnPage = long.MaxValue;
+                foreach (var trade in payload.Trades)
+                {
+                    var ts = NormalizeLighterTimestampToSeconds(trade.Timestamp);
+                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
+                    if (ts < fromUnix || ts > toUnix) continue;
+                    if (string.IsNullOrEmpty(trade.RealizedPnl)) continue;
+
+                    total += ParseDecimalOrZero(trade.RealizedPnl);
+                    sawAnyRealized = true;
+                }
+
+                if (oldestTsOnPage < fromUnix) break;
+                if (string.IsNullOrEmpty(payload.NextCursor)) break;
+                cursor = payload.NextCursor;
+            }
+
+            if (!sawAnyRealized)
+            {
+                _logger.LogInformation(
+                    "Lighter GetRealizedPnlAsync: no trades in window for {Asset} carried realized_pnl — returning null",
+                    asset);
+                return null;
+            }
+
+            return total;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Lighter GetRealizedPnlAsync failed for {Asset}", asset);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Sums funding payments reported by Lighter's /positionFunding endpoint in [from, to].
+    /// The <paramref name="side"/> parameter is ignored: Lighter amounts are signed
+    /// (positive = received, negative = paid) from the account's perspective.
+    /// Returns null on HTTP failure or unknown market.
+    /// </summary>
+    public async Task<decimal?> GetFundingPaymentsAsync(
+        string asset, Side side, DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        _ = side;
+
+        try
+        {
+            var marketDetail = await GetMarketDetailAsync(asset, ct);
+            if (marketDetail is null)
+            {
+                _logger.LogDebug(
+                    "Lighter GetFundingPaymentsAsync: unknown market for {Asset} — returning null",
+                    asset);
+                return null;
+            }
+
+            var accountIndex = GetAccountIndex();
+            var fromUnix = new DateTimeOffset(DateTime.SpecifyKind(from, DateTimeKind.Utc)).ToUnixTimeSeconds();
+            var toUnix = new DateTimeOffset(DateTime.SpecifyKind(to, DateTimeKind.Utc)).ToUnixTimeSeconds();
+
+            const int maxPages = 50;
+            const int pageSize = 100;
+
+            decimal total = 0m;
+            string? cursor = null;
+
+            for (var page = 0; page < maxPages; page++)
+            {
+                var url = $"positionFunding?account_index={accountIndex}&market_id={marketDetail.MarketId}&limit={pageSize}";
+                if (!string.IsNullOrEmpty(cursor))
+                {
+                    url += $"&cursor={Uri.EscapeDataString(cursor)}";
+                }
+
+                var response = await _httpClient.GetAsync(url, ct);
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogWarning(
+                        "Lighter positionFunding returned {Status} for {Asset} (page {Page})",
+                        (int)response.StatusCode, asset, page);
+                    return null;
+                }
+
+                var payload = await response.Content
+                    .ReadFromJsonAsync<LighterPositionFundingResponse>(JsonOptions, ct);
+
+                if (payload?.PositionFunding is null || payload.PositionFunding.Count == 0)
+                {
+                    break;
+                }
+
+                var oldestTsOnPage = long.MaxValue;
+                foreach (var entry in payload.PositionFunding)
+                {
+                    var ts = NormalizeLighterTimestampToSeconds(entry.Timestamp);
+                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
+                    if (ts >= fromUnix && ts <= toUnix)
+                    {
+                        total += ParseDecimalOrZero(entry.Amount);
+                    }
+                }
+
+                if (oldestTsOnPage < fromUnix) break;
+                if (string.IsNullOrEmpty(payload.NextCursor)) break;
+                cursor = payload.NextCursor;
+            }
+
+            return total;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Lighter GetFundingPaymentsAsync failed for {Asset}", asset);
+            return null;
+        }
     }
 
     public void Dispose()

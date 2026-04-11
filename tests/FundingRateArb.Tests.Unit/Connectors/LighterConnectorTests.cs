@@ -2073,6 +2073,444 @@ public class LighterConnectorTests
             "  ]\n" +
             "}";
     }
+
+    // ── Shared JSON options for DTO deserialization tests ────────
+
+    private static readonly System.Text.Json.JsonSerializerOptions LighterJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString,
+    };
+
+    // ── DTO deserialization (Task 1.1) ───────────────────────────
+
+    [Fact]
+    public void LighterModels_PositionFundingResponse_DeserializesSampleJson()
+    {
+        const string json = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744380000, "amount": "-0.0123", "rate": "0.00005", "position_id": 42 },
+                { "market_id": 0, "timestamp": 1744383600, "amount": "0.0200", "rate": "-0.00008", "position_id": 42 }
+              ],
+              "next_cursor": "abc123"
+            }
+            """;
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<LighterPositionFundingResponse>(json, LighterJsonOptions);
+
+        result.Should().NotBeNull();
+        result!.PositionFunding.Should().HaveCount(2);
+        result.PositionFunding![0].Amount.Should().Be("-0.0123");
+        result.PositionFunding[0].Timestamp.Should().Be(1744380000);
+        result.PositionFunding[1].Amount.Should().Be("0.0200");
+        result.NextCursor.Should().Be("abc123");
+    }
+
+    [Fact]
+    public void LighterModels_TradesResponse_DeserializesSampleJson()
+    {
+        const string json = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744380000, "is_ask": 0, "size": "0.5", "price": "3000.0", "quote_amount": "1500", "fee": "0.3", "realized_pnl": "12.50" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744383600, "is_ask": 1, "size": "0.5", "price": "3010.0", "quote_amount": "1505", "fee": "0.3", "realized_pnl": null }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<LighterTradesResponse>(json, LighterJsonOptions);
+
+        result.Should().NotBeNull();
+        result!.Trades.Should().HaveCount(2);
+        result.Trades![0].RealizedPnl.Should().Be("12.50");
+        result.Trades[0].TradeId.Should().Be(1);
+        result.Trades[1].RealizedPnl.Should().BeNull();
+        result.NextCursor.Should().BeNull();
+    }
+
+    // ── GetFundingPaymentsAsync / GetRealizedPnlAsync helpers ────
+
+    private LighterConnector CreateLighterConnectorWithRoutes(Action<MultiRouteHttpMessageHandler> configure)
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var handler = new MultiRouteHttpMessageHandler();
+        configure(handler);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+    }
+
+    private LighterConnector CreateLighterConnectorWithDelegatingHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> responder)
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("1");
+        var handler = new DelegatingFuncHandler(responder);
+        var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        return new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+    }
+
+    // ── GetFundingPaymentsAsync (Task 2.1) ───────────────────────
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_SumsSignedEventsInWindow()
+    {
+        const string fundingJson = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744387200, "amount": "-0.05", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744383600, "amount": "0.02",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380500, "amount": "0.03",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380000, "amount": "-0.01", "rate": "0", "position_id": 1 }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("positionFunding", fundingJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380100).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744384000).UtcDateTime;
+
+        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0.05m); // 0.02 + 0.03
+    }
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_PaginatesUntilWindowClosed_AndForwardsCursor()
+    {
+        const string page1 = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744390000, "amount": "0.10", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744388000, "amount": "0.20", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744386000, "amount": "0.30", "rate": "0", "position_id": 1 }
+              ],
+              "next_cursor": "p2"
+            }
+            """;
+        const string page2 = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744384000, "amount": "0.40", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380000, "amount": "0.50", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744370000, "amount": "99.0", "rate": "0", "position_id": 1 }
+              ],
+              "next_cursor": "p3"
+            }
+            """;
+
+        var callCount = 0;
+        var capturedUrls = new List<string>();
+        var sut = CreateLighterConnectorWithDelegatingHandler(req =>
+        {
+            var path = req.RequestUri!.PathAndQuery;
+            if (path.Contains("orderBookDetails", StringComparison.OrdinalIgnoreCase))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(OrderBookDetailsJson)
+                };
+            }
+            if (path.Contains("positionFunding", StringComparison.OrdinalIgnoreCase))
+            {
+                callCount++;
+                capturedUrls.Add(path);
+                var body = callCount == 1 ? page1 : page2;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body)
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744383000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744395000).UtcDateTime;
+
+        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(1.00m); // 0.10 + 0.20 + 0.30 + 0.40
+        callCount.Should().Be(2);
+
+        capturedUrls[0].Should().Contain("account_index=1");
+        capturedUrls[0].Should().Contain("market_id=0");
+        capturedUrls[0].Should().NotContain("cursor=");
+        capturedUrls[1].Should().Contain("cursor=p2");
+    }
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_NormalizesMillisecondTimestamps()
+    {
+        // Lighter docs declare `timestamp: int64` without a unit. This test locks in
+        // that millisecond-scale timestamps are normalized to seconds in the window filter.
+        const string fundingJson = """
+            {
+              "code": 200,
+              "position_funding": [
+                { "market_id": 0, "timestamp": 1744387200000, "amount": "-0.05", "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744383600000, "amount": "0.02",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380500000, "amount": "0.03",  "rate": "0", "position_id": 1 },
+                { "market_id": 0, "timestamp": 1744380000000, "amount": "-0.01", "rate": "0", "position_id": 1 }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("positionFunding", fundingJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380100).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744384000).UtcDateTime;
+
+        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0.05m); // 0.02 + 0.03 (same window as the seconds-scale test)
+    }
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_ReturnsNull_OnHttpFailure()
+    {
+        var sut = CreateLighterConnectorWithDelegatingHandler(req =>
+        {
+            var path = req.RequestUri!.PathAndQuery;
+            if (path.Contains("orderBookDetails", StringComparison.OrdinalIgnoreCase))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(OrderBookDetailsJson)
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        var result = await sut.GetFundingPaymentsAsync(
+            "ETH", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetFundingPaymentsAsync_ReturnsNull_ForUnknownMarket()
+    {
+        var positionFundingCalls = 0;
+        var sut = CreateLighterConnectorWithDelegatingHandler(req =>
+        {
+            var path = req.RequestUri!.PathAndQuery;
+            if (path.Contains("orderBookDetails", StringComparison.OrdinalIgnoreCase))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(OrderBookDetailsJson)
+                };
+            }
+            if (path.Contains("positionFunding", StringComparison.OrdinalIgnoreCase))
+            {
+                positionFundingCalls++;
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") };
+        });
+
+        var result = await sut.GetFundingPaymentsAsync(
+            "ZZZ", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+
+        result.Should().BeNull();
+        positionFundingCalls.Should().Be(0);
+    }
+
+    // ── GetRealizedPnlAsync (Task 2.2) ───────────────────────────
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_SumsRealizedPnlInWindow()
+    {
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": "12.50" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": "-2.25" },
+                { "trade_id": 3, "market_id": 0, "timestamp": 1744370000, "is_ask": 0, "size": "0.1", "price": "2990", "quote_amount": "299", "fee": "0", "realized_pnl": "100" }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(10.25m); // 12.50 + (-2.25)
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsNull_WhenRealizedPnlMissing()
+    {
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": null },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": null }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsNull_OnHttpFailure()
+    {
+        var sut = CreateLighterConnectorWithDelegatingHandler(req =>
+        {
+            var path = req.RequestUri!.PathAndQuery;
+            if (path.Contains("orderBookDetails", StringComparison.OrdinalIgnoreCase))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(OrderBookDetailsJson)
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+        });
+
+        var result = await sut.GetRealizedPnlAsync(
+            "ETH", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsNull_ForUnknownMarket()
+    {
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", "{\"code\":200,\"trades\":[],\"next_cursor\":null}");
+        });
+
+        var result = await sut.GetRealizedPnlAsync(
+            "ZZZ", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+
+        result.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsZero_WhenAllTradesReportZeroString()
+    {
+        // Disambiguation between "Lighter returned no PnL" (null) and
+        // "Lighter returned zero PnL" (explicit "0") — load-bearing for reconciliation.
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": "0" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": "0" }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetRealizedPnlAsync_ReturnsZero_WhenTradesOffset()
+    {
+        // Two offsetting trades must sum to zero, not null — null must only mean
+        // "no trade in the window carried realized_pnl".
+        const string tradesJson = """
+            {
+              "code": 200,
+              "trades": [
+                { "trade_id": 1, "market_id": 0, "timestamp": 1744383600, "is_ask": 0, "size": "0.1", "price": "3000", "quote_amount": "300", "fee": "0", "realized_pnl": "5.00" },
+                { "trade_id": 2, "market_id": 0, "timestamp": 1744382000, "is_ask": 1, "size": "0.1", "price": "3010", "quote_amount": "301", "fee": "0", "realized_pnl": "-5.00" }
+              ],
+              "next_cursor": null
+            }
+            """;
+
+        var sut = CreateLighterConnectorWithRoutes(h =>
+        {
+            h.AddRoute("orderBookDetails", OrderBookDetailsJson);
+            h.AddRoute("trades", tradesJson);
+        });
+
+        var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
+        var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
+
+        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+
+        result.Should().Be(0m);
+    }
+}
+
+/// <summary>
+/// HTTP handler backed by a delegate — simpler than subclassing for per-test routing
+/// with mutable counters.
+/// </summary>
+internal sealed class DelegatingFuncHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+
+    public DelegatingFuncHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
+    {
+        _responder = responder;
+    }
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        return Task.FromResult(_responder(request));
+    }
 }
 
 /// <summary>
