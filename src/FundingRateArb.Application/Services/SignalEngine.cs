@@ -430,15 +430,41 @@ public class SignalEngine : ISignalEngine
                     var minEdgeThreshold = minEdgeMultiplier * amortizedEntryCostPerHour;
                     var passesMinEdge = net >= minEdgeThreshold;
 
-                    if (net >= config.OpenThreshold && passesMinEdge)
+                    // Stricter break-even-size floor — use the worst-case hold window
+                    // (MinHoldTimeHours) instead of FeeAmortizationHours. Rejects
+                    // opportunities where even the minimum guaranteed hold yield cannot
+                    // cover the configured MinEdgeMultiplier × entry cost. Distinct from
+                    // NetPositiveBelowEdgeGuardrail, which uses FeeAmortizationHours.
+                    // Gated behind UseBreakEvenSizeFilter — ops opt in via admin UI
+                    // because the filter is strictly more aggressive than the legacy
+                    // passesMinEdge check.
+                    var minHoldHoursForFloor = (decimal)Math.Max(config.MinHoldTimeHours, 1);
+                    var breakEvenSizeFloor = minEdgeMultiplier * totalEntryCost;
+                    var minHoldYield = net * minHoldHoursForFloor;
+                    var passesBreakEvenSize = !config.UseBreakEvenSizeFilter
+                        || minHoldYield >= breakEvenSizeFloor;
+
+                    if (net >= config.OpenThreshold && passesBreakEvenSize && passesMinEdge)
                     {
                         opportunities.Add(dto);
                     }
+                    else if (net >= config.OpenThreshold && !passesBreakEvenSize)
+                    {
+                        // Fails the strictest floor: net × MinHoldTimeHours cannot cover
+                        // MinEdgeMultiplier × fees. This is the "fee drag" filter — the
+                        // bot cannot profitably hold this position inside its worst-case
+                        // hold window.
+                        netPositiveList.Add(dto);
+                        diagnostics.PairsFilteredByBreakEvenSize++;
+                        _logger?.LogDebug(
+                            "Opportunity {Asset} {Long}/{Short} filtered by break-even-size: " +
+                            "net*minHold ({MinHoldYield}) < {Floor} (MinEdgeMultiplier*fees)",
+                            symbol, longR.Exchange.Name, shortR.Exchange.Name, minHoldYield, breakEvenSizeFloor);
+                    }
                     else if (net >= config.OpenThreshold)
                     {
-                        // Passed OpenThreshold but failed the 3x edge guardrail — record
-                        // in a dedicated counter so operators can see they need to loosen
-                        // the multiplier, not the threshold.
+                        // Passed OpenThreshold and the break-even-size floor but failed
+                        // the expected-amortization guardrail (uses FeeAmortizationHours).
                         netPositiveList.Add(dto);
                         diagnostics.NetPositiveBelowEdgeGuardrail++;
                     }

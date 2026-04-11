@@ -152,6 +152,16 @@ public class BotConfiguration
     /// </summary>
     public bool UseRiskBasedDivergenceClose { get; set; } = true;
 
+    /// <summary>
+    /// When true, SignalEngine applies a stricter break-even-size filter: opportunities
+    /// are rejected when net yield × MinHoldTimeHours cannot cover MinEdgeMultiplier × fees.
+    /// Distinct from the existing edge-guardrail check which uses FeeAmortizationHours as
+    /// its denominator. Default is false — operators must opt in via admin UI because the
+    /// filter is strictly more aggressive and can reject opportunities the bot would have
+    /// previously admitted. Flip on after validating historical backtest results.
+    /// </summary>
+    public bool UseBreakEvenSizeFilter { get; set; }
+
     /// <summary>Consecutive snapshots with positive funding spread required before entry.</summary>
     [Range(1, 20)]
     public int MinConsecutiveFavorableCycles { get; set; } = 3;
