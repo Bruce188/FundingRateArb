@@ -73,13 +73,15 @@ public class AppInsightsSinkRegistrationTests
     {
         var programText = File.ReadAllText(LocateProgramCs());
 
-        var buildIdx = programText.IndexOf("builder.Build()", StringComparison.Ordinal);
+        // Anchor on the exact assignment statement so comments or other references
+        // to builder.Build() cannot move the anchor under our feet.
+        var buildIdx = programText.LastIndexOf("var app = builder.Build()", StringComparison.Ordinal);
         var logIdx = programText.IndexOf("Serilog App Insights sink", StringComparison.Ordinal);
 
-        Assert.True(buildIdx >= 0, "builder.Build() not found in Program.cs");
+        Assert.True(buildIdx >= 0, "'var app = builder.Build()' not found in Program.cs");
         Assert.True(logIdx > buildIdx,
-            "Startup confirmation must be emitted after builder.Build() so it flows " +
-            "through the host-configured Serilog pipeline (and therefore the AI sink), " +
+            "Startup confirmation must be emitted after 'var app = builder.Build()' so it " +
+            "flows through the host-configured Serilog pipeline (and therefore the AI sink), " +
             "not the bootstrap logger.");
     }
 }
