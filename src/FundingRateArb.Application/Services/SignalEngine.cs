@@ -2,6 +2,7 @@ using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,7 @@ public class SignalEngine : ISignalEngine
     private readonly ICoinGlassScreeningProvider? _screeningProvider;
     private readonly IExchangeSymbolConstraintsProvider? _symbolConstraintsProvider;
     private readonly ILogger<SignalEngine>? _logger;
+    private readonly ISignalEngineMetrics? _metrics;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -24,7 +26,8 @@ public class SignalEngine : ISignalEngine
         ILeverageTierProvider? tierProvider = null,
         ICoinGlassScreeningProvider? screeningProvider = null,
         IExchangeSymbolConstraintsProvider? symbolConstraintsProvider = null,
-        ILogger<SignalEngine>? logger = null)
+        ILogger<SignalEngine>? logger = null,
+        ISignalEngineMetrics? metrics = null)
     {
         _uow = uow;
         _cache = cache;
@@ -33,6 +36,7 @@ public class SignalEngine : ISignalEngine
         _screeningProvider = screeningProvider;
         _symbolConstraintsProvider = symbolConstraintsProvider;
         _logger = logger;
+        _metrics = metrics;
     }
 
     /// <summary>
@@ -55,6 +59,7 @@ public class SignalEngine : ISignalEngine
 
     public async Task<OpportunityResultDto> GetOpportunitiesWithDiagnosticsAsync(CancellationToken ct = default)
     {
+        var cycleStopwatch = System.Diagnostics.Stopwatch.StartNew();
         BotConfiguration config;
         List<FundingRateSnapshot> latestRates;
         try
@@ -495,6 +500,18 @@ public class SignalEngine : ISignalEngine
             .ThenByDescending(o => o.NetYieldPerHour)
             .Take(26)
             .ToList();
+
+        // F10: emit aggregate cycle telemetry. Fire-and-forget — any failure is
+        // logged but must never abort the signal cycle. OperationCanceledException
+        // is intentionally NOT swallowed so caller cancellation semantics flow.
+        try
+        {
+            _metrics?.RecordCycle(diagnostics, cycleStopwatch.Elapsed);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger?.LogWarning(ex, "SignalEngine metrics emission failed — continuing without metric");
+        }
 
         return new OpportunityResultDto
         {
