@@ -32,6 +32,7 @@ using Polly.Retry;
 using Polly.Timeout;
 using Serilog;
 using Serilog.Events;
+using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
 using Serilog.Sinks.MSSqlServer;
 
 // Bootstrap logger — captures startup errors before full Serilog is configured
@@ -74,6 +75,9 @@ try
     // WebApplicationFactory.ConfigureWebHost (which calls UseEnvironment) runs during Build(),
     // so builder.Environment.EnvironmentName is mutated after line 60 would have captured it.
     // Reading from the IHostEnvironment service inside the lambda sees the final resolved value.
+    // The App Insights connection string, by contrast, is stable once Key Vault has merged into
+    // builder.Configuration, so we hoist a single read here and capture it in the lambda closure.
+    var aiConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
     builder.Services.AddSerilog((sp, lc) =>
     {
         var env = sp.GetRequiredService<IHostEnvironment>();
@@ -97,6 +101,16 @@ try
                 "  {Message:lj}{NewLine}{Exception}")
 
             ;
+
+        // Application Insights sink — registered for all environments when a
+        // connection string is configured (populated from Key Vault in production).
+        // The guard keeps local/test startup unaffected when the secret is blank.
+        if (!string.IsNullOrWhiteSpace(aiConnectionString))
+        {
+            lc.WriteTo.ApplicationInsights(
+                connectionString: aiConnectionString,
+                telemetryConverter: TelemetryConverter.Traces);
+        }
 
         if (isDevEnv)
         {
@@ -583,6 +597,16 @@ try
         .AddCheck<WebSocketStreamHealthCheck>("websocket-streams");
 
     var app = builder.Build();
+
+    // Emit a one-line startup confirmation through the host-configured Serilog
+    // pipeline so the App Insights sink (if registered) ships it to the `traces`
+    // table. Post-deploy verification greps container stdout and/or App Insights
+    // for this line to confirm the sink is live.
+    Log.Information(
+        "Serilog App Insights sink {Status}",
+        string.IsNullOrWhiteSpace(aiConnectionString)
+            ? "not configured (connection string empty)"
+            : "registered");
 
     // Validate connection string is configured (not still using placeholder)
     var connStr = app.Configuration.GetConnectionString("DefaultConnection") ?? "";
