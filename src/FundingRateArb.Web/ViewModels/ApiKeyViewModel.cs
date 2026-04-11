@@ -20,7 +20,6 @@ public class ExchangeCredentialItem
 
     // Masked display values — never shows plain-text credentials
     public string? MaskedApiKey { get; set; }
-    public string? MaskedApiSecret { get; set; }
     public string? MaskedWalletAddress { get; set; }
     public string? MaskedPrivateKey { get; set; }
     public string? MaskedApiKeyIndex { get; set; }
