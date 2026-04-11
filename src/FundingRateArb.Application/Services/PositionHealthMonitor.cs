@@ -353,7 +353,15 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 // below the configured early-warning threshold (default 0.75 = 25% consumed).
                 // This is strictly looser than the close trigger at LiquidationWarningPct (0.50)
                 // so ops see a warning before the position is auto-closed.
-                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationEarlyWarningPct)
+                //
+                // Defensive clamp: if an operator misconfigures LiquidationEarlyWarningPct to a
+                // value <= LiquidationWarningPct, the warning would never fire before the close
+                // path preempts it. Floor the effective threshold so the warning at least fires
+                // at the close boundary and ops get a signal on the same cycle.
+                var effectiveEarlyWarningPct = Math.Max(
+                    config.LiquidationEarlyWarningPct, config.LiquidationWarningPct);
+
+                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < effectiveEarlyWarningPct)
                 {
                     var hasRecentLiqAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
 
@@ -367,7 +375,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                             Severity = AlertSeverity.Warning,
                             Message = $"Liquidation warning: {assetSymbol} " +
                                       $"{longExchangeName}/{shortExchangeName} " +
-                                      $"distance={minLiquidationDistance.Value:P1} (threshold={config.LiquidationEarlyWarningPct:P1})",
+                                      $"distance={minLiquidationDistance.Value:P1} (threshold={effectiveEarlyWarningPct:P1})",
                         });
                     }
                 }

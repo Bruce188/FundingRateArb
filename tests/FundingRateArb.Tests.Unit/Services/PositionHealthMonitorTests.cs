@@ -1016,8 +1016,8 @@ public class PositionHealthMonitorTests
         var warningAlerts = capturedAlerts.Where(a => a.Type == AlertType.MarginWarning).ToList();
         warningAlerts.Should().ContainSingle(
             "distance=25% with early-warning threshold=75% must emit exactly one MarginWarning alert");
-        warningAlerts[0].Message.Should().Contain("75",
-            "alert message must reference the new 75% early-warning threshold (not the legacy value)");
+        warningAlerts[0].Message.Should().MatchRegex(@"threshold=75[.,]0\s*%",
+            "alert message must reference the new 75% early-warning threshold in the P1-formatted output");
     }
 
     // ── F15: StopLoss priority over PnlTarget ────────────────────

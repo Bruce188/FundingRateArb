@@ -405,7 +405,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("datetime2");
 
                     b.Property<decimal>("LiquidationEarlyWarningPct")
-                        .HasColumnType("decimal(18,2)");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,4)")
+                        .HasDefaultValue(0.75m);
 
                     b.Property<decimal>("LiquidationWarningPct")
                         .ValueGeneratedOnAdd()

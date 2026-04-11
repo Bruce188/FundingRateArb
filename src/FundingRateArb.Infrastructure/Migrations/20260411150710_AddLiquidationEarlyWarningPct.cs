@@ -13,7 +13,7 @@ public partial class AddLiquidationEarlyWarningPct : Migration
         migrationBuilder.AddColumn<decimal>(
             name: "LiquidationEarlyWarningPct",
             table: "BotConfigurations",
-            type: "decimal(18,2)",
+            type: "decimal(18,4)",
             nullable: false,
             defaultValue: 0.75m);
     }
