@@ -913,4 +913,132 @@ public class DashboardControllerTests
         var vm = result.Should().BeOfType<ViewResult>().Subject.Model.Should().BeOfType<DashboardViewModel>().Subject;
         vm.LastFundingRateFetch.Should().Be(fetchTime);
     }
+
+    // ── F9: cache factory cancellation token decoupling (profitability-fixes) ─
+
+    [Fact]
+    public async Task Index_CacheFactory_UsesNonCancelledToken_EvenWhenRequestTokenIsCancelled()
+    {
+        // The authenticated cache factory must not forward the calling request's
+        // CancellationToken — one client disconnect would otherwise tear down the
+        // in-flight computation that all concurrent waiters depend on.
+        CancellationToken capturedToken = new(canceled: true); // sentinel we flip on callback
+        _mockSignalEngine
+            .Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .Callback<CancellationToken>(t => capturedToken = t)
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                DatabaseAvailable = true,
+                Diagnostics = new PipelineDiagnosticsDto(),
+            });
+
+        // Use a brand-new cache so this test is not pre-warmed by an earlier test.
+        var isolatedCache = new MemoryCache(new MemoryCacheOptions());
+        var isolatedController = new DashboardController(
+            _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
+            _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+        var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
+        }, "mock"));
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        // Mirror RequestAborted so the parallel Task.Run blocks' TaskCanceledException
+        // is funnelled into the new OperationCanceledException catch (Task 1.1) rather
+        // than propagating as a test failure. This test only cares about what token
+        // the factory saw; the subsequent throw is expected.
+        isolatedController.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = user,
+                RequestAborted = cts.Token,
+            }
+        };
+
+        // Act
+        await isolatedController.Index(cts.Token);
+
+        // Assert — the factory must have been invoked with an uncancelled token
+        capturedToken.IsCancellationRequested.Should().BeFalse(
+            "cache factory outlives the request; forwarding `ct` would 500 concurrent waiters");
+    }
+
+    [Fact]
+    public async Task Index_OperationCanceledOnClientAbort_ReturnsEmptyResult_LogsAtDebug()
+    {
+        // Arrange: make one of the parallel DB calls throw OperationCanceledException,
+        // simulating a client abort that propagates through `ct` into a `Task.Run` block.
+        _mockBotConfigRepo
+            .Setup(r => r.GetActiveAsync())
+            .ThrowsAsync(new OperationCanceledException("client aborted"));
+
+        _mockSignalEngine
+            .Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                DatabaseAvailable = true,
+                Diagnostics = new PipelineDiagnosticsDto(),
+            });
+
+        // Use a brand-new cache so the faulty repo mock is actually reached.
+        var isolatedCache = new MemoryCache(new MemoryCacheOptions());
+        var isolatedController = new DashboardController(
+            _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
+            _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+
+        // Wire an HttpContext whose RequestAborted is already cancelled so the
+        // new catch clause's `when` guard fires.
+        var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
+        }, "mock"));
+        var abortedCts = new CancellationTokenSource();
+        abortedCts.Cancel();
+        isolatedController.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = user,
+                RequestAborted = abortedCts.Token,
+            }
+        };
+
+        // Act
+        var result = await isolatedController.Index(abortedCts.Token);
+
+        // Assert
+        result.Should().BeOfType<EmptyResult>(
+            "client has disconnected — nothing to render, route to the new OperationCanceledException catch");
+
+        // Debug log was emitted with the cancellation message
+        _mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Debug,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("cancelled", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce);
+
+        // No Warning or Error logs — a client abort is routine, not a server fault
+        _mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never);
+        _mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never);
+    }
 }

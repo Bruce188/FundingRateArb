@@ -104,7 +104,12 @@ public class DashboardController : Controller
         {
             var result = await _cache.GetOrCreateAsync(AuthenticatedOpportunityCacheKey, async entry =>
             {
-                var computed = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+                // Cache factory outlives the calling request and populates an entry that
+                // benefits subsequent unrelated requests. Forwarding `ct` here would let
+                // one client disconnect tear down the in-flight computation that all
+                // concurrent waiters depend on — 500-ing the whole group. Use None,
+                // matching the anonymous-path factory convention at lines 67-70.
+                var computed = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
                 // Cold-start path: leverage tiers aren't loaded yet so all leverage-derived
                 // metrics (Lev, ROC APR, APR, BE Cyc) are null. Shorten the TTL so the next
                 // request recomputes quickly once LeverageTierRefresher has populated the cache.
@@ -306,6 +311,16 @@ public class DashboardController : Controller
                 "Dashboard rendered in degraded state — SQL transient failure Number={Number} Type={Type}",
                 ex.Number, ex.GetType().Name);
             return DegradedDashboardView();
+        }
+        catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected mid-request. The response will never be read, so
+            // there is nothing to render. Log at Debug (not Warning/Error) because
+            // this is a routine browser navigation pattern, not a server fault —
+            // ExceptionHandlerMiddleware would otherwise log at Error and pollute
+            // Application Insights telemetry with non-server-side errors.
+            _logger.LogDebug("Dashboard request cancelled by client abort");
+            return new EmptyResult();
         }
     }
 
