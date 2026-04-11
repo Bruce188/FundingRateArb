@@ -371,79 +371,26 @@ public static class DbSeeder
     private static async Task ReconcileAllUserPreferencesAsync(AppDbContext context)
     {
         // For every existing user, ensure pref rows exist for every active exchange
-        // and asset. Runs once per startup — new entries in the seed auto-propagate
-        // to all users (not just the admin seeded at first launch).
-        var activeExchangeIds = await context.Exchanges
-            .Where(e => e.IsActive)
-            .Select(e => e.Id)
-            .ToListAsync();
-        var activeAssetIds = await context.Assets
-            .Where(a => a.IsActive)
-            .Select(a => a.Id)
-            .ToListAsync();
+        // and asset. Uses set-based SQL to avoid loading all preference rows into
+        // memory at startup — an O(users × exchanges) in-process scan does not scale.
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO UserExchangePreferences (UserId, ExchangeId, IsEnabled)
+            SELECT u.Id, e.Id, 1
+            FROM AspNetUsers u
+            CROSS JOIN Exchanges e
+            WHERE e.IsActive = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM UserExchangePreferences p
+                WHERE p.UserId = u.Id AND p.ExchangeId = e.Id)");
 
-        if (activeExchangeIds.Count == 0 && activeAssetIds.Count == 0)
-        {
-            return;
-        }
-
-        var userIds = await context.Users.Select(u => u.Id).ToListAsync();
-        if (userIds.Count == 0)
-        {
-            return;
-        }
-
-        var existingExchangePrefs = (await context.UserExchangePreferences
-                .Select(p => new { p.UserId, p.ExchangeId })
-                .ToListAsync())
-            .Select(p => (p.UserId, p.ExchangeId))
-            .ToHashSet();
-
-        var existingAssetPrefs = (await context.UserAssetPreferences
-                .Select(p => new { p.UserId, p.AssetId })
-                .ToListAsync())
-            .Select(p => (p.UserId, p.AssetId))
-            .ToHashSet();
-
-        var added = 0;
-        foreach (var userId in userIds)
-        {
-            foreach (var exchangeId in activeExchangeIds)
-            {
-                if (existingExchangePrefs.Contains((userId, exchangeId)))
-                {
-                    continue;
-                }
-
-                context.UserExchangePreferences.Add(new UserExchangePreference
-                {
-                    UserId = userId,
-                    ExchangeId = exchangeId,
-                    IsEnabled = true
-                });
-                added++;
-            }
-
-            foreach (var assetId in activeAssetIds)
-            {
-                if (existingAssetPrefs.Contains((userId, assetId)))
-                {
-                    continue;
-                }
-
-                context.UserAssetPreferences.Add(new UserAssetPreference
-                {
-                    UserId = userId,
-                    AssetId = assetId,
-                    IsEnabled = true
-                });
-                added++;
-            }
-        }
-
-        if (added > 0)
-        {
-            await context.SaveChangesAsync();
-        }
+        await context.Database.ExecuteSqlRawAsync(@"
+            INSERT INTO UserAssetPreferences (UserId, AssetId, IsEnabled)
+            SELECT u.Id, a.Id, 1
+            FROM AspNetUsers u
+            CROSS JOIN Assets a
+            WHERE a.IsActive = 1
+              AND NOT EXISTS (
+                SELECT 1 FROM UserAssetPreferences p
+                WHERE p.UserId = u.Id AND p.AssetId = a.Id)");
     }
 }
