@@ -175,6 +175,7 @@ public class BotConfigRepositoryCachingTests : IDisposable
             LiquidationWarningPct = 0.40m,
             ReconciliationIntervalCycles = 20,
             DivergenceAlertMultiplier = 3.0m,
+            UseRiskBasedDivergenceClose = false, // flip from default `true` so ShallowCopy gap is detectable
             MinConsecutiveFavorableCycles = 5,
             FundingFlipExitCycles = 4,
             StablecoinAlertThresholdPct = 0.5m,
