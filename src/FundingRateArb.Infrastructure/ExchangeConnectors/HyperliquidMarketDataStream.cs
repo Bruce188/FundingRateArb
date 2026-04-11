@@ -107,7 +107,7 @@ public class HyperliquidMarketDataStream : IMarketDataStream
 
             try
             {
-                var result = await _socketClient.FuturesApi.SubscribeToSymbolUpdatesAsync(
+                var result = await _socketClient.FuturesApi.ExchangeData.SubscribeToSymbolUpdatesAsync(
                     symbol,
                     update => HandleSymbolUpdate(symbol, update),
                     ct).ConfigureAwait(false);

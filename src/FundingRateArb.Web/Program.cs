@@ -2,7 +2,6 @@ using System.Threading.RateLimiting;
 using AspNet.Security.OAuth.GitHub;
 using Azure.Identity;
 using Binance.Net;
-using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Interfaces;
 using FundingRateArb.Application.Common.Repositories;
@@ -394,16 +393,17 @@ try
         if (!string.IsNullOrEmpty(addr) && addr != "PLACEHOLDER"
             && !string.IsNullOrEmpty(key) && key != "PLACEHOLDER")
         {
-            options.ApiCredentials = new ApiCredentials(addr, key);
+            options.ApiCredentials = new HyperLiquid.Net.HyperLiquidCredentials(addr, key);
         }
     });
     builder.Services.AddAster(options =>
     {
         var apiKey = builder.Configuration["Exchanges:Aster:ApiKey"];
         var apiSecret = builder.Configuration["Exchanges:Aster:ApiSecret"];
-        if (!string.IsNullOrEmpty(apiKey) && !string.IsNullOrEmpty(apiSecret))
+        // Anonymous client — FundingRateFetcher only uses public market data endpoints
+        if (!string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = new Aster.Net.AsterCredentials(apiKey, apiSecret);
         }
     });
     builder.Services.AddBinance(options =>
@@ -412,7 +412,7 @@ try
         var apiSecret = builder.Configuration["Exchanges:Binance:ApiSecret"];
         if (!string.IsNullOrEmpty(apiKey) && !string.IsNullOrEmpty(apiSecret))
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = new Binance.Net.BinanceCredentials(apiKey, apiSecret);
         }
     });
 

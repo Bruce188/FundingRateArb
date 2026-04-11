@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Aster.Net;
 using Aster.Net.Clients;
 using Binance.Net.Clients;
-using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
+using HyperLiquid.Net;
 using HyperLiquid.Net.Clients;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -158,7 +159,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var restClient = new HyperLiquidRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(walletAddress, privateKey);
+            options.ApiCredentials = new HyperLiquidCredentials(walletAddress, privateKey);
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
@@ -176,7 +177,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var restClient = new AsterRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = new AsterCredentials(apiKey, apiSecret);
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
@@ -194,7 +195,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var restClient = new BinanceRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = new Binance.Net.BinanceCredentials(apiKey, apiSecret);
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
