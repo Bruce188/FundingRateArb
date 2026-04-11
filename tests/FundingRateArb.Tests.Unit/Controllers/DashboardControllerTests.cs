@@ -1041,4 +1041,51 @@ public class DashboardControllerTests
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.Never);
     }
+
+    [Fact]
+    public async Task Index_OperationCanceled_WithoutClientAbort_PropagatesException()
+    {
+        // The `when HttpContext.RequestAborted.IsCancellationRequested` guard is
+        // load-bearing: an OperationCanceledException raised by an internal timeout
+        // (not a browser disconnect) must still surface to the outer handler so ops
+        // see it in App Insights. Without this test, removing the guard would
+        // silently convert every internal cancellation into a successful EmptyResult.
+        _mockBotConfigRepo
+            .Setup(r => r.GetActiveAsync())
+            .ThrowsAsync(new OperationCanceledException("internal timeout"));
+
+        _mockSignalEngine
+            .Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto
+            {
+                DatabaseAvailable = true,
+                Diagnostics = new PipelineDiagnosticsDto(),
+            });
+
+        var isolatedCache = new MemoryCache(new MemoryCacheOptions());
+        var isolatedController = new DashboardController(
+            _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
+            _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+
+        // RequestAborted stays UNCANCELLED so the new catch's `when` guard is false
+        // and the exception must fall through.
+        var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
+        }, "mock"));
+        isolatedController.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = user,
+                RequestAborted = CancellationToken.None,
+            }
+        };
+
+        // Act + Assert
+        var act = async () => await isolatedController.Index(CancellationToken.None);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "an internal OCE without client abort must propagate — not be swallowed as EmptyResult");
+    }
 }
