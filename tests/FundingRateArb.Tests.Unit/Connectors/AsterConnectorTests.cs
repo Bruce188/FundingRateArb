@@ -1421,6 +1421,52 @@ public class AsterConnectorTests
         result.Error.Should().Contain("below Aster minimum");
     }
 
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_ExchangeReturnsZeroFill_ReturnsFailure()
+    {
+        // Simulates the production failure mode from positions #13/14/15: IOC limit order
+        // expired without fills, or server-side min-notional rejection returned as
+        // Success=true with QuantityFilled=0. The connector must surface this as a
+        // failure instead of letting the ExecutionEngine mark the leg as filled.
+        var zeroFillOrder = SuccessOrder(new AsterOrder
+        {
+            Id = 12345,
+            AveragePrice = 3500m,
+            QuantityFilled = 0m,
+        });
+        var client = BuildClientWithOrderResult(zeroFillOrder);
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        // quantity=0.01 * markPrice=3500 = $35 notional clears the $5 minimum guard.
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.01m, leverage: 5);
+
+        result.Success.Should().BeFalse(
+            "zero-fill response must not be reported as success; downstream ExecutionEngine relies on this flag");
+        result.Error.Should().NotBeNullOrWhiteSpace();
+        result.Error!.Should().Contain("zero fill",
+            "the error should clearly identify the zero-fill failure mode for operators and downstream code");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderByQuantityAsync_ExchangeReturnsPositiveFill_ReturnsSuccess()
+    {
+        // Regression guard: the new zero-fill check must not break the happy path.
+        var filledOrder = SuccessOrder(new AsterOrder
+        {
+            Id = 12345,
+            AveragePrice = 3500m,
+            QuantityFilled = 0.01m,
+        });
+        var client = BuildClientWithOrderResult(filledOrder);
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, quantity: 0.01m, leverage: 5);
+
+        result.Success.Should().BeTrue();
+        result.FilledQuantity.Should().Be(0.01m);
+        result.FilledPrice.Should().Be(3500m);
+    }
+
     // ── GetQuantityPrecisionAsync (public interface) ────────────────────────────
 
     [Fact]
@@ -1674,5 +1720,42 @@ public class AsterConnectorTests
         cache.Count.Should().Be(10_000,
             "cache at cap must not grow when a new symbol entry would be written");
         result.Should().NotBeNull("a result (sentinel or real) must always be returned");
+    }
+
+    // ── Symbol normalization (profitability-fixes F2) ──────────────────────────
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_ResolvesNormalizedSymbol()
+    {
+        // Production callers (ExchangeSymbolConstraintsProvider → SignalEngine) pass the
+        // normalized symbol "WLFI". The Aster exchangeInfo payload keys symbols as
+        // "WLFIUSDT". Before the fix, the lookup missed and returned a no-cap sentinel,
+        // disabling every downstream notional / lot-size validation.
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 1_500_000m);
+        var (client, _) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var constraints = await sut.GetSymbolConstraintsAsync("WLFI");
+
+        constraints.Should().NotBeNull();
+        constraints.MaxNotionalValue.Should().Be(1_500_000m,
+            "the normalized form 'WLFI' must resolve against exchangeInfo rows written as 'WLFIUSDT'");
+    }
+
+    [Fact]
+    public async Task AsterConnector_GetSymbolConstraints_RawAndNormalizedReturnSameValue()
+    {
+        // Backwards-compat: existing tests and any straggler callers still pass "WLFIUSDT".
+        // Both forms must resolve to the same cached constraints.
+        var info = BuildExchangeInfoWithMaxNotional("WLFIUSDT", maxNotional: 1_500_000m);
+        var (client, _) = BuildClientWithExchangeInfo(SuccessExchangeInfo(info));
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var raw = await sut.GetSymbolConstraintsAsync("WLFIUSDT");
+        var normalized = await sut.GetSymbolConstraintsAsync("WLFI");
+
+        raw.MaxNotionalValue.Should().Be(1_500_000m);
+        normalized.MaxNotionalValue.Should().Be(1_500_000m,
+            "normalized form must hit the same cache slot as raw form");
     }
 }
