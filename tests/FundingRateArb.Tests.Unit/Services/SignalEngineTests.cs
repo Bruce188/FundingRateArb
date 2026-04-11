@@ -2919,6 +2919,8 @@ public class SignalEngineTests
         result.Should().NotBeNull();
         result.IsSuccess.Should().BeTrue(
             "a metrics emission failure must never abort the signal cycle");
+        result.Diagnostics.Should().NotBeNull(
+            "the result payload must be fully populated even when metrics emission throws");
 
         // Warning log was emitted
         mockLogger.Verify(
@@ -2930,6 +2932,38 @@ public class SignalEngineTests
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
             Times.AtLeastOnce,
             "metrics failure must be logged at Warning level");
+    }
+
+    [Fact]
+    public async Task SignalEngine_RecordCycle_NotCalled_OnDatabaseUnavailableDegradedPath()
+    {
+        // Plan contract: metrics emission must NOT fire on the degraded path (the
+        // DatabaseUnavailableException early-return at line 71-83 of SignalEngine.cs).
+        // This test locks the contract so a future refactor that hoists RecordCycle
+        // above the try block fails loudly.
+        _mockBotConfig
+            .Setup(b => b.GetActiveAsync())
+            .ThrowsAsync(new DatabaseUnavailableException("simulated degraded DB"));
+
+        var mockMetrics = new Mock<ISignalEngineMetrics>();
+
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: null,
+            screeningProvider: null, symbolConstraintsProvider: null,
+            logger: null, metrics: mockMetrics.Object);
+
+        // Act
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert — degraded result returned, no metric emitted
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.DatabaseAvailable.Should().BeFalse();
+        mockMetrics.Verify(
+            m => m.RecordCycle(It.IsAny<PipelineDiagnosticsDto>(), It.IsAny<TimeSpan>()),
+            Times.Never,
+            "metrics must not be emitted on the degraded (DatabaseUnavailableException) path");
     }
 
     // ── F8: break-even-size filter (profitability-fixes) ─────────────

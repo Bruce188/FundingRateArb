@@ -502,12 +502,13 @@ public class SignalEngine : ISignalEngine
             .ToList();
 
         // F10: emit aggregate cycle telemetry. Fire-and-forget — any failure is
-        // logged but must never abort the signal cycle.
+        // logged but must never abort the signal cycle. OperationCanceledException
+        // is intentionally NOT swallowed so caller cancellation semantics flow.
         try
         {
             _metrics?.RecordCycle(diagnostics, cycleStopwatch.Elapsed);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger?.LogWarning(ex, "SignalEngine metrics emission failed — continuing without metric");
         }
