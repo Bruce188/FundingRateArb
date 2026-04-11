@@ -228,6 +228,51 @@ public class SignalRNotifierTests
         captured.OpeningPositionCount.Should().Be(1);
     }
 
+    [Fact]
+    public async Task PushDashboardUpdateAsync_EmptyOpportunities_FallsBackToDiagnosticsBestRawSpread()
+    {
+        DashboardDto? captured = null;
+        _mockMarketDataClient
+            .Setup(c => c.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
+            .Callback<DashboardDto>(dto => captured = dto)
+            .Returns(Task.CompletedTask);
+
+        var diagnostics = new PipelineDiagnosticsDto { BestRawSpread = 0.000364m };
+        var opportunityResult = new OpportunityResultDto { Diagnostics = diagnostics };
+
+        await _sut.PushDashboardUpdateAsync(
+            new List<ArbitragePosition>(),
+            new List<ArbitrageOpportunityDto>(),
+            operatingState: BotOperatingState.Armed,
+            openingCount: 0,
+            needsAttentionCount: 0,
+            opportunityResult: opportunityResult);
+
+        captured.Should().NotBeNull();
+        captured!.BestSpread.Should().Be(0.000364m);
+    }
+
+    [Fact]
+    public async Task PushDashboardUpdateAsync_EmptyOpportunitiesAndNullDiagnostics_ReturnsZero()
+    {
+        DashboardDto? captured = null;
+        _mockMarketDataClient
+            .Setup(c => c.ReceiveDashboardUpdate(It.IsAny<DashboardDto>()))
+            .Callback<DashboardDto>(dto => captured = dto)
+            .Returns(Task.CompletedTask);
+
+        // No opportunityResult passed — uses optional default null
+        await _sut.PushDashboardUpdateAsync(
+            new List<ArbitragePosition>(),
+            new List<ArbitrageOpportunityDto>(),
+            operatingState: BotOperatingState.Armed,
+            openingCount: 0,
+            needsAttentionCount: 0);
+
+        captured.Should().NotBeNull();
+        captured!.BestSpread.Should().Be(0m);
+    }
+
     // ── Exception-swallowing tests (NB2) ────────────────────────────────────
 
     [Fact]

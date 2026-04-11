@@ -371,7 +371,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         // Step 3: Push global dashboard KPI update (includes opening and needs-attention counts)
         var needsAttentionCount = await uow.Positions.CountByStatusesAsync(PositionStatus.EmergencyClosed, PositionStatus.Failed);
         await _notifier.PushDashboardUpdateAsync(allOpenPositions, allOpportunities, globalConfig.OperatingState,
-            allOpeningPositions.Count, needsAttentionCount);
+            allOpeningPositions.Count, needsAttentionCount, opportunityResult);
 
         // Step 4: Gate — skip position opening if not Armed or Trading (allowlist)
         if (globalConfig.OperatingState != BotOperatingState.Armed
