@@ -104,8 +104,15 @@ public class DashboardController : Controller
         {
             var result = await _cache.GetOrCreateAsync(AuthenticatedOpportunityCacheKey, async entry =>
             {
-                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
-                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+                var computed = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(ct);
+                // Cold-start path: leverage tiers aren't loaded yet so all leverage-derived
+                // metrics (Lev, ROC APR, APR, BE Cyc) are null. Shorten the TTL so the next
+                // request recomputes quickly once LeverageTierRefresher has populated the cache.
+                var hasLeverageMetrics = computed.Opportunities.Any(o => o.EffectiveLeverage != null);
+                entry.AbsoluteExpirationRelativeToNow = hasLeverageMetrics
+                    ? TimeSpan.FromSeconds(5)
+                    : TimeSpan.FromSeconds(1);
+                return computed;
             });
 
             // B1: short-circuit immediately when the SignalEngine already detected a
