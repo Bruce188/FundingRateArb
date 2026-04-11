@@ -32,6 +32,7 @@ using Polly.Retry;
 using Polly.Timeout;
 using Serilog;
 using Serilog.Events;
+using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
 using Serilog.Sinks.MSSqlServer;
 
 // Bootstrap logger — captures startup errors before full Serilog is configured
@@ -98,6 +99,17 @@ try
 
             ;
 
+        // Application Insights sink — registered for all environments when a
+        // connection string is configured (populated from Key Vault in production).
+        // The guard keeps local/test startup unaffected when the secret is blank.
+        var aiConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
+        if (!string.IsNullOrWhiteSpace(aiConnectionString))
+        {
+            lc.WriteTo.ApplicationInsights(
+                connectionString: aiConnectionString,
+                telemetryConverter: TelemetryConverter.Traces);
+        }
+
         if (isDevEnv)
         {
             lc.WriteTo.File(
@@ -124,6 +136,17 @@ try
                 restrictedToMinimumLevel: LogEventLevel.Warning);
         }
     });
+
+    // Eagerly emit a one-line startup confirmation so post-deploy checks can grep for
+    // it. We re-read the connection string here (instead of capturing from the Serilog
+    // lambda) because the lambda runs lazily on first log call and may not fire before
+    // the next log line is emitted.
+    var aiBoundConn = builder.Configuration["ApplicationInsights:ConnectionString"];
+    Log.Information(
+        "Serilog App Insights sink {Status}",
+        string.IsNullOrWhiteSpace(aiBoundConn)
+            ? "not configured (connection string empty)"
+            : "registered");
 
     // --- Application Insights (auto-collects when ConnectionString is configured) ---
     builder.Services.AddApplicationInsightsTelemetry();
