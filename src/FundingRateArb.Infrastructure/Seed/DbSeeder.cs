@@ -25,6 +25,7 @@ public static class DbSeeder
         await SeedAssetsAsync(context);
         await SeedBotConfigAsync(context, userMgr);
         await SeedAdminUserSettingsAsync(context, userMgr);
+        await ReconcileAllUserPreferencesAsync(context);
     }
 
     private static async Task SeedRolesAsync(RoleManager<IdentityRole> roleMgr)
@@ -71,12 +72,9 @@ public static class DbSeeder
 
     private static async Task SeedExchangesAsync(AppDbContext context)
     {
-        if (await context.Exchanges.AnyAsync())
+        // Canonical list — entries appended here are auto-backfilled on next startup.
+        var canonical = new[]
         {
-            return;
-        }
-
-        context.Exchanges.AddRange(
             new Exchange
             {
                 Name = "Hyperliquid",
@@ -112,7 +110,7 @@ public static class DbSeeder
                 FundingTimingDeviationSeconds = 15,
                 SupportsSubAccounts = false,
                 IsActive = true,
-                Description = "Aster DEX — HMAC-SHA256, USDT collateral, 8-hour funding"
+                Description = "Aster DEX — EIP-712 Pro API, USDT collateral, 8-hour funding"
             },
             new Exchange
             {
@@ -153,19 +151,24 @@ public static class DbSeeder
                 IsDataOnly = true,
                 Description = "CoinGlass aggregator — read-only funding rate data source. Not a trading venue."
             }
-        );
+        };
+
+        var existingNames = (await context.Exchanges.Select(e => e.Name).ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var toAdd = canonical.Where(e => !existingNames.Contains(e.Name)).ToList();
+        if (toAdd.Count == 0)
+        {
+            return;
+        }
+
+        context.Exchanges.AddRange(toAdd);
         await context.SaveChangesAsync();
     }
 
     private static async Task SeedAssetsAsync(AppDbContext context)
     {
-        if (await context.Assets.AnyAsync())
-        {
-            return;
-        }
-
-        // All 86 assets commonly listed on Hyperliquid, Lighter and Aster DEX
-        var assets = new (string Symbol, string Name)[]
+        // Canonical list — entries appended here are auto-backfilled on next startup.
+        var canonical = new (string Symbol, string Name)[]
         {
             ("BTC",       "Bitcoin"),
             ("ETH",       "Ethereum"),
@@ -255,8 +258,18 @@ public static class DbSeeder
             ("ZRO",       "LayerZero"),
         };
 
-        context.Assets.AddRange(assets.Select(a =>
-            new Asset { Symbol = a.Symbol, Name = a.Name, IsActive = true }));
+        var existingSymbols = (await context.Assets.Select(a => a.Symbol).ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var toAdd = canonical
+            .Where(a => !existingSymbols.Contains(a.Symbol))
+            .Select(a => new Asset { Symbol = a.Symbol, Name = a.Name, IsActive = true })
+            .ToList();
+        if (toAdd.Count == 0)
+        {
+            return;
+        }
+
+        context.Assets.AddRange(toAdd);
         await context.SaveChangesAsync();
     }
 
@@ -352,48 +365,103 @@ public static class DbSeeder
             });
         }
 
-        // Create exchange preferences for all active exchanges
-        var hasExchangePrefs = await context.UserExchangePreferences
-            .AnyAsync(p => p.UserId == admin.Id);
-        if (!hasExchangePrefs)
+        await context.SaveChangesAsync();
+    }
+
+    private static async Task ReconcileAllUserPreferencesAsync(AppDbContext context)
+    {
+        // For every existing user, ensure pref rows exist for every active exchange
+        // and asset. Uses set-based SQL on relational providers to avoid loading all
+        // preference rows into memory at startup — an O(users × exchanges) in-process
+        // scan does not scale. Falls back to LINQ-based reconciliation for the
+        // in-memory provider used by integration tests.
+        if (context.Database.IsRelational())
         {
-            var exchangeIds = await context.Exchanges
+            await context.Database.ExecuteSqlRawAsync(@"
+                INSERT INTO UserExchangePreferences (UserId, ExchangeId, IsEnabled)
+                SELECT u.Id, e.Id, 1
+                FROM AspNetUsers u
+                CROSS JOIN Exchanges e
+                WHERE e.IsActive = 1
+                  AND NOT EXISTS (
+                    SELECT 1 FROM UserExchangePreferences p
+                    WHERE p.UserId = u.Id AND p.ExchangeId = e.Id)");
+
+            await context.Database.ExecuteSqlRawAsync(@"
+                INSERT INTO UserAssetPreferences (UserId, AssetId, IsEnabled)
+                SELECT u.Id, a.Id, 1
+                FROM AspNetUsers u
+                CROSS JOIN Assets a
+                WHERE a.IsActive = 1
+                  AND NOT EXISTS (
+                    SELECT 1 FROM UserAssetPreferences p
+                    WHERE p.UserId = u.Id AND p.AssetId = a.Id)");
+        }
+        else
+        {
+            // In-memory provider (test environments): LINQ-based fallback.
+            // Performance is not a concern here — test databases are small.
+            var userIds = await context.Users.Select(u => u.Id).ToListAsync();
+            if (userIds.Count == 0)
+            {
+                return;
+            }
+
+            var activeExchangeIds = await context.Exchanges
                 .Where(e => e.IsActive)
                 .Select(e => e.Id)
                 .ToListAsync();
 
-            foreach (var exchangeId in exchangeIds)
-            {
-                context.UserExchangePreferences.Add(new UserExchangePreference
-                {
-                    UserId = admin.Id,
-                    ExchangeId = exchangeId,
-                    IsEnabled = true
-                });
-            }
-        }
+            var existingExchangePrefs = (await context.UserExchangePreferences
+                    .Select(p => new { p.UserId, p.ExchangeId })
+                    .ToListAsync())
+                .Select(p => (p.UserId, p.ExchangeId))
+                .ToHashSet();
 
-        // Create asset preferences for all active assets
-        var hasAssetPrefs = await context.UserAssetPreferences
-            .AnyAsync(p => p.UserId == admin.Id);
-        if (!hasAssetPrefs)
-        {
-            var assetIds = await context.Assets
+            var exchangePrefsToAdd = userIds
+                .SelectMany(userId => activeExchangeIds
+                    .Where(exchangeId => !existingExchangePrefs.Contains((userId, exchangeId)))
+                    .Select(exchangeId => new UserExchangePreference
+                    {
+                        UserId = userId,
+                        ExchangeId = exchangeId,
+                        IsEnabled = true
+                    }))
+                .ToList();
+
+            if (exchangePrefsToAdd.Count > 0)
+            {
+                context.UserExchangePreferences.AddRange(exchangePrefsToAdd);
+            }
+
+            var activeAssetIds = await context.Assets
                 .Where(a => a.IsActive)
                 .Select(a => a.Id)
                 .ToListAsync();
 
-            foreach (var assetId in assetIds)
-            {
-                context.UserAssetPreferences.Add(new UserAssetPreference
-                {
-                    UserId = admin.Id,
-                    AssetId = assetId,
-                    IsEnabled = true
-                });
-            }
-        }
+            var existingAssetPrefs = (await context.UserAssetPreferences
+                    .Select(p => new { p.UserId, p.AssetId })
+                    .ToListAsync())
+                .Select(p => (p.UserId, p.AssetId))
+                .ToHashSet();
 
-        await context.SaveChangesAsync();
+            var assetPrefsToAdd = userIds
+                .SelectMany(userId => activeAssetIds
+                    .Where(assetId => !existingAssetPrefs.Contains((userId, assetId)))
+                    .Select(assetId => new UserAssetPreference
+                    {
+                        UserId = userId,
+                        AssetId = assetId,
+                        IsEnabled = true
+                    }))
+                .ToList();
+
+            if (assetPrefsToAdd.Count > 0)
+            {
+                context.UserAssetPreferences.AddRange(assetPrefsToAdd);
+            }
+
+            await context.SaveChangesAsync();
+        }
     }
 }

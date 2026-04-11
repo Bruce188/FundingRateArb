@@ -2886,4 +2886,98 @@ public class ExchangeConnectorFactoryTests
         act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Account Index*required*");
     }
+
+    // ── Aster V3 factory path tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void CreateAsterConnector_WithV3Credentials_ReturnsV3Client()
+    {
+        var factory = BuildFactoryForUserCreation();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: null, apiSecret: null,
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull("V3 credentials must produce a non-null connector");
+        factory.LastAsterCredentials.Should().NotBeNull();
+        factory.LastAsterCredentials!.V3.Should().NotBeNull("wallet+key pair must select the V3 credential path");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithLegacyV1Credentials_ReturnsV1Client()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: null, privateKey: null);
+
+        connector.Should().NotBeNull("V1 HMAC credentials must produce a non-null connector");
+        factory.LastAsterCredentials.Should().NotBeNull();
+        factory.LastAsterCredentials!.V3.Should().BeNull("HMAC-only credentials must select the V1 path, not V3");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithBothV1AndV3_PrefersV3()
+    {
+        var factory = BuildFactoryForUserCreation();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull(
+            "when both V1 and V3 credentials are supplied, V3 takes precedence and a connector must be returned");
+        factory.LastAsterCredentials.Should().NotBeNull();
+        factory.LastAsterCredentials!.V3.Should().NotBeNull(
+            "when both credential types are present the factory must prefer V3 over V1");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithPartialV3Credentials_WalletOnlyFallsBackToV1()
+    {
+        // Only walletAddress set, privateKey absent — partial V3 falls back to V1
+        var factory = BuildFactoryForUserCreation();
+        var walletAddress = "0x" + new string('a', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: walletAddress, privateKey: null);
+
+        connector.Should().NotBeNull("partial V3 + valid V1 must still return a connector via V1 fallback");
+        factory.LastAsterCredentials!.V3.Should().BeNull(
+            "incomplete V3 credentials (no privateKey) must not select the V3 path");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithPartialV3Credentials_KeyOnlyFallsBackToV1()
+    {
+        // Only privateKey set, walletAddress absent — partial V3 falls back to V1
+        var factory = BuildFactoryForUserCreation();
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: null, privateKey: privateKey);
+
+        connector.Should().NotBeNull("partial V3 + valid V1 must still return a connector via V1 fallback");
+        factory.LastAsterCredentials!.V3.Should().BeNull(
+            "incomplete V3 credentials (no walletAddress) must not select the V3 path");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithNoCredentials_ReturnsNull()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: null, apiSecret: null,
+            walletAddress: null, privateKey: null);
+
+        connector.Should().BeNull("no credentials at all must produce null");
+    }
 }

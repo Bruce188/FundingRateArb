@@ -77,46 +77,44 @@ public class UserPreferenceRepository : IUserPreferenceRepository
 
     public async Task InitializeDefaultsAsync(string userId)
     {
-        // Check if user already has preferences
-        var hasExchangePrefs = await _context.UserExchangePreferences
-            .AnyAsync(p => p.UserId == userId);
-        var hasAssetPrefs = await _context.UserAssetPreferences
-            .AnyAsync(p => p.UserId == userId);
+        // Insert only the missing (user × active-exchange/asset) pairs so a re-run after
+        // new exchanges/assets land in the seed backfills the user's prefs idempotently.
+        var existingExchangeIds = await _context.UserExchangePreferences
+            .Where(p => p.UserId == userId)
+            .Select(p => p.ExchangeId)
+            .ToListAsync();
+        var activeExchangeIds = await _context.Exchanges
+            .Where(e => e.IsActive)
+            .Select(e => e.Id)
+            .ToListAsync();
 
-        if (!hasExchangePrefs)
+        foreach (var exchangeId in activeExchangeIds.Except(existingExchangeIds))
         {
-            var activeExchanges = await _context.Exchanges
-                .Where(e => e.IsActive)
-                .Select(e => e.Id)
-                .ToListAsync();
-
-            foreach (var exchangeId in activeExchanges)
+            _context.UserExchangePreferences.Add(new UserExchangePreference
             {
-                _context.UserExchangePreferences.Add(new UserExchangePreference
-                {
-                    UserId = userId,
-                    ExchangeId = exchangeId,
-                    IsEnabled = true
-                });
-            }
+                UserId = userId,
+                ExchangeId = exchangeId,
+                IsEnabled = true
+            });
         }
 
-        if (!hasAssetPrefs)
-        {
-            var activeAssets = await _context.Assets
-                .Where(a => a.IsActive)
-                .Select(a => a.Id)
-                .ToListAsync();
+        var existingAssetIds = await _context.UserAssetPreferences
+            .Where(p => p.UserId == userId)
+            .Select(p => p.AssetId)
+            .ToListAsync();
+        var activeAssetIds = await _context.Assets
+            .Where(a => a.IsActive)
+            .Select(a => a.Id)
+            .ToListAsync();
 
-            foreach (var assetId in activeAssets)
+        foreach (var assetId in activeAssetIds.Except(existingAssetIds))
+        {
+            _context.UserAssetPreferences.Add(new UserAssetPreference
             {
-                _context.UserAssetPreferences.Add(new UserAssetPreference
-                {
-                    UserId = userId,
-                    AssetId = assetId,
-                    IsEnabled = true
-                });
-            }
+                UserId = userId,
+                AssetId = assetId,
+                IsEnabled = true
+            });
         }
     }
 }

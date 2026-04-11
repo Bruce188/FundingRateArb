@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Aster.Net;
 using Aster.Net.Clients;
+using Aster.Net.Objects;
 using Binance.Net.Clients;
-using CryptoExchange.Net.Authentication;
 using FundingRateArb.Application.Common.Exchanges;
+using HyperLiquid.Net;
 using HyperLiquid.Net.Clients;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +19,10 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ExchangeConnectorFactory> _logger;
     private readonly ConcurrentDictionary<string, KeyPool> _keyPools = new(StringComparer.OrdinalIgnoreCase);
+
+    // ── Test hook (internal; InternalsVisibleTo FundingRateArb.Tests.Unit) ───────
+    // Set by CreateAsterConnector so tests can assert which credential variant was used.
+    internal AsterCredentials? LastAsterCredentials { get; private set; }
 
     private static readonly Dictionary<string, Type> ConnectorTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -112,7 +118,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         IExchangeConnector? connector = exchangeName.ToLowerInvariant() switch
         {
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey, subAccountAddress),
-            "aster" => CreateAsterConnector(apiKey, apiSecret),
+            "aster" => CreateAsterConnector(apiKey, apiSecret, walletAddress, privateKey),
             "binance" => CreateBinanceConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
             "dydx" => CreateDydxConnector(privateKey),
@@ -158,7 +164,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var restClient = new HyperLiquidRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(walletAddress, privateKey);
+            options.ApiCredentials = new HyperLiquidCredentials(walletAddress, privateKey);
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
@@ -167,18 +173,33 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         return new HyperliquidConnector(restClient, pipelineProvider, markPriceCache, subAccountAddress, hlLogger);
     }
 
-    private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
+    internal AsterConnector? CreateAsterConnector(
+        string? apiKey, string? apiSecret,
+        string? walletAddress, string? privateKey)
     {
-        if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        AsterCredentials? credentials;
+
+        // V3 EIP-712 Pro API: both private keys must be present.
+        if (!string.IsNullOrWhiteSpace(walletAddress) && !string.IsNullOrWhiteSpace(privateKey))
+        {
+            credentials = new AsterCredentials(new AsterV3Credential(walletAddress, privateKey));
+        }
+        // V1 HMAC fallback: legacy API key + secret.
+        else if (!string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
+        {
+            credentials = new AsterCredentials(apiKey, apiSecret);
+        }
+        else
         {
             return null;
         }
 
         var restClient = new AsterRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = credentials;
         });
 
+        LastAsterCredentials = credentials;
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
         var logger = _serviceProvider.GetRequiredService<ILogger<AsterConnector>>();
         var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
@@ -194,7 +215,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
 
         var restClient = new BinanceRestClient(options =>
         {
-            options.ApiCredentials = new ApiCredentials(apiKey, apiSecret);
+            options.ApiCredentials = new Binance.Net.BinanceCredentials(apiKey, apiSecret);
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();

@@ -388,4 +388,67 @@ public class SettingsControllerTests
         model.Exchanges.Should().HaveCount(2);
         model.Exchanges.Should().NotContain(e => e.ExchangeName == "CoinGlass");
     }
+
+    // ── Aster V3 controller tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SaveApiKey_AsterV3_StoresWalletAndPrivateKey_RedirectsToApiKeys()
+    {
+        SetupAuthenticatedUser();
+
+        var userPrivateKey = "0x" + new string('a', 64);
+        var signerPrivateKey = "0x" + new string('b', 64);
+
+        var result = await _controller.SaveApiKey(
+            exchangeId: 3,
+            apiKey: null,
+            apiSecret: null,
+            walletAddress: userPrivateKey,
+            privateKey: signerPrivateKey,
+            subAccountAddress: null,
+            apiKeyIndex: null);
+
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Error"].Should().BeNull();
+
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 3, null, null, userPrivateKey, signerPrivateKey,
+            null, null), Times.Once);
+    }
+
+    [Fact]
+    public async Task ApiKeys_AsterWithV1Credentials_DisplaysLegacyBanner()
+    {
+        SetupAuthenticatedUser();
+
+        // Aster exchange with only V1 HMAC credentials (ApiKey set, WalletAddress empty)
+        var asterCredential = new UserExchangeCredential
+        {
+            ExchangeId = 3,
+            UserId = "test-user-id",
+            IsActive = true,
+            EncryptedApiKey = "encrypted-apikey",
+            EncryptedApiSecret = "encrypted-apisecret",
+            EncryptedWalletAddress = null,
+            EncryptedPrivateKey = null,
+        };
+
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync()).ReturnsAsync(new List<Exchange>
+        {
+            new() { Id = 3, Name = "Aster", IsActive = true, IsDataOnly = false }
+        });
+        _mockSettings.Setup(s => s.GetAllCredentialsAsync("test-user-id"))
+            .ReturnsAsync(new List<UserExchangeCredential> { asterCredential });
+        _mockSettings.Setup(s => s.DecryptCredential(asterCredential))
+            .Returns(("apikey-value", "apisecret-value", null, null, null, null));
+
+        var result = await _controller.ApiKeys();
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<ApiKeyViewModel>().Subject;
+        var asterItem = model.Exchanges.Should().ContainSingle(e => e.ExchangeName == "Aster").Subject;
+        asterItem.HasLegacyV1Credentials.Should().BeTrue(
+            "Aster entry with V1 API key but no V3 private keys must signal the legacy banner");
+    }
 }

@@ -147,16 +147,34 @@ public class SettingsController : Controller
 
         string? maskedApiKey = null;
         string? maskedWallet = null;
+        string? maskedPrivateKey = null;
         string? maskedSubAccount = null;
         string? maskedApiKeyIndex = null;
+        bool hasLegacyV1Credentials = false;
 
         if (credential is not null)
         {
             var decrypted = _settings.DecryptCredential(credential);
             maskedApiKey = MaskSecret(decrypted.ApiKey);
-            maskedWallet = MaskSecret(decrypted.WalletAddress);
             maskedSubAccount = MaskSecret(decrypted.SubAccountAddress);
             maskedApiKeyIndex = MaskSecret(decrypted.ApiKeyIndex);
+
+            // For Aster V3: WalletAddress stores a user private key — mask it entirely
+            // to prevent even a partial reveal of the key in the UI.
+            if (exchangeType == "aster-v3")
+            {
+                maskedWallet = MaskPrivateKey(decrypted.WalletAddress);
+                maskedPrivateKey = MaskPrivateKey(decrypted.PrivateKey);
+
+                // Legacy V1 detection: API key set but no V3 private keys configured.
+                hasLegacyV1Credentials = !string.IsNullOrEmpty(decrypted.ApiKey)
+                    && string.IsNullOrEmpty(decrypted.WalletAddress);
+            }
+            else
+            {
+                maskedWallet = MaskSecret(decrypted.WalletAddress);
+                maskedPrivateKey = MaskSecret(decrypted.PrivateKey);
+            }
         }
 
         return new ExchangeCredentialItem
@@ -167,8 +185,10 @@ public class SettingsController : Controller
             ExchangeType = exchangeType,
             MaskedApiKey = maskedApiKey,
             MaskedWalletAddress = maskedWallet,
+            MaskedPrivateKey = maskedPrivateKey,
             MaskedSubAccountAddress = maskedSubAccount,
             MaskedApiKeyIndex = maskedApiKeyIndex,
+            HasLegacyV1Credentials = hasLegacyV1Credentials,
         };
     }
 
@@ -180,6 +200,7 @@ public class SettingsController : Controller
         {
             "hyperliquid" => "hyperliquid",
             "lighter" => "lighter",
+            "aster" => "aster-v3",
             _ => "cex"
         };
 
@@ -197,6 +218,13 @@ public class SettingsController : Controller
 
         return value[..4] + "..." + value[^4..];
     }
+
+    /// <summary>
+    /// Masks a private key entirely. Private keys must never be partially revealed in the UI,
+    /// even as first-4/last-4 characters. Returns null for null input, "****" for any non-null value.
+    /// </summary>
+    private static string? MaskPrivateKey(string? value) =>
+        value is null ? null : "****";
 
     // -------------------------------------------------------------------------
     // Stream C — Exchange & Coin Preferences

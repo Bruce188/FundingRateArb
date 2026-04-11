@@ -8,6 +8,7 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using HyperLiquid.Net.Interfaces.Clients;
 using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
+using IHLFuturesExchangeData = HyperLiquid.Net.Interfaces.Clients.FuturesApi.IHyperLiquidSocketClientFuturesApiExchangeData;
 using HyperLiquid.Net.Objects.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -29,24 +30,26 @@ public class HyperliquidMarketDataStreamTests
     {
         var stream = CreateStream(out var mockSocket, out _);
         var mockFutures = new Mock<IHyperLiquidSocketClientFuturesApi>();
+        var mockExchangeData = new Mock<IHLFuturesExchangeData>();
 
         var failResult = new CallResult<UpdateSubscription>(
             new ServerError("error", new ErrorInfo(ErrorType.SystemError, "test error"), null!));
 
         // Both fail, but StartAsync should not throw
-        mockFutures.Setup(f => f.SubscribeToSymbolUpdatesAsync(
+        mockExchangeData.Setup(e => e.SubscribeToSymbolUpdatesAsync(
                 It.IsAny<string>(),
                 It.IsAny<Action<DataEvent<HyperLiquidFuturesTicker>>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(failResult);
 
+        mockFutures.Setup(f => f.ExchangeData).Returns(mockExchangeData.Object);
         mockSocket.Setup(s => s.FuturesApi).Returns(mockFutures.Object);
 
         // Should not throw even though all subscriptions fail
         await stream.StartAsync(new[] { "BTC", "ETH" }, CancellationToken.None);
 
         // Verify both were attempted
-        mockFutures.Verify(f => f.SubscribeToSymbolUpdatesAsync(
+        mockExchangeData.Verify(e => e.SubscribeToSymbolUpdatesAsync(
             It.IsAny<string>(),
             It.IsAny<Action<DataEvent<HyperLiquidFuturesTicker>>>(),
             It.IsAny<CancellationToken>()), Times.Exactly(2));
@@ -352,8 +355,9 @@ public class HyperliquidMarketDataStreamTests
         var tracker = new ConcurrencyTracker();
         var mockSocket = new Mock<IHyperLiquidSocketClient>();
         var mockFutures = new Mock<IHyperLiquidSocketClientFuturesApi>();
+        var mockExchangeData = new Mock<IHLFuturesExchangeData>();
 
-        mockFutures.Setup(f => f.SubscribeToSymbolUpdatesAsync(
+        mockExchangeData.Setup(e => e.SubscribeToSymbolUpdatesAsync(
                 It.IsAny<string>(),
                 It.IsAny<Action<DataEvent<HyperLiquidFuturesTicker>>>(),
                 It.IsAny<CancellationToken>()))
@@ -375,6 +379,7 @@ public class HyperliquidMarketDataStreamTests
                     return new CallResult<UpdateSubscription>(new Mock<UpdateSubscription>().Object);
                 });
 
+        mockFutures.Setup(f => f.ExchangeData).Returns(mockExchangeData.Object);
         mockSocket.Setup(s => s.FuturesApi).Returns(mockFutures.Object);
         return (mockSocket, mockFutures, tracker);
     }

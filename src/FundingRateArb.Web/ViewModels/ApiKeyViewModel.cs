@@ -14,13 +14,20 @@ public class ExchangeCredentialItem
 
     /// <summary>
     /// Identifies the exchange type for per-exchange form rendering.
-    /// Values: "cex", "hyperliquid", "lighter".
+    /// Values: "cex", "hyperliquid", "lighter", "aster-v3".
     /// </summary>
     public string ExchangeType { get; set; } = "cex";
 
     // Masked display values — never shows plain-text credentials
     public string? MaskedApiKey { get; set; }
     public string? MaskedWalletAddress { get; set; }
+    public string? MaskedPrivateKey { get; set; }
     public string? MaskedApiKeyIndex { get; set; }
     public string? MaskedSubAccountAddress { get; set; }
+
+    /// <summary>
+    /// True when an Aster exchange entry has V1 HMAC credentials stored but no V3 keys.
+    /// Used to render a migration banner prompting the user to upgrade to V3 Pro API.
+    /// </summary>
+    public bool HasLegacyV1Credentials { get; set; }
 }
