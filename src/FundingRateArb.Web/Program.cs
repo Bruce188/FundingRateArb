@@ -75,6 +75,9 @@ try
     // WebApplicationFactory.ConfigureWebHost (which calls UseEnvironment) runs during Build(),
     // so builder.Environment.EnvironmentName is mutated after line 60 would have captured it.
     // Reading from the IHostEnvironment service inside the lambda sees the final resolved value.
+    // The App Insights connection string, by contrast, is stable once Key Vault has merged into
+    // builder.Configuration, so we hoist a single read here and capture it in the lambda closure.
+    var aiConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
     builder.Services.AddSerilog((sp, lc) =>
     {
         var env = sp.GetRequiredService<IHostEnvironment>();
@@ -102,7 +105,6 @@ try
         // Application Insights sink — registered for all environments when a
         // connection string is configured (populated from Key Vault in production).
         // The guard keeps local/test startup unaffected when the secret is blank.
-        var aiConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
         if (!string.IsNullOrWhiteSpace(aiConnectionString))
         {
             lc.WriteTo.ApplicationInsights(
@@ -136,17 +138,6 @@ try
                 restrictedToMinimumLevel: LogEventLevel.Warning);
         }
     });
-
-    // Eagerly emit a one-line startup confirmation so post-deploy checks can grep for
-    // it. We re-read the connection string here (instead of capturing from the Serilog
-    // lambda) because the lambda runs lazily on first log call and may not fire before
-    // the next log line is emitted.
-    var aiBoundConn = builder.Configuration["ApplicationInsights:ConnectionString"];
-    Log.Information(
-        "Serilog App Insights sink {Status}",
-        string.IsNullOrWhiteSpace(aiBoundConn)
-            ? "not configured (connection string empty)"
-            : "registered");
 
     // --- Application Insights (auto-collects when ConnectionString is configured) ---
     builder.Services.AddApplicationInsightsTelemetry();
@@ -606,6 +597,16 @@ try
         .AddCheck<WebSocketStreamHealthCheck>("websocket-streams");
 
     var app = builder.Build();
+
+    // Emit a one-line startup confirmation through the host-configured Serilog
+    // pipeline so the App Insights sink (if registered) ships it to the `traces`
+    // table. Post-deploy verification greps container stdout and/or App Insights
+    // for this line to confirm the sink is live.
+    Log.Information(
+        "Serilog App Insights sink {Status}",
+        string.IsNullOrWhiteSpace(aiConnectionString)
+            ? "not configured (connection string empty)"
+            : "registered");
 
     // Validate connection string is configured (not still using placeholder)
     var connStr = app.Configuration.GetConnectionString("DefaultConnection") ?? "";
