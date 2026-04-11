@@ -24,6 +24,10 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
         builder.Property(p => p.RealizedPnl).HasColumnType("decimal(18,4)");
         builder.Property(p => p.LongFilledQuantity).HasColumnType("decimal(28,12)");
         builder.Property(p => p.ShortFilledQuantity).HasColumnType("decimal(28,12)");
+        builder.Property(p => p.LongExitPrice).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.ShortExitPrice).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.LongExitQty).HasColumnType("decimal(28,12)");
+        builder.Property(p => p.ShortExitQty).HasColumnType("decimal(28,12)");
         builder.Property(p => p.ExchangeReportedPnl).HasColumnType("decimal(18,4)");
         builder.Property(p => p.PnlDivergence).HasColumnType("decimal(18,4)");
         builder.Property(p => p.CurrentDivergencePct).HasColumnType("decimal(18,4)");
