@@ -1,3 +1,5 @@
+using System;
+using System.Threading;
 using FluentAssertions;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
@@ -180,5 +182,29 @@ public class MarketDataCacheTests
         result.Should().NotBeNull();
         result!.Value.Should().BeOnOrAfter(before);
         result!.Value.Should().BeOnOrBefore(after);
+    }
+
+    [Fact]
+    public void GetLastFetchTime_ReturnsLatestTimestamp_WhenEntryUpdatedAfterOlderEntries()
+    {
+        // Seed with an initial entry, pause, then update a different key — the returned
+        // max must reflect the later update, not the earlier one. A min-implementation
+        // bug would return the older timestamp and fail the assertion.
+        _sut.Update(MakeDto("Aster", "BTC"));
+        var firstUpdateFinishedAt = DateTime.UtcNow;
+
+        // Ensure a measurable gap between the two updates so max vs min is distinguishable.
+        Thread.Sleep(50);
+
+        _sut.Update(MakeDto("Hyperliquid", "ETH"));
+        var secondUpdateStartedAt = DateTime.UtcNow.AddMilliseconds(-10);
+
+        var result = _sut.GetLastFetchTime();
+
+        result.Should().NotBeNull();
+        result!.Value.Should().BeOnOrAfter(secondUpdateStartedAt,
+            "GetLastFetchTime must return the latest (max) timestamp across all entries, not an older one");
+        result.Value.Should().BeAfter(firstUpdateFinishedAt,
+            "the max timestamp must be strictly newer than the first update's completion time");
     }
 }

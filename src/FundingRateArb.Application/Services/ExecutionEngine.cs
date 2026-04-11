@@ -651,7 +651,10 @@ public class ExecutionEngine : IExecutionEngine
             }
 
             position.Status = PositionStatus.Open;
-            position.ConfirmedAtUtc = DateTime.UtcNow;
+            if (!position.IsDryRun)
+            {
+                position.ConfirmedAtUtc = DateTime.UtcNow;
+            }
 
             var longNotional = position.LongEntryPrice * longResult.FilledQuantity;
             var shortNotional = position.ShortEntryPrice * shortResult.FilledQuantity;

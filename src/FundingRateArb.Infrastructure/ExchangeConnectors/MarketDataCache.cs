@@ -68,8 +68,8 @@ public class MarketDataCache : IMarketDataCache
 
     public DateTime? GetLastFetchTime()
     {
-        if (_rates.IsEmpty) return null;
-        return _rates.Values.Max(e => e.Timestamp);
+        var timestamps = _rates.Values.Select(e => (DateTime?)e.Timestamp);
+        return timestamps.DefaultIfEmpty().Max();
     }
 
     public bool IsStaleForExchange(string exchangeName, TimeSpan maxAge)
