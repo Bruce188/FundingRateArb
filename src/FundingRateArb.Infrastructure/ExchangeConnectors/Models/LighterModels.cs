@@ -287,3 +287,94 @@ public class LighterSendTxResponse
     [JsonPropertyName("message")]
     public string? Message { get; set; }
 }
+
+// ── Position Funding API model (/api/v1/positionFunding) ──
+
+/// <summary>
+/// A single entry from /api/v1/positionFunding.
+/// Amounts are signed from the account's perspective: negative = paid, positive = received.
+/// </summary>
+public class LighterPositionFundingEntry
+{
+    [JsonPropertyName("market_id")]
+    public int MarketId { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public long Timestamp { get; set; }
+
+    [JsonPropertyName("amount")]
+    public string Amount { get; set; } = "0";
+
+    [JsonPropertyName("rate")]
+    public string Rate { get; set; } = "0";
+
+    [JsonPropertyName("position_id")]
+    public long PositionId { get; set; }
+}
+
+/// <summary>
+/// Top-level response from /api/v1/positionFunding (cursor-paginated).
+/// </summary>
+public class LighterPositionFundingResponse
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("position_funding")]
+    public List<LighterPositionFundingEntry>? PositionFunding { get; set; } = [];
+
+    [JsonPropertyName("next_cursor")]
+    public string? NextCursor { get; set; }
+}
+
+// ── Trades API model (/api/v1/trades) ──
+
+/// <summary>
+/// A single trade entry from /api/v1/trades.
+/// RealizedPnl is nullable because Lighter may omit it on non-PnL-realizing trades (e.g. opens).
+/// </summary>
+public class LighterTradeEntry
+{
+    [JsonPropertyName("trade_id")]
+    public long TradeId { get; set; }
+
+    [JsonPropertyName("market_id")]
+    public int MarketId { get; set; }
+
+    [JsonPropertyName("timestamp")]
+    public long Timestamp { get; set; }
+
+    /// <summary>0 = buy, 1 = sell.</summary>
+    [JsonPropertyName("is_ask")]
+    public int IsAsk { get; set; }
+
+    [JsonPropertyName("size")]
+    public string Size { get; set; } = "0";
+
+    [JsonPropertyName("price")]
+    public string Price { get; set; } = "0";
+
+    [JsonPropertyName("quote_amount")]
+    public string QuoteAmount { get; set; } = "0";
+
+    [JsonPropertyName("fee")]
+    public string Fee { get; set; } = "0";
+
+    [JsonPropertyName("realized_pnl")]
+    public string? RealizedPnl { get; set; }
+}
+
+/// <summary>
+/// Top-level response from /api/v1/trades (cursor-paginated).
+/// </summary>
+public class LighterTradesResponse
+{
+    [JsonPropertyName("code")]
+    public int Code { get; set; }
+
+    [JsonPropertyName("trades")]
+    public List<LighterTradeEntry>? Trades { get; set; } = [];
+
+    [JsonPropertyName("next_cursor")]
+    public string? NextCursor { get; set; }
+}

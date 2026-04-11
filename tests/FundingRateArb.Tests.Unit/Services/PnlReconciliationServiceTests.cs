@@ -413,4 +413,41 @@ public class PnlReconciliationServiceTests
         position.ReconciledAt.Should().NotBeNull();
         _capturedAlerts.Should().BeEmpty();
     }
+
+    // ── F6: Full-divergence reachable once Lighter reconciliation lands ──
+
+    [Fact]
+    public async Task ReconcileAsync_ComputesDivergence_WhenLighterLegReturnsValues()
+    {
+        // Previously unreachable for Lighter-containing pairs because the connector
+        // stubbed GetRealizedPnlAsync / GetFundingPaymentsAsync to null. Now both legs
+        // report, so the full divergence path fires.
+        var position = CreatePosition(realizedPnl: -0.10m);
+
+        // Lighter leg (long): realized +0.50, funding -0.05
+        SetupConnectorPnl(_mockLongConnector, 0.50m);
+        SetupConnectorFunding(_mockLongConnector, -0.05m);
+
+        // Aster leg (short): realized -0.55, funding +0.01
+        SetupConnectorPnl(_mockShortConnector, -0.55m);
+        SetupConnectorFunding(_mockShortConnector, 0.01m);
+
+        await _sut.ReconcileAsync(
+            position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        // Exchange PnL = 0.50 + -0.55 = -0.05
+        position.ExchangeReportedPnl.Should().Be(-0.05m);
+        // Exchange funding = -0.05 + 0.01 = -0.04
+        position.ExchangeReportedFunding.Should().Be(-0.04m);
+
+        // Local -0.10 vs exchange -0.05: divergence = (-0.10 - -0.05) / |-0.05| * 100 = -100%
+        position.PnlDivergence.Should().NotBeNull();
+        position.PnlDivergence!.Value.Should().BeApproximately(-100m, 0.1m);
+
+        // Should have captured a Critical alert since |divergence| > 10%
+        _capturedAlerts.Should().ContainSingle(a =>
+            a.Type == AlertType.PnlDivergence && a.Severity == AlertSeverity.Critical);
+
+        position.ReconciledAt.Should().NotBeNull();
+    }
 }
