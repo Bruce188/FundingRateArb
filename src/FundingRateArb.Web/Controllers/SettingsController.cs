@@ -1,5 +1,7 @@
+using System.Net;
 using System.Security.Claims;
 using System.Text.RegularExpressions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
@@ -17,12 +19,18 @@ public class SettingsController : Controller
 {
     private readonly IUserSettingsService _settings;
     private readonly IUnitOfWork _uow;
+    private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly ILogger<SettingsController> _logger;
 
-    public SettingsController(IUserSettingsService settings, IUnitOfWork uow, ILogger<SettingsController> logger)
+    public SettingsController(
+        IUserSettingsService settings,
+        IUnitOfWork uow,
+        IExchangeConnectorFactory connectorFactory,
+        ILogger<SettingsController> logger)
     {
         _settings = settings;
         _uow = uow;
+        _connectorFactory = connectorFactory;
         _logger = logger;
     }
 
@@ -50,10 +58,95 @@ public class SettingsController : Controller
 
         var vm = new ApiKeyViewModel
         {
-            Exchanges = items
+            Exchanges = items,
+            TestResultMessage = TempData["TestResult"] as string,
+            TestResultSuccess = TempData["TestResultSuccess"] as bool?,
         };
 
         return View(vm);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TestApiKey(int exchangeId, CancellationToken ct = default)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
+
+        var exchanges = await _settings.GetAvailableExchangesAsync();
+        var exchange = exchanges.FirstOrDefault(e => e.Id == exchangeId);
+        if (exchange is null)
+        {
+            return NotFound();
+        }
+
+        var credential = await _settings.GetCredentialAsync(userId, exchangeId);
+        if (credential is null)
+        {
+            TempData["TestResult"] = "No credentials configured";
+            TempData["TestResultSuccess"] = false;
+            return RedirectToAction(nameof(ApiKeys));
+        }
+
+        var decrypted = _settings.DecryptCredential(credential);
+        IExchangeConnector? connector = null;
+        try
+        {
+            connector = await _connectorFactory.CreateForUserAsync(
+                exchange.Name,
+                decrypted.ApiKey,
+                decrypted.ApiSecret,
+                decrypted.WalletAddress,
+                decrypted.PrivateKey,
+                decrypted.SubAccountAddress,
+                decrypted.ApiKeyIndex);
+
+            if (connector is null)
+            {
+                TempData["TestResult"] = "Network error";
+                TempData["TestResultSuccess"] = false;
+                _logger.LogWarning("TestApiKey: factory returned null for exchange {ExchangeId}", exchangeId);
+                return RedirectToAction(nameof(ApiKeys));
+            }
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var balance = await connector.GetAvailableBalanceAsync(cts.Token);
+            TempData["TestResult"] = $"Connection OK — available balance: {balance:F2}";
+            TempData["TestResultSuccess"] = true;
+        }
+        catch (OperationCanceledException)
+        {
+            TempData["TestResult"] = "Timeout";
+            TempData["TestResultSuccess"] = false;
+            _logger.LogWarning("TestApiKey timeout for exchange {ExchangeId}", exchangeId);
+        }
+        catch (Exception ex) when (IsUnauthorized(ex))
+        {
+            TempData["TestResult"] = "Unauthorized";
+            TempData["TestResultSuccess"] = false;
+            _logger.LogWarning(ex, "TestApiKey unauthorized for exchange {ExchangeId}", exchangeId);
+        }
+        catch (Exception ex) when (IsRateLimit(ex))
+        {
+            TempData["TestResult"] = "Exchange returned: 429";
+            TempData["TestResultSuccess"] = false;
+            _logger.LogWarning(ex, "TestApiKey rate-limited for exchange {ExchangeId}", exchangeId);
+        }
+        catch (Exception ex)
+        {
+            TempData["TestResult"] = "Network error";
+            TempData["TestResultSuccess"] = false;
+            _logger.LogWarning(ex, "TestApiKey failed for exchange {ExchangeId}", exchangeId);
+        }
+        finally
+        {
+            (connector as IDisposable)?.Dispose();
+        }
+
+        return RedirectToAction(nameof(ApiKeys));
     }
 
     [HttpPost]
@@ -211,6 +304,7 @@ public class SettingsController : Controller
             MaskedSubAccountAddress = maskedSubAccount,
             MaskedApiKeyIndex = maskedApiKeyIndex,
             HasLegacyV1Credentials = hasLegacyV1Credentials,
+            LastUsedAt = credential?.LastUsedAt,
         };
     }
 
@@ -248,6 +342,16 @@ public class SettingsController : Controller
     /// </summary>
     private static string? MaskPrivateKey(string? value) =>
         value is null ? null : "****";
+
+    private static bool IsUnauthorized(Exception ex) =>
+        ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized }
+        || ex.Message.Contains("401", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("unauthorized", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRateLimit(Exception ex) =>
+        ex is HttpRequestException { StatusCode: HttpStatusCode.TooManyRequests }
+        || ex.Message.Contains("429", StringComparison.OrdinalIgnoreCase)
+        || ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
 
     // -------------------------------------------------------------------------
     // Stream C — Exchange & Coin Preferences

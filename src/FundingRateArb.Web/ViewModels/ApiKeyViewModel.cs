@@ -4,6 +4,8 @@ public class ApiKeyViewModel
 {
     public List<ExchangeCredentialItem> Exchanges { get; set; } = [];
     public string? StatusMessage { get; set; }
+    public string? TestResultMessage { get; set; }
+    public bool? TestResultSuccess { get; set; }
 }
 
 public class ExchangeCredentialItem
@@ -30,4 +32,6 @@ public class ExchangeCredentialItem
     /// Used to render a migration banner prompting the user to upgrade to V3 Pro API.
     /// </summary>
     public bool HasLegacyV1Credentials { get; set; }
+
+    public DateTime? LastUsedAt { get; set; }
 }

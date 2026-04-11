@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
@@ -19,6 +20,7 @@ public class SettingsControllerTests
     private readonly Mock<IUserSettingsService> _mockSettings = new();
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IBotConfigRepository> _mockBotConfigRepo = new();
+    private readonly Mock<IExchangeConnectorFactory> _mockConnectorFactory = new();
     private readonly SettingsController _controller;
 
     private static readonly BotConfiguration GlobalConfig = new()
@@ -56,6 +58,7 @@ public class SettingsControllerTests
         _controller = new SettingsController(
             _mockSettings.Object,
             _mockUow.Object,
+            _mockConnectorFactory.Object,
             NullLogger<SettingsController>.Instance);
     }
 
