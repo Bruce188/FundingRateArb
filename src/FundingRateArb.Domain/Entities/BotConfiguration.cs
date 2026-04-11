@@ -124,9 +124,17 @@ public class BotConfiguration
     [Range(0, 50)]
     public int SlippageBufferBps { get; set; } = 5;
 
-    /// <summary>Fraction of distance-to-liquidation at which to warn/close. 0.5 = close when 50% of the way.</summary>
+    /// <summary>Fraction of distance-to-liquidation at which to close. 0.5 = close when 50% of the safe range remains (i.e. half consumed).</summary>
     [Range(0.1, 0.9)]
     public decimal LiquidationWarningPct { get; set; } = 0.50m;
+
+    /// <summary>
+    /// Fraction of distance-to-liquidation at which to *alert* (not close). Default 0.75 =
+    /// warn when 75% of the safe range remains (i.e. 25% consumed). Must be greater than
+    /// <see cref="LiquidationWarningPct"/>, otherwise the warning fires after the close.
+    /// </summary>
+    [Range(0.1, 0.99)]
+    public decimal LiquidationEarlyWarningPct { get; set; } = 0.75m;
 
     /// <summary>Number of bot cycles between exchange position reconciliation checks.</summary>
     [Range(1, 100)]
@@ -139,7 +147,7 @@ public class BotConfiguration
     /// <summary>
     /// When true (default), DivergenceCritical close only fires when the position is past
     /// its MinHoldTimeHours AND the liquidation distance has fallen below
-    /// LiquidationWarningPct * 2. Set to false to revert to the pre-fix behavior where
+    /// LiquidationEarlyWarningPct. Set to false to revert to the pre-fix behavior where
     /// any divergence breach fires an immediate close regardless of hold time or liquidation.
     /// </summary>
     public bool UseRiskBasedDivergenceClose { get; set; } = true;

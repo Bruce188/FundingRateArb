@@ -349,8 +349,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     continue; // skip alert check — position will be closed
                 }
 
-                // Liquidation early warning at 2x threshold
-                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationWarningPct * 2m)
+                // Liquidation early warning — fires when the remaining safe range has dropped
+                // below the configured early-warning threshold (default 0.75 = 25% consumed).
+                // This is strictly looser than the close trigger at LiquidationWarningPct (0.50)
+                // so ops see a warning before the position is auto-closed.
+                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < config.LiquidationEarlyWarningPct)
                 {
                     var hasRecentLiqAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
 
@@ -364,7 +367,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                             Severity = AlertSeverity.Warning,
                             Message = $"Liquidation warning: {assetSymbol} " +
                                       $"{longExchangeName}/{shortExchangeName} " +
-                                      $"distance={minLiquidationDistance.Value:P1} (threshold={config.LiquidationWarningPct:P1})",
+                                      $"distance={minLiquidationDistance.Value:P1} (threshold={config.LiquidationEarlyWarningPct:P1})",
                         });
                     }
                 }
@@ -591,8 +594,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         // F4: in a delta-neutral hedge, mark-price divergence alone is NOT a closure signal — the
         // real risks are liquidation, funding sign flip, and leg drift. So when
         // UseRiskBasedDivergenceClose is true (default), we require both a minimum hold window
-        // and an unhealthy liquidation distance before escalating to a close. The old
-        // threshold-only behavior is preserved behind the feature flag for rollback safety.
+        // and an unhealthy liquidation distance (below LiquidationEarlyWarningPct) before
+        // escalating to a close. The old threshold-only behavior is preserved behind the
+        // feature flag for rollback safety.
         var currentDivergencePct = pos.CurrentDivergencePct ?? 0m;
         var divergenceCloseThreshold = entrySpreadCostPct > 0m
             ? entrySpreadCostPct * config.DivergenceAlertMultiplier * 2m
@@ -607,7 +611,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
             var pastMinHoldTime = hoursOpen >= (decimal)config.MinHoldTimeHours;
             var liquidationUnhealthy = minLiquidationDistance.HasValue
-                && minLiquidationDistance.Value < config.LiquidationWarningPct * 2m;
+                && minLiquidationDistance.Value < config.LiquidationEarlyWarningPct;
             if (pastMinHoldTime && liquidationUnhealthy)
             {
                 return CloseReason.DivergenceCritical;

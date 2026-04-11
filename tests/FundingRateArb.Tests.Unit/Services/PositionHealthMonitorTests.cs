@@ -844,7 +844,7 @@ public class PositionHealthMonitorTests
     [Fact]
     public void DetermineCloseReason_DivergenceCritical_PastHoldAndLiquidationRisky_FiresClose()
     {
-        // All gates pass: past MinHoldTime, distance in the 2x risky band → fire.
+        // All gates pass: past MinHoldTime, distance in the early-warning risky band → fire.
         var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3021m);
         pos.CurrentDivergencePct = 2.8m;
 
@@ -853,17 +853,19 @@ public class PositionHealthMonitorTests
             MinHoldTimeHours = 2,
             DivergenceAlertMultiplier = 2.0m,
             LiquidationWarningPct = 0.50m,
+            LiquidationEarlyWarningPct = 0.75m,
             UseRiskBasedDivergenceClose = true,
             MaxHoldTimeHours = 72,
             CloseThreshold = -0.00005m,
         };
 
-        // Distance 0.75 sits between LiquidationWarningPct (0.50) and 2x warning (1.0):
-        // high enough that LiquidationRisk does NOT pre-empt, low enough that the divergence
-        // risk gate is tripped (distance < 1.0).
+        // Distance 0.60 sits between LiquidationWarningPct (0.50, the close trigger)
+        // and LiquidationEarlyWarningPct (0.75, the unhealthy gate): high enough that
+        // LiquidationRisk does NOT pre-empt, low enough that the divergence risk gate
+        // is tripped (distance < 0.75).
         var result = PositionHealthMonitor.DetermineCloseReason(
             pos, config, unrealizedPnl: 0m, hoursOpen: 3m, spread: 0.001m,
-            minLiquidationDistance: 0.75m, negativeFundingCycles: 0,
+            minLiquidationDistance: 0.60m, negativeFundingCycles: 0,
             entrySpreadCostPct: 0.697m);
 
         result.Should().Be(CloseReason.DivergenceCritical,
@@ -894,6 +896,128 @@ public class PositionHealthMonitorTests
 
         result.Should().Be(CloseReason.DivergenceCritical,
             "feature flag off must preserve the legacy threshold-only semantics");
+    }
+
+    // ── F7: ComputeLiquidationDistance direction (profitability-fixes) ────────
+
+    [Fact]
+    public void ComputeLiquidationDistance_ReturnsOne_WhenMarkEqualsEntry()
+    {
+        var pos = new ArbitragePosition
+        {
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            Leverage = 10,
+        };
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 3000m, currentShortMark: 3000m);
+
+        distance.Should().NotBeNull();
+        distance!.Value.Should().Be(1m,
+            "distance is 1.0 when the position is sitting at entry");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ReturnsZero_WhenLongMarkEqualsLongLiquidation()
+    {
+        var pos = new ArbitragePosition
+        {
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            Leverage = 10,
+        };
+
+        // Formulaic long liquidation = 3000 * (1 - 1/10) = 2700
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 2700m, currentShortMark: 3000m);
+
+        distance.Should().NotBeNull();
+        distance!.Value.Should().Be(0m,
+            "distance is 0 when the mark has reached the liquidation price");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ReturnsHalf_AtLongMidpoint()
+    {
+        var pos = new ArbitragePosition
+        {
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            Leverage = 10,
+        };
+
+        // Midway between entry (3000) and long liquidation (2700) = 2850
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos, currentLongMark: 2850m, currentShortMark: 3000m);
+
+        distance.Should().NotBeNull();
+        distance!.Value.Should().Be(0.5m,
+            "distance is 0.5 when the mark is halfway between entry and liquidation");
+    }
+
+    // ── F7: Liquidation early-warning alert threshold (profitability-fixes) ───
+
+    [Fact]
+    public async Task CheckAndAct_DoesNotEmitLiquidationWarning_WhenDistanceAboveEarlyWarningThreshold()
+    {
+        // Fresh position, mark nearly at entry, distance ~0.97 — well above 0.75 early-warning.
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            LiquidationWarningPct = 0.50m,
+            LiquidationEarlyWarningPct = 0.75m,
+        });
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m);
+        pos.Leverage = 10; // long liq ≈ 2700, short liq ≈ 3300
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices(longMark: 2990m, shortMark: 3010m); // distance ≈ 0.97 (long), 0.97 (short)
+
+        await _sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.MarginWarning)), Times.Never,
+            "healthy fresh position must not emit a liquidation warning");
+    }
+
+    [Fact]
+    public async Task CheckAndAct_EmitsLiquidationWarning_WhenDistanceBelowEarlyWarningThreshold()
+    {
+        // Distance ~0.25 — well below 0.75 early-warning, but above the 0.20 close threshold
+        // so the position is NOT queued for close (the close path would skip the alert block).
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.95m, // high enough that unrealized losses don't trigger stop-loss
+            MaxHoldTimeHours = 72,
+            LiquidationWarningPct = 0.20m, // low close threshold so the alert path still runs
+            LiquidationEarlyWarningPct = 0.75m,
+        });
+
+        var capturedAlerts = new List<Alert>();
+        _mockAlerts.Setup(a => a.Add(It.IsAny<Alert>()))
+            .Callback<Alert>(a => capturedAlerts.Add(a));
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m, marginUsdc: 10000m);
+        pos.Leverage = 10; // long liq ≈ 2700 (range 300). Mark 2775 → distance = 75/300 = 0.25
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m); // healthy spread
+        SetupMarkPrices(longMark: 2775m, shortMark: 3000m);
+
+        await _sut.CheckAndActAsync();
+
+        var warningAlerts = capturedAlerts.Where(a => a.Type == AlertType.MarginWarning).ToList();
+        warningAlerts.Should().ContainSingle(
+            "distance=25% with early-warning threshold=75% must emit exactly one MarginWarning alert");
+        warningAlerts[0].Message.Should().Contain("75",
+            "alert message must reference the new 75% early-warning threshold (not the legacy value)");
     }
 
     // ── F15: StopLoss priority over PnlTarget ────────────────────
