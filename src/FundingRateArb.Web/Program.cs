@@ -274,6 +274,7 @@ try
 
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();
+    builder.Services.AddSingleton<ISignalEngineMetrics, AppInsightsSignalEngineMetrics>();
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
     builder.Services.AddScoped<IPnlReconciliationService, PnlReconciliationService>();
     builder.Services.AddScoped<IConnectorLifecycleManager, ConnectorLifecycleManager>();

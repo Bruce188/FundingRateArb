@@ -3,6 +3,7 @@ using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Tests.Unit.Common;
@@ -2837,6 +2838,98 @@ public class SignalEngineTests
         result.Should().NotBeEmpty(
             "spread between Hyperliquid and Binance is above threshold; opportunity must be returned");
         strictProvider.VerifyNoOtherCalls();
+    }
+
+    // ── F10: signal engine observability metrics (profitability-fixes) ────
+
+    [Fact]
+    public async Task SignalEngine_RecordCycle_EmitsDiagnosticsAndDuration_WhenCycleSucceeds()
+    {
+        // Arrange: standard rates fixture that yields a non-zero diagnostics shape.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m, takerFeeRate: 0.0004m),
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var mockMetrics = new Mock<ISignalEngineMetrics>();
+        PipelineDiagnosticsDto? capturedDiagnostics = null;
+        TimeSpan capturedDuration = default;
+        mockMetrics
+            .Setup(m => m.RecordCycle(It.IsAny<PipelineDiagnosticsDto>(), It.IsAny<TimeSpan>()))
+            .Callback<PipelineDiagnosticsDto, TimeSpan>((d, t) =>
+            {
+                capturedDiagnostics = d;
+                capturedDuration = t;
+            });
+
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: null,
+            screeningProvider: null, symbolConstraintsProvider: null,
+            logger: null, metrics: mockMetrics.Object);
+
+        // Act
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert — RecordCycle fired once with the diagnostics from this cycle
+        result.Should().NotBeNull();
+        mockMetrics.Verify(
+            m => m.RecordCycle(It.IsAny<PipelineDiagnosticsDto>(), It.IsAny<TimeSpan>()),
+            Times.Once,
+            "RecordCycle must fire exactly once on a successful signal engine cycle");
+        capturedDiagnostics.Should().NotBeNull();
+        capturedDiagnostics!.TotalRatesLoaded.Should().Be(2);
+        capturedDuration.Should().BeGreaterThan(TimeSpan.Zero);
+    }
+
+    [Fact]
+    public async Task SignalEngine_RecordCycle_Failure_DoesNotAbortCycle()
+    {
+        // Arrange: metrics backend throws — cycle must still succeed.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0000m, takerFeeRate: 0.0004m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0030m, takerFeeRate: 0.0004m),
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var mockMetrics = new Mock<ISignalEngineMetrics>();
+        mockMetrics
+            .Setup(m => m.RecordCycle(It.IsAny<PipelineDiagnosticsDto>(), It.IsAny<TimeSpan>()))
+            .Throws(new InvalidOperationException("telemetry backend down"));
+
+        var mockLogger = new Mock<ILogger<SignalEngine>>();
+
+        var sut = new SignalEngine(
+            _mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: null,
+            screeningProvider: null, symbolConstraintsProvider: null,
+            logger: mockLogger.Object, metrics: mockMetrics.Object);
+
+        // Act
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert — cycle returned normally despite metrics failure
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeTrue(
+            "a metrics emission failure must never abort the signal cycle");
+
+        // Warning log was emitted
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("metrics", StringComparison.OrdinalIgnoreCase)),
+                It.IsAny<Exception>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce,
+            "metrics failure must be logged at Warning level");
     }
 
     // ── F8: break-even-size filter (profitability-fixes) ─────────────
