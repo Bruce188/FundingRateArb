@@ -1772,8 +1772,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     {
         // 10^12 is ~Nov 2286 in unix seconds (1.0e12 s ≈ 31,688 years after epoch),
         // so a legitimate seconds-precision timestamp is always below this.
-        const long MillisecondThreshold = 1_000_000_000_000L;
-        return raw >= MillisecondThreshold ? raw / 1000L : raw;
+        const long millisecondThreshold = 1_000_000_000_000L;
+        return raw >= millisecondThreshold ? raw / 1000L : raw;
     }
 
     /// <summary>
@@ -1840,16 +1840,35 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 foreach (var trade in payload.Trades)
                 {
                     var ts = NormalizeLighterTimestampToSeconds(trade.Timestamp);
-                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
-                    if (ts < fromUnix || ts > toUnix) continue;
-                    if (string.IsNullOrEmpty(trade.RealizedPnl)) continue;
+                    if (ts < oldestTsOnPage)
+                    {
+                        oldestTsOnPage = ts;
+                    }
+
+                    if (ts < fromUnix || ts > toUnix)
+                    {
+                        continue;
+                    }
+
+                    if (string.IsNullOrEmpty(trade.RealizedPnl))
+                    {
+                        continue;
+                    }
 
                     total += ParseDecimalOrZero(trade.RealizedPnl);
                     sawAnyRealized = true;
                 }
 
-                if (oldestTsOnPage < fromUnix) break;
-                if (string.IsNullOrEmpty(payload.NextCursor)) break;
+                if (oldestTsOnPage < fromUnix)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrEmpty(payload.NextCursor))
+                {
+                    break;
+                }
+
                 cursor = payload.NextCursor;
             }
 
@@ -1931,15 +1950,27 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 foreach (var entry in payload.PositionFunding)
                 {
                     var ts = NormalizeLighterTimestampToSeconds(entry.Timestamp);
-                    if (ts < oldestTsOnPage) oldestTsOnPage = ts;
+                    if (ts < oldestTsOnPage)
+                    {
+                        oldestTsOnPage = ts;
+                    }
+
                     if (ts >= fromUnix && ts <= toUnix)
                     {
                         total += ParseDecimalOrZero(entry.Amount);
                     }
                 }
 
-                if (oldestTsOnPage < fromUnix) break;
-                if (string.IsNullOrEmpty(payload.NextCursor)) break;
+                if (oldestTsOnPage < fromUnix)
+                {
+                    break;
+                }
+
+                if (string.IsNullOrEmpty(payload.NextCursor))
+                {
+                    break;
+                }
+
                 cursor = payload.NextCursor;
             }
 
