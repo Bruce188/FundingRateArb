@@ -2619,13 +2619,15 @@ public class ExchangeConnectorFactoryTests
     }
 
     /// <summary>
-    /// Builds a factory with full DI (loggers + ResiliencePipelineProvider) for CreateForUserAsync tests.
+    /// Builds a factory with full DI (loggers + ResiliencePipelineProvider + IHttpClientFactory)
+    /// for CreateForUserAsync tests.
     /// </summary>
     private static ExchangeConnectorFactory BuildFactoryForUserCreation()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
+        services.AddHttpClient();
 
         // Mock the ResiliencePipelineProvider that Hyperliquid/Aster connectors need
         var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
@@ -2979,5 +2981,39 @@ public class ExchangeConnectorFactoryTests
             walletAddress: null, privateKey: null);
 
         connector.Should().BeNull("no credentials at all must produce null");
+    }
+
+    [Fact]
+    public async Task CreateForUserAsync_Binance_ReturnsNonNullConnector_WhenCredentialsValid()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "binance", apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: null, privateKey: null);
+
+        connector.Should().NotBeNull("valid API key + secret must produce a Binance connector");
+        connector.Should().BeOfType<BinanceConnector>();
+    }
+
+    [Fact]
+    public async Task CreateForUserAsync_Dydx_ReturnsNonNullConnector_WhenMnemonicProvided()
+    {
+        // BIP39 canonical test vector 3 (23 × "abandon" + "art").
+        // This is the standard BIP39 test vector documented at https://github.com/trezor/python-mnemonic
+        // and accepted by NBitcoin's Mnemonic constructor without throwing.
+        const string mnemonic24 =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
+            "abandon art";
+
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = await factory.CreateForUserAsync(
+            "dydx", apiKey: null, apiSecret: null,
+            walletAddress: null, privateKey: mnemonic24);
+
+        connector.Should().NotBeNull("a valid BIP39 24-word mnemonic must produce a dYdX connector");
+        connector.Should().BeOfType<DydxConnector>();
     }
 }
