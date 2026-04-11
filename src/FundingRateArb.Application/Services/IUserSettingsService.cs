@@ -33,4 +33,7 @@ public interface IUserSettingsService
 
     // Validation
     Task<bool> HasValidCredentialsAsync(string userId);
+
+    // Usage tracking
+    Task TouchLastUsedAsync(string userId, int exchangeId, CancellationToken ct = default);
 }

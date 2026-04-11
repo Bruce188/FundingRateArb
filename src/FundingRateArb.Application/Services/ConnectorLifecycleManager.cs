@@ -126,6 +126,18 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
             return (null!, null!, $"Could not create connector for {shortExchangeName} — invalid credentials");
         }
 
+        try
+        {
+            var longExchangeId = longCred.ExchangeId;
+            var shortExchangeId = shortCred.ExchangeId;
+            await _userSettings.TouchLastUsedAsync(userId, longExchangeId);
+            await _userSettings.TouchLastUsedAsync(userId, shortExchangeId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "TouchLastUsedAsync failed (non-fatal)");
+        }
+
         return (longConnector, shortConnector, null);
     }
 

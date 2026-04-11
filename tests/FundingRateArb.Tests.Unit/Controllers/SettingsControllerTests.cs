@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using FluentAssertions;
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
@@ -19,6 +20,7 @@ public class SettingsControllerTests
     private readonly Mock<IUserSettingsService> _mockSettings = new();
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly Mock<IBotConfigRepository> _mockBotConfigRepo = new();
+    private readonly Mock<IExchangeConnectorFactory> _mockConnectorFactory = new();
     private readonly SettingsController _controller;
 
     private static readonly BotConfiguration GlobalConfig = new()
@@ -56,6 +58,7 @@ public class SettingsControllerTests
         _controller = new SettingsController(
             _mockSettings.Object,
             _mockUow.Object,
+            _mockConnectorFactory.Object,
             NullLogger<SettingsController>.Instance);
     }
 
@@ -291,6 +294,7 @@ public class SettingsControllerTests
     public async Task SaveApiKey_WithValidSubAccountAddress_Succeeds(string subAccountAddress)
     {
         SetupAuthenticatedUser();
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync()).ReturnsAsync(new List<Exchange>());
 
         var result = await _controller.SaveApiKey(
             exchangeId: 1,
@@ -344,6 +348,7 @@ public class SettingsControllerTests
     public async Task SaveApiKey_WithValidApiKeyIndex_Succeeds(string apiKeyIndex)
     {
         SetupAuthenticatedUser();
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync()).ReturnsAsync(new List<Exchange>());
 
         var result = await _controller.SaveApiKey(
             exchangeId: 2,
@@ -395,6 +400,8 @@ public class SettingsControllerTests
     public async Task SaveApiKey_AsterV3_StoresWalletAndPrivateKey_RedirectsToApiKeys()
     {
         SetupAuthenticatedUser();
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { new() { Id = 3, Name = "Aster", IsActive = true, IsDataOnly = false } });
 
         var userPrivateKey = "0x" + new string('a', 64);
         var signerPrivateKey = "0x" + new string('b', 64);
@@ -562,5 +569,131 @@ public class SettingsControllerTests
         var asterItem = model.Exchanges.Should().ContainSingle(e => e.ExchangeName == "Aster").Subject;
         asterItem.HasLegacyV1Credentials.Should().BeTrue(
             "Aster entry with V1 API key but no V3 private keys must signal the legacy banner");
+    }
+
+    // ── TestApiKey tests ──────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task TestApiKey_WithValidCredentials_ReturnsSuccessToast()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+
+        var exchange = new Exchange { Id = 1, Name = "Binance", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 1 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 1))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("api-key", "api-secret", null, null, null, null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
+                "Binance", "api-key", "api-secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.TestApiKey(1);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["TestResultSuccess"].Should().Be(true);
+        (_controller.TempData["TestResult"] as string).Should().Contain("OK");
+    }
+
+    [Fact]
+    public async Task TestApiKey_WithInvalidCredentials_ReturnsSanitizedError_NoStackTrace()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+
+        var exchange = new Exchange { Id = 1, Name = "Binance", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 1 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 1))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("bad-key", "bad-secret", null, null, null, null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        var innerMessage = "   at SomeExchange.SendRequest() in /src/lib.cs:line 123\n" +
+                           "   at SomeExchange.Authenticate() in /src/auth.cs:line 45";
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception(innerMessage));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
+                "Binance", "bad-key", "bad-secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.TestApiKey(1);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["TestResultSuccess"].Should().Be(false);
+        var message = _controller.TempData["TestResult"] as string;
+        message.Should().NotBeNull();
+        // Must be from the sanitized allowlist, not the raw exception message
+        message.Should().NotContain("at SomeExchange");
+        message.Should().NotContain("line 123");
+    }
+
+    [Fact]
+    public async Task TestApiKey_WithTimeout_ReturnsTimeoutError()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+
+        var exchange = new Exchange { Id = 1, Name = "Binance", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 1 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 1))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("api-key", "api-secret", null, null, null, null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
+                "Binance", "api-key", "api-secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.TestApiKey(1);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["TestResult"].Should().Be("Timeout");
+        _controller.TempData["TestResultSuccess"].Should().Be(false);
+    }
+
+    [Fact]
+    public async Task TestApiKey_WithUnknownExchange_Returns404()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange>());
+
+        // Act
+        var result = await _controller.TestApiKey(999);
+
+        // Assert
+        result.Should().BeOfType<NotFoundResult>();
     }
 }

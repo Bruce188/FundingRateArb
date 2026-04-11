@@ -180,4 +180,19 @@ public class UserSettingsService : IUserSettingsService
         var active = await _uow.UserCredentials.GetActiveByUserAsync(userId);
         return active.Count >= 2;
     }
+
+    // --- Usage tracking ---
+
+    public async Task TouchLastUsedAsync(string userId, int exchangeId, CancellationToken ct = default)
+    {
+        var credential = await _uow.UserCredentials.GetByUserAndExchangeAsync(userId, exchangeId);
+        if (credential is null)
+        {
+            return;
+        }
+
+        credential.LastUsedAt = DateTime.UtcNow;
+        _uow.UserCredentials.Update(credential);
+        await _uow.SaveAsync(ct);
+    }
 }

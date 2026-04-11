@@ -705,4 +705,49 @@ public class UserSettingsServiceTests
         // Assert
         result.Should().BeEmpty();
     }
+
+    // --- TouchLastUsedAsync ---
+
+    [Fact]
+    public async Task TouchLastUsedAsync_UpdatesTimestamp()
+    {
+        // Arrange
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastUsedAt = null
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        // Act
+        await _sut.TouchLastUsedAsync(UserId, 1);
+
+        // Assert
+        credential.LastUsedAt.Should().NotBeNull();
+        credential.LastUsedAt!.Value.Should().BeAfter(before);
+        credential.LastUsedAt.Value.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        _mockCredentials.Verify(r => r.Update(credential), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TouchLastUsedAsync_NoCredential_NoOp()
+    {
+        // Arrange
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 99))
+            .ReturnsAsync((UserExchangeCredential?)null);
+
+        // Act
+        var act = async () => await _sut.TouchLastUsedAsync(UserId, 99);
+
+        // Assert
+        await act.Should().NotThrowAsync();
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
 }
