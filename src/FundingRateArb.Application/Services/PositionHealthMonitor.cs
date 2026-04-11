@@ -750,6 +750,16 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             var longConnector = _connectorFactory.GetConnector(longExchangeName);
             var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
+            if (!longConnector.HasCredentials || !shortConnector.HasCredentials)
+            {
+                _logger.LogDebug(
+                    "Skipping margin state fetch for {Asset}: connector missing credentials ({Long}={LongOk}, {Short}={ShortOk})",
+                    assetSymbol,
+                    longExchangeName, longConnector.HasCredentials,
+                    shortExchangeName, shortConnector.HasCredentials);
+                return (null, null);
+            }
+
             // Deduplicate: if both legs use the same connector for the same asset, call once.
             Task<MarginStateDto?> longMarginTask;
             Task<MarginStateDto?> shortMarginTask;

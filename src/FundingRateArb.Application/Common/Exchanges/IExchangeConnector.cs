@@ -15,6 +15,13 @@ public interface IExchangeConnector
     /// </summary>
     bool IsEstimatedFillExchange { get; }
 
+    /// <summary>
+    /// Returns true when this connector has the credentials necessary to make
+    /// authenticated API calls. Callers may skip operations that require credentials
+    /// when this returns false, rather than letting the SDK throw.
+    /// </summary>
+    bool HasCredentials => true;
+
     Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default);
     Task<OrderResultDto> PlaceMarketOrderAsync(string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default);
     Task<OrderResultDto> ClosePositionAsync(string asset, Side side, CancellationToken ct = default);
