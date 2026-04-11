@@ -56,7 +56,7 @@ jobs:
           --no-build -c Release
           --logger "trx;LogFileName=unit.trx"
           --collect:"XPlat Code Coverage"
-          -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+          --settings coverage.runsettings
 
       - name: Check code coverage threshold
         run: |
