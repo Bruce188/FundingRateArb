@@ -29,7 +29,7 @@
                     </dd>
 
                     <dt class="col-sm-6">Opened</dt>
-                    <dd class="col-sm-6">@Model.OpenedAt.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                    <dd class="col-sm-6">@(Model.ConfirmedAtUtc ?? Model.OpenedAt).ToString("yyyy-MM-dd HH:mm") UTC</dd>
 
                     @if (Model.ClosedAt.HasValue)
                     {

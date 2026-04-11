@@ -27,6 +27,7 @@ public class PositionSummaryDto
     public decimal? RealizedPnl { get; set; }
     public PositionStatus Status { get; set; }
     public DateTime OpenedAt { get; set; }
+    public DateTime? ConfirmedAtUtc { get; set; }
     public DateTime? ClosedAt { get; set; }
     public bool IsDryRun { get; set; }
 

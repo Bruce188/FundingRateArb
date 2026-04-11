@@ -41,6 +41,7 @@ public class PositionDetailsDto
     public PositionStatus Status { get; set; }
     public CloseReason? CloseReason { get; set; }
     public DateTime OpenedAt { get; set; }
+    public DateTime? ConfirmedAtUtc { get; set; }
     public DateTime? ClosedAt { get; set; }
     public string? Notes { get; set; }
     public bool IsDryRun { get; set; }

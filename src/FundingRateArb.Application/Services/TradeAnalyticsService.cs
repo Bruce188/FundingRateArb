@@ -45,6 +45,7 @@ public class TradeAnalyticsService : ITradeAnalyticsService
             SizeUsdc = position.SizeUsdc,
             IsClosed = position.Status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated,
             OpenedAt = position.OpenedAt,
+            ConfirmedAtUtc = position.ConfirmedAtUtc,
             ClosedAt = position.ClosedAt,
             SpreadHistory = spreadHistory,
         };

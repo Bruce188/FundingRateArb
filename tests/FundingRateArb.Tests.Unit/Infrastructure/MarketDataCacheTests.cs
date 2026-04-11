@@ -160,4 +160,25 @@ public class MarketDataCacheTests
 
         _sut.GetLatest("Aster", "NEW")!.Volume24hUsd.Should().Be(0m);
     }
+
+    [Fact]
+    public void GetLastFetchTime_ReturnsNull_WhenCacheEmpty()
+    {
+        _sut.GetLastFetchTime().Should().BeNull();
+    }
+
+    [Fact]
+    public void GetLastFetchTime_ReturnsMaxTimestamp_AfterUpdates()
+    {
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        _sut.Update(MakeDto("Aster", "BTC"));
+        _sut.Update(MakeDto("Hyperliquid", "ETH"));
+        var after = DateTime.UtcNow.AddSeconds(1);
+
+        var result = _sut.GetLastFetchTime();
+
+        result.Should().NotBeNull();
+        result!.Value.Should().BeOnOrAfter(before);
+        result!.Value.Should().BeOnOrBefore(after);
+    }
 }

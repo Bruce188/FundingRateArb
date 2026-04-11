@@ -66,6 +66,12 @@ public class MarketDataCache : IMarketDataCache
         return DateTime.UtcNow - entry.Timestamp > maxAge;
     }
 
+    public DateTime? GetLastFetchTime()
+    {
+        if (_rates.IsEmpty) return null;
+        return _rates.Values.Max(e => e.Timestamp);
+    }
+
     public bool IsStaleForExchange(string exchangeName, TimeSpan maxAge)
     {
         var prefix = exchangeName + ":";

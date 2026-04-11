@@ -29,6 +29,7 @@ public static class ArbitragePositionMappingExtensions
             RealizedPnl = pos.RealizedPnl,
             Status = pos.Status,
             OpenedAt = pos.OpenedAt,
+            ConfirmedAtUtc = pos.ConfirmedAtUtc,
             ClosedAt = pos.ClosedAt,
             IsDryRun = pos.IsDryRun,
         };
@@ -61,6 +62,7 @@ public static class ArbitragePositionMappingExtensions
             Status = pos.Status,
             CloseReason = pos.CloseReason,
             OpenedAt = pos.OpenedAt,
+            ConfirmedAtUtc = pos.ConfirmedAtUtc,
             ClosedAt = pos.ClosedAt,
             Notes = pos.Notes,
             IsDryRun = pos.IsDryRun,

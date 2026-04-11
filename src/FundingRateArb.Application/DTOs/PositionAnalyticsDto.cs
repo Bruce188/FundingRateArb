@@ -14,6 +14,7 @@ public class PositionAnalyticsDto
     public decimal SizeUsdc { get; set; }
     public bool IsClosed { get; set; }
     public DateTime OpenedAt { get; set; }
+    public DateTime? ConfirmedAtUtc { get; set; }
     public DateTime? ClosedAt { get; set; }
     public List<HourlySpreadPoint> SpreadHistory { get; set; } = [];
 }
