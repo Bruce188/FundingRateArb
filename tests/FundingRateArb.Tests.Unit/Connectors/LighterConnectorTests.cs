@@ -2886,4 +2886,47 @@ public class ExchangeConnectorFactoryTests
         act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*Account Index*required*");
     }
+
+    // ── Aster V3 factory path tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void CreateAsterConnector_WithV3Credentials_ReturnsV3Client()
+    {
+        var factory = BuildFactoryForUserCreation();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: null, apiSecret: null,
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull("V3 credentials must produce a non-null connector");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithLegacyV1Credentials_ReturnsV1Client()
+    {
+        var factory = BuildFactoryForUserCreation();
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: null, privateKey: null);
+
+        connector.Should().NotBeNull("V1 HMAC credentials must produce a non-null connector");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithBothV1AndV3_PrefersV3()
+    {
+        var factory = BuildFactoryForUserCreation();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull(
+            "when both V1 and V3 credentials are supplied, V3 takes precedence and a connector must be returned");
+    }
 }

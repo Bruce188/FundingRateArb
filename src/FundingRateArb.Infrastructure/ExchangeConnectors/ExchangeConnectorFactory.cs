@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Aster.Net;
 using Aster.Net.Clients;
+using Aster.Net.Objects;
 using Binance.Net.Clients;
 using FundingRateArb.Application.Common.Exchanges;
 using HyperLiquid.Net;
@@ -113,7 +114,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         IExchangeConnector? connector = exchangeName.ToLowerInvariant() switch
         {
             "hyperliquid" => CreateHyperliquidConnector(walletAddress, privateKey, subAccountAddress),
-            "aster" => CreateAsterConnector(apiKey, apiSecret),
+            "aster" => CreateAsterConnector(apiKey, apiSecret, walletAddress, privateKey),
             "binance" => CreateBinanceConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
             "dydx" => CreateDydxConnector(privateKey),
@@ -168,16 +169,30 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         return new HyperliquidConnector(restClient, pipelineProvider, markPriceCache, subAccountAddress, hlLogger);
     }
 
-    private AsterConnector? CreateAsterConnector(string? apiKey, string? apiSecret)
+    internal AsterConnector? CreateAsterConnector(
+        string? apiKey, string? apiSecret,
+        string? walletAddress, string? privateKey)
     {
-        if (string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        AsterCredentials? credentials;
+
+        // V3 EIP-712 Pro API: both private keys must be present.
+        if (!string.IsNullOrWhiteSpace(walletAddress) && !string.IsNullOrWhiteSpace(privateKey))
+        {
+            credentials = new AsterCredentials(new AsterV3Credential(walletAddress, privateKey));
+        }
+        // V1 HMAC fallback: legacy API key + secret.
+        else if (!string.IsNullOrWhiteSpace(apiKey) && !string.IsNullOrWhiteSpace(apiSecret))
+        {
+            credentials = new AsterCredentials(apiKey, apiSecret);
+        }
+        else
         {
             return null;
         }
 
         var restClient = new AsterRestClient(options =>
         {
-            options.ApiCredentials = new AsterCredentials(apiKey, apiSecret);
+            options.ApiCredentials = credentials;
         });
 
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();

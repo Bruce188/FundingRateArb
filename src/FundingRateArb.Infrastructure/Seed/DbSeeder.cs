@@ -110,7 +110,7 @@ public static class DbSeeder
                 FundingTimingDeviationSeconds = 15,
                 SupportsSubAccounts = false,
                 IsActive = true,
-                Description = "Aster DEX — HMAC-SHA256, USDT collateral, 8-hour funding"
+                Description = "Aster DEX — EIP-712 Pro API, USDT collateral, 8-hour funding"
             },
             new Exchange
             {
