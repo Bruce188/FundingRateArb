@@ -417,13 +417,7 @@
                                                 <span class="text-muted">&mdash;</span>
                                             }
                                         </td>
-                                        <td class="@apyClass">
-                                            @((opp.AnnualizedYield * 100).ToString("F1"))%
-                                            @if (constrained)
-                                            {
-                                                <span class="ms-1" title="Position size limited by liquidity">&#9888;</span>
-                                            }
-                                        </td>
+                                        <td class="@apyClass">@((opp.AnnualizedYield * 100).ToString("F1"))%</td>
                                         <td class="text-muted small">
                                             @if (opp.EffectiveLeverage.HasValue)
                                             {
@@ -546,7 +540,7 @@
                                             <small class="text-muted">PnL Target: @mPct.ToString("F0")%</small>
                                         </div>
                                     }
-                                    <div class="border-top mt-1 pt-1"><small class="text-muted">Opened <time datetime="@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o")" class="local-time">@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("MMM dd HH:mm") UTC</time></small></div>
+                                    <div class="border-top mt-1 pt-1"><small class="text-muted">Opened <time datetime="@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o"))" class="local-time">@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("MMM dd HH:mm")) UTC</time></small></div>
                                 </div>
                             </div>
                         }
@@ -629,7 +623,7 @@
                                                 }
                                             </td>
                                         }
-                                        <td><time datetime="@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o")" class="local-time">@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm") UTC</time></td>
+                                        <td><time datetime="@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o"))" class="local-time">@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm")) UTC</time></td>
                                     </tr>
                                 }
                             </tbody>

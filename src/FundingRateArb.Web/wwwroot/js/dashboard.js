@@ -472,7 +472,7 @@
         if (opportunitiesArr.length === 0) {
             var emptyRow = document.createElement("tr");
             var emptyCell = document.createElement("td");
-            emptyCell.colSpan = 8;
+            emptyCell.colSpan = 12;
             emptyCell.className = "text-center py-4";
 
             if (diagnostics) {
@@ -544,13 +544,21 @@
             var row = document.createElement("tr");
             if (constrained) row.className = "table-warning";
 
+            // Col 1: Asset (with optional CoinGlass hot badge)
             var tdAsset = document.createElement("td");
             var strongEl = document.createElement("strong");
             strongEl.textContent = opp.assetSymbol;
             tdAsset.appendChild(strongEl);
+            if (opp.isCoinGlassHot) {
+                var cgBadge = document.createElement("span");
+                cgBadge.className = "badge bg-info ms-1";
+                cgBadge.title = "Matching cross-exchange arbitrage opportunity on CoinGlass";
+                cgBadge.textContent = "CG";
+                tdAsset.appendChild(cgBadge);
+            }
             row.appendChild(tdAsset);
 
-            // Format mark prices as average of long/short
+            // Col 2: Mark Price (avg of long/short)
             var tdPrice = document.createElement("td");
             var lp = opp.longMarkPrice || 0;
             var sp = opp.shortMarkPrice || 0;
@@ -558,42 +566,108 @@
             tdPrice.textContent = formatPrice(avgPrice);
             row.appendChild(tdPrice);
 
+            // Col 3: Long Exchange
             var tdLong = document.createElement("td");
             tdLong.textContent = opp.longExchangeName;
             row.appendChild(tdLong);
 
+            // Col 4: Short Exchange
             var tdShort = document.createElement("td");
             tdShort.textContent = opp.shortExchangeName;
             row.appendChild(tdShort);
 
+            // Col 5: Spread/hr
             var tdSpread = document.createElement("td");
             tdSpread.className = "text-info";
             tdSpread.textContent = (opp.spreadPerHour * 100).toFixed(4) + "%";
             row.appendChild(tdSpread);
 
+            // Col 6: Net Yield/hr (boosted)
             var tdYield = document.createElement("td");
             tdYield.textContent = ((opp.boostedNetYieldPerHour ?? opp.netYieldPerHour) * 100).toFixed(4) + "%";
             row.appendChild(tdYield);
 
+            // Col 7: Predicted (value + trend arrow + confidence dot)
+            var tdPredicted = document.createElement("td");
+            if (opp.predictedSpread != null) {
+                var predValueSpan = document.createElement("span");
+                predValueSpan.textContent = (opp.predictedSpread * 100).toFixed(4) + "%";
+                tdPredicted.appendChild(predValueSpan);
+
+                var trend = opp.predictedTrend || "n/a";
+                var arrow = trend === "rising" ? "^" : trend === "falling" ? "v" : "-";
+                var arrowClass = trend === "rising" ? "text-success" : trend === "falling" ? "text-danger" : "text-muted";
+                var arrowSpan = document.createElement("span");
+                arrowSpan.className = "trend-arrow " + arrowClass + " ms-1";
+                arrowSpan.title = "Trend: " + trend;
+                arrowSpan.textContent = arrow;
+                tdPredicted.appendChild(arrowSpan);
+
+                var conf = opp.predictionConfidence || 0;
+                var confClass = conf >= 0.7 ? "text-success" : conf >= 0.4 ? "text-warning" : "text-danger";
+                var confSpan = document.createElement("span");
+                confSpan.className = "prediction-confidence " + confClass;
+                confSpan.title = "Confidence: " + (conf * 100).toFixed(0) + "%";
+                tdPredicted.appendChild(confSpan);
+            } else {
+                var predDash = document.createElement("span");
+                predDash.className = "text-muted";
+                predDash.textContent = "\u2014";
+                tdPredicted.appendChild(predDash);
+            }
+            row.appendChild(tdPredicted);
+
+            // Col 8: APR (volume-constrained opportunities are flagged via the row's table-warning class)
             var tdApr = document.createElement("td");
             tdApr.className = aprClass;
-            var aprText = (opp.annualizedYield * 100).toFixed(1) + "%";
-            if (constrained) {
-                tdApr.textContent = aprText + " ";
-                var warn = document.createElement("span");
-                warn.className = "ms-1";
-                warn.title = "Position size limited by liquidity";
-                warn.textContent = "\u26A0";
-                tdApr.appendChild(warn);
-            } else {
-                tdApr.textContent = aprText;
-            }
+            tdApr.textContent = (opp.annualizedYield * 100).toFixed(1) + "%";
             row.appendChild(tdApr);
 
+            // Col 9: Lev (effective leverage)
+            var tdLev = document.createElement("td");
+            tdLev.className = "text-muted small";
+            if (opp.effectiveLeverage != null) {
+                tdLev.textContent = opp.effectiveLeverage + "x";
+            } else {
+                tdLev.textContent = "\u2014";
+            }
+            row.appendChild(tdLev);
+
+            // Col 10: ROC APR (return on capital, leverage-adjusted)
+            var tdRoc = document.createElement("td");
+            tdRoc.className = "small";
+            if (opp.aprOnCapital != null) {
+                var rocClass = opp.aprOnCapital > 100 ? "text-success fw-bold"
+                    : opp.aprOnCapital > 50 ? "text-warning fw-bold" : "";
+                var rocSpan = document.createElement("span");
+                rocSpan.className = rocClass;
+                rocSpan.textContent = opp.aprOnCapital.toFixed(0) + "%";
+                tdRoc.appendChild(rocSpan);
+            } else {
+                var rocDash = document.createElement("span");
+                rocDash.className = "text-muted";
+                rocDash.textContent = "\u2014";
+                tdRoc.appendChild(rocDash);
+            }
+            row.appendChild(tdRoc);
+
+            // Col 11: BE Cyc (break-even cycles)
+            var tdBeCyc = document.createElement("td");
+            tdBeCyc.className = "text-muted small";
+            if (opp.breakEvenCycles != null) {
+                tdBeCyc.textContent = opp.breakEvenCycles.toFixed(1);
+            } else {
+                tdBeCyc.textContent = "\u2014";
+            }
+            row.appendChild(tdBeCyc);
+
+            // Col 12: Next (minutes to next funding settlement)
             var tdNext = document.createElement("td");
             tdNext.className = "text-muted small";
             if (opp.minutesToNextSettlement != null) {
                 tdNext.textContent = opp.minutesToNextSettlement + "m";
+            } else {
+                tdNext.textContent = "\u2014";
             }
             row.appendChild(tdNext);
 

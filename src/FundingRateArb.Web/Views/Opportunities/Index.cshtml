@@ -56,13 +56,7 @@
                                 <td>@opp.ShortExchangeName</td>
                                 <td class="text-info">@((opp.SpreadPerHour * 100).ToString("F4"))%</td>
                                 <td>@((opp.BoostedNetYieldPerHour * 100).ToString("F4"))%</td>
-                                <td class="@apyClass">
-                                    @((opp.AnnualizedYield * 100).ToString("F1"))%
-                                    @if (constrained)
-                                    {
-                                        <span class="ms-1" title="Position size limited by liquidity">&#9888;</span>
-                                    }
-                                </td>
+                                <td class="@apyClass">@((opp.AnnualizedYield * 100).ToString("F1"))%</td>
                             </tr>
                         }
                     }
