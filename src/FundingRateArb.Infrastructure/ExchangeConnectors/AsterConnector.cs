@@ -754,6 +754,15 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 var currentCacheCount = _symbolConstraintsCache.Count;
                 foreach (var s in symbols)
                 {
+                    // Defensive: a malformed exchangeInfo row with a null or blank
+                    // Name would NRE inside NormalizeSymbol, aborting the entire
+                    // populate loop and leaving the cache partially filled (which is
+                    // exactly the sentinel-fallthrough state this fix is closing).
+                    if (string.IsNullOrWhiteSpace(s.Name))
+                    {
+                        continue;
+                    }
+
                     // Normalize the exchangeInfo key to match the lookup form in
                     // GetSymbolConstraintsAsync ("WLFIUSDT" → "WLFI"); otherwise the
                     // cache is populated under a key shape that upstream callers never
