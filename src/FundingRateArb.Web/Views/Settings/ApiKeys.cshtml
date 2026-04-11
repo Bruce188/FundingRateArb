@@ -168,6 +168,53 @@ else
                                            placeholder="Enter the private key for this API key index" />
                                 </div>
                             }
+                            else if (exchange.ExchangeType == "aster-v3")
+                            {
+                                @* V1 legacy migration banner — shown only for users with old HMAC credentials *@
+                                @if (exchange.HasLegacyV1Credentials)
+                                {
+                                    <div class="alert alert-info alert-dismissible fade show" role="alert">
+                                        You are using V1 HMAC credentials. Upgrade to V3 Pro API keys for improved security.
+                                        <a href="https://pro.aster.exchange/" target="_blank">Manage API wallets</a>
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                    </div>
+                                }
+
+                                @* V3 Pro API form: User Private Key + Signer Private Key *@
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">User Private Key</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedWalletAddress is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedWalletAddress
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing user private key.</div>
+                                    }
+                                    <input type="password" class="form-control" name="walletAddress"
+                                           autocomplete="new-password"
+                                           placeholder="0x + 64 hex chars"
+                                           pattern="^(0x)?[0-9a-fA-F]{64}$" />
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label fw-semibold">Signer Private Key</label>
+                                    @if (exchange.IsConfigured && exchange.MaskedPrivateKey is not null)
+                                    {
+                                        <div class="input-group mb-1">
+                                            <span class="input-group-text bg-light text-muted font-monospace small">
+                                                @exchange.MaskedPrivateKey
+                                            </span>
+                                        </div>
+                                        <div class="form-text">Leave blank to keep the existing signer private key.</div>
+                                    }
+                                    <input type="password" class="form-control" name="privateKey"
+                                           autocomplete="new-password"
+                                           placeholder="0x + 64 hex chars"
+                                           pattern="^(0x)?[0-9a-fA-F]{64}$" />
+                                </div>
+                                <input type="hidden" name="exchangeType" value="aster-v3" />
+                            }
 
                             <div class="d-flex gap-2 mt-3">
                                 <button type="submit" class="btn btn-primary btn-sm">
