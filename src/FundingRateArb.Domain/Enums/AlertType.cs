@@ -13,5 +13,6 @@ public enum AlertType
     PriceFeedFailure,
     LeverageReduced,
     QuantityMismatch,
-    PnlDivergence
+    PnlDivergence,
+    ExchangeCircuitBreaker
 }

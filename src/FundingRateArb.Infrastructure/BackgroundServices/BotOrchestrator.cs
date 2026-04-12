@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
@@ -963,14 +964,48 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                 // Target circuit breaker to the failing exchange
                 if (failingExchangeId.HasValue)
                 {
-                    _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    if (circuitJustOpened)
+                    {
+                        var exchangeName = opp.LongExchangeId == failingExchangeId.Value ? opp.LongExchangeName : opp.ShortExchangeName;
+                        var duration = ctx.GlobalConfig.ExchangeCircuitBreakerMinutes;
+                        ctx.Uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.ExchangeCircuitBreaker,
+                            Severity = AlertSeverity.Critical,
+                            Message = $"{exchangeName} circuit breaker opened — exchange disabled for {duration} minutes",
+                        });
+                        await ctx.Uow.SaveAsync(ct);
+                    }
                 }
                 else
                 {
-                    _circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig);
+                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig))
+                    {
+                        ctx.Uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.ExchangeCircuitBreaker,
+                            Severity = AlertSeverity.Critical,
+                            Message = $"{opp.LongExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
+                        });
+                        await ctx.Uow.SaveAsync(ct);
+                    }
+
                     if (opp.ShortExchangeId != opp.LongExchangeId)
                     {
-                        _circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig);
+                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig))
+                        {
+                            ctx.Uow.Alerts.Add(new Alert
+                            {
+                                UserId = userId,
+                                Type = AlertType.ExchangeCircuitBreaker,
+                                Severity = AlertSeverity.Critical,
+                                Message = $"{opp.ShortExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
+                            });
+                            await ctx.Uow.SaveAsync(ct);
+                        }
                     }
                 }
 
@@ -978,6 +1013,20 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     "Opportunity {Asset} {Long}/{Short} failed for user {UserId} ({Failures} consecutive). Cooldown until {Until}",
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, failures, DateTime.UtcNow + delay);
                 _logger.LogError("Failed to open position: {Error}", error);
+
+                var failureSeverity = (error?.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("-2015", StringComparison.Ordinal) == true
+                    || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true)
+                    ? "danger" : "warning";
+
+                var sanitizedError = error?.Length > 200 ? error[..200] + "..." : error ?? "Unknown error";
+                sanitizedError = Regex.Replace(sanitizedError, @"[A-Za-z0-9]{32,}", "[redacted]");
+
+                await _notifier.PushStatusExplanationAsync(
+                    userId,
+                    $"Trade failed for {opp.AssetSymbol} on {opp.LongExchangeName}/{opp.ShortExchangeName}: {sanitizedError}",
+                    failureSeverity);
+
                 await _notifier.PushNewAlertsAsync(ctx.Uow);
             }
         }

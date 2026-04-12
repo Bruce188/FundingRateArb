@@ -117,10 +117,13 @@ public class CircuitBreakerManager : ICircuitBreakerManager
         }
     }
 
-    public void IncrementExchangeFailure(int exchangeId, BotConfiguration config)
+    public bool IncrementExchangeFailure(int exchangeId, BotConfiguration config)
     {
         var threshold = config.ExchangeCircuitBreakerThreshold;
         var brokenUntil = DateTime.UtcNow.AddMinutes(config.ExchangeCircuitBreakerMinutes);
+
+        var wasAlreadyOpen = _exchangeCircuitBreaker.TryGetValue(exchangeId, out var prev)
+            && prev.Failures >= threshold;
 
         var updated = _exchangeCircuitBreaker.AddOrUpdate(
             exchangeId,
@@ -135,12 +138,16 @@ public class CircuitBreakerManager : ICircuitBreakerManager
                 return (f, f >= threshold ? brokenUntil : DateTime.MinValue);
             });
 
+        var justOpened = updated.Failures >= threshold && !wasAlreadyOpen;
+
         if (updated.Failures >= threshold)
         {
             _logger.LogWarning(
                 "Circuit breaker OPEN for exchange {ExchangeId}: {Failures} consecutive failures, excluded for {Minutes}m",
                 exchangeId, updated.Failures, config.ExchangeCircuitBreakerMinutes);
         }
+
+        return justOpened;
     }
 
     public void IncrementAssetExchangeFailure(int assetId, int exchangeId)
