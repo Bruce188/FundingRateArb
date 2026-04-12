@@ -1016,8 +1016,8 @@ public class ConnectivityTestServiceTests
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
 
         result.Success.Should().BeTrue("a zero balance is not a failure");
-        logMessages.Should().Contain(msg => msg.Contains("WARNING") && msg.Contains("quote asset"),
-            "zero balance should produce a warning about the expected quote asset");
+        logMessages.Should().Contain(msg => msg.Contains("WARNING") && msg.Contains("quote asset") && msg.Contains("USDT"),
+            "zero balance should produce a warning mentioning the expected quote asset (USDT)");
     }
 
     [Fact]
