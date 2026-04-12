@@ -34,20 +34,26 @@ function wireThresholdHelper(inputId, helperId) {
     updateThresholdHelper(inputId, helperId);
 }
 
-// Convert UTC timestamps to browser-local time
+// Convert UTC timestamps to browser-local time using Intl.DateTimeFormat
+// (unified format with shared-time.js to avoid inconsistent display)
+var _localTimeFmt = new Intl.DateTimeFormat(undefined, {
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+    timeZoneName: "short"
+});
+
 function formatLocalDateTime(utcString) {
     var d = new Date(utcString);
     if (isNaN(d.getTime())) return utcString;
-    return d.getFullYear() + "-" +
-        String(d.getMonth() + 1).padStart(2, "0") + "-" +
-        String(d.getDate()).padStart(2, "0") + " " +
-        String(d.getHours()).padStart(2, "0") + ":" +
-        String(d.getMinutes()).padStart(2, "0");
+    return _localTimeFmt.format(d);
 }
 
 document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll("time.local-time").forEach(function (el) {
+    document.querySelectorAll("time.local-time:not([data-local-done])").forEach(function (el) {
         var utc = el.getAttribute("datetime");
-        if (utc) el.textContent = formatLocalDateTime(utc);
+        if (utc) {
+            el.textContent = formatLocalDateTime(utc);
+            el.setAttribute("data-local-done", "1");
+        }
     });
 });

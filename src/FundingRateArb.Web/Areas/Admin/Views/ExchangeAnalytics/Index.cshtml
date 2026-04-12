@@ -5,12 +5,39 @@
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <h1 class="h3">Exchange Analytics</h1>
-    <div>
+    <div class="d-flex gap-2">
+        <form asp-action="TriggerFetch" method="post" class="d-inline">
+            @Html.AntiForgeryToken()
+            <button type="submit" class="btn btn-outline-primary btn-sm" @(!Model.CoinGlassAvailable ? "disabled" : "")>
+                Trigger CoinGlass Fetch
+            </button>
+        </form>
         <a asp-area="Admin" asp-controller="Overview" asp-action="Index" class="btn btn-outline-secondary btn-sm">
             Back to Overview
         </a>
     </div>
 </div>
+
+@if (TempData["Success"] is string successMsg)
+{
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        @successMsg
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (TempData["Error"] is string errorMsg)
+{
+    <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        @errorMsg
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+}
+@if (!Model.CoinGlassAvailable)
+{
+    <div class="alert alert-warning">
+        CoinGlass API is currently unavailable (circuit breaker open). Set <code>ExchangeConnectors:CoinGlass:ApiKey</code> to enable.
+    </div>
+}
 
 @* Exchange Overview *@
 <div class="card shadow-sm mb-4">

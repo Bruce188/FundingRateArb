@@ -25,6 +25,13 @@ public class PositionSummaryDto
     public decimal DivergencePct { get; set; }
 
     public decimal? RealizedPnl { get; set; }
+
+    /// <summary>Reason the position was closed, if applicable.</summary>
+    public CloseReason? CloseReason { get; set; }
+
+    /// <summary>Human-readable display name for CloseReason (e.g. "Divergence Critical").</summary>
+    public string? CloseReasonDisplayName { get; set; }
+
     public PositionStatus Status { get; set; }
     public DateTime OpenedAt { get; set; }
     public DateTime? ConfirmedAtUtc { get; set; }

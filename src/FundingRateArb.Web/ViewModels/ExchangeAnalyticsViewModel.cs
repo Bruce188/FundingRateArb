@@ -8,4 +8,5 @@ public class ExchangeAnalyticsViewModel
     public List<SpreadOpportunityDto> TopOpportunities { get; set; } = [];
     public List<RateComparisonDto> RateComparisons { get; set; } = [];
     public List<DiscoveryEventDto> DiscoveryEvents { get; set; } = [];
+    public bool CoinGlassAvailable { get; set; }
 }

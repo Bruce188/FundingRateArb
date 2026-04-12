@@ -588,6 +588,7 @@ try
     builder.Services.AddSingleton<IBotDiagnostics>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
     builder.Services.AddHostedService<LeverageTierRefresher>();
+    builder.Services.AddHostedService<BalanceRefreshService>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>

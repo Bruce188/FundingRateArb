@@ -33,4 +33,7 @@ public class DashboardViewModel
     public List<ActiveCooldownDto> ActiveCooldowns { get; set; } = [];
     public List<CircuitBreakerStatusDto> CircuitBreakerStates { get; set; } = [];
     public DateTime? LastFundingRateFetch { get; set; }
+
+    /// <summary>Server-rendered initial balance snapshot. Null when aggregator is unavailable.</summary>
+    public BalanceSnapshotDto? InitialBalances { get; set; }
 }

@@ -4,163 +4,290 @@
 @{
     ViewData["Title"] = $"Position #{Model.Position.Id}";
     var pos = Model.Position;
+    var badgeClass = pos.Status switch
+    {
+        PositionStatus.Opening => "bg-info",
+        PositionStatus.Open => "bg-success",
+        PositionStatus.Closing => "bg-warning text-dark",
+        PositionStatus.Closed => "bg-secondary",
+        PositionStatus.EmergencyClosed => "bg-warning text-dark border border-danger",
+        PositionStatus.Liquidated => "bg-danger",
+        PositionStatus.Failed => "bg-danger text-white",
+        _ => "bg-secondary",
+    };
+    var badgeText = pos.Status == PositionStatus.EmergencyClosed ? "Emergency Closed" : pos.Status.ToString();
+    var holdTimeHours = Model.DurationHours;
 }
 
-<h2>Position #@pos.Id Details</h2>
-<a asp-action="Index" class="btn btn-outline-secondary mb-3">Back to Positions</a>
-
-@if (pos.Status == PositionStatus.EmergencyClosed || pos.Status == PositionStatus.Liquidated)
-{
-    <div class="alert alert-warning">
-        This position was @(pos.Status == PositionStatus.EmergencyClosed ? "emergency-closed" : "liquidated")
-        and may have incomplete price data.
-    </div>
-}
-
-<div class="row">
-    <div class="col-md-6">
-        <h5>Position Info</h5>
-        <dl class="row">
-            <dt class="col-sm-5">Asset</dt>
-            <dd class="col-sm-7">@pos.AssetSymbol</dd>
-
-            <dt class="col-sm-5">Status</dt>
-            <dd class="col-sm-7">
-                @{
-                    var badgeClass = pos.Status switch
-                    {
-                        PositionStatus.Open    => "bg-success",
-                        PositionStatus.Opening => "bg-info",
-                        PositionStatus.Closing => "bg-warning text-dark",
-                        _                      => "bg-secondary",
-                    };
-                }
-                <span class="badge @badgeClass">@pos.Status</span>
-                @if (pos.IsDryRun)
+<!-- Card 1: Header -->
+<div class="card shadow-sm mb-3">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start">
+            <div>
+                <h3 class="mb-1">@pos.AssetSymbol <small class="text-muted">@pos.LongExchangeName / @pos.ShortExchangeName</small></h3>
+                <span class="badge @badgeClass fs-6">
+                    @if (pos.Status == PositionStatus.Failed) { <i class="bi bi-exclamation-triangle"></i> }
+                    @badgeText
+                </span>
+                @if (pos.IsDryRun) { <span class="badge bg-warning text-dark ms-1">Paper</span> }
+                @if (pos.CloseReason.HasValue)
                 {
-                    <span class="badge bg-warning text-dark ms-1">Paper</span>
+                    <span class="badge bg-dark ms-2">@pos.CloseReason</span>
                 }
-            </dd>
-
-            <dt class="col-sm-5">Long Exchange</dt>
-            <dd class="col-sm-7">@pos.LongExchangeName</dd>
-
-            <dt class="col-sm-5">Short Exchange</dt>
-            <dd class="col-sm-7">@pos.ShortExchangeName</dd>
-
-            <dt class="col-sm-5">Size (USDC)</dt>
-            <dd class="col-sm-7">@pos.SizeUsdc.ToString("F2")</dd>
-
-            <dt class="col-sm-5">Margin (USDC)</dt>
-            <dd class="col-sm-7">@pos.MarginUsdc.ToString("F2")</dd>
-
-            <dt class="col-sm-5">Leverage</dt>
-            <dd class="col-sm-7">@pos.Leverage x</dd>
-
-            <dt class="col-sm-5">Opened At</dt>
-            <dd class="col-sm-7">@(pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
-
-            @if (pos.ClosedAt.HasValue)
+            </div>
+            <div class="text-end">
+                <div class="text-muted small">Opened</div>
+                <time datetime="@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o"))" class="local-time">
+                    @((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm"))
+                </time>
+                <div class="text-muted small mt-1">Hold: @holdTimeHours.ToString("F1") hours</div>
+            </div>
+        </div>
+        <div class="mt-2">
+            <a asp-controller="Positions" asp-action="Index" class="btn btn-sm btn-outline-secondary">Back to Positions</a>
+            @if (pos.Status == PositionStatus.Open && User.IsInRole("Admin"))
             {
-                <dt class="col-sm-5">Closed At</dt>
-                <dd class="col-sm-7">@pos.ClosedAt.Value.ToString("yyyy-MM-dd HH:mm:ss") UTC</dd>
+                <form asp-action="Close" asp-route-id="@pos.Id" method="post" class="d-inline ms-2"
+                      onsubmit="return confirm('Force close this position?')">
+                    @Html.AntiForgeryToken()
+                    <button type="submit" class="btn btn-sm btn-danger">Force Close Now</button>
+                </form>
             }
-
-            <dt class="col-sm-5">Duration</dt>
-            <dd class="col-sm-7">@Model.DurationHours.ToString("F1") hours</dd>
-
-            @if (pos.CloseReason.HasValue)
-            {
-                <dt class="col-sm-5">Close Reason</dt>
-                <dd class="col-sm-7">@pos.CloseReason</dd>
-            }
-        </dl>
-    </div>
-
-    <div class="col-md-6">
-        <h5>Pricing & PnL</h5>
-        <dl class="row">
-            <dt class="col-sm-5">Long Entry Price</dt>
-            <dd class="col-sm-7">@(pos.LongEntryPrice > 0 ? pos.LongEntryPrice.ToString("F4") : "N/A")</dd>
-
-            <dt class="col-sm-5">Short Entry Price</dt>
-            <dd class="col-sm-7">@(pos.ShortEntryPrice > 0 ? pos.ShortEntryPrice.ToString("F4") : "N/A")</dd>
-
-            <dt class="col-sm-5">Entry Spread/hr</dt>
-            <dd class="col-sm-7">@pos.EntrySpreadPerHour.ToString("P4")</dd>
-
-            <dt class="col-sm-5">Current Spread/hr</dt>
-            <dd class="col-sm-7">@pos.CurrentSpreadPerHour.ToString("P4")</dd>
-
-            <dt class="col-sm-5">Accumulated Funding</dt>
-            <dd class="col-sm-7 @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
-                @pos.AccumulatedFunding.ToString("F4") USDC
-            </dd>
-
-            <dt class="col-sm-5">Unrealized PnL</dt>
-            <dd class="col-sm-7 @(Model.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">
-                @Model.UnrealizedPnl.ToString("F4") USDC
-            </dd>
-
-            @if (pos.RealizedPnl.HasValue)
-            {
-                <dt class="col-sm-5">Realized PnL</dt>
-                <dd class="col-sm-7 @(pos.RealizedPnl >= 0 ? "text-success" : "text-danger")">
-                    @pos.RealizedPnl.Value.ToString("F4") USDC
-                </dd>
-            }
-        </dl>
-
-        @if (pos.LongMarginUtilizationPct.HasValue || pos.ShortMarginUtilizationPct.HasValue)
-        {
-            <h5 class="mt-3">Margin Utilization</h5>
-            <dl class="row">
-                @if (pos.LongMarginUtilizationPct.HasValue)
-                {
-                    <dt class="col-sm-5">Long Margin Util.</dt>
-                    <dd class="col-sm-7 @(pos.LongMarginUtilizationPct >= 0.70m ? "text-danger" : "")">
-                        @(pos.LongMarginUtilizationPct.Value.ToString("P1"))
-                    </dd>
-                    @if (pos.MaxSafeMovePctLong.HasValue)
-                    {
-                        <dt class="col-sm-5">Long Max Safe Move</dt>
-                        <dd class="col-sm-7">@(pos.MaxSafeMovePctLong.Value.ToString("F2"))%</dd>
-                    }
-                }
-                @if (pos.ShortMarginUtilizationPct.HasValue)
-                {
-                    <dt class="col-sm-5">Short Margin Util.</dt>
-                    <dd class="col-sm-7 @(pos.ShortMarginUtilizationPct >= 0.70m ? "text-danger" : "")">
-                        @(pos.ShortMarginUtilizationPct.Value.ToString("P1"))
-                    </dd>
-                    @if (pos.MaxSafeMovePctShort.HasValue)
-                    {
-                        <dt class="col-sm-5">Short Max Safe Move</dt>
-                        <dd class="col-sm-7">@(pos.MaxSafeMovePctShort.Value.ToString("F2"))%</dd>
-                    }
-                }
-                @if (pos.CyclesUntilLiquidation.HasValue)
-                {
-                    <dt class="col-sm-5">Cycles to Liquidation</dt>
-                    <dd class="col-sm-7">@(pos.CyclesUntilLiquidation.Value.ToString("F1"))</dd>
-                }
-            </dl>
-        }
-
-        @if (!string.IsNullOrEmpty(pos.Notes))
-        {
-            <h5 class="mt-3">Notes</h5>
-            <p>@pos.Notes</p>
-        }
+        </div>
     </div>
 </div>
 
-@if (pos.Status == PositionStatus.Open)
+<div class="row">
+    <!-- Card 2: PnL Decomposition -->
+    <div class="col-md-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header"><strong>PnL Decomposition</strong></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Entry Fees</dt>
+                    <dd class="col-sm-6 text-danger">-@pos.EntryFeesUsdc.ToString("F4") USDC</dd>
+
+                    <dt class="col-sm-6">Exit Fees</dt>
+                    <dd class="col-sm-6 text-danger">-@pos.ExitFeesUsdc.ToString("F4") USDC</dd>
+
+                    <dt class="col-sm-6">Accumulated Funding</dt>
+                    <dd class="col-sm-6 @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
+                        @pos.AccumulatedFunding.ToString("F4") USDC
+                    </dd>
+
+                    @if (pos.RealizedDirectionalPnl.HasValue)
+                    {
+                        <dt class="col-sm-6">Directional PnL</dt>
+                        <dd class="col-sm-6 @(pos.RealizedDirectionalPnl >= 0 ? "text-success" : "text-danger")">
+                            @pos.RealizedDirectionalPnl.Value.ToString("F4") USDC
+                        </dd>
+                    }
+
+                    @if (pos.RealizedPnl.HasValue)
+                    {
+                        <dt class="col-sm-6 fw-bold">Net Realized PnL</dt>
+                        <dd class="col-sm-6 fw-bold @(pos.RealizedPnl >= 0 ? "text-success" : "text-danger")">
+                            @pos.RealizedPnl.Value.ToString("F4") USDC
+                        </dd>
+                    }
+                    else
+                    {
+                        <dt class="col-sm-6 fw-bold">Unrealized PnL</dt>
+                        <dd class="col-sm-6 fw-bold @(Model.UnrealizedPnl >= 0 ? "text-success" : "text-danger")">
+                            @Model.UnrealizedPnl.ToString("F4") USDC
+                        </dd>
+                    }
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- Card 3: Cross-Exchange Divergence -->
+    <div class="col-md-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header"><strong>Cross-Exchange Divergence</strong></div>
+            <div class="card-body">
+                <p class="display-6 mb-1" title="Cross-exchange price divergence (|longMark - shortMark| / unified)">
+                    @if (pos.CurrentDivergencePct.HasValue && pos.CurrentDivergencePct > 0)
+                    {
+                        <span class="badge bg-info fs-4">@pos.CurrentDivergencePct.Value.ToString("F2")%</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted">No divergence data</span>
+                    }
+                </p>
+                <p class="text-muted small mb-0">
+                    This is a phantom PnL that collapses when prices reconverge across exchanges.
+                    Exchange PnL may differ from strategy PnL by this amount.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Card 4: Margin & Liquidation (lazy-loaded) -->
+    <div class="col-md-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header"><strong>Margin & Liquidation</strong></div>
+            <div class="card-body" id="live-margin-card" data-margin-url="/api/positions/@pos.Id/live-margin">
+                @if (pos.Status == PositionStatus.Open)
+                {
+                    <div class="text-center py-3" id="margin-spinner">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="text-muted mt-2 small">Fetching exchange data...</p>
+                    </div>
+                    <div id="margin-data" class="d-none"></div>
+                }
+                else
+                {
+                    @if (pos.LongMarginUtilizationPct.HasValue || pos.ShortMarginUtilizationPct.HasValue)
+                    {
+                        <dl class="row mb-0">
+                            @if (pos.LongMarginUtilizationPct.HasValue)
+                            {
+                                <dt class="col-sm-6">Long Margin Util.</dt>
+                                <dd class="col-sm-6 @(pos.LongMarginUtilizationPct >= 0.70m ? "text-danger" : "")">@pos.LongMarginUtilizationPct.Value.ToString("P1")</dd>
+                            }
+                            @if (pos.ShortMarginUtilizationPct.HasValue)
+                            {
+                                <dt class="col-sm-6">Short Margin Util.</dt>
+                                <dd class="col-sm-6 @(pos.ShortMarginUtilizationPct >= 0.70m ? "text-danger" : "")">@pos.ShortMarginUtilizationPct.Value.ToString("P1")</dd>
+                            }
+                        </dl>
+                    }
+                    else
+                    {
+                        <p class="text-muted mb-0">No margin data available for closed positions.</p>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+
+    <!-- Card 5: Spread History -->
+    <div class="col-md-6">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header"><strong>Spread History</strong></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Entry Spread/hr</dt>
+                    <dd class="col-sm-6">@pos.EntrySpreadPerHour.ToString("P4")</dd>
+
+                    <dt class="col-sm-6">Current Spread/hr</dt>
+                    <dd class="col-sm-6">@pos.CurrentSpreadPerHour.ToString("P4")</dd>
+
+                    <dt class="col-sm-6">Spread Change</dt>
+                    @{
+                        var spreadDelta = pos.CurrentSpreadPerHour - pos.EntrySpreadPerHour;
+                        var spreadColor = spreadDelta >= 0 ? "text-success" : "text-danger";
+                    }
+                    <dd class="col-sm-6 @spreadColor">@spreadDelta.ToString("P4")</dd>
+                </dl>
+                <div class="mt-2">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-6">Long Entry Price</dt>
+                        <dd class="col-sm-6">@(pos.LongEntryPrice > 0 ? pos.LongEntryPrice.ToString("F4") : "N/A")</dd>
+                        <dt class="col-sm-6">Short Entry Price</dt>
+                        <dd class="col-sm-6">@(pos.ShortEntryPrice > 0 ? pos.ShortEntryPrice.ToString("F4") : "N/A")</dd>
+                        <dt class="col-sm-6">Size / Margin</dt>
+                        <dd class="col-sm-6">$@pos.SizeUsdc.ToString("F2") / $@pos.MarginUsdc.ToString("F2") (@pos.Leverage x)</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Card 6: Actions (admin only) -->
+@if (User.IsInRole("Admin") && pos.Status == PositionStatus.Open)
 {
-    <hr />
-    <form asp-action="Close" asp-route-id="@pos.Id" method="post"
-          onsubmit="return confirm('Are you sure you want to close this position?')">
-        @Html.AntiForgeryToken()
-        <button type="submit" class="btn btn-danger">Close Position</button>
-    </form>
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Admin Actions</strong></div>
+        <div class="card-body">
+            <form asp-action="Close" asp-route-id="@pos.Id" method="post" class="d-inline"
+                  onsubmit="return confirm('Are you sure you want to force-close this position?')">
+                @Html.AntiForgeryToken()
+                <button type="submit" class="btn btn-danger me-2">Force Close</button>
+            </form>
+        </div>
+    </div>
+}
+
+@if (!string.IsNullOrEmpty(pos.Notes))
+{
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Notes</strong></div>
+        <div class="card-body"><p class="mb-0">@pos.Notes</p></div>
+    </div>
+}
+
+@section Scripts {
+    <script src="~/js/shared-time.js" asp-append-version="true"></script>
+    @if (pos.Status == PositionStatus.Open)
+    {
+        <script>
+            (function() {
+                var card = document.getElementById("live-margin-card");
+                var marginUrl = card ? card.getAttribute("data-margin-url") : null;
+                var spinner = document.getElementById("margin-spinner");
+                var dataDiv = document.getElementById("margin-data");
+                if (!marginUrl) return;
+
+                function fetchMarginData() {
+                    if (spinner) { spinner.classList.remove("d-none"); }
+                    if (dataDiv) { dataDiv.classList.add("d-none"); dataDiv.textContent = ""; }
+
+                    fetch(marginUrl)
+                        .then(function(r) { return r.json(); })
+                        .then(function(d) {
+                            if (spinner) spinner.classList.add("d-none");
+                            if (!dataDiv) return;
+                            dataDiv.classList.remove("d-none");
+                            if (d.error) {
+                                showError(d.error);
+                                return;
+                            }
+                            var dl = document.createElement("dl");
+                            dl.className = "row mb-0";
+                            function addRow(label, val) {
+                                if (val == null) return;
+                                var dt = document.createElement("dt"); dt.className = "col-sm-6"; dt.textContent = label;
+                                var dd = document.createElement("dd"); dd.className = "col-sm-6"; dd.textContent = val;
+                                dl.appendChild(dt); dl.appendChild(dd);
+                            }
+                            if (d.longMarginUtilization != null) addRow("Long Margin Util.", (d.longMarginUtilization * 100).toFixed(1) + "%");
+                            if (d.shortMarginUtilization != null) addRow("Short Margin Util.", (d.shortMarginUtilization * 100).toFixed(1) + "%");
+                            if (d.longLiquidationPrice != null) addRow("Long Liq. Price", "$" + d.longLiquidationPrice.toFixed(4));
+                            if (d.shortLiquidationPrice != null) addRow("Short Liq. Price", "$" + d.shortLiquidationPrice.toFixed(4));
+                            dataDiv.appendChild(dl);
+                        })
+                        .catch(function() {
+                            if (spinner) spinner.classList.add("d-none");
+                            showError("Exchange data unavailable");
+                        });
+                }
+
+                function showError(msg) {
+                    if (!dataDiv) return;
+                    dataDiv.classList.remove("d-none");
+                    var p = document.createElement("p");
+                    p.className = "text-warning mb-0";
+                    p.textContent = msg;
+                    dataDiv.appendChild(p);
+                    var btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "btn btn-sm btn-outline-secondary mt-2";
+                    btn.textContent = "Retry";
+                    btn.addEventListener("click", fetchMarginData);
+                    dataDiv.appendChild(btn);
+                }
+
+                fetchMarginData();
+            })();
+        </script>
+    }
 }

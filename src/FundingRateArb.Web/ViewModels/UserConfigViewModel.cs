@@ -70,6 +70,9 @@ public class UserConfigViewModel
     [Required, Range(0.01, 1.0), Display(Name = "Max Exposure Per Exchange (%)")]
     public decimal? MaxExposurePerExchange { get; set; }
 
+    [Range(1, 50), Display(Name = "Max Leverage Cap (optional)")]
+    public int? MaxLeverageCap { get; set; }
+
     [Display(Name = "Enable Email Notifications")]
     public bool EmailNotificationsEnabled { get; set; }
 

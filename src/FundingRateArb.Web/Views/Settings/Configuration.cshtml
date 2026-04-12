@@ -161,6 +161,12 @@
                         <small class="text-muted">(Default: @d.MaxExposurePerExchange)</small>
                         <span asp-validation-for="MaxExposurePerExchange" class="text-danger"></span>
                     </div>
+                    <div class="col-md-4">
+                        <label asp-for="MaxLeverageCap" class="form-label"></label>
+                        <input asp-for="MaxLeverageCap" class="form-control" type="number" min="1" max="50" />
+                        <span class="form-text">Optional per-user hard ceiling. Leave empty to inherit from Bot Config. Can only be equal to or lower than the global cap.</span>
+                        <span asp-validation-for="MaxLeverageCap" class="text-danger"></span>
+                    </div>
                 </div>
             </div>
         </div>

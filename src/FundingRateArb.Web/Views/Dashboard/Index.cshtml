@@ -203,15 +203,34 @@
 
 @if (Model.IsAuthenticated)
 {
-    <!-- Exchange Balances -->
-    <div class="row mb-3" id="exchange-balances-row" style="display:none;">
+    <!-- Exchange Balances (always visible, server-rendered initial data) -->
+    <div class="row mb-3" id="exchange-balances-row">
         <div class="col-12">
             <div class="card border-0 shadow-sm">
                 <div class="card-body py-2 px-3">
                     <div class="d-flex align-items-center">
                         <span class="text-muted small me-3">Balances:</span>
-                        <div id="exchange-balances" class="d-flex flex-wrap gap-3 small"></div>
-                        <span class="text-muted small ms-auto" id="balance-total"></span>
+                        <div id="exchange-balances" class="d-flex flex-wrap gap-3 small">
+                            @if (Model.InitialBalances is not null && Model.InitialBalances.Balances is not null)
+                            {
+                                @foreach (var b in Model.InitialBalances.Balances)
+                                {
+                                    <span class="exchange-balance" data-exchange="@b.ExchangeName">
+                                        <strong>@b.ExchangeName:</strong> @b.AvailableUsdc.ToString("F2") USDC
+                                    </span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="text-muted">Balances: loading...</span>
+                            }
+                        </div>
+                        <span class="text-muted small ms-auto" id="balance-total">
+                            @if (Model.InitialBalances is not null)
+                            {
+                                <text>Total: @Model.InitialBalances.TotalAvailableUsdc.ToString("F2") USDC</text>
+                            }
+                        </span>
                     </div>
                 </div>
             </div>
@@ -338,7 +357,7 @@
                                                     }
                                                     @if (dx.NetPositiveBelowThreshold > 0)
                                                     {
-                                                        <strong> @dx.NetPositiveBelowThreshold profitable (adaptive eligible).</strong>
+                                                        <strong> @dx.NetPositiveBelowThreshold net-positive below gate (adaptive eligible).</strong>
                                                     }
                                                     @if (dx.PairsFilteredByBreakEvenSize > 0)
                                                     {
@@ -547,7 +566,7 @@
                     </div>
                     @* Desktop table view (>= 576px) *@
                     <div class="table-responsive d-none d-sm-block">
-                        <table id="positions-table" class="table table-hover mb-0">
+                        <table id="positions-table" class="table table-hover mb-0" data-details-base-url="@Url.Action("Details", "Positions")">
                             <thead class="table-light">
                                 <tr>
                                     <th>Asset</th>
@@ -712,5 +731,6 @@
 }
 
 @section Scripts {
+    <script src="~/js/shared-time.js" asp-append-version="true"></script>
     <script src="~/js/dashboard.js" asp-append-version="true"></script>
 }

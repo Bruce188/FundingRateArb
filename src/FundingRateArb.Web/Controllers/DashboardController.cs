@@ -30,6 +30,7 @@ public class DashboardController : Controller
     private readonly ICircuitBreakerManager _circuitBreakerManager;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMarketDataCache _marketDataCache;
+    private readonly IBalanceAggregator _balanceAggregator;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
     private const string AuthenticatedOpportunityCacheKey = "dashboard:auth:opportunities";
@@ -43,7 +44,8 @@ public class DashboardController : Controller
         IMemoryCache cache,
         ICircuitBreakerManager circuitBreakerManager,
         IServiceScopeFactory scopeFactory,
-        IMarketDataCache marketDataCache)
+        IMarketDataCache marketDataCache,
+        IBalanceAggregator balanceAggregator)
     {
         _uow = uow;
         _logger = logger;
@@ -54,6 +56,7 @@ public class DashboardController : Controller
         _circuitBreakerManager = circuitBreakerManager;
         _scopeFactory = scopeFactory;
         _marketDataCache = marketDataCache;
+        _balanceAggregator = balanceAggregator;
     }
 
     [AllowAnonymous]
@@ -266,6 +269,17 @@ public class DashboardController : Controller
                 }
             }
 
+            // Fetch initial balance snapshot for the always-visible balance tile
+            BalanceSnapshotDto? initialBalances = null;
+            try
+            {
+                initialBalances = await _balanceAggregator.GetBalanceSnapshotAsync(userId!, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to fetch initial balances for dashboard");
+            }
+
             var vm = new DashboardViewModel
             {
                 IsAuthenticated = true,
@@ -287,6 +301,7 @@ public class DashboardController : Controller
                 ActiveCooldowns = _circuitBreakerManager.GetActivePairCooldowns().ToList(),
                 CircuitBreakerStates = _circuitBreakerManager.GetCircuitBreakerStates().ToList(),
                 LastFundingRateFetch = result.Diagnostics is not null ? _marketDataCache.GetLastFetchTime() : null,
+                InitialBalances = initialBalances,
             };
 
             if (User.IsInRole("Admin") && botConfig is not null)

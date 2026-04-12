@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
@@ -6,6 +7,12 @@ namespace FundingRateArb.Application.Extensions;
 
 public static class ArbitragePositionMappingExtensions
 {
+    private static readonly Regex PascalCaseRegex = new("(?<!^)([A-Z])", RegexOptions.Compiled);
+
+    private static readonly Dictionary<CloseReason, string> CloseReasonDisplayNames =
+        Enum.GetValues<CloseReason>()
+            .ToDictionary(r => r, r => PascalCaseRegex.Replace(r.ToString(), " $1"));
+
     public static PositionSummaryDto ToSummaryDto(this ArbitragePosition pos)
     {
         return new PositionSummaryDto
@@ -27,6 +34,8 @@ public static class ArbitragePositionMappingExtensions
             UnifiedPnl = IsClosedStatus(pos.Status) ? pos.RealizedPnl ?? 0m : 0m,
             DivergencePct = pos.CurrentDivergencePct ?? 0m,
             RealizedPnl = pos.RealizedPnl,
+            CloseReason = pos.CloseReason,
+            CloseReasonDisplayName = pos.CloseReason.HasValue ? ToDisplayName(pos.CloseReason.Value) : null,
             Status = pos.Status,
             OpenedAt = pos.OpenedAt,
             ConfirmedAtUtc = pos.ConfirmedAtUtc,
@@ -59,6 +68,7 @@ public static class ArbitragePositionMappingExtensions
             TotalFeesUsdc = pos.TotalFeesUsdc,
             EntryFeesUsdc = pos.EntryFeesUsdc,
             ExitFeesUsdc = pos.ExitFeesUsdc,
+            CurrentDivergencePct = pos.CurrentDivergencePct,
             Status = pos.Status,
             CloseReason = pos.CloseReason,
             OpenedAt = pos.OpenedAt,
@@ -71,6 +81,18 @@ public static class ArbitragePositionMappingExtensions
 
     private static bool IsClosedStatus(PositionStatus status) =>
         status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated;
+
+    /// <summary>
+    /// Converts a PascalCase enum value to a space-separated display name.
+    /// E.g. "DivergenceCritical" becomes "Divergence Critical".
+    /// Uses pre-computed dictionary to avoid regex compilation per call.
+    /// </summary>
+    internal static string ToDisplayName(CloseReason reason)
+    {
+        return CloseReasonDisplayNames.TryGetValue(reason, out var name)
+            ? name
+            : PascalCaseRegex.Replace(reason.ToString(), " $1");
+    }
 
     /// <summary>
     /// Returns the three-component PnL decomposition for a closed position per

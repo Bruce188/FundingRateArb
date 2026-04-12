@@ -12,6 +12,13 @@ public interface IPositionHealthMonitor
     /// if missing from both exchanges. Called periodically by the orchestrator.
     /// </summary>
     Task ReconcileOpenPositionsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Computes PnL snapshot for a single position using cached mark prices.
+    /// Returns null if mark prices are unavailable (cache cold). Does not persist any state.
+    /// Intended for instant PnL on position-open push path.
+    /// </summary>
+    Task<ComputedPositionPnl?> ComputePositionSnapshotAsync(ArbitragePosition position, CancellationToken ct = default);
 }
 
 /// <summary>

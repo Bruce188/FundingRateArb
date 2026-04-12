@@ -8,6 +8,42 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
+    // Row-click navigation: navigate to position details on click/Enter
+    var posTable = document.getElementById("positions-table");
+    var detailsBaseUrl = (posTable && posTable.getAttribute("data-details-base-url")) || "/Positions/Details";
+
+    function bindRowClick(row) {
+        if (!row || row.dataset.rowClickBound) return;
+        row.dataset.rowClickBound = "1";
+        function navigate() {
+            window.location.href = detailsBaseUrl + "/" + row.dataset.positionId;
+        }
+        row.addEventListener("click", function(e) {
+            if (e.target.closest("a, button")) return;
+            navigate();
+        });
+        row.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") navigate();
+        });
+    }
+
+    function bindRowClickHandlers(container) {
+        if (!container) return;
+        var rows = container.querySelectorAll("tr[data-position-id]");
+        for (var i = 0; i < rows.length; i++) {
+            bindRowClick(rows[i]);
+        }
+    }
+
+    // Bind row-click on page load for server-rendered rows
+    document.addEventListener("DOMContentLoaded", function() {
+        var posTable = document.getElementById("positions-table");
+        if (posTable) {
+            var tbody = posTable.querySelector("tbody");
+            bindRowClickHandlers(tbody);
+        }
+    });
+
     var lastUpdateTime = null;
     var staleTimer = null;
     var STALE_THRESHOLD_MS = 120000; // 2 minutes
@@ -104,6 +140,10 @@
     function createPositionRow(position) {
         var tr = document.createElement("tr");
         tr.id = "position-" + position.id;
+        tr.setAttribute("data-position-id", position.id);
+        tr.setAttribute("tabindex", "0");
+        tr.setAttribute("role", "link");
+        tr.style.cursor = "pointer";
         var spread = position.currentSpreadPerHour ?? 0;
         var spreadClass = spread >= 0 ? "text-success" : "text-danger";
 
@@ -147,7 +187,7 @@
         tdExchPnl.appendChild(exchTextNode);
         var badge = document.createElement("span");
         badge.className = "badge bg-info ms-1 divergence-badge";
-        badge.title = "Price divergence";
+        badge.title = "Cross-exchange price divergence (|longMark - shortMark| / unified)";
         badge.textContent = divergence.toFixed(2) + "%";
         badge.style.display = divergence > 0.01 ? "" : "none";
         tdExchPnl.appendChild(badge);
@@ -295,12 +335,21 @@
             var posTable = document.getElementById("positions-table");
             var tbody = posTable ? posTable.querySelector("tbody") : null;
             if (tbody) {
-                tbody.appendChild(createPositionRow(position));
+                var newRow = createPositionRow(position);
+                tbody.appendChild(newRow);
+                bindRowClick(newRow);
             }
             // Mobile card
             var cardsContainer = document.getElementById("positions-cards");
+            var newCard = null;
             if (cardsContainer) {
-                cardsContainer.appendChild(createPositionCard(position));
+                newCard = createPositionCard(position);
+                cardsContainer.appendChild(newCard);
+            }
+            // Rewrite local times for newly added elements only
+            if (typeof rewriteLocalTimes === "function") {
+                if (newRow) { rewriteLocalTimes(newRow); }
+                if (newCard) { rewriteLocalTimes(newCard); }
             }
         }
     });
@@ -460,11 +509,16 @@
         var countBadge = document.querySelector(".badge.bg-primary");
         if (countBadge) countBadge.textContent = opportunitiesArr.length + " found";
 
-        // Update Best Spread KPI from diagnostics (raw spread includes all opportunities, not just above-threshold)
-        if (diagnostics && diagnostics.bestRawSpread > 0) {
-            var bestSpread = document.getElementById("best-spread");
-            if (bestSpread) {
-                bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
+        // Update Best Spread KPI: prefer live opportunity data, fall back to diagnostics
+        var bestFromOpps = opportunitiesArr.length > 0
+            ? Math.max.apply(null, opportunitiesArr.map(function(o) { return o.spreadPerHour ?? 0; }))
+            : (diagnostics && diagnostics.bestRawSpread) || 0;
+        var bestSpreadEl = document.getElementById("best-spread");
+        if (bestSpreadEl) {
+            if (bestFromOpps > 0) {
+                bestSpreadEl.textContent = (bestFromOpps * 100).toFixed(4) + "%";
+            } else {
+                bestSpreadEl.textContent = "N/A";
             }
         }
 
@@ -488,20 +542,40 @@
                 } else if (diagnostics.pairsPassing === 0 && diagnostics.pairsFilteredByVolume > 0 && diagnostics.pairsFilteredByThreshold === 0) {
                     alertDiv.className += " alert alert-info";
                     alertDiv.textContent = diagnostics.pairsFilteredByVolume + " pairs filtered \u2014 volume below $" + diagnostics.minVolumeThreshold.toLocaleString("en-US", { maximumFractionDigits: 0 }) + " on one or both legs.";
-                } else if (diagnostics.pairsPassing === 0 && (diagnostics.pairsFilteredByThreshold > 0 || diagnostics.netPositiveBelowThreshold > 0)) {
+                } else if (diagnostics.pairsPassing === 0 && (diagnostics.pairsFilteredByThreshold > 0 || diagnostics.netPositiveBelowThreshold > 0 || diagnostics.netPositiveBelowEdgeGuardrail > 0 || diagnostics.pairsFilteredByBreakEvenSize > 0)) {
                     alertDiv.className += " alert alert-info";
-                    var totalBelowThreshold = diagnostics.pairsFilteredByThreshold + (diagnostics.netPositiveBelowThreshold || 0);
-                    var thresholdText = totalBelowThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. ";
-                    if (diagnostics.netPositiveBelowThreshold > 0) {
-                        var bold = document.createElement("strong");
-                        bold.textContent = diagnostics.netPositiveBelowThreshold + " profitable (adaptive eligible).";
-                        alertDiv.textContent = thresholdText;
-                        alertDiv.appendChild(bold);
-                        var trailing = document.createTextNode(" Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.");
-                        alertDiv.appendChild(trailing);
-                    } else {
-                        alertDiv.textContent = thresholdText + "Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.";
+                    var totalRejected = (diagnostics.pairsFilteredByThreshold || 0) + (diagnostics.netPositiveBelowThreshold || 0) + (diagnostics.netPositiveBelowEdgeGuardrail || 0) + (diagnostics.pairsFilteredByBreakEvenSize || 0);
+                    alertDiv.textContent = totalRejected + " pairs rejected by profitability filters.";
+
+                    var belowThreshold = (diagnostics.pairsFilteredByThreshold || 0) + (diagnostics.netPositiveBelowThreshold || 0);
+                    if (belowThreshold > 0) {
+                        alertDiv.appendChild(document.createElement("br"));
+                        var thresholdBold = document.createElement("strong");
+                        thresholdBold.textContent = belowThreshold + " below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold";
+                        alertDiv.appendChild(thresholdBold);
+                        alertDiv.appendChild(document.createTextNode("."));
                     }
+                    if (diagnostics.netPositiveBelowThreshold > 0) {
+                        var adaptiveBold = document.createElement("strong");
+                        adaptiveBold.textContent = " " + diagnostics.netPositiveBelowThreshold + " net-positive below gate (adaptive eligible).";
+                        alertDiv.appendChild(adaptiveBold);
+                    }
+                    if (diagnostics.pairsFilteredByBreakEvenSize > 0) {
+                        alertDiv.appendChild(document.createElement("br"));
+                        var beBold = document.createElement("strong");
+                        beBold.textContent = diagnostics.pairsFilteredByBreakEvenSize + " filtered by break-even-size floor";
+                        alertDiv.appendChild(beBold);
+                        alertDiv.appendChild(document.createTextNode(" \u2014 net \u00d7 MinHoldTimeHours below MinEdgeMultiplier \u00d7 fees."));
+                    }
+                    if (diagnostics.netPositiveBelowEdgeGuardrail > 0) {
+                        alertDiv.appendChild(document.createElement("br"));
+                        var guardrailBold = document.createElement("strong");
+                        guardrailBold.textContent = diagnostics.netPositiveBelowEdgeGuardrail + " above threshold but below the 3\u00d7 edge guardrail";
+                        alertDiv.appendChild(guardrailBold);
+                        alertDiv.appendChild(document.createTextNode(" \u2014 loosen MinEdgeMultiplier to surface."));
+                    }
+                    alertDiv.appendChild(document.createElement("br"));
+                    alertDiv.appendChild(document.createTextNode("Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%."));
                 } else {
                     var span = document.createElement("span");
                     span.className = "text-muted";
@@ -701,8 +775,7 @@
         if (totalEl) {
             totalEl.textContent = "Total: $" + (snapshot.totalAvailableUsdc || 0).toFixed(2);
         }
-
-        row.style.display = balances.length > 0 ? "block" : "none";
+        // Balance tile is always visible (server-rendered). No show/hide toggle needed.
     });
 
     // B4: Handle status explanations

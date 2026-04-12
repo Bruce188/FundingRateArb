@@ -29,6 +29,7 @@ public class ArbitragePositionMappingExtensionsTests
             CloseReason = CloseReason.PnlTargetReached,
             OpenedAt = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc),
             ClosedAt = new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc),
+            CurrentDivergencePct = 0.15m,
             Notes = "Test position notes",
             Asset = new Asset { Id = 5, Symbol = "BTC", Name = "Bitcoin" },
             LongExchange = new Exchange
@@ -92,11 +93,13 @@ public class ArbitragePositionMappingExtensionsTests
         dto.UnrealizedPnl.Should().Be(0m); // set by caller with live computed value
         dto.ExchangePnl.Should().Be(0m);
         dto.UnifiedPnl.Should().Be(0m);
-        dto.DivergencePct.Should().Be(0m);
+        dto.DivergencePct.Should().Be(0.15m);
         dto.RealizedPnl.Should().Be(25.75m);
         dto.Status.Should().Be(PositionStatus.Open);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
         dto.ClosedAt.Should().Be(new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc));
+        dto.CloseReason.Should().Be(CloseReason.PnlTargetReached);
+        dto.CloseReasonDisplayName.Should().Be("Pnl Target Reached");
         dto.WarningLevel.Should().Be(WarningLevel.None);
         dto.WarningTypes.Should().BeEmpty();
     }
@@ -181,6 +184,7 @@ public class ArbitragePositionMappingExtensionsTests
         dto.CloseReason.Should().Be(CloseReason.PnlTargetReached);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
         dto.ClosedAt.Should().Be(new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc));
+        dto.CurrentDivergencePct.Should().Be(0.15m);
         dto.Notes.Should().Be("Test position notes");
     }
 
@@ -422,5 +426,52 @@ public class ArbitragePositionMappingExtensionsTests
 
         decomp.Should().NotBeNull();
         decomp!.Strategy.Should().Be(pos.RealizedPnl!.Value);
+    }
+
+    // ── CloseReason mapping to PositionSummaryDto ──
+
+    [Fact]
+    public void ToSummaryDto_ClosedPosition_PopulatesCloseReasonAndDisplayName()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Closed;
+        pos.CloseReason = CloseReason.DivergenceCritical;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.CloseReason.Should().Be(CloseReason.DivergenceCritical);
+        dto.CloseReasonDisplayName.Should().Be("Divergence Critical");
+    }
+
+    [Fact]
+    public void ToSummaryDto_OpenPosition_CloseReasonIsNull()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Open;
+        pos.CloseReason = null;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.CloseReason.Should().BeNull();
+        dto.CloseReasonDisplayName.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(CloseReason.StopLoss, "Stop Loss")]
+    [InlineData(CloseReason.MaxHoldTimeReached, "Max Hold Time Reached")]
+    [InlineData(CloseReason.PnlTargetReached, "Pnl Target Reached")]
+    [InlineData(CloseReason.SpreadCollapsed, "Spread Collapsed")]
+    [InlineData(CloseReason.FundingFlipped, "Funding Flipped")]
+    [InlineData(CloseReason.LiquidationRisk, "Liquidation Risk")]
+    [InlineData(CloseReason.ExchangeDrift, "Exchange Drift")]
+    [InlineData(CloseReason.StablecoinDepeg, "Stablecoin Depeg")]
+    [InlineData(CloseReason.PriceFeedLost, "Price Feed Lost")]
+    [InlineData(CloseReason.Rebalanced, "Rebalanced")]
+    [InlineData(CloseReason.Manual, "Manual")]
+    [InlineData(CloseReason.EmergencyLegFailed, "Emergency Leg Failed")]
+    [InlineData(CloseReason.Rotation, "Rotation")]
+    public void ToDisplayName_AllReasons_ProducesReadableText(CloseReason reason, string expected)
+    {
+        ArbitragePositionMappingExtensions.ToDisplayName(reason).Should().Be(expected);
     }
 }

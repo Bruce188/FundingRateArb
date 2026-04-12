@@ -106,6 +106,7 @@ public class SettingsControllerTests
                 FundingWindowMinutes = 30,
                 MaxExposurePerAsset = 0.5m,
                 MaxExposurePerExchange = 0.7m,
+                MaxLeverageCap = 5,
             });
 
         var result = await _controller.Configuration();
@@ -120,6 +121,9 @@ public class SettingsControllerTests
         model.AdminDefaults.MaxConcurrentPositions.Should().Be(GlobalConfig.MaxConcurrentPositions);
         model.AdminDefaults.OpenThreshold.Should().Be(GlobalConfig.OpenThreshold);
         model.AdminDefaults.StopLossPct.Should().Be(GlobalConfig.StopLossPct);
+
+        // MaxLeverageCap roundtrip: entity -> viewmodel
+        model.MaxLeverageCap.Should().Be(5);
     }
 
     [Fact]
@@ -695,5 +699,180 @@ public class SettingsControllerTests
 
         // Assert
         result.Should().BeOfType<NotFoundResult>();
+    }
+
+    // ── MaxLeverageCap validation ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Configuration_Post_MaxLeverageCapExceedsGlobal_ReturnsValidationError()
+    {
+        // GlobalConfig.MaxLeverageCap = 50 (defined in the test fixture)
+        // But let's use a tighter global cap for clarity
+        SetupAuthenticatedUser();
+        var tightGlobal = new BotConfiguration { MaxLeverageCap = 10 };
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).ReturnsAsync(tightGlobal);
+
+        var config = new UserConfiguration { UserId = "test-user-id" };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 100m,
+            MaxCapitalPerPosition = 0.5m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            MaxLeverageCap = 20, // exceeds global cap of 10
+        };
+
+        var result = await _controller.Configuration(model);
+
+        result.Should().BeOfType<ViewResult>();
+        _controller.ModelState.IsValid.Should().BeFalse();
+        _controller.ModelState[nameof(UserConfigViewModel.MaxLeverageCap)]!
+            .Errors.Should().ContainSingle()
+            .Which.ErrorMessage.Should().Contain("global cap of 10");
+    }
+
+    [Fact]
+    public async Task Configuration_Post_NullMaxLeverageCap_ClearsOverride()
+    {
+        SetupAuthenticatedUser();
+        var config = new UserConfiguration { UserId = "test-user-id", MaxLeverageCap = 5 };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 100m,
+            MaxCapitalPerPosition = 0.5m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            MaxLeverageCap = null, // clear the override
+        };
+
+        var result = await _controller.Configuration(model);
+
+        result.Should().BeOfType<RedirectToActionResult>();
+        config.MaxLeverageCap.Should().BeNull("null clears the per-user override");
+    }
+
+    [Fact]
+    public async Task Configuration_Post_MaxLeverageCapWithinGlobal_Persists()
+    {
+        SetupAuthenticatedUser();
+        var tightGlobal = new BotConfiguration { MaxLeverageCap = 10 };
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).ReturnsAsync(tightGlobal);
+
+        var config = new UserConfiguration { UserId = "test-user-id" };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 100m,
+            MaxCapitalPerPosition = 0.5m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            MaxLeverageCap = 5, // within global cap of 10
+        };
+
+        var result = await _controller.Configuration(model);
+
+        result.Should().BeOfType<RedirectToActionResult>();
+        config.MaxLeverageCap.Should().Be(5, "value within global cap should be persisted");
+    }
+
+    [Fact]
+    public async Task Configuration_Post_MaxLeverageCap_ValidatesBeforeEntityMutation()
+    {
+        SetupAuthenticatedUser();
+        var tightGlobal = new BotConfiguration { MaxLeverageCap = 10 };
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).ReturnsAsync(tightGlobal);
+
+        // Entity should never be loaded when validation fails early
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id"))
+            .ReturnsAsync(new UserConfiguration { UserId = "test-user-id" });
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 100m,
+            MaxCapitalPerPosition = 0.5m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            MaxLeverageCap = 20, // exceeds global cap of 10
+        };
+
+        var result = await _controller.Configuration(model);
+
+        result.Should().BeOfType<ViewResult>();
+        // Entity should never be fetched when validation rejects early
+        _mockSettings.Verify(s => s.GetOrCreateConfigAsync(It.IsAny<string>()), Times.Never,
+            "entity should not be loaded when MaxLeverageCap validation fails before mutation");
     }
 }

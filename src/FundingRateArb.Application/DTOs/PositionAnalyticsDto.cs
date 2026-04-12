@@ -17,12 +17,20 @@ public class PositionAnalyticsDto
     public DateTime? ConfirmedAtUtc { get; set; }
     public DateTime? ClosedAt { get; set; }
     public List<HourlySpreadPoint> SpreadHistory { get; set; } = [];
+    public List<CounterfactualPoint> Counterfactuals { get; set; } = [];
 }
 
 public class HourlySpreadPoint
 {
     public DateTime HourUtc { get; set; }
     public decimal SpreadPerHour { get; set; }
+}
+
+public class CounterfactualPoint
+{
+    public string Label { get; set; } = null!;
+    public decimal HoursAfterClose { get; set; }
+    public decimal HypotheticalPnl { get; set; }
 }
 
 public class PositionAnalyticsSummaryDto

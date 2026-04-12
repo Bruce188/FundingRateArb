@@ -636,4 +636,220 @@ public class PositionsControllerTests
             "zero current mark must not produce a divide-by-zero or nonsense value");
         vm.Position.MaxSafeMovePctShort.Should().BeNull();
     }
+
+    [Fact]
+    public async Task GetLiveMargin_Returns503WithErrorMessage_OnTimeout()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 99, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(99)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(new Mock<IExchangeConnector>().Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(99, CancellationToken.None);
+
+        var statusResult = result.Should().BeOfType<ObjectResult>().Subject;
+        statusResult.StatusCode.Should().Be(503);
+        statusResult.Value.Should().NotBeNull();
+        statusResult.Value!.ToString().Should().Contain("timeout");
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsUnauthorized_WhenNoUserId()
+    {
+        // B2: No authenticated user
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        var controller = CreateControllerForUser(anonUser);
+
+        var result = await controller.GetLiveMargin(1, CancellationToken.None);
+
+        result.Should().BeOfType<UnauthorizedResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsNotFound_WhenPositionDoesNotExist()
+    {
+        // B2: Nonexistent position
+        _mockPositions.Setup(p => p.GetByIdAsync(999)).ReturnsAsync((ArbitragePosition?)null);
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        var result = await controller.GetLiveMargin(999, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsForbid_WhenUserDoesNotOwnPosition()
+    {
+        // B2: Non-admin user accessing another user's position
+        var position = new ArbitragePosition
+        {
+            Id = 42, UserId = "other-user",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(42)).ReturnsAsync(position);
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        var result = await controller.GetLiveMargin(42, CancellationToken.None);
+
+        result.Should().BeOfType<ForbidResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_SameExchange_CallsConnectorOnce()
+    {
+        // NB4: When both legs are on the same exchange, only one connector call should be made
+        var position = new ArbitragePosition
+        {
+            Id = 55, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 1, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(55)).ReturnsAsync(position);
+
+        var marginState = new FundingRateArb.Application.DTOs.MarginStateDto
+        {
+            MarginUtilizationPct = 0.5m,
+            LiquidationPrice = 2500m,
+            MarginUsed = 100m,
+        };
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(55, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        // When same exchange, GetConnector should be called once (not twice)
+        _mockConnectorFactory.Verify(f => f.GetConnector("Hyperliquid"), Times.Once);
+        connector.Verify(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Details_ReturnsViewWithDivergenceData()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 80, UserId = "trader-id",
+            Status = PositionStatus.Closed,
+            CurrentDivergencePct = 0.75m,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongEntryPrice = 3000m, ShortEntryPrice = 3001m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(80)).ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(80);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+        vm.Position.CurrentDivergencePct.Should().Be(0.75m);
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsBadRequest_WhenNavigationPropertiesNull()
+    {
+        // NB3: position with null LongExchange/ShortExchange/Asset returns BadRequest
+        var position = new ArbitragePosition
+        {
+            Id = 101, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = null!,
+            ShortExchange = null!,
+            Asset = null!,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(101)).ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(101, CancellationToken.None);
+
+        var badRequest = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        badRequest.Value!.ToString().Should().Contain("Missing exchange or asset data");
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_AdminCanViewOtherUsersPosition()
+    {
+        // NB4: Admin can access positions owned by other users
+        var position = new ArbitragePosition
+        {
+            Id = 102, UserId = "other-user",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(102)).ReturnsAsync(position);
+
+        var marginState = new FundingRateArb.Application.DTOs.MarginStateDto
+        {
+            MarginUtilizationPct = 0.6m,
+            LiquidationPrice = 2400m,
+            MarginUsed = 120m,
+        };
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(connector.Object);
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+        var result = await controller.GetLiveMargin(102, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_Returns503_OnGenericException()
+    {
+        // N7: Generic exception (non-timeout) returns 503 with generic error message
+        var position = new ArbitragePosition
+        {
+            Id = 103, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(103)).ReturnsAsync(position);
+
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("exchange connection failed"));
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(new Mock<IExchangeConnector>().Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(103, CancellationToken.None);
+
+        var statusResult = result.Should().BeOfType<ObjectResult>().Subject;
+        statusResult.StatusCode.Should().Be(503);
+        statusResult.Value!.ToString().Should().Contain("unavailable");
+    }
 }
