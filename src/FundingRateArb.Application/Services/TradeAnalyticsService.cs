@@ -31,6 +31,11 @@ public class TradeAnalyticsService : ITradeAnalyticsService
         // Fetch spread history from hourly aggregates
         var spreadHistory = await GetSpreadHistoryAsync(position, ct);
 
+        var isClosed = position.Status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated;
+        var counterfactuals = isClosed && position.ClosedAt.HasValue
+            ? await ComputeCounterfactualPnlAsync(position, actualPnl, ct)
+            : [];
+
         return new PositionAnalyticsDto
         {
             PositionId = position.Id,
@@ -43,11 +48,12 @@ public class TradeAnalyticsService : ITradeAnalyticsService
             HoursHeld = hoursHeld,
             EntrySpreadPerHour = position.EntrySpreadPerHour,
             SizeUsdc = position.SizeUsdc,
-            IsClosed = position.Status is PositionStatus.Closed or PositionStatus.EmergencyClosed or PositionStatus.Liquidated,
+            IsClosed = isClosed,
             OpenedAt = position.OpenedAt,
             ConfirmedAtUtc = position.ConfirmedAtUtc,
             ClosedAt = position.ClosedAt,
             SpreadHistory = spreadHistory,
+            Counterfactuals = counterfactuals,
         };
     }
 
@@ -94,6 +100,58 @@ public class TradeAnalyticsService : ITradeAnalyticsService
 
     public static decimal ComputeProjectedPnl(ArbitragePosition pos, decimal hoursHeld) =>
         pos.SizeUsdc * pos.EntrySpreadPerHour * hoursHeld;
+
+    /// <summary>
+    /// Computes hypothetical PnL at +1h, +4h, +24h, +48h past close using post-close spread data.
+    /// Bounded by close time + 48h max to prevent unbounded history scans.
+    /// </summary>
+    internal async Task<List<CounterfactualPoint>> ComputeCounterfactualPnlAsync(
+        ArbitragePosition position, decimal actualPnl, CancellationToken ct)
+    {
+        if (!position.ClosedAt.HasValue) return [];
+
+        var closeTime = position.ClosedAt.Value;
+        var maxWindow = TimeSpan.FromHours(48);
+        var horizons = new (string Label, decimal Hours)[]
+        {
+            ("+1h", 1m), ("+4h", 4m), ("+24h", 24m), ("+48h", 48m),
+        };
+
+        // Fetch post-close spread data (bounded to 48h)
+        var longAggs = await _uow.FundingRates.GetHourlyAggregatesAsync(
+            position.AssetId, position.LongExchangeId, closeTime, closeTime + maxWindow, ct);
+        var shortAggs = await _uow.FundingRates.GetHourlyAggregatesAsync(
+            position.AssetId, position.ShortExchangeId, closeTime, closeTime + maxWindow, ct);
+
+        var shortByHour = shortAggs.ToDictionary(a => a.HourUtc, a => a.AvgRatePerHour);
+
+        // Compute cumulative spread per hour for each time horizon
+        var spreadPoints = longAggs
+            .Where(a => shortByHour.ContainsKey(a.HourUtc))
+            .OrderBy(a => a.HourUtc)
+            .Select(a => new { a.HourUtc, Spread = shortByHour[a.HourUtc] - a.AvgRatePerHour })
+            .ToList();
+
+        var results = new List<CounterfactualPoint>();
+        foreach (var (label, hours) in horizons)
+        {
+            var cutoff = closeTime.AddHours((double)hours);
+            var cumulativeSpread = spreadPoints
+                .Where(p => p.HourUtc < cutoff)
+                .Sum(p => p.Spread);
+
+            // Hypothetical PnL = actual PnL + additional spread earnings if held longer
+            var hypotheticalPnl = actualPnl + (cumulativeSpread * position.SizeUsdc);
+            results.Add(new CounterfactualPoint
+            {
+                Label = label,
+                HoursAfterClose = hours,
+                HypotheticalPnl = hypotheticalPnl,
+            });
+        }
+
+        return results;
+    }
 
     private async Task<List<HourlySpreadPoint>> GetSpreadHistoryAsync(
         ArbitragePosition pos, CancellationToken ct)

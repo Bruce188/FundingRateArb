@@ -3872,6 +3872,32 @@ public class PositionHealthMonitorTests
             "when unified price is unavailable, DivergencePct should be 0");
     }
 
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_ReturnsNull_WhenEntryPricesAreZero()
+    {
+        // NB5: The guard at line ~928-931 returns null when entry prices are zero,
+        // independent of cache state. Test this guard with warm cache.
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(3010m);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(3005m);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var pos = MakeOpenPosition(longEntry: 0m, shortEntry: 0m);
+
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().BeNull("zero entry prices should trigger the early-exit guard regardless of cache state");
+    }
+
     // ── Divergence badge invariant tests ──────────────────────────────────────
 
     [Fact]

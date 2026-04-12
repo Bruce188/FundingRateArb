@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
+using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Web.ViewModels.Admin;
 using Microsoft.AspNetCore.Authorization;
@@ -105,67 +106,67 @@ public class BotConfigController : Controller
             return View(model);
         }
 
-        var config = await _uow.BotConfig.GetActiveTrackedAsync();
+        // Validate against a temporary config before mutating the tracked entity,
+        // matching the SettingsController pattern for MaxLeverageCap.
+        var candidate = new BotConfiguration
+        {
+            OpenThreshold = model.OpenThreshold!.Value,
+            CloseThreshold = model.CloseThreshold!.Value,
+            AlertThreshold = model.AlertThreshold!.Value,
+            TotalCapitalUsdc = model.TotalCapitalUsdc!.Value,
+            DefaultLeverage = model.DefaultLeverage!.Value,
+            MaxConcurrentPositions = model.MaxConcurrentPositions!.Value,
+            MaxCapitalPerPosition = model.MaxCapitalPerPosition!.Value,
+            StopLossPct = model.StopLossPct!.Value,
+            MaxHoldTimeHours = model.MaxHoldTimeHours!.Value,
+            MinHoldTimeHours = model.MinHoldTimeHours!.Value,
+            VolumeFraction = model.VolumeFraction!.Value,
+            BreakevenHoursMax = model.BreakevenHoursMax!.Value,
+            AllocationStrategy = model.AllocationStrategy!.Value,
+            AllocationTopN = model.AllocationTopN!.Value,
+            FeeAmortizationHours = model.FeeAmortizationHours!.Value,
+            MinPositionSizeUsdc = model.MinPositionSizeUsdc!.Value,
+            MinVolume24hUsdc = model.MinVolume24hUsdc!.Value,
+            RateStalenessMinutes = model.RateStalenessMinutes!.Value,
+            DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value,
+            ConsecutiveLossPause = model.ConsecutiveLossPause!.Value,
+            FundingWindowMinutes = model.FundingWindowMinutes!.Value,
+            MaxExposurePerAsset = model.MaxExposurePerAsset!.Value,
+            MaxExposurePerExchange = model.MaxExposurePerExchange!.Value,
+            TargetPnlMultiplier = model.TargetPnlMultiplier!.Value,
+            AdaptiveHoldEnabled = model.AdaptiveHoldEnabled,
+            RebalanceEnabled = model.RebalanceEnabled,
+            RebalanceMinImprovement = model.RebalanceMinImprovement!.Value,
+            MaxRebalancesPerCycle = model.MaxRebalancesPerCycle!.Value,
+            MaxLeverageCap = model.MaxLeverageCap,
+            MarginUtilizationAlertPct = model.MarginUtilizationAlertPct,
+            PnlTargetCooldownMinutes = model.PnlTargetCooldownMinutes!.Value,
+            // Risk Management
+            MinHoldBeforePnlTargetMinutes = model.MinHoldBeforePnlTargetMinutes!.Value,
+            LiquidationWarningPct = model.LiquidationWarningPct!.Value,
+            LiquidationEarlyWarningPct = model.LiquidationEarlyWarningPct!.Value,
+            ExchangeCircuitBreakerThreshold = model.ExchangeCircuitBreakerThreshold!.Value,
+            ExchangeCircuitBreakerMinutes = model.ExchangeCircuitBreakerMinutes!.Value,
+            PriceFeedFailureCloseThreshold = model.PriceFeedFailureCloseThreshold!.Value,
+            // Thresholds
+            EmergencyCloseSpreadThreshold = model.EmergencyCloseSpreadThreshold!.Value,
+            MinEdgeMultiplier = model.MinEdgeMultiplier!.Value,
+            DivergenceAlertMultiplier = model.DivergenceAlertMultiplier!.Value,
+            SlippageBufferBps = model.SlippageBufferBps!.Value,
+            StablecoinAlertThresholdPct = model.StablecoinAlertThresholdPct!.Value,
+            StablecoinCriticalThresholdPct = model.StablecoinCriticalThresholdPct!.Value,
+            MinConsecutiveFavorableCycles = model.MinConsecutiveFavorableCycles!.Value,
+            FundingFlipExitCycles = model.FundingFlipExitCycles!.Value,
+            // Advanced booleans
+            UseRiskBasedDivergenceClose = model.UseRiskBasedDivergenceClose,
+            UseBreakEvenSizeFilter = model.UseBreakEvenSizeFilter,
+            DryRunEnabled = model.DryRunEnabled,
+            ForceConcurrentExecution = model.ForceConcurrentExecution,
+            // Infrastructure
+            ReconciliationIntervalCycles = model.ReconciliationIntervalCycles!.Value,
+        };
 
-        // NB2/NB4: Do not set OperatingState from the form — only SetState can change it.
-        // Derive IsEnabled from the DB-persisted OperatingState.
-        config.IsEnabled = config.OperatingState != BotOperatingState.Stopped;
-        config.OpenThreshold = model.OpenThreshold!.Value;
-        config.CloseThreshold = model.CloseThreshold!.Value;
-        config.AlertThreshold = model.AlertThreshold!.Value;
-        config.TotalCapitalUsdc = model.TotalCapitalUsdc!.Value;
-        config.DefaultLeverage = model.DefaultLeverage!.Value;
-        config.MaxConcurrentPositions = model.MaxConcurrentPositions!.Value;
-        config.MaxCapitalPerPosition = model.MaxCapitalPerPosition!.Value;
-        config.StopLossPct = model.StopLossPct!.Value;
-        config.MaxHoldTimeHours = model.MaxHoldTimeHours!.Value;
-        config.MinHoldTimeHours = model.MinHoldTimeHours!.Value;
-        config.VolumeFraction = model.VolumeFraction!.Value;
-        config.BreakevenHoursMax = model.BreakevenHoursMax!.Value;
-        config.AllocationStrategy = model.AllocationStrategy!.Value;
-        config.AllocationTopN = model.AllocationTopN!.Value;
-        config.FeeAmortizationHours = model.FeeAmortizationHours!.Value;
-        config.MinPositionSizeUsdc = model.MinPositionSizeUsdc!.Value;
-        config.MinVolume24hUsdc = model.MinVolume24hUsdc!.Value;
-        config.RateStalenessMinutes = model.RateStalenessMinutes!.Value;
-        config.DailyDrawdownPausePct = model.DailyDrawdownPausePct!.Value;
-        config.ConsecutiveLossPause = model.ConsecutiveLossPause!.Value;
-        config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
-        config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
-        config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
-        config.TargetPnlMultiplier = model.TargetPnlMultiplier!.Value;
-        config.AdaptiveHoldEnabled = model.AdaptiveHoldEnabled;
-        config.RebalanceEnabled = model.RebalanceEnabled;
-        config.RebalanceMinImprovement = model.RebalanceMinImprovement!.Value;
-        config.MaxRebalancesPerCycle = model.MaxRebalancesPerCycle!.Value;
-        config.MaxLeverageCap = model.MaxLeverageCap;
-        config.MarginUtilizationAlertPct = model.MarginUtilizationAlertPct;
-        config.PnlTargetCooldownMinutes = model.PnlTargetCooldownMinutes!.Value;
-        // Risk Management
-        config.MinHoldBeforePnlTargetMinutes = model.MinHoldBeforePnlTargetMinutes!.Value;
-        config.LiquidationWarningPct = model.LiquidationWarningPct!.Value;
-        config.LiquidationEarlyWarningPct = model.LiquidationEarlyWarningPct!.Value;
-        config.ExchangeCircuitBreakerThreshold = model.ExchangeCircuitBreakerThreshold!.Value;
-        config.ExchangeCircuitBreakerMinutes = model.ExchangeCircuitBreakerMinutes!.Value;
-        config.PriceFeedFailureCloseThreshold = model.PriceFeedFailureCloseThreshold!.Value;
-        // Thresholds
-        config.EmergencyCloseSpreadThreshold = model.EmergencyCloseSpreadThreshold!.Value;
-        config.MinEdgeMultiplier = model.MinEdgeMultiplier!.Value;
-        config.DivergenceAlertMultiplier = model.DivergenceAlertMultiplier!.Value;
-        config.SlippageBufferBps = model.SlippageBufferBps!.Value;
-        config.StablecoinAlertThresholdPct = model.StablecoinAlertThresholdPct!.Value;
-        config.StablecoinCriticalThresholdPct = model.StablecoinCriticalThresholdPct!.Value;
-        config.MinConsecutiveFavorableCycles = model.MinConsecutiveFavorableCycles!.Value;
-        config.FundingFlipExitCycles = model.FundingFlipExitCycles!.Value;
-        // Advanced booleans
-        config.UseRiskBasedDivergenceClose = model.UseRiskBasedDivergenceClose;
-        config.UseBreakEvenSizeFilter = model.UseBreakEvenSizeFilter;
-        config.DryRunEnabled = model.DryRunEnabled;
-        config.ForceConcurrentExecution = model.ForceConcurrentExecution;
-        // Infrastructure
-        config.ReconciliationIntervalCycles = model.ReconciliationIntervalCycles!.Value;
-
-        var validation = _configValidator.Validate(config);
+        var validation = _configValidator.Validate(candidate);
         if (!validation.IsValid)
         {
             foreach (var error in validation.Errors)
@@ -175,6 +176,67 @@ public class BotConfigController : Controller
 
             return View(model);
         }
+
+        // Validation passed — now mutate the tracked entity
+        var config = await _uow.BotConfig.GetActiveTrackedAsync();
+
+        // NB2/NB4: Do not set OperatingState from the form — only SetState can change it.
+        // Derive IsEnabled from the DB-persisted OperatingState.
+        config.IsEnabled = config.OperatingState != BotOperatingState.Stopped;
+        config.OpenThreshold = candidate.OpenThreshold;
+        config.CloseThreshold = candidate.CloseThreshold;
+        config.AlertThreshold = candidate.AlertThreshold;
+        config.TotalCapitalUsdc = candidate.TotalCapitalUsdc;
+        config.DefaultLeverage = candidate.DefaultLeverage;
+        config.MaxConcurrentPositions = candidate.MaxConcurrentPositions;
+        config.MaxCapitalPerPosition = candidate.MaxCapitalPerPosition;
+        config.StopLossPct = candidate.StopLossPct;
+        config.MaxHoldTimeHours = candidate.MaxHoldTimeHours;
+        config.MinHoldTimeHours = candidate.MinHoldTimeHours;
+        config.VolumeFraction = candidate.VolumeFraction;
+        config.BreakevenHoursMax = candidate.BreakevenHoursMax;
+        config.AllocationStrategy = candidate.AllocationStrategy;
+        config.AllocationTopN = candidate.AllocationTopN;
+        config.FeeAmortizationHours = candidate.FeeAmortizationHours;
+        config.MinPositionSizeUsdc = candidate.MinPositionSizeUsdc;
+        config.MinVolume24hUsdc = candidate.MinVolume24hUsdc;
+        config.RateStalenessMinutes = candidate.RateStalenessMinutes;
+        config.DailyDrawdownPausePct = candidate.DailyDrawdownPausePct;
+        config.ConsecutiveLossPause = candidate.ConsecutiveLossPause;
+        config.FundingWindowMinutes = candidate.FundingWindowMinutes;
+        config.MaxExposurePerAsset = candidate.MaxExposurePerAsset;
+        config.MaxExposurePerExchange = candidate.MaxExposurePerExchange;
+        config.TargetPnlMultiplier = candidate.TargetPnlMultiplier;
+        config.AdaptiveHoldEnabled = candidate.AdaptiveHoldEnabled;
+        config.RebalanceEnabled = candidate.RebalanceEnabled;
+        config.RebalanceMinImprovement = candidate.RebalanceMinImprovement;
+        config.MaxRebalancesPerCycle = candidate.MaxRebalancesPerCycle;
+        config.MaxLeverageCap = candidate.MaxLeverageCap;
+        config.MarginUtilizationAlertPct = candidate.MarginUtilizationAlertPct;
+        config.PnlTargetCooldownMinutes = candidate.PnlTargetCooldownMinutes;
+        // Risk Management
+        config.MinHoldBeforePnlTargetMinutes = candidate.MinHoldBeforePnlTargetMinutes;
+        config.LiquidationWarningPct = candidate.LiquidationWarningPct;
+        config.LiquidationEarlyWarningPct = candidate.LiquidationEarlyWarningPct;
+        config.ExchangeCircuitBreakerThreshold = candidate.ExchangeCircuitBreakerThreshold;
+        config.ExchangeCircuitBreakerMinutes = candidate.ExchangeCircuitBreakerMinutes;
+        config.PriceFeedFailureCloseThreshold = candidate.PriceFeedFailureCloseThreshold;
+        // Thresholds
+        config.EmergencyCloseSpreadThreshold = candidate.EmergencyCloseSpreadThreshold;
+        config.MinEdgeMultiplier = candidate.MinEdgeMultiplier;
+        config.DivergenceAlertMultiplier = candidate.DivergenceAlertMultiplier;
+        config.SlippageBufferBps = candidate.SlippageBufferBps;
+        config.StablecoinAlertThresholdPct = candidate.StablecoinAlertThresholdPct;
+        config.StablecoinCriticalThresholdPct = candidate.StablecoinCriticalThresholdPct;
+        config.MinConsecutiveFavorableCycles = candidate.MinConsecutiveFavorableCycles;
+        config.FundingFlipExitCycles = candidate.FundingFlipExitCycles;
+        // Advanced booleans
+        config.UseRiskBasedDivergenceClose = candidate.UseRiskBasedDivergenceClose;
+        config.UseBreakEvenSizeFilter = candidate.UseBreakEvenSizeFilter;
+        config.DryRunEnabled = candidate.DryRunEnabled;
+        config.ForceConcurrentExecution = candidate.ForceConcurrentExecution;
+        // Infrastructure
+        config.ReconciliationIntervalCycles = candidate.ReconciliationIntervalCycles;
 
         config.LastUpdatedAt = DateTime.UtcNow;
         config.UpdatedByUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "system";

@@ -41,7 +41,7 @@ function bindPercentInput(percentInputId, rawHiddenInputId, multiplier) {
     pctInput.addEventListener('input', function () {
         var pctVal = parseFloat(pctInput.value);
         if (!isNaN(pctVal)) {
-            rawInput.value = (pctVal / multiplier).toFixed(10).replace(/\.?0+$/, '');
+            rawInput.value = (pctVal / multiplier).toFixed(8).replace(/\.?0+$/, '');
         } else {
             rawInput.value = '';
         }

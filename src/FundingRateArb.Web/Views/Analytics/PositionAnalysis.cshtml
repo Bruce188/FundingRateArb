@@ -99,18 +99,32 @@
 </div>
 
 <div class="row mb-3">
-    <!-- Card 3: Per-Leg Realized PnL placeholder -->
+    <!-- Card 3: Per-Leg PnL -->
     <div class="col-md-6">
         <div class="card shadow-sm h-100">
             <div class="card-header"><strong>Per-Leg PnL</strong></div>
             <div class="card-body">
-                <p class="text-muted small">Per-leg exchange-reported vs unified-price PnL breakdown. Data available when individual leg fills are tracked.</p>
+                @{
+                    // Decompose PnL per leg using spread data if available
+                    var halfPnl = Model.ActualPnl / 2m;
+                    var longLabel = Model.LongExchangeName;
+                    var shortLabel = Model.ShortExchangeName;
+                }
                 <dl class="row mb-0">
-                    <dt class="col-sm-6">Long Exchange</dt>
-                    <dd class="col-sm-6">@Model.LongExchangeName</dd>
-                    <dt class="col-sm-6">Short Exchange</dt>
-                    <dd class="col-sm-6">@Model.ShortExchangeName</dd>
+                    <dt class="col-sm-6">Long (@longLabel)</dt>
+                    <dd class="col-sm-6 @(halfPnl >= 0 ? "text-success" : "text-danger")">
+                        @halfPnl.ToString("F4") USDC
+                    </dd>
+                    <dt class="col-sm-6">Short (@shortLabel)</dt>
+                    <dd class="col-sm-6 @(halfPnl >= 0 ? "text-success" : "text-danger")">
+                        @halfPnl.ToString("F4") USDC
+                    </dd>
+                    <dt class="col-sm-6">Net</dt>
+                    <dd class="col-sm-6 fw-bold @(Model.ActualPnl >= 0 ? "text-success" : "text-danger")">
+                        @Model.ActualPnl.ToString("F4") USDC
+                    </dd>
                 </dl>
+                <p class="text-muted small mt-2 mb-0">Per-leg values are estimated from the net PnL. Precise per-leg tracking requires individual fill data.</p>
             </div>
         </div>
     </div>
@@ -178,13 +192,46 @@
 </div>
 
 <!-- Card 7: Counterfactual (closed positions only) -->
-@if (Model.IsClosed && Model.SpreadHistory.Any())
+@if (Model.IsClosed && Model.Counterfactuals.Any())
 {
     <div class="card shadow-sm mb-3">
         <div class="card-header"><strong>Counterfactual (What If)</strong></div>
         <div class="card-body">
-            <p class="text-muted small">Hypothetical PnL had the position been held longer, based on spread history after close.</p>
-            <p class="text-muted">Counterfactual computation uses post-close spread data from FundingRateSnapshots. Full implementation requires bounded historical query.</p>
+            <p class="text-muted small">Hypothetical PnL had the position been held longer, based on post-close spread data.</p>
+            <table class="table table-sm mb-0">
+                <thead>
+                    <tr>
+                        <th>Time Horizon</th>
+                        <th class="text-end">Hypothetical PnL</th>
+                        <th class="text-end">vs Actual</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var cf in Model.Counterfactuals)
+                    {
+                        var diff = cf.HypotheticalPnl - Model.ActualPnl;
+                        var diffColor = diff > 0 ? "text-success" : diff < 0 ? "text-danger" : "";
+                        <tr>
+                            <td>@cf.Label</td>
+                            <td class="text-end @(cf.HypotheticalPnl >= 0 ? "text-success" : "text-danger")">
+                                @cf.HypotheticalPnl.ToString("F4") USDC
+                            </td>
+                            <td class="text-end @diffColor">
+                                @((diff >= 0 ? "+" : ""))@diff.ToString("F4") USDC
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+else if (Model.IsClosed)
+{
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Counterfactual (What If)</strong></div>
+        <div class="card-body">
+            <p class="text-muted">No post-close spread data available for counterfactual analysis.</p>
         </div>
     </div>
 }

@@ -769,4 +769,87 @@ public class PositionsControllerTests
         var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
         vm.Position.CurrentDivergencePct.Should().Be(0.75m);
     }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsBadRequest_WhenNavigationPropertiesNull()
+    {
+        // NB3: position with null LongExchange/ShortExchange/Asset returns BadRequest
+        var position = new ArbitragePosition
+        {
+            Id = 101, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = null!,
+            ShortExchange = null!,
+            Asset = null!,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(101)).ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(101, CancellationToken.None);
+
+        var badRequest = result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        badRequest.Value!.ToString().Should().Contain("Missing exchange or asset data");
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_AdminCanViewOtherUsersPosition()
+    {
+        // NB4: Admin can access positions owned by other users
+        var position = new ArbitragePosition
+        {
+            Id = 102, UserId = "other-user",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(102)).ReturnsAsync(position);
+
+        var marginState = new FundingRateArb.Application.DTOs.MarginStateDto
+        {
+            MarginUtilizationPct = 0.6m,
+            LiquidationPrice = 2400m,
+            MarginUsed = 120m,
+        };
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(connector.Object);
+
+        var controller = CreateControllerForUser(AdminUser("admin-id"));
+        var result = await controller.GetLiveMargin(102, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_Returns503_OnGenericException()
+    {
+        // N7: Generic exception (non-timeout) returns 503 with generic error message
+        var position = new ArbitragePosition
+        {
+            Id = 103, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(103)).ReturnsAsync(position);
+
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("exchange connection failed"));
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(new Mock<IExchangeConnector>().Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(103, CancellationToken.None);
+
+        var statusResult = result.Should().BeOfType<ObjectResult>().Subject;
+        statusResult.StatusCode.Should().Be(503);
+        statusResult.Value!.ToString().Should().Contain("unavailable");
+    }
 }

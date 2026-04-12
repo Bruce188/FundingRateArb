@@ -311,4 +311,101 @@ public class TradeAnalyticsServiceTests
         results[0].PositionId.Should().Be(1);
         results[0].AccuracyPct.Should().NotBeNull();
     }
+
+    // ── Counterfactual PnL computation ──────────────────────────────────────
+
+    [Fact]
+    public async Task ComputeCounterfactualPnlAsync_MatchesFormula_ForKnownInputs()
+    {
+        var closeTime = new DateTime(2026, 4, 1, 12, 0, 0, DateTimeKind.Utc);
+        var position = new ArbitragePosition
+        {
+            Id = 30,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 1000m,
+            ClosedAt = closeTime,
+            Status = PositionStatus.Closed,
+        };
+        var actualPnl = 5.0m;
+
+        // Post-close spread data: 3 hours of data after close
+        var longAggs = new List<FundingRateHourlyAggregate>
+        {
+            new() { HourUtc = closeTime.AddHours(0), AvgRatePerHour = 0.0002m },
+            new() { HourUtc = closeTime.AddHours(1), AvgRatePerHour = 0.0003m },
+            new() { HourUtc = closeTime.AddHours(2), AvgRatePerHour = 0.0001m },
+        };
+        var shortAggs = new List<FundingRateHourlyAggregate>
+        {
+            new() { HourUtc = closeTime.AddHours(0), AvgRatePerHour = 0.0005m },
+            new() { HourUtc = closeTime.AddHours(1), AvgRatePerHour = 0.0006m },
+            new() { HourUtc = closeTime.AddHours(2), AvgRatePerHour = 0.0004m },
+        };
+
+        _mockFundingRateRepo.Setup(r => r.GetHourlyAggregatesAsync(
+                1, 1, closeTime, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(longAggs);
+        _mockFundingRateRepo.Setup(r => r.GetHourlyAggregatesAsync(
+                1, 2, closeTime, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(shortAggs);
+
+        var result = await _sut.ComputeCounterfactualPnlAsync(position, actualPnl, CancellationToken.None);
+
+        result.Should().HaveCount(4); // +1h, +4h, +24h, +48h
+
+        // +1h: only hour 0 counts (HourUtc < closeTime + 1h)
+        // spread at h0 = 0.0005 - 0.0002 = 0.0003
+        // hypothetical = 5.0 + (0.0003 * 1000) = 5.0 + 0.3 = 5.3
+        result[0].Label.Should().Be("+1h");
+        result[0].HypotheticalPnl.Should().Be(5.0m + 0.0003m * 1000m);
+
+        // +4h: all 3 hours count (HourUtc < closeTime + 4h)
+        // cumulative spread = 0.0003 + 0.0003 + 0.0003 = 0.0009
+        var cumSpread = (0.0005m - 0.0002m) + (0.0006m - 0.0003m) + (0.0004m - 0.0001m);
+        result[1].Label.Should().Be("+4h");
+        result[1].HypotheticalPnl.Should().Be(5.0m + cumSpread * 1000m);
+
+        // +24h and +48h: same as +4h since only 3 hours of data
+        result[2].Label.Should().Be("+24h");
+        result[2].HypotheticalPnl.Should().Be(result[1].HypotheticalPnl);
+        result[3].Label.Should().Be("+48h");
+        result[3].HypotheticalPnl.Should().Be(result[1].HypotheticalPnl);
+    }
+
+    [Fact]
+    public async Task GetPositionAnalyticsAsync_ClosedPosition_PopulatesCounterfactuals()
+    {
+        var openedAt = DateTime.UtcNow.AddHours(-48);
+        var closedAt = DateTime.UtcNow.AddHours(-24);
+        var pos = new ArbitragePosition
+        {
+            Id = 31,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 500m,
+            EntrySpreadPerHour = 0.0005m,
+            AccumulatedFunding = 10m,
+            RealizedPnl = 5.5m,
+            OpenedAt = openedAt,
+            ClosedAt = closedAt,
+            Status = PositionStatus.Closed,
+            Asset = new Asset { Symbol = "ETH" },
+            LongExchange = new Exchange { Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Name = "Aster" },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetByIdAsync(31)).ReturnsAsync(pos);
+
+        var result = await _sut.GetPositionAnalyticsAsync(31);
+
+        result.Should().NotBeNull();
+        result!.IsClosed.Should().BeTrue();
+        // Even with empty spread data, counterfactuals should be populated (all = actualPnl)
+        result.Counterfactuals.Should().HaveCount(4);
+        result.Counterfactuals.Should().AllSatisfy(cf =>
+            cf.HypotheticalPnl.Should().Be(5.5m, "no post-close spread data means PnL stays at actual"));
+    }
 }

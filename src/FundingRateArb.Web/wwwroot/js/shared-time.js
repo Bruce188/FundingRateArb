@@ -27,4 +27,5 @@ function rewriteLocalTimes(container) {
         }
     }
 }
-document.addEventListener("DOMContentLoaded", rewriteLocalTimes);
+// Initial page-load rewriting is handled by site.js (loaded globally via _Layout.cshtml).
+// This file exposes rewriteLocalTimes for dynamic content inserted after page load.
