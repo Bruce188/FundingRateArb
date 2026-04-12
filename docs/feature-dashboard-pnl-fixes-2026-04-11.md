@@ -566,3 +566,4 @@ If CoinGlass is unreliable or the API key is unavailable, the Exchange Analytics
 **Run 2026-04-12T00:41:53Z:** Started pipeline (orchestrate.sh)
 **Resume 2026-04-12T00:41:53Z:** skipping analyze for feat/dashboard-pnl-fixes (--restart-from=implement)
 **Resume 2026-04-12T00:41:53Z:** skipping plan for feat/dashboard-pnl-fixes (--restart-from=implement)
+**Failed 2026-04-12T04:40:39Z:** refix | Status: FAILED
