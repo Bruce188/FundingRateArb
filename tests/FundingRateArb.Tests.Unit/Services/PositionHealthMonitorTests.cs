@@ -3793,6 +3793,85 @@ public class PositionHealthMonitorTests
         snapshot.Should().BeNull("cache cold should return null so caller falls back to zero-PnL");
     }
 
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_ReturnsNull_WhenNavigationPropertiesNull()
+    {
+        // B4: When Asset, LongExchange, ShortExchange are null, the method uses "?" for
+        // exchange/asset names. GetMarkPrice("?", "?") returns 0 → cache-cold path → null.
+        var pos = MakeOpenPosition();
+        pos.Asset = null!;
+        pos.LongExchange = null!;
+        pos.ShortExchange = null!;
+
+        // Default _sut cache returns 0 for any symbol → treated as cold
+        var snapshot = await _sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().BeNull("null navigation properties produce invalid cache keys → cache cold → null");
+    }
+
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_CollateralImbalanceNull_WhenMarginZero()
+    {
+        // NB2: When MarginUsdc is 0, marginPerLeg is 0, so CollateralImbalancePct stays null
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(3010m);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(3005m);
+
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter")).Returns(3007.5m);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            mockRefPrice.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var pos = MakeOpenPosition(marginUsdc: 0m);
+
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.CollateralImbalancePct.Should().BeNull(
+            "when MarginUsdc is 0, marginPerLeg is 0 and CollateralImbalancePct should remain null");
+    }
+
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_FallsBackToExchangePnl_WhenUnifiedPriceUnavailable()
+    {
+        // NB3: When GetUnifiedPrice returns 0, unifiedPnl falls back to exchangePnl
+        // and divergencePct becomes 0
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(3010m);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(3005m);
+
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter")).Returns(0m);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            mockRefPrice.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().NotBeNull();
+        snapshot!.UnifiedPnl.Should().Be(snapshot.ExchangePnl,
+            "when unified price is unavailable, UnifiedPnl should fall back to ExchangePnl");
+        snapshot.DivergencePct.Should().Be(0m,
+            "when unified price is unavailable, DivergencePct should be 0");
+    }
+
     // ── Divergence badge invariant tests ──────────────────────────────────────
 
     [Fact]

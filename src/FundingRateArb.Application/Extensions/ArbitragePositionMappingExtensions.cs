@@ -7,6 +7,11 @@ namespace FundingRateArb.Application.Extensions;
 
 public static class ArbitragePositionMappingExtensions
 {
+    private static readonly Regex PascalCaseRegex = new("(?<!^)([A-Z])", RegexOptions.Compiled);
+
+    private static readonly Dictionary<CloseReason, string> CloseReasonDisplayNames =
+        Enum.GetValues<CloseReason>()
+            .ToDictionary(r => r, r => PascalCaseRegex.Replace(r.ToString(), " $1"));
     public static PositionSummaryDto ToSummaryDto(this ArbitragePosition pos)
     {
         return new PositionSummaryDto
@@ -79,10 +84,13 @@ public static class ArbitragePositionMappingExtensions
     /// <summary>
     /// Converts a PascalCase enum value to a space-separated display name.
     /// E.g. "DivergenceCritical" becomes "Divergence Critical".
+    /// Uses pre-computed dictionary to avoid regex compilation per call.
     /// </summary>
     internal static string ToDisplayName(CloseReason reason)
     {
-        return Regex.Replace(reason.ToString(), "(?<!^)([A-Z])", " $1");
+        return CloseReasonDisplayNames.TryGetValue(reason, out var name)
+            ? name
+            : PascalCaseRegex.Replace(reason.ToString(), " $1");
     }
 
     /// <summary>

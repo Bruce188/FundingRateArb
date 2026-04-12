@@ -126,29 +126,30 @@
                     <div class="row g-3">
                         <div class="col-md-4">
                             <label asp-for="OpenThreshold" class="form-label"></label>
-                            <input asp-for="OpenThreshold" class="form-control" type="number" step="any" />
-                            <div class="form-text">Minimum rate difference to open position</div>
-                            <small id="open-threshold-pct" class="text-info"></small>
+                            <input asp-for="OpenThreshold" type="hidden" id="OpenThreshold_raw" />
+                            <input type="number" step="0.001" class="form-control" id="OpenThreshold_pct" />
+                            <div class="form-text">Minimum rate difference to open position (%/hr)</div>
                             <span asp-validation-for="OpenThreshold" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
                             <label asp-for="CloseThreshold" class="form-label"></label>
-                            <input asp-for="CloseThreshold" class="form-control" type="number" step="any" />
-                            <div class="form-text">Rate at which to close position</div>
-                            <small id="close-threshold-pct" class="text-info"></small>
+                            <input asp-for="CloseThreshold" type="hidden" id="CloseThreshold_raw" />
+                            <input type="number" step="0.001" class="form-control" id="CloseThreshold_pct" />
+                            <div class="form-text">Rate at which to close position (%/hr)</div>
                             <span asp-validation-for="CloseThreshold" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
                             <label asp-for="AlertThreshold" class="form-label"></label>
-                            <input asp-for="AlertThreshold" class="form-control" type="number" step="any" />
-                            <div class="form-text">Rate at which to trigger alerts</div>
-                            <small id="alert-threshold-pct" class="text-info"></small>
+                            <input asp-for="AlertThreshold" type="hidden" id="AlertThreshold_raw" />
+                            <input type="number" step="0.001" class="form-control" id="AlertThreshold_pct" />
+                            <div class="form-text">Rate at which to trigger alerts (%/hr)</div>
                             <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
                             <label asp-for="EmergencyCloseSpreadThreshold" class="form-label"></label>
-                            <input asp-for="EmergencyCloseSpreadThreshold" class="form-control" type="number" step="any" min="-1" max="0" />
-                            <div class="form-text">Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours</div>
+                            <input asp-for="EmergencyCloseSpreadThreshold" type="hidden" id="EmergencyCloseSpreadThreshold_raw" />
+                            <input type="number" step="0.001" class="form-control" id="EmergencyCloseSpreadThreshold_pct" min="-100" max="0" />
+                            <div class="form-text">Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours (%/hr)</div>
                             <span asp-validation-for="EmergencyCloseSpreadThreshold" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
@@ -388,8 +389,9 @@
                         </div>
                         <div class="col-md-4">
                             <label asp-for="RebalanceMinImprovement" class="form-label"></label>
-                            <input asp-for="RebalanceMinImprovement" class="form-control" type="number" step="any" min="0" max="0.01" />
-                            <div class="form-text">Minimum spread improvement to justify rebalance</div>
+                            <input asp-for="RebalanceMinImprovement" type="hidden" id="RebalanceMinImprovement_raw" />
+                            <input type="number" step="0.001" class="form-control" id="RebalanceMinImprovement_pct" min="0" max="1" />
+                            <div class="form-text">Minimum spread improvement to justify rebalance (%/hr)</div>
                             <span asp-validation-for="RebalanceMinImprovement" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
@@ -447,8 +449,9 @@
                     <div class="row g-3">
                         <div class="col-md-4">
                             <label asp-for="VolumeFraction" class="form-label"></label>
-                            <input asp-for="VolumeFraction" class="form-control" type="number" step="any" min="0.00001" max="0.1" />
-                            <div class="form-text">Max fraction of 24h volume per order</div>
+                            <input asp-for="VolumeFraction" type="hidden" id="VolumeFraction_raw" />
+                            <input type="number" step="0.001" class="form-control" id="VolumeFraction_pct" min="0.001" max="10" />
+                            <div class="form-text">Max fraction of 24h volume per order (%)</div>
                             <span asp-validation-for="VolumeFraction" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
@@ -479,8 +482,11 @@
     <partial name="_ValidationScriptsPartial" />
     <script src="~/js/admin-forms.js"></script>
     <script>
-        wireThresholdHelper('OpenThreshold', 'open-threshold-pct');
-        wireThresholdHelper('CloseThreshold', 'close-threshold-pct');
-        wireThresholdHelper('AlertThreshold', 'alert-threshold-pct');
+        bindPercentInput('OpenThreshold_pct', 'OpenThreshold_raw', 100);
+        bindPercentInput('CloseThreshold_pct', 'CloseThreshold_raw', 100);
+        bindPercentInput('AlertThreshold_pct', 'AlertThreshold_raw', 100);
+        bindPercentInput('EmergencyCloseSpreadThreshold_pct', 'EmergencyCloseSpreadThreshold_raw', 100);
+        bindPercentInput('RebalanceMinImprovement_pct', 'RebalanceMinImprovement_raw', 100);
+        bindPercentInput('VolumeFraction_pct', 'VolumeFraction_raw', 100);
     </script>
 }

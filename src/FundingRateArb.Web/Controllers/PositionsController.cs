@@ -261,7 +261,7 @@ public class PositionsController : Controller
 
         if (longExchangeName is null || shortExchangeName is null || assetSymbol is null)
         {
-            return Ok(new { error = "Missing exchange or asset data" });
+            return BadRequest(new { error = "Missing exchange or asset data" });
         }
 
         try
@@ -293,12 +293,12 @@ public class PositionsController : Controller
         }
         catch (OperationCanceledException)
         {
-            return Ok(new { error = "Exchange data unavailable (timeout)" });
+            return StatusCode(503, new { error = "Exchange data unavailable (timeout)" });
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Live margin fetch failed for position #{Id}", id);
-            return Ok(new { error = "Exchange data unavailable" });
+            return StatusCode(503, new { error = "Exchange data unavailable" });
         }
     }
 }

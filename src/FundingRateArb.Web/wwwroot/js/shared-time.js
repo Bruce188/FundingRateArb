@@ -4,8 +4,9 @@
  * the element's textContent. Gracefully handles invalid datetime values by leaving the
  * server-rendered text in place.
  */
-function rewriteLocalTimes() {
-    var elements = document.querySelectorAll("time.local-time");
+function rewriteLocalTimes(container) {
+    var root = container || document;
+    var elements = root.querySelectorAll("time.local-time:not([data-local-done])");
     for (var i = 0; i < elements.length; i++) {
         var el = elements[i];
         var dt = el.getAttribute("datetime");
@@ -19,6 +20,7 @@ function rewriteLocalTimes() {
                 timeZoneName: "short"
             });
             el.textContent = fmt.format(date);
+            el.setAttribute("data-local-done", "1");
         } catch (e) {
             // leave server-rendered text in place
         }

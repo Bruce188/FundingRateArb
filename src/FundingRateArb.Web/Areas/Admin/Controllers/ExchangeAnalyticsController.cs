@@ -56,7 +56,7 @@ public class ExchangeAnalyticsController : Controller
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Manual CoinGlass fetch failed");
-            TempData["Error"] = $"CoinGlass fetch failed: {ex.Message}";
+            TempData["Error"] = "CoinGlass fetch failed. Check logs for details.";
         }
 
         return RedirectToAction(nameof(Index));

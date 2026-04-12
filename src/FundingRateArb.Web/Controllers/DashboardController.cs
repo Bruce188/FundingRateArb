@@ -30,6 +30,7 @@ public class DashboardController : Controller
     private readonly ICircuitBreakerManager _circuitBreakerManager;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMarketDataCache _marketDataCache;
+    private readonly IBalanceAggregator _balanceAggregator;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
     private const string AuthenticatedOpportunityCacheKey = "dashboard:auth:opportunities";
@@ -43,7 +44,8 @@ public class DashboardController : Controller
         IMemoryCache cache,
         ICircuitBreakerManager circuitBreakerManager,
         IServiceScopeFactory scopeFactory,
-        IMarketDataCache marketDataCache)
+        IMarketDataCache marketDataCache,
+        IBalanceAggregator balanceAggregator)
     {
         _uow = uow;
         _logger = logger;
@@ -54,6 +56,7 @@ public class DashboardController : Controller
         _circuitBreakerManager = circuitBreakerManager;
         _scopeFactory = scopeFactory;
         _marketDataCache = marketDataCache;
+        _balanceAggregator = balanceAggregator;
     }
 
     [AllowAnonymous]
@@ -270,9 +273,7 @@ public class DashboardController : Controller
             BalanceSnapshotDto? initialBalances = null;
             try
             {
-                using var balanceScope = _scopeFactory.CreateScope();
-                var aggregator = balanceScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
-                initialBalances = await aggregator.GetBalanceSnapshotAsync(userId!, ct);
+                initialBalances = await _balanceAggregator.GetBalanceSnapshotAsync(userId!, ct);
             }
             catch (Exception ex)
             {

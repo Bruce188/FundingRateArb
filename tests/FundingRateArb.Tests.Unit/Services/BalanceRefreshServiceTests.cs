@@ -72,4 +72,40 @@ public class BalanceRefreshServiceTests
         // Assert
         mockNotifier.Verify(n => n.PushBalanceUpdateAsync(It.IsAny<string>(), It.IsAny<BalanceSnapshotDto>()), Times.Never);
     }
+
+    [Fact]
+    public async Task RefreshBalancesAsync_ContinuesOnPerUserFailure()
+    {
+        // Arrange: two users, aggregator throws for first user
+        var mockAggregator = new Mock<IBalanceAggregator>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockUserConfigRepo = new Mock<IUserConfigurationRepository>();
+
+        var snapshot2 = new BalanceSnapshotDto();
+        mockUserConfigRepo.Setup(r => r.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(new List<string> { "user-1", "user-2" });
+        mockUow.Setup(u => u.UserConfigurations).Returns(mockUserConfigRepo.Object);
+
+        mockAggregator.Setup(a => a.GetBalanceSnapshotAsync("user-1", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange API unreachable"));
+        mockAggregator.Setup(a => a.GetBalanceSnapshotAsync("user-2", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(snapshot2);
+
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddScoped<IUnitOfWork>(_ => mockUow.Object);
+        serviceCollection.AddScoped<IBalanceAggregator>(_ => mockAggregator.Object);
+        serviceCollection.AddScoped<ISignalRNotifier>(_ => mockNotifier.Object);
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+        var scopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
+
+        var sut = new BalanceRefreshService(scopeFactory, NullLogger<BalanceRefreshService>.Instance);
+
+        // Act
+        await sut.RefreshBalancesAsync(CancellationToken.None);
+
+        // Assert: user-1 failure should not prevent user-2 from being pushed
+        mockNotifier.Verify(n => n.PushBalanceUpdateAsync("user-1", It.IsAny<BalanceSnapshotDto>()), Times.Never);
+        mockNotifier.Verify(n => n.PushBalanceUpdateAsync("user-2", snapshot2), Times.Once);
+    }
 }

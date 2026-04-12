@@ -784,4 +784,46 @@ public class SettingsControllerTests
         result.Should().BeOfType<RedirectToActionResult>();
         config.MaxLeverageCap.Should().BeNull("null clears the per-user override");
     }
+
+    [Fact]
+    public async Task Configuration_Post_MaxLeverageCapWithinGlobal_Persists()
+    {
+        SetupAuthenticatedUser();
+        var tightGlobal = new BotConfiguration { MaxLeverageCap = 10 };
+        _mockBotConfigRepo.Setup(b => b.GetActiveAsync()).ReturnsAsync(tightGlobal);
+
+        var config = new UserConfiguration { UserId = "test-user-id" };
+        _mockSettings.Setup(s => s.GetOrCreateConfigAsync("test-user-id")).ReturnsAsync(config);
+
+        var model = new UserConfigViewModel
+        {
+            IsEnabled = false,
+            OpenThreshold = 0.0002m,
+            CloseThreshold = 0.00005m,
+            AlertThreshold = 0.00015m,
+            DefaultLeverage = 5,
+            TotalCapitalUsdc = 100m,
+            MaxCapitalPerPosition = 0.5m,
+            MaxConcurrentPositions = 1,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 48,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 12,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            MaxLeverageCap = 5, // within global cap of 10
+        };
+
+        var result = await _controller.Configuration(model);
+
+        result.Should().BeOfType<RedirectToActionResult>();
+        config.MaxLeverageCap.Should().Be(5, "value within global cap should be persisted");
+    }
 }

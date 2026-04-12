@@ -38,6 +38,7 @@ public class DashboardControllerTests
     private readonly Mock<IServiceScope> _mockScope;
     private readonly Mock<IServiceProvider> _mockScopeProvider;
     private readonly Mock<IMarketDataCache> _mockMarketDataCache;
+    private readonly Mock<IBalanceAggregator> _mockBalanceAggregator;
     private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
@@ -101,7 +102,9 @@ public class DashboardControllerTests
         _mockMarketDataCache = new Mock<IMarketDataCache>();
         _mockMarketDataCache.Setup(m => m.GetLastFetchTime()).Returns((DateTime?)null);
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+        _mockBalanceAggregator = new Mock<IBalanceAggregator>();
+
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -937,7 +940,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
             new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
@@ -987,7 +990,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
 
         // Wire an HttpContext whose RequestAborted is already cancelled so the
         // new catch clause's `when` guard fires.
@@ -1066,7 +1069,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
 
         // RequestAborted stays UNCANCELLED so the new catch's `when` guard is false
         // and the exception must fall through.
@@ -1092,8 +1095,7 @@ public class DashboardControllerTests
     [Fact]
     public async Task Index_ReturnsViewModelWithInitialBalances_WhenAggregatorReturnsSnapshot()
     {
-        // Arrange: register IBalanceAggregator on the scoped service provider
-        var mockAggregator = new Mock<IBalanceAggregator>();
+        // Arrange: IBalanceAggregator is now constructor-injected
         var snapshot = new BalanceSnapshotDto
         {
             TotalAvailableUsdc = 1000m,
@@ -1103,9 +1105,8 @@ public class DashboardControllerTests
                 new() { ExchangeName = "Lighter", AvailableUsdc = 400m },
             }
         };
-        mockAggregator.Setup(a => a.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+        _mockBalanceAggregator.Setup(a => a.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(snapshot);
-        _mockScopeProvider.Setup(p => p.GetService(typeof(IBalanceAggregator))).Returns(mockAggregator.Object);
 
         // Act
         var result = await _controller.Index(CancellationToken.None);
@@ -1116,5 +1117,22 @@ public class DashboardControllerTests
         model.InitialBalances.Should().NotBeNull();
         model.InitialBalances!.TotalAvailableUsdc.Should().Be(1000m);
         model.InitialBalances.Balances.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Index_ReturnsViewModelWithNullBalances_WhenAggregatorThrows()
+    {
+        // NB6: When IBalanceAggregator.GetBalanceSnapshotAsync throws,
+        // InitialBalances stays null (graceful degradation, not a 500 error)
+        _mockBalanceAggregator.Setup(a => a.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Exchange API unreachable"));
+
+        // Act
+        var result = await _controller.Index(CancellationToken.None);
+
+        // Assert: should return view successfully with null balances, not throw
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.InitialBalances.Should().BeNull("aggregator failure should result in null, not a 500 error");
     }
 }

@@ -638,7 +638,7 @@ public class PositionsControllerTests
     }
 
     [Fact]
-    public async Task GetLiveMargin_ReturnsGracefully_OnTimeout()
+    public async Task GetLiveMargin_Returns503WithErrorMessage_OnTimeout()
     {
         var position = new ArbitragePosition
         {
@@ -660,8 +660,89 @@ public class PositionsControllerTests
         var controller = CreateControllerForUser(TraderUser("trader-id"));
         var result = await controller.GetLiveMargin(99, CancellationToken.None);
 
-        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
-        okResult.Value.Should().NotBeNull();
+        var statusResult = result.Should().BeOfType<ObjectResult>().Subject;
+        statusResult.StatusCode.Should().Be(503);
+        statusResult.Value.Should().NotBeNull();
+        statusResult.Value!.ToString().Should().Contain("timeout");
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsUnauthorized_WhenNoUserId()
+    {
+        // B2: No authenticated user
+        var anonUser = new ClaimsPrincipal(new ClaimsIdentity());
+        var controller = CreateControllerForUser(anonUser);
+
+        var result = await controller.GetLiveMargin(1, CancellationToken.None);
+
+        result.Should().BeOfType<UnauthorizedResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsNotFound_WhenPositionDoesNotExist()
+    {
+        // B2: Nonexistent position
+        _mockPositions.Setup(p => p.GetByIdAsync(999)).ReturnsAsync((ArbitragePosition?)null);
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        var result = await controller.GetLiveMargin(999, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsForbid_WhenUserDoesNotOwnPosition()
+    {
+        // B2: Non-admin user accessing another user's position
+        var position = new ArbitragePosition
+        {
+            Id = 42, UserId = "other-user",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(42)).ReturnsAsync(position);
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+
+        var result = await controller.GetLiveMargin(42, CancellationToken.None);
+
+        result.Should().BeOfType<ForbidResult>();
+    }
+
+    [Fact]
+    public async Task GetLiveMargin_SameExchange_CallsConnectorOnce()
+    {
+        // NB4: When both legs are on the same exchange, only one connector call should be made
+        var position = new ArbitragePosition
+        {
+            Id = 55, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 1, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(55)).ReturnsAsync(position);
+
+        var marginState = new FundingRateArb.Application.DTOs.MarginStateDto
+        {
+            MarginUtilizationPct = 0.5m,
+            LiquidationPrice = 2500m,
+            MarginUsed = 100m,
+        };
+        var connector = new Mock<IExchangeConnector>();
+        connector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(marginState);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(connector.Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(55, CancellationToken.None);
+
+        result.Should().BeOfType<OkObjectResult>();
+        // When same exchange, GetConnector should be called once (not twice)
+        _mockConnectorFactory.Verify(f => f.GetConnector("Hyperliquid"), Times.Once);
+        connector.Verify(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

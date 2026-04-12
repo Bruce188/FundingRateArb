@@ -59,17 +59,21 @@ public class BalanceRefreshService : BackgroundService
 
         var userIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
 
-        foreach (var userId in userIds)
+        await Parallel.ForEachAsync(userIds, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 4,
+            CancellationToken = ct,
+        }, async (userId, token) =>
         {
             try
             {
-                var snapshot = await aggregator.GetBalanceSnapshotAsync(userId, ct);
+                var snapshot = await aggregator.GetBalanceSnapshotAsync(userId, token);
                 await notifier.PushBalanceUpdateAsync(userId, snapshot);
             }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Failed to refresh balance for user {UserId}", userId);
             }
-        }
+        });
     }
 }
