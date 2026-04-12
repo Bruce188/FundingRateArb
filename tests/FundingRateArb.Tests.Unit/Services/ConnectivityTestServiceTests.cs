@@ -1000,6 +1000,27 @@ public class ConnectivityTestServiceTests
     }
 
     [Fact]
+    public async Task DryRun_ZeroBalance_LogsWarning()
+    {
+        var exchange = CreateTestExchange();
+        var credential = CreateTestCredential();
+        SetupExchangeAndCredential(exchange, credential);
+        CreateDryRunConnector(balance: 0m);
+
+        var logMessages = new List<string>();
+        _mockDashboardClient
+            .Setup(d => d.ReceiveConnectivityLog(It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<string, string>((_, msg) => logMessages.Add(msg))
+            .Returns(Task.CompletedTask);
+
+        var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: true);
+
+        result.Success.Should().BeTrue("a zero balance is not a failure");
+        logMessages.Should().Contain(msg => msg.Contains("WARNING") && msg.Contains("quote asset"),
+            "zero balance should produce a warning about the expected quote asset");
+    }
+
+    [Fact]
     public async Task ConcurrentLock_PreventsOverlappingTests()
     {
         var exchange = CreateTestExchange();

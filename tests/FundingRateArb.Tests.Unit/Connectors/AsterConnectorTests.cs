@@ -1054,6 +1054,87 @@ public class AsterConnectorTests
             "only USDT balance should be counted, not the sum of all assets");
     }
 
+    [Fact]
+    public async Task GetAvailableBalance_EmptyResponse_ReturnsZero()
+    {
+        var balanceResult = SuccessBalances([]);
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(balanceResult);
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var available = await sut.GetAvailableBalanceAsync();
+
+        available.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetAvailableBalance_NonUsdtAssetsOnly_ReturnsZero()
+    {
+        var balances = new[]
+        {
+            new AsterBalance { Asset = "BTC", AvailableBalance = 1.5m },
+            new AsterBalance { Asset = "ETH", AvailableBalance = 10m },
+        };
+        var balanceResult = SuccessBalances(balances);
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(balanceResult);
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var available = await sut.GetAvailableBalanceAsync();
+
+        available.Should().Be(0m,
+            "no USDT or fallback asset present, should return zero");
+    }
+
+    [Fact]
+    public async Task GetAvailableBalance_UsdcFallback_ReturnsUsdcBalance()
+    {
+        var balances = new[]
+        {
+            new AsterBalance { Asset = "USDC", AvailableBalance = 38.49m },
+            new AsterBalance { Asset = "BTC", AvailableBalance = 1.0m },
+        };
+        var balanceResult = SuccessBalances(balances);
+
+        var accountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        accountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(balanceResult);
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Account).Returns(accountMock.Object);
+
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new AsterConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var available = await sut.GetAvailableBalanceAsync();
+
+        available.Should().Be(38.49m,
+            "USDC should be used as fallback when no USDT entries exist");
+    }
+
     // ── B-W3: SetLeverage failure is logged, order still proceeds ─────────────
 
     [Fact]

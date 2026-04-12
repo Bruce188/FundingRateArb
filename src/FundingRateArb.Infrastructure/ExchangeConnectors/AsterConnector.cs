@@ -571,9 +571,48 @@ public class AsterConnector : IExchangeConnector, IDisposable
             throw new InvalidOperationException(result.Error?.Message ?? "Unknown error");
         }
 
-        return result.Data!
+        var entries = result.Data!;
+
+        _logger.LogDebug("Aster balance API returned {Count} entries", entries.Length);
+        foreach (var entry in entries)
+        {
+            _logger.LogDebug("  Asset={Asset} AvailableBalance={Balance}", entry.Asset, entry.AvailableBalance);
+        }
+
+        if (entries.Length == 0)
+        {
+            _logger.LogWarning("Aster balance API returned empty response");
+            return 0m;
+        }
+
+        var usdtEntries = entries
             .Where(b => b.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase))
-            .Sum(b => b.AvailableBalance);
+            .ToArray();
+
+        if (usdtEntries.Length > 0)
+        {
+            return usdtEntries.Sum(b => b.AvailableBalance);
+        }
+
+        var assetList = string.Join(", ", entries.Select(b => b.Asset));
+        _logger.LogWarning("Aster balance API returned {Count} entries but no USDT. Assets found: {AssetList}",
+            entries.Length, assetList);
+
+        var fallbackAssets = new[] { "USDC", "USD" };
+        foreach (var fallbackAsset in fallbackAssets)
+        {
+            var fallbackEntries = entries
+                .Where(b => b.Asset.Equals(fallbackAsset, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            if (fallbackEntries.Length > 0)
+            {
+                _logger.LogInformation("Using fallback asset {Asset} for balance", fallbackAsset);
+                return fallbackEntries.Sum(b => b.AvailableBalance);
+            }
+        }
+
+        return 0m;
     }
 
     public async Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default)
