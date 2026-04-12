@@ -106,7 +106,7 @@ public class BalanceAggregator : IBalanceAggregator
                     ExchangeId = exchangeId,
                     ExchangeName = exchangeName,
                     AvailableUsdc = 0m,
-                    ErrorMessage = SanitizeErrorMessage(ex),
+                    ErrorMessage = SanitizeErrorMessage(ex, exchangeName),
                     FetchedAt = now,
                 });
             }
@@ -123,10 +123,16 @@ public class BalanceAggregator : IBalanceAggregator
         return snapshot;
     }
 
-    private static string SanitizeErrorMessage(Exception ex) => ex switch
+    private static string SanitizeErrorMessage(Exception ex, string exchangeName) => ex switch
     {
-        HttpRequestException => "Exchange unreachable",
+        HttpRequestException => $"{exchangeName}: unreachable",
         InvalidOperationException when ex.Message == CredentialsNotConfiguredMessage => CredentialsNotConfiguredMessage,
-        _ => "Balance fetch failed",
+        InvalidOperationException when ex.Message.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("-2015", StringComparison.Ordinal)
+            || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
+            => $"{exchangeName}: API key invalid or expired",
+        InvalidOperationException when ex.Message.Contains("No recognized quote asset", StringComparison.Ordinal)
+            => $"{exchangeName}: no recognized quote asset (USDT/USDC/USD) found",
+        _ => $"{exchangeName}: balance fetch failed",
     };
 }

@@ -172,7 +172,7 @@ public class BalanceAggregatorTests
 
         result.Balances.Should().HaveCount(1);
         result.Balances[0].ErrorMessage.Should().NotBeNull();
-        result.Balances[0].ErrorMessage.Should().Be("Balance fetch failed", "raw exception messages must be sanitized");
+        result.Balances[0].ErrorMessage.Should().Be("Hyperliquid: balance fetch failed", "raw exception messages must be sanitized and include exchange name");
         result.Balances[0].AvailableUsdc.Should().Be(0m);
     }
 
@@ -246,7 +246,7 @@ public class BalanceAggregatorTests
         var result = await _sut.GetBalanceSnapshotAsync("user1");
 
         result.Balances.Should().HaveCount(1);
-        result.Balances[0].ErrorMessage.Should().Be("Exchange unreachable", "HttpRequestException must be sanitized to hide internal details");
+        result.Balances[0].ErrorMessage.Should().Be("Hyperliquid: unreachable", "HttpRequestException must be sanitized to hide internal details");
         result.Balances[0].AvailableUsdc.Should().Be(0m);
     }
 
@@ -284,6 +284,84 @@ public class BalanceAggregatorTests
         // Structural property: TotalAvailableUsdc must equal the sum of non-error balances
         result.Balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc)
             .Should().Be(result.TotalAvailableUsdc, "TotalAvailableUsdc must only sum non-error balances");
+    }
+
+    [Fact]
+    public async Task FailedExchange_ErrorMessageIncludesExchangeName()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new Exception("something unexpected"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().StartWith("Aster:", "error message must include exchange name");
+    }
+
+    [Theory]
+    [InlineData("Invalid API-key, IP, or permissions for action")]
+    [InlineData("Error code -2015: invalid key")]
+    [InlineData("Unauthorized access denied")]
+    public async Task AuthError_ProducesSpecificMessage(string errorMessage)
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException(errorMessage));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Be("Aster: API key invalid or expired");
+    }
+
+    [Fact]
+    public async Task NoRecognizedQuoteAsset_ProducesSpecificMessage()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("No recognized quote asset (USDT/USDC/USD) in balance response. Assets found: BNB, ETH"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Be("Aster: no recognized quote asset (USDT/USDC/USD) found");
     }
 
     [Fact]

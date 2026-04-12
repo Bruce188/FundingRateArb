@@ -219,6 +219,11 @@ public class ConnectivityTestService : IConnectivityTestService
             balance = await connector.GetAvailableBalanceAsync(ct);
             _logger.LogTrace("[ConnectivityTest] [{Exchange}] Balance: ${Balance:F2}", exchangeName, balance);
             await log($"Balance: ${balance:F2} USDC");
+
+            if (balance == 0m)
+            {
+                await log("WARNING: Balance is $0.00 — the expected quote asset (USDT) may not be present in the API response. Check exchange asset naming.");
+            }
         }
         catch (Exception ex)
         {
