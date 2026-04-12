@@ -311,8 +311,11 @@ public class BalanceAggregatorTests
         result.Balances[0].ErrorMessage.Should().StartWith("Aster:", "error message must include exchange name");
     }
 
-    [Fact]
-    public async Task AuthError_ProducesSpecificMessage()
+    [Theory]
+    [InlineData("Invalid API-key, IP, or permissions for action")]
+    [InlineData("Error code -2015: invalid key")]
+    [InlineData("Unauthorized access denied")]
+    public async Task AuthError_ProducesSpecificMessage(string errorMessage)
     {
         var creds = new List<UserExchangeCredential>
         {
@@ -325,7 +328,7 @@ public class BalanceAggregatorTests
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+            .ThrowsAsync(new InvalidOperationException(errorMessage));
 
         _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
             .ReturnsAsync(mockConnector.Object);

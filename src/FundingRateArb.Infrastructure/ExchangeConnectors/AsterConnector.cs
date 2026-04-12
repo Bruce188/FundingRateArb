@@ -574,9 +574,12 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var entries = result.Data!;
 
         _logger.LogDebug("Aster balance API returned {Count} entries", entries.Length);
-        foreach (var entry in entries)
+        if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logger.LogDebug("  Asset={Asset} AvailableBalance={Balance}", entry.Asset, entry.AvailableBalance);
+            foreach (var entry in entries)
+            {
+                _logger.LogDebug("  Asset={Asset} AvailableBalance={Balance}", entry.Asset, entry.AvailableBalance);
+            }
         }
 
         if (entries.Length == 0)
@@ -612,7 +615,8 @@ public class AsterConnector : IExchangeConnector, IDisposable
             }
         }
 
-        return 0m;
+        throw new InvalidOperationException(
+            $"No recognized quote asset (USDT/USDC/USD) in balance response. Assets found: {assetList}");
     }
 
     public async Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default)
