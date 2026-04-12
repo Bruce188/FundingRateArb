@@ -108,7 +108,10 @@ public class TradeAnalyticsService : ITradeAnalyticsService
     internal async Task<List<CounterfactualPoint>> ComputeCounterfactualPnlAsync(
         ArbitragePosition position, decimal actualPnl, CancellationToken ct)
     {
-        if (!position.ClosedAt.HasValue) return [];
+        if (!position.ClosedAt.HasValue)
+        {
+            return [];
+        }
 
         var closeTime = position.ClosedAt.Value;
         var maxWindow = TimeSpan.FromHours(48);

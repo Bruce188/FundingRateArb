@@ -251,11 +251,21 @@ public class PositionsController : Controller
     public async Task<IActionResult> GetLiveMargin(int id, CancellationToken ct)
     {
         var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        if (userId is null) return Unauthorized();
+        if (userId is null)
+        {
+            return Unauthorized();
+        }
 
         var position = await _uow.Positions.GetByIdAsync(id);
-        if (position is null) return NotFound();
-        if (!User.IsInRole("Admin") && position.UserId != userId) return Forbid();
+        if (position is null)
+        {
+            return NotFound();
+        }
+
+        if (!User.IsInRole("Admin") && position.UserId != userId)
+        {
+            return Forbid();
+        }
 
         var longExchangeName = position.LongExchange?.Name;
         var shortExchangeName = position.ShortExchange?.Name;
