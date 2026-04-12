@@ -76,7 +76,14 @@ try
     // Reading from the IHostEnvironment service inside the lambda sees the final resolved value.
     // The App Insights connection string, by contrast, is stable once Key Vault has merged into
     // builder.Configuration, so we hoist a single read here and capture it in the lambda closure.
+    // Check the nested config key first (Key Vault / appsettings), then fall back to the flat
+    // env var that Azure App Service injects (APPLICATIONINSIGHTS_CONNECTION_STRING uses single
+    // underscores, which ASP.NET Core does NOT map to the nested "ApplicationInsights:ConnectionString").
     var aiConnectionString = builder.Configuration["ApplicationInsights:ConnectionString"];
+    if (string.IsNullOrWhiteSpace(aiConnectionString))
+    {
+        aiConnectionString = Environment.GetEnvironmentVariable("APPLICATIONINSIGHTS_CONNECTION_STRING");
+    }
     builder.Services.AddSerilog((sp, lc) =>
     {
         var env = sp.GetRequiredService<IHostEnvironment>();

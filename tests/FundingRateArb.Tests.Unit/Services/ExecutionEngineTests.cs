@@ -717,7 +717,7 @@ public class ExecutionEngineTests
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeFalse();
-        result.Error.Should().Contain("Pre-flight balance check failed");
+        result.Error.Should().Contain("Exchange connectivity error");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
             It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
