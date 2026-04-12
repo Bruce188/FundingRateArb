@@ -225,38 +225,38 @@ public class SettingsController : Controller
 
         // Validate credentials by attempting a balance fetch
         string? validationWarning = null;
+        IExchangeConnector? validationConnector = null;
         try
         {
             var credential = await _settings.GetCredentialAsync(userId, exchangeId);
             if (credential is not null)
             {
                 var decrypted = _settings.DecryptCredential(credential);
-                var connector = await _connectorFactory.CreateForUserAsync(
+                validationConnector = await _connectorFactory.CreateForUserAsync(
                     exchange?.Name ?? "", decrypted.ApiKey, decrypted.ApiSecret,
                     decrypted.WalletAddress, decrypted.PrivateKey,
                     decrypted.SubAccountAddress, decrypted.ApiKeyIndex);
 
-                if (connector is not null)
+                if (validationConnector is not null)
                 {
                     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                    await connector.GetAvailableBalanceAsync(cts.Token);
+                    await validationConnector.GetAvailableBalanceAsync(cts.Token);
                 }
             }
         }
         catch (Exception ex)
         {
-            validationWarning = $"Credentials saved but validation failed: {ex.Message}";
-            if (validationWarning.Length > 200)
-            {
-                validationWarning = validationWarning[..200] + "...";
-            }
-
+            validationWarning = "Credentials saved but validation failed. Check your API key and permissions.";
             _logger.LogWarning(ex, "Credential validation failed for exchange {ExchangeId} after save", exchangeId);
+        }
+        finally
+        {
+            (validationConnector as IDisposable)?.Dispose();
         }
 
         if (validationWarning is not null)
         {
-            TempData["Success"] = validationWarning;
+            TempData["Error"] = validationWarning;
         }
         else
         {

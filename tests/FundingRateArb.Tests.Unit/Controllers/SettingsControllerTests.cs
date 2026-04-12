@@ -875,4 +875,82 @@ public class SettingsControllerTests
         _mockSettings.Verify(s => s.GetOrCreateConfigAsync(It.IsAny<string>()), Times.Never,
             "entity should not be loaded when MaxLeverageCap validation fails before mutation");
     }
+
+    // ── SaveApiKey validation tests (B4) ─────────────────────────────────────────
+
+    [Fact]
+    public async Task SaveApiKey_WithValidCredentials_SetsValidatedSuccessMessage()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+        var exchange = new Exchange { Id = 20, Name = "Binance", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 20 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 20))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("testkey", "testsecret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "testkey", "testsecret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 20, apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: null, privateKey: null,
+            subAccountAddress: null, apiKeyIndex: null);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["Success"].Should().Be("API key saved and validated successfully.");
+        _controller.TempData["Error"].Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SaveApiKey_WhenValidationFails_SetsWarningInErrorTempData()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+        var exchange = new Exchange { Id = 20, Name = "Binance", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 20 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 20))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("badkey", "badsecret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "badkey", "badsecret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 20, apiKey: "badkey", apiSecret: "badsecret",
+            walletAddress: null, privateKey: null,
+            subAccountAddress: null, apiKeyIndex: null);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        // B2: generic message, no raw ex.Message
+        var errorMsg = _controller.TempData["Error"] as string;
+        errorMsg.Should().NotBeNull();
+        errorMsg.Should().Contain("validation failed");
+        errorMsg.Should().NotContain("Invalid API-key");
+        // NB1: TempData["Success"] should NOT be set on validation failure
+        _controller.TempData["Success"].Should().BeNull();
+        // Credentials should still be saved despite validation failure
+        _mockSettings.Verify(s => s.SaveCredentialAsync(
+            "test-user-id", 20, "badkey", "badsecret", null, null, null, null), Times.Once);
+    }
 }

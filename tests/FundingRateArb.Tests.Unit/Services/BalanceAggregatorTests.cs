@@ -484,6 +484,33 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public async Task NonAuthError_DoesNotPersistToCredential()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        await _sut.GetBalanceSnapshotAsync("user1");
+
+        // Non-auth errors (HttpRequestException) should NOT be persisted to the credential
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync("user1", 1, It.Is<string>(s => s != null), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>

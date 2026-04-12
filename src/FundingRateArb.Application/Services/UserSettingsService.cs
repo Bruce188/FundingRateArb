@@ -193,6 +193,12 @@ public class UserSettingsService : IUserSettingsService
             return;
         }
 
+        // Short-circuit: skip DB write when value is unchanged
+        if (credential.LastError == error)
+        {
+            return;
+        }
+
         credential.LastError = error;
         credential.LastErrorAt = error is not null ? DateTime.UtcNow : null;
         _uow.UserCredentials.Update(credential);
