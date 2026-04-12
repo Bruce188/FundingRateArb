@@ -765,6 +765,14 @@
                 span.className = "text-warning balance-error";
                 span.title = b.errorMessage;
                 span.textContent = b.exchangeName + ": \u26A0 error";
+                if (b.errorMessage.toLowerCase().includes("api key invalid")) {
+                    var settingsLink = document.createElement("a");
+                    settingsLink.href = "/Settings";
+                    settingsLink.className = "text-warning ms-1";
+                    settingsLink.textContent = "\u2014 update in Settings";
+                    span.appendChild(settingsLink);
+                    span.title = b.errorMessage + " \u2014 update in Settings";
+                }
             } else {
                 span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
                 span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
@@ -12,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.BackgroundServices;
 
-public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
+public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
@@ -960,24 +961,83 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     }
                 }
 
-                // Target circuit breaker to the failing exchange
+                // Target circuit breaker to the failing exchange — collect alerts, batch SaveAsync
+                var circuitBreakerAlertAdded = false;
                 if (failingExchangeId.HasValue)
                 {
-                    _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    if (circuitJustOpened)
+                    {
+                        var exchangeName = opp.LongExchangeId == failingExchangeId.Value ? opp.LongExchangeName : opp.ShortExchangeName;
+                        var duration = ctx.GlobalConfig.ExchangeCircuitBreakerMinutes;
+                        ctx.Uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.ExchangeCircuitBreaker,
+                            Severity = AlertSeverity.Critical,
+                            Message = $"{exchangeName} circuit breaker opened — exchange disabled for {duration} minutes",
+                        });
+                        circuitBreakerAlertAdded = true;
+                    }
                 }
                 else
                 {
-                    _circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig);
+                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig))
+                    {
+                        ctx.Uow.Alerts.Add(new Alert
+                        {
+                            UserId = userId,
+                            Type = AlertType.ExchangeCircuitBreaker,
+                            Severity = AlertSeverity.Critical,
+                            Message = $"{opp.LongExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
+                        });
+                        circuitBreakerAlertAdded = true;
+                    }
+
                     if (opp.ShortExchangeId != opp.LongExchangeId)
                     {
-                        _circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig);
+                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig))
+                        {
+                            ctx.Uow.Alerts.Add(new Alert
+                            {
+                                UserId = userId,
+                                Type = AlertType.ExchangeCircuitBreaker,
+                                Severity = AlertSeverity.Critical,
+                                Message = $"{opp.ShortExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
+                            });
+                            circuitBreakerAlertAdded = true;
+                        }
                     }
+                }
+
+                if (circuitBreakerAlertAdded)
+                {
+                    await ctx.Uow.SaveAsync(ct);
                 }
 
                 _logger.LogWarning(
                     "Opportunity {Asset} {Long}/{Short} failed for user {UserId} ({Failures} consecutive). Cooldown until {Until}",
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, failures, DateTime.UtcNow + delay);
                 _logger.LogError("Failed to open position: {Error}", error);
+
+                var failureSeverity = (error?.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("-2015", StringComparison.Ordinal) == true
+                    || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true)
+                    ? "danger" : "warning";
+
+                var sanitizedError = error is not null
+                    ? SecretPattern().Replace(error, "[redacted]")
+                    : "Unknown error";
+                if (sanitizedError.Length > 200)
+                {
+                    sanitizedError = sanitizedError[..200] + "...";
+                }
+
+                await _notifier.PushStatusExplanationAsync(
+                    userId,
+                    $"Trade failed for {opp.AssetSymbol} on {opp.LongExchangeName}/{opp.ShortExchangeName}: {sanitizedError}",
+                    failureSeverity);
+
                 await _notifier.PushNewAlertsAsync(ctx.Uow);
             }
         }
@@ -1177,4 +1237,6 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         return null;
     }
 
+    [GeneratedRegex(@"[A-Za-z0-9]{32,}")]
+    private static partial Regex SecretPattern();
 }

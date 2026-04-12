@@ -14,7 +14,7 @@ public interface ICircuitBreakerManager
     TimeSpan RotationCooldownDuration { get; }
 
     void SweepExpiredEntries();
-    void IncrementExchangeFailure(int exchangeId, BotConfiguration config);
+    bool IncrementExchangeFailure(int exchangeId, BotConfiguration config);
     void IncrementAssetExchangeFailure(int assetId, int exchangeId);
     void RecordCloseResult(decimal realizedPnl, string? userId);
     IReadOnlyList<CircuitBreakerStatusDto> GetCircuitBreakerStates();

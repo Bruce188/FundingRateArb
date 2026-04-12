@@ -2457,4 +2457,192 @@ public class BotOrchestratorTests
         _circuitBreaker.IsOnCooldown(cooldownKey, out _).Should().BeFalse(
             "if ClosePositionAsync fails to mark the position as Closed with a realized PnL, no cooldown should be applied");
     }
+
+    // ── Trade failure status explanation notifications ─────────────────────────
+
+    [Fact]
+    public async Task GenericOpenFailure_CircuitBreakerTrips_CreatesAlert()
+    {
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+        };
+
+        SetupCircuitBreakerScenario(opp, openSuccess: false);
+
+        var addedAlerts = new List<Alert>();
+        _mockAlerts.Setup(a => a.Add(It.IsAny<Alert>()))
+            .Callback<Alert>(alert => addedAlerts.Add(alert));
+
+        // Fail 3 times (threshold = 3) to trip the circuit breaker
+        for (int i = 0; i < 3; i++)
+        {
+            _circuitBreaker.FailedOpCooldowns.Clear();
+            await _sut.RunCycleAsync(CancellationToken.None);
+        }
+
+        addedAlerts.Should().Contain(a =>
+            a.Type == AlertType.ExchangeCircuitBreaker
+            && a.Severity == AlertSeverity.Critical
+            && a.Message.Contains("circuit breaker opened"));
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_PushesStatusExplanation_WarningSeverity()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Order rejected by Hyperliquid: rate limit"));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockNotifier.Verify(n => n.PushStatusExplanationAsync(
+            TestUserId,
+            It.Is<string>(s => s.Contains("Trade failed") && s.Contains("ETH")),
+            "warning"), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("Invalid API-key format for exchange")]
+    [InlineData("Error code -2015: invalid api key")]
+    [InlineData("Unauthorized access to trading endpoint")]
+    public async Task GenericOpenFailure_AuthError_PushesDangerSeverity(string errorMessage)
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, errorMessage));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockNotifier.Verify(n => n.PushStatusExplanationAsync(
+            TestUserId,
+            It.Is<string>(s => s.Contains("Trade failed") && s.Contains("ETH")),
+            "danger"), Times.Once);
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_LongError_TruncatesAndRedacts()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var fakeApiKey = new string('A', 40);
+        // Use non-alphanumeric filler so only the fake API key triggers redaction
+        var longError = $"Order rejected: key={fakeApiKey} " + string.Concat(Enumerable.Repeat("err-", 60));
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, longError));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockNotifier.Verify(n => n.PushStatusExplanationAsync(
+            TestUserId,
+            It.Is<string>(s =>
+                s.Contains("[redacted]")
+                && !s.Contains(fakeApiKey)
+                && s.EndsWith("...")),
+            "warning"), Times.Once);
+    }
+
+    [Fact]
+    public async Task GenericOpenFailure_NullError_PushesUnknownError()
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, (string?)null));
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        _mockNotifier.Verify(n => n.PushStatusExplanationAsync(
+            TestUserId,
+            It.Is<string>(s => s.Contains("Unknown error")),
+            "warning"), Times.Once);
+    }
 }
