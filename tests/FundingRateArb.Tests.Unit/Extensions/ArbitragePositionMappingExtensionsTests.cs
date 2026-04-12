@@ -98,6 +98,8 @@ public class ArbitragePositionMappingExtensionsTests
         dto.Status.Should().Be(PositionStatus.Open);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
         dto.ClosedAt.Should().Be(new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc));
+        dto.CloseReason.Should().Be(CloseReason.PnlTargetReached);
+        dto.CloseReasonDisplayName.Should().Be("Pnl Target Reached");
         dto.WarningLevel.Should().Be(WarningLevel.None);
         dto.WarningTypes.Should().BeEmpty();
     }
@@ -464,6 +466,10 @@ public class ArbitragePositionMappingExtensionsTests
     [InlineData(CloseReason.ExchangeDrift, "Exchange Drift")]
     [InlineData(CloseReason.StablecoinDepeg, "Stablecoin Depeg")]
     [InlineData(CloseReason.PriceFeedLost, "Price Feed Lost")]
+    [InlineData(CloseReason.Rebalanced, "Rebalanced")]
+    [InlineData(CloseReason.Manual, "Manual")]
+    [InlineData(CloseReason.EmergencyLegFailed, "Emergency Leg Failed")]
+    [InlineData(CloseReason.Rotation, "Rotation")]
     public void ToDisplayName_AllReasons_ProducesReadableText(CloseReason reason, string expected)
     {
         ArbitragePositionMappingExtensions.ToDisplayName(reason).Should().Be(expected);
