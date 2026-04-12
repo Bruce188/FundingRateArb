@@ -10,6 +10,7 @@ public class BalanceAggregator : IBalanceAggregator
 {
     internal const string CredentialsNotConfiguredMessage = "Credentials not configured";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan AuthErrorBackoff = TimeSpan.FromMinutes(5);
 
     private readonly IUserSettingsService _userSettings;
     private readonly IExchangeConnectorFactory _connectorFactory;
@@ -58,6 +59,23 @@ public class BalanceAggregator : IBalanceAggregator
                 continue;
             }
 
+            // Skip credentials in auth-error backoff
+            if (cred.LastError is not null
+                && cred.LastErrorAt is not null
+                && cred.LastError.Contains("API key invalid", StringComparison.OrdinalIgnoreCase)
+                && DateTime.UtcNow - cred.LastErrorAt.Value < AuthErrorBackoff)
+            {
+                balances.Add(new ExchangeBalanceDto
+                {
+                    ExchangeId = cred.ExchangeId,
+                    ExchangeName = exchangeName,
+                    AvailableUsdc = 0m,
+                    ErrorMessage = cred.LastError,
+                    FetchedAt = DateTime.UtcNow,
+                });
+                continue;
+            }
+
             var decrypted = _userSettings.DecryptCredential(cred);
             var connector = await _connectorFactory.CreateForUserAsync(
                 exchangeName, decrypted.ApiKey, decrypted.ApiSecret,
@@ -96,19 +114,29 @@ public class BalanceAggregator : IBalanceAggregator
                     AvailableUsdc = balance,
                     FetchedAt = now,
                 });
+
+                // Clear credential error on success
+                await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, null, ct);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to fetch balance from {Exchange} for user {UserId}, using 0",
                     exchangeName, userId);
+                var sanitized = SanitizeErrorMessage(ex, exchangeName);
                 balances.Add(new ExchangeBalanceDto
                 {
                     ExchangeId = exchangeId,
                     ExchangeName = exchangeName,
                     AvailableUsdc = 0m,
-                    ErrorMessage = SanitizeErrorMessage(ex, exchangeName),
+                    ErrorMessage = sanitized,
                     FetchedAt = now,
                 });
+
+                // Persist auth errors to credential for backoff tracking
+                if (sanitized.Contains("API key invalid", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, sanitized, ct);
+                }
             }
         }
 

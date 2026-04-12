@@ -221,8 +221,47 @@ public class SettingsController : Controller
         }
 
         await _settings.SaveCredentialAsync(userId, exchangeId, apiKey, apiSecret, walletAddress, privateKey, subAccountAddress, apiKeyIndex);
-        TempData["Success"] = "API key saved successfully.";
         _logger.LogInformation("User {UserId} saved credentials for exchange {ExchangeId}", userId, exchangeId);
+
+        // Validate credentials by attempting a balance fetch
+        string? validationWarning = null;
+        IExchangeConnector? validationConnector = null;
+        try
+        {
+            var credential = await _settings.GetCredentialAsync(userId, exchangeId);
+            if (credential is not null)
+            {
+                var decrypted = _settings.DecryptCredential(credential);
+                validationConnector = await _connectorFactory.CreateForUserAsync(
+                    exchange?.Name ?? "", decrypted.ApiKey, decrypted.ApiSecret,
+                    decrypted.WalletAddress, decrypted.PrivateKey,
+                    decrypted.SubAccountAddress, decrypted.ApiKeyIndex);
+
+                if (validationConnector is not null)
+                {
+                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    await validationConnector.GetAvailableBalanceAsync(cts.Token);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            validationWarning = "Credentials saved but validation failed. Check your API key and permissions.";
+            _logger.LogWarning(ex, "Credential validation failed for exchange {ExchangeId} after save", exchangeId);
+        }
+        finally
+        {
+            (validationConnector as IDisposable)?.Dispose();
+        }
+
+        if (validationWarning is not null)
+        {
+            TempData["Error"] = validationWarning;
+        }
+        else
+        {
+            TempData["Success"] = "API key saved and validated successfully.";
+        }
 
         return RedirectToAction(nameof(ApiKeys));
     }
@@ -305,6 +344,8 @@ public class SettingsController : Controller
             MaskedApiKeyIndex = maskedApiKeyIndex,
             HasLegacyV1Credentials = hasLegacyV1Credentials,
             LastUsedAt = credential?.LastUsedAt,
+            LastError = credential?.LastError,
+            LastErrorAt = credential?.LastErrorAt,
         };
     }
 

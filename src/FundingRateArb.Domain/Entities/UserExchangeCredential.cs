@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace FundingRateArb.Domain.Entities;
 
 public class UserExchangeCredential
@@ -15,6 +17,9 @@ public class UserExchangeCredential
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastUpdatedAt { get; set; }
     public DateTime? LastUsedAt { get; set; }
+    [MaxLength(500)]
+    public string? LastError { get; set; }
+    public DateTime? LastErrorAt { get; set; }
 
     // Navigation
     public ApplicationUser User { get; set; } = null!;

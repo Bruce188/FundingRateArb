@@ -32,6 +32,8 @@ public class UserSettingsService : IUserSettingsService
             existing.EncryptedApiKeyIndex = !string.IsNullOrEmpty(apiKeyIndex) ? _vault.Encrypt(apiKeyIndex) : existing.EncryptedApiKeyIndex;
             existing.IsActive = true;
             existing.LastUpdatedAt = DateTime.UtcNow;
+            existing.LastError = null;
+            existing.LastErrorAt = null;
             _uow.UserCredentials.Update(existing);
         }
         else
@@ -179,6 +181,28 @@ public class UserSettingsService : IUserSettingsService
     {
         var active = await _uow.UserCredentials.GetActiveByUserAsync(userId);
         return active.Count >= 2;
+    }
+
+    // --- Error tracking ---
+
+    public async Task UpdateCredentialErrorAsync(string userId, int exchangeId, string? error, CancellationToken ct = default)
+    {
+        var credential = await _uow.UserCredentials.GetByUserAndExchangeAsync(userId, exchangeId);
+        if (credential is null)
+        {
+            return;
+        }
+
+        // Short-circuit: skip DB write when value is unchanged
+        if (credential.LastError == error)
+        {
+            return;
+        }
+
+        credential.LastError = error;
+        credential.LastErrorAt = error is not null ? DateTime.UtcNow : null;
+        _uow.UserCredentials.Update(credential);
+        await _uow.SaveAsync(ct);
     }
 
     // --- Usage tracking ---

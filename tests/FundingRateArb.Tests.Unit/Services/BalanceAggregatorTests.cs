@@ -365,6 +365,152 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public async Task AuthError_PersistsLastErrorOnCredential()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Binance" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        await _sut.GetBalanceSnapshotAsync("user1");
+
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync("user1", 1, It.Is<string>(s => s.Contains("API key invalid")), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task AuthErrorBackoff_SkipsCredentialWithRecentError()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 1, ExchangeId = 1,
+                Exchange = new Exchange { Id = 1, Name = "Binance" },
+                EncryptedApiKey = "k",
+                LastError = "Binance: API key invalid or expired",
+                LastErrorAt = DateTime.UtcNow.AddMinutes(-2),
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Contain("API key invalid");
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+
+        // Connector should never have been created
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task AuthErrorBackoff_RetriesAfterExpiry()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 1, ExchangeId = 1,
+                Exchange = new Exchange { Id = 1, Name = "Binance" },
+                EncryptedApiKey = "k",
+                LastError = "Binance: API key invalid or expired",
+                LastErrorAt = DateTime.UtcNow.AddMinutes(-10), // Past the 5-minute backoff
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].AvailableUsdc.Should().Be(100m);
+        result.Balances[0].ErrorMessage.Should().BeNull();
+
+        // Connector SHOULD have been created — backoff expired
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task SuccessfulFetch_ClearsLastError()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Binance" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(100m);
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        await _sut.GetBalanceSnapshotAsync("user1");
+
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync("user1", 1, null, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task NonAuthError_DoesNotPersistToCredential()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        await _sut.GetBalanceSnapshotAsync("user1");
+
+        // Non-auth errors (HttpRequestException) should NOT be persisted to the credential
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync("user1", 1, It.Is<string>(s => s != null), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>

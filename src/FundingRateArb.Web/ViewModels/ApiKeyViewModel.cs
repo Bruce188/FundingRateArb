@@ -34,4 +34,6 @@ public class ExchangeCredentialItem
     public bool HasLegacyV1Credentials { get; set; }
 
     public DateTime? LastUsedAt { get; set; }
+    public string? LastError { get; set; }
+    public DateTime? LastErrorAt { get; set; }
 }

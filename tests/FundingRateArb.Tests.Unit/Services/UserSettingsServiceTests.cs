@@ -706,6 +706,104 @@ public class UserSettingsServiceTests
         result.Should().BeEmpty();
     }
 
+    // --- UpdateCredentialErrorAsync Tests ---
+
+    [Fact]
+    public async Task UpdateCredentialErrorAsync_SetsErrorAndTimestamp()
+    {
+        // Arrange
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastError = null,
+            LastErrorAt = null
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+
+        // Act
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid");
+
+        // Assert
+        credential.LastError.Should().Be("API key invalid");
+        credential.LastErrorAt.Should().NotBeNull();
+        credential.LastErrorAt!.Value.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        _mockCredentials.Verify(r => r.Update(credential), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task UpdateCredentialErrorAsync_NullError_ClearsBothFields()
+    {
+        // Arrange
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastError = "some previous error",
+            LastErrorAt = DateTime.UtcNow.AddMinutes(-5)
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+
+        // Act
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, null);
+
+        // Assert
+        credential.LastError.Should().BeNull();
+        credential.LastErrorAt.Should().BeNull();
+        _mockCredentials.Verify(r => r.Update(credential), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task UpdateCredentialErrorAsync_NonexistentCredential_ReturnsSilently()
+    {
+        // Arrange
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 99))
+            .ReturnsAsync((UserExchangeCredential?)null);
+
+        // Act
+        var act = async () => await _sut.UpdateCredentialErrorAsync(UserId, 99, "some error");
+
+        // Assert
+        await act.Should().NotThrowAsync();
+        _mockCredentials.Verify(r => r.Update(It.IsAny<UserExchangeCredential>()), Times.Never);
+        _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task SaveCredentialAsync_ExistingWithError_ClearsErrorFields()
+    {
+        // Arrange
+        var existing = new UserExchangeCredential
+        {
+            Id = 50,
+            UserId = UserId,
+            ExchangeId = 1,
+            EncryptedApiKey = "old-key",
+            LastError = "Binance: API key invalid or expired",
+            LastErrorAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(existing);
+        _mockVault.Setup(v => v.Encrypt("new-key")).Returns("enc-new-key");
+
+        // Act
+        await _sut.SaveCredentialAsync(UserId, 1, "new-key", null, null, null);
+
+        // Assert — LastError and LastErrorAt should be cleared
+        existing.LastError.Should().BeNull();
+        existing.LastErrorAt.Should().BeNull();
+        _mockCredentials.Verify(r => r.Update(existing), Times.Once);
+        _mockUow.Verify(u => u.SaveAsync(default), Times.Once);
+    }
+
     // --- TouchLastUsedAsync ---
 
     [Fact]
