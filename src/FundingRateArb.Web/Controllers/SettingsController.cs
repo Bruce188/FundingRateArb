@@ -542,6 +542,19 @@ public class SettingsController : Controller
             return Unauthorized();
         }
 
+        // Validate MaxLeverageCap against global cap before any entity mutation
+        if (model.MaxLeverageCap.HasValue)
+        {
+            var globalConfig = await _uow.BotConfig.GetActiveAsync();
+            if (model.MaxLeverageCap.Value > globalConfig.MaxLeverageCap)
+            {
+                ModelState.AddModelError(nameof(model.MaxLeverageCap),
+                    $"Cannot exceed the global cap of {globalConfig.MaxLeverageCap}.");
+                model.AllocationStrategyOptions = BuildAllocationStrategyOptions(model.AllocationStrategy);
+                return View(model);
+            }
+        }
+
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
         config.IsEnabled = model.IsEnabled;
@@ -565,18 +578,6 @@ public class SettingsController : Controller
         config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
         config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
         config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
-        // Validate MaxLeverageCap against global cap
-        if (model.MaxLeverageCap.HasValue)
-        {
-            var globalConfig = await _uow.BotConfig.GetActiveAsync();
-            if (model.MaxLeverageCap.Value > globalConfig.MaxLeverageCap)
-            {
-                ModelState.AddModelError(nameof(model.MaxLeverageCap),
-                    $"Cannot exceed the global cap of {globalConfig.MaxLeverageCap}.");
-                model.AllocationStrategyOptions = BuildAllocationStrategyOptions(model.AllocationStrategy);
-                return View(model);
-            }
-        }
         config.MaxLeverageCap = model.MaxLeverageCap;
         config.EmailNotificationsEnabled = model.EmailNotificationsEnabled;
         config.EmailCriticalAlerts = model.EmailCriticalAlerts;

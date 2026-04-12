@@ -338,11 +338,16 @@
             }
             // Mobile card
             var cardsContainer = document.getElementById("positions-cards");
+            var newCard = null;
             if (cardsContainer) {
-                cardsContainer.appendChild(createPositionCard(position));
+                newCard = createPositionCard(position);
+                cardsContainer.appendChild(newCard);
             }
-            // Rewrite local times for newly added elements
-            if (typeof rewriteLocalTimes === "function") { rewriteLocalTimes(); }
+            // Rewrite local times for newly added elements only
+            if (typeof rewriteLocalTimes === "function") {
+                if (newRow) { rewriteLocalTimes(newRow); }
+                if (newCard) { rewriteLocalTimes(newCard); }
+            }
         }
     });
 

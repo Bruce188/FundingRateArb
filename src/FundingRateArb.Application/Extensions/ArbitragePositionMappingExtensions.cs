@@ -12,6 +12,7 @@ public static class ArbitragePositionMappingExtensions
     private static readonly Dictionary<CloseReason, string> CloseReasonDisplayNames =
         Enum.GetValues<CloseReason>()
             .ToDictionary(r => r, r => PascalCaseRegex.Replace(r.ToString(), " $1"));
+
     public static PositionSummaryDto ToSummaryDto(this ArbitragePosition pos)
     {
         return new PositionSummaryDto

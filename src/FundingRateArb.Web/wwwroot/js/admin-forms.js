@@ -48,25 +48,3 @@ function bindPercentInput(percentInputId, rawHiddenInputId, multiplier) {
         updateBadge();
     });
 }
-
-/**
- * Helper used by the existing threshold display in BotConfig/Index.cshtml.
- * Shows a percentage conversion hint next to raw decimal threshold inputs.
- */
-function wireThresholdHelper(inputName, hintId) {
-    var input = document.querySelector('[name="' + inputName + '"]');
-    var hint = document.getElementById(hintId);
-    if (!input || !hint) return;
-
-    function update() {
-        var val = parseFloat(input.value);
-        if (!isNaN(val)) {
-            hint.textContent = '(' + (val * 100).toFixed(4) + '% per hour)';
-        } else {
-            hint.textContent = '';
-        }
-    }
-
-    input.addEventListener('input', update);
-    update();
-}

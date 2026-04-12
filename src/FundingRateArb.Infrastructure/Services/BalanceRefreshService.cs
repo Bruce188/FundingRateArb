@@ -52,12 +52,12 @@ public class BalanceRefreshService : BackgroundService
 
     internal async Task RefreshBalancesAsync(CancellationToken ct)
     {
-        using var scope = _scopeFactory.CreateScope();
-        var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        var aggregator = scope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
-        var notifier = scope.ServiceProvider.GetRequiredService<ISignalRNotifier>();
-
-        var userIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+        List<string> userIds;
+        using (var scope = _scopeFactory.CreateScope())
+        {
+            var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            userIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+        }
 
         await Parallel.ForEachAsync(userIds, new ParallelOptions
         {
@@ -67,6 +67,9 @@ public class BalanceRefreshService : BackgroundService
         {
             try
             {
+                using var innerScope = _scopeFactory.CreateScope();
+                var aggregator = innerScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
+                var notifier = innerScope.ServiceProvider.GetRequiredService<ISignalRNotifier>();
                 var snapshot = await aggregator.GetBalanceSnapshotAsync(userId, token);
                 await notifier.PushBalanceUpdateAsync(userId, snapshot);
             }

@@ -108,4 +108,41 @@ public class BalanceRefreshServiceTests
         mockNotifier.Verify(n => n.PushBalanceUpdateAsync("user-1", It.IsAny<BalanceSnapshotDto>()), Times.Never);
         mockNotifier.Verify(n => n.PushBalanceUpdateAsync("user-2", snapshot2), Times.Once);
     }
+
+    [Fact]
+    public async Task RefreshBalancesAsync_CreatesPerUserScope()
+    {
+        // Arrange: 3 users — verify CreateScope called once for user-id lookup + once per user
+        var mockAggregator = new Mock<IBalanceAggregator>();
+        var mockNotifier = new Mock<ISignalRNotifier>();
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockUserConfigRepo = new Mock<IUserConfigurationRepository>();
+
+        var userIds = new List<string> { "user-1", "user-2", "user-3" };
+        mockUserConfigRepo.Setup(r => r.GetAllEnabledUserIdsAsync())
+            .ReturnsAsync(userIds);
+        mockUow.Setup(u => u.UserConfigurations).Returns(mockUserConfigRepo.Object);
+
+        mockAggregator.Setup(a => a.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto());
+
+        var mockScopeFactory = new Mock<IServiceScopeFactory>();
+        var serviceCollection = new ServiceCollection();
+        serviceCollection.AddScoped<IUnitOfWork>(_ => mockUow.Object);
+        serviceCollection.AddScoped<IBalanceAggregator>(_ => mockAggregator.Object);
+        serviceCollection.AddScoped<ISignalRNotifier>(_ => mockNotifier.Object);
+        var serviceProvider = serviceCollection.BuildServiceProvider();
+        var realScopeFactory = serviceProvider.GetRequiredService<IServiceScopeFactory>();
+
+        // Wrap the real scope factory to count calls
+        mockScopeFactory.Setup(f => f.CreateScope()).Returns(() => realScopeFactory.CreateScope());
+
+        var sut = new BalanceRefreshService(mockScopeFactory.Object, NullLogger<BalanceRefreshService>.Instance);
+
+        // Act
+        await sut.RefreshBalancesAsync(CancellationToken.None);
+
+        // Assert: 1 scope for user-id lookup + 3 scopes for 3 users = 4 total
+        mockScopeFactory.Verify(f => f.CreateScope(), Times.Exactly(4));
+    }
 }
