@@ -131,6 +131,8 @@ public class BalanceAggregator : IBalanceAggregator
             || ex.Message.Contains("-2015", StringComparison.Ordinal)
             || ex.Message.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
             => $"{exchangeName}: API key invalid or expired",
+        InvalidOperationException when ex.Message.Contains("No recognized quote asset", StringComparison.Ordinal)
+            => $"{exchangeName}: no recognized quote asset (USDT/USDC/USD) found",
         _ => $"{exchangeName}: balance fetch failed",
     };
 }
