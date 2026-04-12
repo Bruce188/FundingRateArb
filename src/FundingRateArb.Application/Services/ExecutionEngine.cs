@@ -198,9 +198,12 @@ public class ExecutionEngine : IExecutionEngine
             }
             catch (Exception ex)
             {
-                // NB3: Log full exception internally but return generic message to user
-                _logger.LogWarning(ex, "Pre-flight balance check failed for {Asset}, skipping trade", opp.AssetSymbol);
-                return (false, "Pre-flight balance check failed — exchange connection error");
+                // NB3: Log full exception internally but return a message that does NOT
+                // contain "balance" or "margin" — the BotOrchestrator classifies those as
+                // capital-exhaustion and circuit-breaks both exchanges.  A connection/auth
+                // error should follow the generic-failure path with per-opportunity cooldown.
+                _logger.LogWarning(ex, "Pre-flight connectivity check failed for {Asset}, skipping trade", opp.AssetSymbol);
+                return (false, $"Exchange connectivity error on {opp.LongExchangeName}/{opp.ShortExchangeName}");
             }
 
             // Compute shared target quantity for delta-neutral coordination

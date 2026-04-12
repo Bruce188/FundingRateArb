@@ -1180,7 +1180,7 @@ public class BotOrchestratorTests
     [InlineData("Insufficient margin on Hyperliquid: available=0.00, required=100.00", "Hyperliquid")]
     [InlineData("Insufficient margin on OKX Futures: available=1, required=5", "OKX Futures")]
     [InlineData("Insufficient margin on Aster", null)]
-    [InlineData("Pre-flight balance check failed — exchange connection error", null)]
+    [InlineData("Exchange connectivity error on Hyperliquid/Lighter", null)]
     [InlineData(null, null)]
     [InlineData("", null)]
     [InlineData("Some other error", null)]
