@@ -423,4 +423,47 @@ public class ArbitragePositionMappingExtensionsTests
         decomp.Should().NotBeNull();
         decomp!.Strategy.Should().Be(pos.RealizedPnl!.Value);
     }
+
+    // ── CloseReason mapping to PositionSummaryDto ──
+
+    [Fact]
+    public void ToSummaryDto_ClosedPosition_PopulatesCloseReasonAndDisplayName()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Closed;
+        pos.CloseReason = CloseReason.DivergenceCritical;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.CloseReason.Should().Be(CloseReason.DivergenceCritical);
+        dto.CloseReasonDisplayName.Should().Be("Divergence Critical");
+    }
+
+    [Fact]
+    public void ToSummaryDto_OpenPosition_CloseReasonIsNull()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.Status = PositionStatus.Open;
+        pos.CloseReason = null;
+
+        var dto = pos.ToSummaryDto();
+
+        dto.CloseReason.Should().BeNull();
+        dto.CloseReasonDisplayName.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(CloseReason.StopLoss, "Stop Loss")]
+    [InlineData(CloseReason.MaxHoldTimeReached, "Max Hold Time Reached")]
+    [InlineData(CloseReason.PnlTargetReached, "Pnl Target Reached")]
+    [InlineData(CloseReason.SpreadCollapsed, "Spread Collapsed")]
+    [InlineData(CloseReason.FundingFlipped, "Funding Flipped")]
+    [InlineData(CloseReason.LiquidationRisk, "Liquidation Risk")]
+    [InlineData(CloseReason.ExchangeDrift, "Exchange Drift")]
+    [InlineData(CloseReason.StablecoinDepeg, "Stablecoin Depeg")]
+    [InlineData(CloseReason.PriceFeedLost, "Price Feed Lost")]
+    public void ToDisplayName_AllReasons_ProducesReadableText(CloseReason reason, string expected)
+    {
+        ArbitragePositionMappingExtensions.ToDisplayName(reason).Should().Be(expected);
+    }
 }

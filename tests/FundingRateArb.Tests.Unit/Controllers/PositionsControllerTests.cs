@@ -636,4 +636,56 @@ public class PositionsControllerTests
             "zero current mark must not produce a divide-by-zero or nonsense value");
         vm.Position.MaxSafeMovePctShort.Should().BeNull();
     }
+
+    [Fact]
+    public async Task GetLiveMargin_ReturnsGracefully_OnTimeout()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 99, UserId = "trader-id",
+            Status = PositionStatus.Open,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(99)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException());
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(new Mock<IExchangeConnector>().Object);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.GetLiveMargin(99, CancellationToken.None);
+
+        var okResult = result.Should().BeOfType<OkObjectResult>().Subject;
+        okResult.Value.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Details_ReturnsViewWithDivergenceData()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 80, UserId = "trader-id",
+            Status = PositionStatus.Closed,
+            CurrentDivergencePct = 0.75m,
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongEntryPrice = 3000m, ShortEntryPrice = 3001m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+        };
+        _mockPositions.Setup(p => p.GetByIdAsync(80)).ReturnsAsync(position);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(80);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+        vm.Position.CurrentDivergencePct.Should().Be(0.75m);
+    }
 }

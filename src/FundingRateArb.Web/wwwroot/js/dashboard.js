@@ -8,6 +8,38 @@
     var connection = window.appSignalR.connection;
     var showToast = window.appSignalR.showToast;
 
+    // Row-click navigation: navigate to position details on click/Enter
+    function bindRowClickHandlers(container) {
+        if (!container) return;
+        var rows = container.querySelectorAll("tr[data-position-id]");
+        for (var i = 0; i < rows.length; i++) {
+            var row = rows[i];
+            if (row.dataset.rowClickBound) continue;
+            row.dataset.rowClickBound = "1";
+            (function(r) {
+                function navigate() {
+                    window.location.href = "/Positions/Details/" + r.dataset.positionId;
+                }
+                r.addEventListener("click", function(e) {
+                    if (e.target.closest("a, button")) return;
+                    navigate();
+                });
+                r.addEventListener("keydown", function(e) {
+                    if (e.key === "Enter") navigate();
+                });
+            })(row);
+        }
+    }
+
+    // Bind row-click on page load for server-rendered rows
+    document.addEventListener("DOMContentLoaded", function() {
+        var posTable = document.getElementById("positions-table");
+        if (posTable) {
+            var tbody = posTable.querySelector("tbody");
+            bindRowClickHandlers(tbody);
+        }
+    });
+
     var lastUpdateTime = null;
     var staleTimer = null;
     var STALE_THRESHOLD_MS = 120000; // 2 minutes
@@ -104,6 +136,10 @@
     function createPositionRow(position) {
         var tr = document.createElement("tr");
         tr.id = "position-" + position.id;
+        tr.setAttribute("data-position-id", position.id);
+        tr.setAttribute("tabindex", "0");
+        tr.setAttribute("role", "link");
+        tr.style.cursor = "pointer";
         var spread = position.currentSpreadPerHour ?? 0;
         var spreadClass = spread >= 0 ? "text-success" : "text-danger";
 
@@ -147,7 +183,7 @@
         tdExchPnl.appendChild(exchTextNode);
         var badge = document.createElement("span");
         badge.className = "badge bg-info ms-1 divergence-badge";
-        badge.title = "Price divergence";
+        badge.title = "Cross-exchange price divergence (|longMark - shortMark| / unified)";
         badge.textContent = divergence.toFixed(2) + "%";
         badge.style.display = divergence > 0.01 ? "" : "none";
         tdExchPnl.appendChild(badge);
@@ -296,12 +332,15 @@
             var tbody = posTable ? posTable.querySelector("tbody") : null;
             if (tbody) {
                 tbody.appendChild(createPositionRow(position));
+                bindRowClickHandlers(tbody);
             }
             // Mobile card
             var cardsContainer = document.getElementById("positions-cards");
             if (cardsContainer) {
                 cardsContainer.appendChild(createPositionCard(position));
             }
+            // Rewrite local times for newly added elements
+            if (typeof rewriteLocalTimes === "function") { rewriteLocalTimes(); }
         }
     });
 
@@ -460,11 +499,16 @@
         var countBadge = document.querySelector(".badge.bg-primary");
         if (countBadge) countBadge.textContent = opportunitiesArr.length + " found";
 
-        // Update Best Spread KPI from diagnostics (raw spread includes all opportunities, not just above-threshold)
-        if (diagnostics && diagnostics.bestRawSpread > 0) {
-            var bestSpread = document.getElementById("best-spread");
-            if (bestSpread) {
-                bestSpread.textContent = (diagnostics.bestRawSpread * 100).toFixed(4) + "%";
+        // Update Best Spread KPI: prefer live opportunity data, fall back to diagnostics
+        var bestFromOpps = opportunitiesArr.length > 0
+            ? Math.max.apply(null, opportunitiesArr.map(function(o) { return o.spreadPerHour ?? 0; }))
+            : (diagnostics && diagnostics.bestRawSpread) || 0;
+        var bestSpreadEl = document.getElementById("best-spread");
+        if (bestSpreadEl) {
+            if (bestFromOpps > 0) {
+                bestSpreadEl.textContent = (bestFromOpps * 100).toFixed(4) + "%";
+            } else {
+                bestSpreadEl.textContent = "N/A";
             }
         }
 
@@ -494,7 +538,7 @@
                     var thresholdText = totalBelowThreshold + " pairs below " + (diagnostics.openThreshold * 100).toFixed(3) + "% net yield threshold. ";
                     if (diagnostics.netPositiveBelowThreshold > 0) {
                         var bold = document.createElement("strong");
-                        bold.textContent = diagnostics.netPositiveBelowThreshold + " profitable (adaptive eligible).";
+                        bold.textContent = diagnostics.netPositiveBelowThreshold + " net-positive below gate (adaptive eligible).";
                         alertDiv.textContent = thresholdText;
                         alertDiv.appendChild(bold);
                         var trailing = document.createTextNode(" Best raw spread: " + (diagnostics.bestRawSpread * 100).toFixed(4) + "%.");
@@ -701,8 +745,7 @@
         if (totalEl) {
             totalEl.textContent = "Total: $" + (snapshot.totalAvailableUsdc || 0).toFixed(2);
         }
-
-        row.style.display = balances.length > 0 ? "block" : "none";
+        // Balance tile is always visible (server-rendered). No show/hide toggle needed.
     });
 
     // B4: Handle status explanations

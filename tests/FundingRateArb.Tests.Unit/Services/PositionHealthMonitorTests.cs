@@ -3746,4 +3746,140 @@ public class PositionHealthMonitorTests
 
         await _sut.CheckAndActAsync();
     }
+
+    // ── ComputePositionSnapshotAsync ──────────────────────────────────────────
+
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_PopulatesAllFields_ForFreshPosition()
+    {
+        // Arrange: build a SUT with a warm market data cache
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(3010m);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(3005m);
+
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter")).Returns(3007.5m);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            mockRefPrice.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+
+        // Act
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        // Assert
+        snapshot.Should().NotBeNull();
+        snapshot!.ExchangePnl.Should().NotBe(0m, "exchange PnL should be computed from mark prices");
+        snapshot.UnifiedPnl.Should().NotBe(0m, "unified PnL should be computed from unified price");
+        snapshot.DivergencePct.Should().BeGreaterThan(0m, "divergence should be non-zero when marks differ");
+    }
+
+    [Fact]
+    public async Task ComputePositionSnapshotAsync_ReturnsNull_WhenCacheCold()
+    {
+        // The default _sut has an IMarketDataCache mock returning 0 for all symbols
+        var pos = MakeOpenPosition();
+
+        var snapshot = await _sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().BeNull("cache cold should return null so caller falls back to zero-PnL");
+    }
+
+    // ── Divergence badge invariant tests ──────────────────────────────────────
+
+    [Fact]
+    public async Task DivergencePct_ForKnownInputs_ReturnsExpectedValue()
+    {
+        // Arrange: longMark=100.50, shortMark=99.50, unifiedPrice=100.00
+        // Expected: |100.50 - 99.50| / 100.00 * 100 = 1.00%
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(100.50m);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(99.50m);
+
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter")).Returns(100.00m);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            mockRefPrice.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var pos = MakeOpenPosition(longEntry: 100m, shortEntry: 100m);
+
+        // Act
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        // Assert
+        snapshot.Should().NotBeNull();
+        snapshot!.DivergencePct.Should().BeApproximately(1.00m, 0.001m,
+            "divergence = |100.50 - 99.50| / 100.00 * 100 = 1.00%");
+    }
+
+    [Theory]
+    [InlineData(101.0, 99.0, 100.0, "long-favored: longMark > shortMark")]
+    [InlineData(99.0, 101.0, 100.0, "short-favored: longMark < shortMark")]
+    [InlineData(100.0, 100.0, 100.0, "symmetric: longMark == shortMark")]
+    public async Task DivergencePct_InvariantRelation_ExchangeVsUnifiedPnlGap(
+        decimal longMark, decimal shortMark, decimal unifiedPrice, string scenario)
+    {
+        // The invariant: |ExchangePnl - UnifiedPnl| / notional ~ |DivergencePct| / 100
+        // where notional = estimatedQty * unifiedPrice
+        var mockCache = new Mock<IMarketDataCache>();
+        mockCache.Setup(c => c.GetMarkPrice("Hyperliquid", "ETH")).Returns(longMark);
+        mockCache.Setup(c => c.GetMarkPrice("Lighter", "ETH")).Returns(shortMark);
+
+        var mockRefPrice = new Mock<IReferencePriceProvider>();
+        mockRefPrice.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter")).Returns(unifiedPrice);
+
+        var sut = new PositionHealthMonitor(
+            _mockUow.Object,
+            _mockFactory.Object,
+            mockCache.Object,
+            mockRefPrice.Object,
+            _mockExecutionEngine.Object,
+            Mock.Of<ILeverageTierProvider>(),
+            new HealthMonitorState(),
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        // Use symmetric entry prices so divergence is entirely from mark price difference
+        var pos = MakeOpenPosition(longEntry: 100m, shortEntry: 100m);
+
+        var snapshot = await sut.ComputePositionSnapshotAsync(pos);
+
+        snapshot.Should().NotBeNull($"snapshot should be available for scenario: {scenario}");
+
+        if (longMark == shortMark)
+        {
+            // Symmetric case: zero divergence, PnL gap should be zero
+            snapshot!.DivergencePct.Should().Be(0m);
+            Math.Abs(snapshot.ExchangePnl - snapshot.UnifiedPnl).Should().Be(0m);
+        }
+        else
+        {
+            // Invariant: the PnL gap normalized by notional should approximate divergence/100
+            var avgEntryPrice = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+            var estimatedQty = pos.SizeUsdc * pos.Leverage / avgEntryPrice;
+            var notional = estimatedQty * unifiedPrice;
+            var pnlGapNormalized = notional > 0
+                ? Math.Abs(snapshot!.ExchangePnl - snapshot.UnifiedPnl) / notional
+                : 0m;
+            var divergenceAsDecimal = snapshot!.DivergencePct / 100m;
+
+            pnlGapNormalized.Should().BeApproximately(divergenceAsDecimal, 0.01m,
+                $"PnL gap should explain divergence for scenario: {scenario}");
+        }
+    }
 }

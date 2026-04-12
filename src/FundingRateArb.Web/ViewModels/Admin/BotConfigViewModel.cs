@@ -106,4 +106,69 @@ public class BotConfigViewModel
 
     [Required, Range(0.1, 0.95), Display(Name = "Margin Utilization Alert (%)")]
     public decimal MarginUtilizationAlertPct { get; set; } = 0.70m;
+
+    // ── Risk Management ──────────────────────────────────────────────────────
+
+    [Required, Range(0, 1440), Display(Name = "Min Hold Before PnL Target (minutes)")]
+    public int? MinHoldBeforePnlTargetMinutes { get; set; } = 60;
+
+    [Required, Range(0.1, 0.9), Display(Name = "Liquidation Warning (fraction)")]
+    public decimal? LiquidationWarningPct { get; set; } = 0.50m;
+
+    [Required, Range(0.1, 0.99), Display(Name = "Liquidation Early Warning (fraction)")]
+    public decimal? LiquidationEarlyWarningPct { get; set; } = 0.75m;
+
+    [Required, Range(1, 20), Display(Name = "Circuit Breaker Threshold (failures)")]
+    public int? ExchangeCircuitBreakerThreshold { get; set; } = 3;
+
+    [Required, Range(1, 120), Display(Name = "Circuit Breaker Cooldown (minutes)")]
+    public int? ExchangeCircuitBreakerMinutes { get; set; } = 15;
+
+    [Required, Range(5, 100), Display(Name = "Price Feed Failure Close Threshold")]
+    public int? PriceFeedFailureCloseThreshold { get; set; } = 10;
+
+    // ── Thresholds ───────────────────────────────────────────────────────────
+
+    [Required, Range(-1.0, 0), Display(Name = "Emergency Close Spread Threshold")]
+    public decimal? EmergencyCloseSpreadThreshold { get; set; } = -0.001m;
+
+    [Required, Range(0.0, 20.0), Display(Name = "Min Edge Multiplier")]
+    public decimal? MinEdgeMultiplier { get; set; } = 3m;
+
+    [Required, Range(0.5, 10.0), Display(Name = "Divergence Alert Multiplier")]
+    public decimal? DivergenceAlertMultiplier { get; set; } = 2.0m;
+
+    [Required, Range(0, 50), Display(Name = "Slippage Buffer (bps)")]
+    public int? SlippageBufferBps { get; set; } = 5;
+
+    [Required, Range(0.0, 5.0), Display(Name = "Stablecoin Alert Threshold (%)")]
+    public decimal? StablecoinAlertThresholdPct { get; set; } = 0.3m;
+
+    [Required, Range(0.0, 10.0), Display(Name = "Stablecoin Critical Threshold (%)")]
+    public decimal? StablecoinCriticalThresholdPct { get; set; } = 1.0m;
+
+    [Required, Range(1, 20), Display(Name = "Min Consecutive Favorable Cycles")]
+    public int? MinConsecutiveFavorableCycles { get; set; } = 3;
+
+    [Required, Range(1, 20), Display(Name = "Funding Flip Exit Cycles")]
+    public int? FundingFlipExitCycles { get; set; } = 2;
+
+    // ── Advanced (booleans) ──────────────────────────────────────────────────
+
+    [Display(Name = "Use Risk-Based Divergence Close")]
+    public bool UseRiskBasedDivergenceClose { get; set; } = true;
+
+    [Display(Name = "Use Break-Even Size Filter")]
+    public bool UseBreakEvenSizeFilter { get; set; }
+
+    [Display(Name = "Dry Run Mode")]
+    public bool DryRunEnabled { get; set; }
+
+    [Display(Name = "Force Concurrent Execution")]
+    public bool ForceConcurrentExecution { get; set; }
+
+    // ── Infrastructure ───────────────────────────────────────────────────────
+
+    [Required, Range(1, 100), Display(Name = "Reconciliation Interval (cycles)")]
+    public int? ReconciliationIntervalCycles { get; set; } = 10;
 }

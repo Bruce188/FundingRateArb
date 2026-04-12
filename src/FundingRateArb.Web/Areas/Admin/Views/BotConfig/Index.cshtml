@@ -145,6 +145,54 @@
                             <small id="alert-threshold-pct" class="text-info"></small>
                             <span asp-validation-for="AlertThreshold" class="text-danger"></span>
                         </div>
+                        <div class="col-md-4">
+                            <label asp-for="EmergencyCloseSpreadThreshold" class="form-label"></label>
+                            <input asp-for="EmergencyCloseSpreadThreshold" class="form-control" type="number" step="any" min="-1" max="0" />
+                            <div class="form-text">Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours</div>
+                            <span asp-validation-for="EmergencyCloseSpreadThreshold" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="MinEdgeMultiplier" class="form-label"></label>
+                            <input asp-for="MinEdgeMultiplier" class="form-control" type="number" step="any" min="0" max="20" />
+                            <div class="form-text">Minimum net yield must exceed this multiple of amortized entry cost</div>
+                            <span asp-validation-for="MinEdgeMultiplier" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="DivergenceAlertMultiplier" class="form-label"></label>
+                            <input asp-for="DivergenceAlertMultiplier" class="form-control" type="number" step="any" min="0.5" max="10" />
+                            <div class="form-text">Alert when divergence exceeds this multiple of entry spread cost</div>
+                            <span asp-validation-for="DivergenceAlertMultiplier" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="SlippageBufferBps" class="form-label"></label>
+                            <input asp-for="SlippageBufferBps" class="form-control" type="number" min="0" max="50" />
+                            <div class="form-text">Basis points subtracted from net yield for slippage</div>
+                            <span asp-validation-for="SlippageBufferBps" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="StablecoinAlertThresholdPct" class="form-label"></label>
+                            <input asp-for="StablecoinAlertThresholdPct" class="form-control" type="number" step="any" min="0" max="5" />
+                            <div class="form-text">USDT/USDC spread % at which to issue a warning alert</div>
+                            <span asp-validation-for="StablecoinAlertThresholdPct" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="StablecoinCriticalThresholdPct" class="form-label"></label>
+                            <input asp-for="StablecoinCriticalThresholdPct" class="form-control" type="number" step="any" min="0" max="10" />
+                            <div class="form-text">USDT/USDC spread % at which to close cross-stablecoin positions</div>
+                            <span asp-validation-for="StablecoinCriticalThresholdPct" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="MinConsecutiveFavorableCycles" class="form-label"></label>
+                            <input asp-for="MinConsecutiveFavorableCycles" class="form-control" type="number" min="1" max="20" />
+                            <div class="form-text">Consecutive positive-spread snapshots required before entry</div>
+                            <span asp-validation-for="MinConsecutiveFavorableCycles" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="FundingFlipExitCycles" class="form-label"></label>
+                            <input asp-for="FundingFlipExitCycles" class="form-control" type="number" min="1" max="20" />
+                            <div class="form-text">Consecutive negative-spread cycles before FundingFlipped close</div>
+                            <span asp-validation-for="FundingFlipExitCycles" class="text-danger"></span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -213,6 +261,42 @@
                             <input asp-for="MarginUtilizationAlertPct" class="form-control" type="number" step="any" min="0.1" max="0.95" />
                             <div class="form-text">Alert when margin utilization exceeds this fraction (e.g. 0.70 = 70%)</div>
                             <span asp-validation-for="MarginUtilizationAlertPct" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="MinHoldBeforePnlTargetMinutes" class="form-label"></label>
+                            <input asp-for="MinHoldBeforePnlTargetMinutes" class="form-control" type="number" min="0" max="1440" />
+                            <div class="form-text">Minimum minutes before PnlTargetReached can fire</div>
+                            <span asp-validation-for="MinHoldBeforePnlTargetMinutes" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="LiquidationWarningPct" class="form-label"></label>
+                            <input asp-for="LiquidationWarningPct" class="form-control" type="number" step="any" min="0.1" max="0.9" />
+                            <div class="form-text">Fraction of safe range at which to close (0.5 = close when 50% consumed)</div>
+                            <span asp-validation-for="LiquidationWarningPct" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="LiquidationEarlyWarningPct" class="form-label"></label>
+                            <input asp-for="LiquidationEarlyWarningPct" class="form-control" type="number" step="any" min="0.1" max="0.99" />
+                            <div class="form-text">Alert threshold (must be higher than close threshold)</div>
+                            <span asp-validation-for="LiquidationEarlyWarningPct" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="ExchangeCircuitBreakerThreshold" class="form-label"></label>
+                            <input asp-for="ExchangeCircuitBreakerThreshold" class="form-control" type="number" min="1" max="20" />
+                            <div class="form-text">Consecutive failures before circuit breaker opens</div>
+                            <span asp-validation-for="ExchangeCircuitBreakerThreshold" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="ExchangeCircuitBreakerMinutes" class="form-label"></label>
+                            <input asp-for="ExchangeCircuitBreakerMinutes" class="form-control" type="number" min="1" max="120" />
+                            <div class="form-text">Minutes an exchange is excluded after circuit breaker opens</div>
+                            <span asp-validation-for="ExchangeCircuitBreakerMinutes" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="PriceFeedFailureCloseThreshold" class="form-label"></label>
+                            <input asp-for="PriceFeedFailureCloseThreshold" class="form-control" type="number" min="5" max="100" />
+                            <div class="form-text">Consecutive price feed failures before force-closing position</div>
+                            <span asp-validation-for="PriceFeedFailureCloseThreshold" class="text-danger"></span>
                         </div>
                     </div>
                 </div>
@@ -314,6 +398,34 @@
                             <div class="form-text">Max rebalance closes per bot cycle</div>
                             <span asp-validation-for="MaxRebalancesPerCycle" class="text-danger"></span>
                         </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
+                                <input asp-for="UseRiskBasedDivergenceClose" class="form-check-input" type="checkbox" />
+                                <label asp-for="UseRiskBasedDivergenceClose" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text text-warning">When enabled, DivergenceCritical close requires both MinHoldTime AND unhealthy liquidation distance. Disable to revert to immediate threshold-based close.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
+                                <input asp-for="UseBreakEvenSizeFilter" class="form-check-input" type="checkbox" />
+                                <label asp-for="UseBreakEvenSizeFilter" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text text-warning">Stricter break-even filter rejects opportunities when net yield cannot cover MinEdgeMultiplier fees within MinHoldTime. Much more aggressive than the legacy edge guardrail.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
+                                <input asp-for="DryRunEnabled" class="form-check-input" type="checkbox" />
+                                <label asp-for="DryRunEnabled" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text text-warning">Paper trading mode. No real orders are placed on exchanges.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
+                                <input asp-for="ForceConcurrentExecution" class="form-check-input" type="checkbox" />
+                                <label asp-for="ForceConcurrentExecution" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text text-warning">Skip sequential execution and use Task.WhenAll for all exchanges. Risk: one-sided position on tx failure.</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -345,6 +457,12 @@
                             <div class="form-text">Max hours to break even on fees</div>
                             <span asp-validation-for="BreakevenHoursMax" class="text-danger"></span>
                         </div>
+                        <div class="col-md-4">
+                            <label asp-for="ReconciliationIntervalCycles" class="form-label"></label>
+                            <input asp-for="ReconciliationIntervalCycles" class="form-control" type="number" min="1" max="100" />
+                            <div class="form-text">Bot cycles between exchange position reconciliation checks</div>
+                            <span asp-validation-for="ReconciliationIntervalCycles" class="text-danger"></span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -359,6 +477,7 @@
 
 @section Scripts {
     <partial name="_ValidationScriptsPartial" />
+    <script src="~/js/admin-forms.js"></script>
     <script>
         wireThresholdHelper('OpenThreshold', 'open-threshold-pct');
         wireThresholdHelper('CloseThreshold', 'close-threshold-pct');

@@ -993,7 +993,19 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
             allOpeningPositions.Clear();
             allOpeningPositions.AddRange(updatedOpening);
 
-            await _notifier.PushPositionUpdatesAsync(updatedPositions, ctx.GlobalConfig);
+            // Compute instant PnL snapshot for newly opened positions so the first
+            // SignalR push carries real PnL instead of zeros.
+            var snapshots = new Dictionary<int, ComputedPositionPnl>();
+            foreach (var pos in updatedPositions)
+            {
+                var snapshot = await ctx.HealthMonitor.ComputePositionSnapshotAsync(pos, ct);
+                if (snapshot is not null)
+                {
+                    snapshots[pos.Id] = snapshot;
+                }
+            }
+
+            await _notifier.PushPositionUpdatesAsync(updatedPositions, ctx.GlobalConfig, snapshots);
         }
     }
 

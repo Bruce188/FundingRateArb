@@ -240,4 +240,65 @@ public class PositionsController : Controller
         TempData["Success"] = "Position closed successfully.";
         return RedirectToAction(nameof(Index));
     }
+
+    /// <summary>
+    /// Lazy-loaded live margin/liquidation data for the Details page.
+    /// Returns partial data or error on exchange timeout.
+    /// </summary>
+    [HttpGet("api/positions/{id}/live-margin")]
+    public async Task<IActionResult> GetLiveMargin(int id, CancellationToken ct)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (userId is null) return Unauthorized();
+
+        var position = await _uow.Positions.GetByIdAsync(id);
+        if (position is null) return NotFound();
+        if (!User.IsInRole("Admin") && position.UserId != userId) return Forbid();
+
+        var longExchangeName = position.LongExchange?.Name;
+        var shortExchangeName = position.ShortExchange?.Name;
+        var assetSymbol = position.Asset?.Symbol;
+
+        if (longExchangeName is null || shortExchangeName is null || assetSymbol is null)
+        {
+            return Ok(new { error = "Missing exchange or asset data" });
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var sameExchange = string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase);
+            var longConnector = _connectorFactory.GetConnector(longExchangeName);
+            var shortConnector = sameExchange ? longConnector : _connectorFactory.GetConnector(shortExchangeName);
+
+            var longMarginTask = longConnector.GetPositionMarginStateAsync(assetSymbol, cts.Token);
+            var shortMarginTask = sameExchange ? longMarginTask : shortConnector.GetPositionMarginStateAsync(assetSymbol, cts.Token);
+
+            await Task.WhenAll(longMarginTask, shortMarginTask);
+
+            var longMargin = await longMarginTask;
+            var shortMargin = await shortMarginTask;
+
+            return Ok(new
+            {
+                longMarginUtilization = longMargin?.MarginUtilizationPct,
+                shortMarginUtilization = shortMargin?.MarginUtilizationPct,
+                longLiquidationPrice = longMargin?.LiquidationPrice,
+                shortLiquidationPrice = shortMargin?.LiquidationPrice,
+                longMarginUsed = longMargin?.MarginUsed,
+                shortMarginUsed = shortMargin?.MarginUsed,
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            return Ok(new { error = "Exchange data unavailable (timeout)" });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Live margin fetch failed for position #{Id}", id);
+            return Ok(new { error = "Exchange data unavailable" });
+        }
+    }
 }

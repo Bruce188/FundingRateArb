@@ -38,6 +38,9 @@ public class PositionDetailsDto
     /// <summary>Exit fees captured at position close (both legs). Zero while open.</summary>
     public decimal ExitFeesUsdc { get; set; }
 
+    /// <summary>Cross-exchange price divergence percentage.</summary>
+    public decimal? CurrentDivergencePct { get; set; }
+
     public PositionStatus Status { get; set; }
     public CloseReason? CloseReason { get; set; }
     public DateTime OpenedAt { get; set; }

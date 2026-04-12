@@ -29,6 +29,7 @@ else
                     <th>Long Exchange</th>
                     <th>Short Exchange</th>
                     <th>Status</th>
+                    <th>Close Reason</th>
                     <th class="text-end">Size (USDC)</th>
                     <th class="text-end">Spread/hr</th>
                     <th class="text-end">Strategy PnL</th>
@@ -42,7 +43,7 @@ else
             <tbody>
                 @foreach (var pos in Model.Positions)
                 {
-                    <tr data-position-id="@pos.Id">
+                    <tr data-position-id="@pos.Id" tabindex="0" role="link" style="cursor:pointer;">
                         <td>@pos.AssetSymbol</td>
                         <td>@pos.LongExchangeName</td>
                         <td>@pos.ShortExchangeName</td>
@@ -50,16 +51,37 @@ else
                             @{
                                 var badgeClass = pos.Status switch
                                 {
-                                    PositionStatus.Open    => "bg-success",
                                     PositionStatus.Opening => "bg-info",
+                                    PositionStatus.Open => "bg-success",
                                     PositionStatus.Closing => "bg-warning text-dark",
-                                    _                      => "bg-secondary",
+                                    PositionStatus.Closed => "bg-secondary",
+                                    PositionStatus.EmergencyClosed => "bg-warning text-dark border border-danger",
+                                    PositionStatus.Liquidated => "bg-danger",
+                                    PositionStatus.Failed => "bg-danger text-white",
+                                    _ => "bg-secondary",
                                 };
+                                var badgeText = pos.Status == PositionStatus.EmergencyClosed ? "Emergency Closed" : pos.Status.ToString();
                             }
-                            <span class="badge pos-status @badgeClass">@pos.Status</span>
+                            <span class="badge pos-status @badgeClass">
+                                @if (pos.Status == PositionStatus.Failed)
+                                {
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                }
+                                @badgeText
+                            </span>
                             @if (pos.IsDryRun)
                             {
                                 <span class="badge bg-warning text-dark ms-1">Paper</span>
+                            }
+                        </td>
+                        <td>
+                            @if (pos.CloseReasonDisplayName is not null)
+                            {
+                                <span title="@pos.CloseReason">@pos.CloseReasonDisplayName</span>
+                            }
+                            else
+                            {
+                                <span class="text-muted">&mdash;</span>
                             }
                         </td>
                         <td class="text-end">@pos.SizeUsdc.ToString("F2")</td>
@@ -73,7 +95,7 @@ else
                         <td class="text-end">
                             @if (pos.DivergencePct > 0.01m)
                             {
-                                <span class="badge bg-info">@pos.DivergencePct.ToString("F2")%</span>
+                                <span class="badge bg-info" title="Cross-exchange price divergence (|longMark - shortMark| / unified)">@pos.DivergencePct.ToString("F2")%</span>
                             }
                             else
                             {
@@ -83,9 +105,10 @@ else
                         <td class="pos-funding text-end @(pos.AccumulatedFunding >= 0 ? "text-success" : "text-danger")">
                             @pos.AccumulatedFunding.ToString("F4")
                         </td>
-                        <td><time datetime="@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o"))" class="local-time">@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm")) UTC</time></td>
+                        <td><time datetime="@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("o"))" class="local-time">@((pos.ConfirmedAtUtc ?? pos.OpenedAt).ToString("yyyy-MM-dd HH:mm"))</time></td>
                         <td>
                             <a asp-action="Details" asp-route-id="@pos.Id" class="btn btn-sm btn-outline-primary me-1">Details</a>
+                            <a href="/Analytics/PositionAnalysis?id=@pos.Id" class="btn btn-sm btn-outline-secondary me-1" title="Analyse"><i class="bi bi-graph-up"></i></a>
                             @if (pos.Status == PositionStatus.Open)
                             {
                                 <form asp-action="Close" asp-route-id="@pos.Id" method="post" class="d-inline"
@@ -103,5 +126,18 @@ else
 }
 
 @section Scripts {
+    <script src="~/js/shared-time.js" asp-append-version="true"></script>
     <script src="~/js/positions.js" asp-append-version="true"></script>
+    <script>
+        document.querySelectorAll("tr[data-position-id]").forEach(function(row) {
+            function navigate() { window.location.href = "/Positions/Details/" + row.dataset.positionId; }
+            row.addEventListener("click", function(e) {
+                if (e.target.closest("a, button, form")) return;
+                navigate();
+            });
+            row.addEventListener("keydown", function(e) {
+                if (e.key === "Enter") navigate();
+            });
+        });
+    </script>
 }

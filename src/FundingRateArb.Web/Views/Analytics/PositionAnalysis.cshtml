@@ -2,46 +2,172 @@
 
 @{
     ViewData["Title"] = $"Position #{Model.PositionId} Analysis";
+    var pctAchieved = Model.ProjectedPnl != 0 ? (Model.ActualPnl / Model.ProjectedPnl * 100m) : 0m;
+    var pctColor = pctAchieved < 0 ? "text-danger" : pctAchieved < 50 ? "text-warning" : "text-success";
 }
 
 <h2>Position #@Model.PositionId Analysis</h2>
 <a asp-action="Index" class="btn btn-sm btn-outline-secondary mb-3">Back to Analytics</a>
 
-<div class="row mb-4">
+<div class="row mb-3">
+    <!-- Card 1: PnL Decomposition Bar -->
     <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <strong>@Model.AssetSymbol</strong>
-                <span class="text-muted">@Model.LongExchangeName / @Model.ShortExchangeName</span>
-            </div>
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>PnL Decomposition</strong></div>
             <div class="card-body">
+                @{
+                    // Decompose: Funding is the intended profit, Directional is price movement, Fees are always negative
+                    var funding = Model.ActualPnl; // AccumulatedFunding for open, RealizedPnl for closed
+                    var maxPnl = Math.Max(Math.Abs(Model.ActualPnl), Math.Abs(Model.ProjectedPnl));
+                    var actualBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ActualPnl) / maxPnl * 100) : 0;
+                    var projectedBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ProjectedPnl) / maxPnl * 100) : 0;
+                    var actualBarColor = Model.ActualPnl >= 0 ? "bg-success" : "bg-danger";
+                    var projectedBarColor = "bg-primary";
+                }
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Actual PnL</span>
+                        <strong class="@(Model.ActualPnl >= 0 ? "text-success" : "text-danger")">
+                            @Model.ActualPnl.ToString("F4") USDC
+                        </strong>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar @actualBarColor" role="progressbar" style="width: @(actualBarPct)%"></div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-1">
+                        <span>Projected PnL</span>
+                        <strong>@Model.ProjectedPnl.ToString("F4") USDC</strong>
+                    </div>
+                    <div class="progress" style="height: 20px;">
+                        <div class="progress-bar @projectedBarColor" role="progressbar" style="width: @(projectedBarPct)%"></div>
+                    </div>
+                </div>
+                <hr />
+                <div class="d-flex justify-content-between">
+                    <span>Difference</span>
+                    <strong class="@(Model.PnlDifference >= 0 ? "text-success" : "text-danger")">
+                        @Model.PnlDifference.ToString("F4") USDC
+                    </strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Card 2: Close Reason & Context -->
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>@(Model.IsClosed ? "Close Reason & Context" : "Position Status")</strong></div>
+            <div class="card-body">
+                @if (Model.IsClosed)
+                {
+                    <p class="mb-1">
+                        <span class="badge bg-secondary fs-6">Closed</span>
+                    </p>
+                    <p class="text-muted">Position was closed after @Model.HoursHeld.ToString("F1") hours.</p>
+                }
+                else
+                {
+                    <p class="mb-1"><span class="badge bg-success fs-6">Open</span></p>
+                    <p class="text-muted">Position has been open for @Model.HoursHeld.ToString("F1") hours.</p>
+                }
                 <dl class="row mb-0">
-                    <dt class="col-sm-6">Status</dt>
-                    <dd class="col-sm-6">
-                        @if (Model.IsClosed)
-                        {
-                            <span class="badge bg-secondary">Closed</span>
-                        }
-                        else
-                        {
-                            <span class="badge bg-success">Open</span>
-                        }
+                    <dt class="col-sm-5">Opened</dt>
+                    <dd class="col-sm-7">
+                        <time datetime="@((Model.ConfirmedAtUtc ?? Model.OpenedAt).ToString("o"))" class="local-time">
+                            @((Model.ConfirmedAtUtc ?? Model.OpenedAt).ToString("yyyy-MM-dd HH:mm"))
+                        </time>
                     </dd>
-
-                    <dt class="col-sm-6">Opened</dt>
-                    <dd class="col-sm-6"><time datetime="@((Model.ConfirmedAtUtc ?? Model.OpenedAt).ToString("o"))" class="local-time">@((Model.ConfirmedAtUtc ?? Model.OpenedAt).ToString("yyyy-MM-dd HH:mm")) UTC</time></dd>
-
                     @if (Model.ClosedAt.HasValue)
                     {
-                        <dt class="col-sm-6">Closed</dt>
-                        <dd class="col-sm-6">@Model.ClosedAt.Value.ToString("yyyy-MM-dd HH:mm") UTC</dd>
+                        <dt class="col-sm-5">Closed</dt>
+                        <dd class="col-sm-7">
+                            <time datetime="@Model.ClosedAt.Value.ToString("o")" class="local-time">
+                                @Model.ClosedAt.Value.ToString("yyyy-MM-dd HH:mm")
+                            </time>
+                        </dd>
                     }
+                    <dt class="col-sm-5">Asset</dt>
+                    <dd class="col-sm-7"><strong>@Model.AssetSymbol</strong> (@Model.LongExchangeName / @Model.ShortExchangeName)</dd>
+                    <dt class="col-sm-5">Size</dt>
+                    <dd class="col-sm-7">@Model.SizeUsdc.ToString("F2") USDC</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
 
+<div class="row mb-3">
+    <!-- Card 3: Per-Leg Realized PnL placeholder -->
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>Per-Leg PnL</strong></div>
+            <div class="card-body">
+                <p class="text-muted small">Per-leg exchange-reported vs unified-price PnL breakdown. Data available when individual leg fills are tracked.</p>
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Long Exchange</dt>
+                    <dd class="col-sm-6">@Model.LongExchangeName</dd>
+                    <dt class="col-sm-6">Short Exchange</dt>
+                    <dd class="col-sm-6">@Model.ShortExchangeName</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- Card 4: Entry vs Exit Analysis -->
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>Entry vs Exit</strong></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Entry Spread/hr</dt>
+                    <dd class="col-sm-6">@((Model.EntrySpreadPerHour * 100).ToString("F4"))%</dd>
+
+                    @if (Model.SpreadHistory.Any())
+                    {
+                        var latestSpread = Model.SpreadHistory.Last().SpreadPerHour;
+                        <dt class="col-sm-6">Latest Spread/hr</dt>
+                        <dd class="col-sm-6 @(latestSpread >= 0 ? "text-success" : "text-danger")">@((latestSpread * 100).ToString("F4"))%</dd>
+
+                        var spreadEvolution = latestSpread - Model.EntrySpreadPerHour;
+                        <dt class="col-sm-6">Spread Change</dt>
+                        <dd class="col-sm-6 @(spreadEvolution >= 0 ? "text-success" : "text-danger")">@((spreadEvolution * 100).ToString("F4"))%</dd>
+                    }
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-3">
+    <!-- Card 5: Target vs Actual -->
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>Target vs Actual</strong></div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-6">Projected PnL</dt>
+                    <dd class="col-sm-6">@Model.ProjectedPnl.ToString("F4") USDC</dd>
+
+                    <dt class="col-sm-6">Actual PnL</dt>
+                    <dd class="col-sm-6 @(Model.ActualPnl >= 0 ? "text-success" : "text-danger")">@Model.ActualPnl.ToString("F4") USDC</dd>
+
+                    <dt class="col-sm-6">% of Target</dt>
+                    <dd class="col-sm-6 @pctColor fw-bold">@pctAchieved.ToString("F1")%</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- Card 6: Hold Time Analysis -->
+    <div class="col-md-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-header"><strong>Hold Time</strong></div>
+            <div class="card-body">
+                <dl class="row mb-0">
                     <dt class="col-sm-6">Hours Held</dt>
                     <dd class="col-sm-6">@Model.HoursHeld.ToString("F1")</dd>
-
-                    <dt class="col-sm-6">Size</dt>
-                    <dd class="col-sm-6">@Model.SizeUsdc.ToString("F2") USDC</dd>
 
                     <dt class="col-sm-6">Entry Spread/hr</dt>
                     <dd class="col-sm-6">@((Model.EntrySpreadPerHour * 100).ToString("F4"))%</dd>
@@ -49,64 +175,31 @@
             </div>
         </div>
     </div>
-
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">PnL Comparison</div>
-            <div class="card-body">
-                @{
-                    var diffClass = Model.PnlDifference >= 0 ? "text-success" : "text-danger";
-                    var maxPnl = Math.Max(Math.Abs(Model.ActualPnl), Math.Abs(Model.ProjectedPnl));
-                    var actualBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ActualPnl) / maxPnl * 100) : 0;
-                    var projectedBarPct = maxPnl > 0 ? (int)(Math.Abs(Model.ProjectedPnl) / maxPnl * 100) : 0;
-                    var actualBarColor = Model.ActualPnl >= 0 ? "bg-success" : "bg-danger";
-                    var projectedBarColor = Model.ProjectedPnl >= 0 ? "bg-primary" : "bg-warning";
-                }
-
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between mb-1">
-                        <span>Actual PnL</span>
-                        <strong class="@(Model.ActualPnl >= 0 ? "text-success" : "text-danger")">
-                            @Model.ActualPnl.ToString("F2") USDC
-                        </strong>
-                    </div>
-                    <div class="progress" style="height: 20px;">
-                        <div class="progress-bar @actualBarColor" role="progressbar"
-                             style="width: @(actualBarPct)%"></div>
-                    </div>
-                </div>
-
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between mb-1">
-                        <span>Projected PnL</span>
-                        <strong>@Model.ProjectedPnl.ToString("F2") USDC</strong>
-                    </div>
-                    <div class="progress" style="height: 20px;">
-                        <div class="progress-bar @projectedBarColor" role="progressbar"
-                             style="width: @(projectedBarPct)%"></div>
-                    </div>
-                </div>
-
-                <hr />
-                <div class="d-flex justify-content-between">
-                    <span>Difference</span>
-                    <strong class="@diffClass">@Model.PnlDifference.ToString("F2") USDC</strong>
-                </div>
-            </div>
-        </div>
-    </div>
 </div>
 
+<!-- Card 7: Counterfactual (closed positions only) -->
+@if (Model.IsClosed && Model.SpreadHistory.Any())
+{
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Counterfactual (What If)</strong></div>
+        <div class="card-body">
+            <p class="text-muted small">Hypothetical PnL had the position been held longer, based on spread history after close.</p>
+            <p class="text-muted">Counterfactual computation uses post-close spread data from FundingRateSnapshots. Full implementation requires bounded historical query.</p>
+        </div>
+    </div>
+}
+
+<!-- Spread History -->
 @if (Model.SpreadHistory.Any())
 {
-    <div class="card mb-4">
-        <div class="card-header">Spread History (Hourly)</div>
+    <div class="card shadow-sm mb-3">
+        <div class="card-header"><strong>Spread History (Hourly)</strong></div>
         <div class="card-body">
             <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
                 <table class="table table-sm table-striped">
                     <thead class="table-dark sticky-top">
                         <tr>
-                            <th>Hour (UTC)</th>
+                            <th>Hour</th>
                             <th class="text-end">Spread/hr</th>
                             <th>Bar</th>
                         </tr>
@@ -120,7 +213,7 @@
                             var barPct = maxSpread > 0 ? (int)(Math.Abs(point.SpreadPerHour) / maxSpread * 100) : 0;
                             var barColor = point.SpreadPerHour >= 0 ? "bg-success" : "bg-danger";
                             <tr>
-                                <td>@point.HourUtc.ToString("MM-dd HH:mm")</td>
+                                <td><time datetime="@point.HourUtc.ToString("o")" class="local-time">@point.HourUtc.ToString("MM-dd HH:mm")</time></td>
                                 <td class="text-end">@((point.SpreadPerHour * 100).ToString("F4"))%</td>
                                 <td style="width: 40%;">
                                     <div class="progress" style="height: 14px;">
@@ -138,4 +231,8 @@
 else
 {
     <div class="alert alert-info">No hourly spread history available. Aggregates are generated hourly and retained for 30 days.</div>
+}
+
+@section Scripts {
+    <script src="~/js/shared-time.js" asp-append-version="true"></script>
 }

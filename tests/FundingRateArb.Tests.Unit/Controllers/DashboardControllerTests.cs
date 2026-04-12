@@ -1088,4 +1088,33 @@ public class DashboardControllerTests
         await act.Should().ThrowAsync<OperationCanceledException>(
             "an internal OCE without client abort must propagate — not be swallowed as EmptyResult");
     }
+
+    [Fact]
+    public async Task Index_ReturnsViewModelWithInitialBalances_WhenAggregatorReturnsSnapshot()
+    {
+        // Arrange: register IBalanceAggregator on the scoped service provider
+        var mockAggregator = new Mock<IBalanceAggregator>();
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 1000m,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new() { ExchangeName = "Hyperliquid", AvailableUsdc = 600m },
+                new() { ExchangeName = "Lighter", AvailableUsdc = 400m },
+            }
+        };
+        mockAggregator.Setup(a => a.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(snapshot);
+        _mockScopeProvider.Setup(p => p.GetService(typeof(IBalanceAggregator))).Returns(mockAggregator.Object);
+
+        // Act
+        var result = await _controller.Index(CancellationToken.None);
+
+        // Assert
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.InitialBalances.Should().NotBeNull();
+        model.InitialBalances!.TotalAvailableUsdc.Should().Be(1000m);
+        model.InitialBalances.Balances.Should().HaveCount(2);
+    }
 }

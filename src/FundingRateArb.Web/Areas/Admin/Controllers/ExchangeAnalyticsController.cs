@@ -1,3 +1,4 @@
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Web.ViewModels;
@@ -12,11 +13,19 @@ public class ExchangeAnalyticsController : Controller
 {
     private readonly IExchangeAnalyticsService _analytics;
     private readonly ICoinGlassAnalyticsRepository _analyticsRepo;
+    private readonly ICoinGlassScreeningProvider _screeningProvider;
+    private readonly ILogger<ExchangeAnalyticsController> _logger;
 
-    public ExchangeAnalyticsController(IExchangeAnalyticsService analytics, ICoinGlassAnalyticsRepository analyticsRepo)
+    public ExchangeAnalyticsController(
+        IExchangeAnalyticsService analytics,
+        ICoinGlassAnalyticsRepository analyticsRepo,
+        ICoinGlassScreeningProvider screeningProvider,
+        ILogger<ExchangeAnalyticsController> logger)
     {
         _analytics = analytics;
         _analyticsRepo = analyticsRepo;
+        _screeningProvider = screeningProvider;
+        _logger = logger;
     }
 
     public async Task<IActionResult> Index(CancellationToken ct)
@@ -29,8 +38,27 @@ public class ExchangeAnalyticsController : Controller
             Exchanges = await _analytics.GetExchangeOverviewAsync(latestRates, ct),
             TopOpportunities = await _analytics.GetTopOpportunitiesAsync(latestRates, ct: ct),
             RateComparisons = await _analytics.GetRateComparisonsAsync(ct),
-            DiscoveryEvents = await _analytics.GetRecentDiscoveryEventsAsync(ct: ct)
+            DiscoveryEvents = await _analytics.GetRecentDiscoveryEventsAsync(ct: ct),
+            CoinGlassAvailable = _screeningProvider.IsAvailable,
         };
         return View(vm);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> TriggerFetch(CancellationToken ct)
+    {
+        try
+        {
+            var hotSymbols = await _screeningProvider.GetHotSymbolsAsync(ct);
+            TempData["Success"] = $"CoinGlass fetch completed. {hotSymbols.Count} hot symbols found.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Manual CoinGlass fetch failed");
+            TempData["Error"] = $"CoinGlass fetch failed: {ex.Message}";
+        }
+
+        return RedirectToAction(nameof(Index));
     }
 }

@@ -919,6 +919,70 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         }
     }
 
+    public Task<ComputedPositionPnl?> ComputePositionSnapshotAsync(ArbitragePosition position, CancellationToken ct = default)
+    {
+        var assetSymbol = position.Asset?.Symbol ?? "?";
+        var longExchangeName = position.LongExchange?.Name ?? "?";
+        var shortExchangeName = position.ShortExchange?.Name ?? "?";
+
+        if (position.LongEntryPrice <= 0 || position.ShortEntryPrice <= 0)
+        {
+            return Task.FromResult<ComputedPositionPnl?>(null);
+        }
+
+        var currentLongMark = _marketDataCache.GetMarkPrice(longExchangeName, assetSymbol);
+        var currentShortMark = _marketDataCache.GetMarkPrice(shortExchangeName, assetSymbol);
+
+        if (currentLongMark <= 0 || currentShortMark <= 0)
+        {
+            // Cache cold — caller falls back to zero-PnL behavior
+            return Task.FromResult<ComputedPositionPnl?>(null);
+        }
+
+        var avgEntryPrice = (position.LongEntryPrice + position.ShortEntryPrice) / 2m;
+        var estimatedQty = avgEntryPrice > 0
+            ? position.SizeUsdc * position.Leverage / avgEntryPrice
+            : 0m;
+        var longPnl = (currentLongMark - position.LongEntryPrice) * estimatedQty;
+        var shortPnl = (position.ShortEntryPrice - currentShortMark) * estimatedQty;
+        var exchangePnl = longPnl + shortPnl;
+
+        var unifiedPrice = _referencePriceProvider.GetUnifiedPrice(assetSymbol, longExchangeName, shortExchangeName);
+        decimal unifiedPnl;
+        decimal unifiedLongPnl, unifiedShortPnl;
+        if (unifiedPrice > 0)
+        {
+            unifiedLongPnl = (unifiedPrice - position.LongEntryPrice) * estimatedQty;
+            unifiedShortPnl = (position.ShortEntryPrice - unifiedPrice) * estimatedQty;
+            unifiedPnl = unifiedLongPnl + unifiedShortPnl;
+        }
+        else
+        {
+            unifiedPnl = exchangePnl;
+            unifiedLongPnl = longPnl;
+            unifiedShortPnl = shortPnl;
+        }
+
+        decimal? collateralImbalancePct = null;
+        var marginPerLeg = position.MarginUsdc / 2m;
+        if (marginPerLeg > 0)
+        {
+            var longUtil = Math.Abs(unifiedLongPnl) / marginPerLeg;
+            var shortUtil = Math.Abs(unifiedShortPnl) / marginPerLeg;
+            collateralImbalancePct = Math.Abs(longUtil - shortUtil);
+        }
+
+        var divergencePct = unifiedPrice > 0
+            ? Math.Abs(currentLongMark - currentShortMark) / unifiedPrice * 100m
+            : 0m;
+
+        return Task.FromResult<ComputedPositionPnl?>(new ComputedPositionPnl(
+            ExchangePnl: exchangePnl,
+            UnifiedPnl: unifiedPnl,
+            DivergencePct: divergencePct,
+            CollateralImbalancePct: collateralImbalancePct));
+    }
+
     public async Task ReconcileOpenPositionsAsync(CancellationToken ct = default)
     {
         // Part B.1: Reconcile Opening positions — recover or fail stuck opens

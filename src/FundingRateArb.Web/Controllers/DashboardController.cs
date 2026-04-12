@@ -266,6 +266,19 @@ public class DashboardController : Controller
                 }
             }
 
+            // Fetch initial balance snapshot for the always-visible balance tile
+            BalanceSnapshotDto? initialBalances = null;
+            try
+            {
+                using var balanceScope = _scopeFactory.CreateScope();
+                var aggregator = balanceScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
+                initialBalances = await aggregator.GetBalanceSnapshotAsync(userId!, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to fetch initial balances for dashboard");
+            }
+
             var vm = new DashboardViewModel
             {
                 IsAuthenticated = true,
@@ -287,6 +300,7 @@ public class DashboardController : Controller
                 ActiveCooldowns = _circuitBreakerManager.GetActivePairCooldowns().ToList(),
                 CircuitBreakerStates = _circuitBreakerManager.GetCircuitBreakerStates().ToList(),
                 LastFundingRateFetch = result.Diagnostics is not null ? _marketDataCache.GetLastFetchTime() : null,
+                InitialBalances = initialBalances,
             };
 
             if (User.IsInRole("Admin") && botConfig is not null)

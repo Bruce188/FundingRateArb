@@ -62,6 +62,29 @@ public class BotConfigController : Controller
             MaxLeverageCap = config.MaxLeverageCap,
             MarginUtilizationAlertPct = config.MarginUtilizationAlertPct,
             PnlTargetCooldownMinutes = config.PnlTargetCooldownMinutes,
+            // Risk Management
+            MinHoldBeforePnlTargetMinutes = config.MinHoldBeforePnlTargetMinutes,
+            LiquidationWarningPct = config.LiquidationWarningPct,
+            LiquidationEarlyWarningPct = config.LiquidationEarlyWarningPct,
+            ExchangeCircuitBreakerThreshold = config.ExchangeCircuitBreakerThreshold,
+            ExchangeCircuitBreakerMinutes = config.ExchangeCircuitBreakerMinutes,
+            PriceFeedFailureCloseThreshold = config.PriceFeedFailureCloseThreshold,
+            // Thresholds
+            EmergencyCloseSpreadThreshold = config.EmergencyCloseSpreadThreshold,
+            MinEdgeMultiplier = config.MinEdgeMultiplier,
+            DivergenceAlertMultiplier = config.DivergenceAlertMultiplier,
+            SlippageBufferBps = config.SlippageBufferBps,
+            StablecoinAlertThresholdPct = config.StablecoinAlertThresholdPct,
+            StablecoinCriticalThresholdPct = config.StablecoinCriticalThresholdPct,
+            MinConsecutiveFavorableCycles = config.MinConsecutiveFavorableCycles,
+            FundingFlipExitCycles = config.FundingFlipExitCycles,
+            // Advanced booleans
+            UseRiskBasedDivergenceClose = config.UseRiskBasedDivergenceClose,
+            UseBreakEvenSizeFilter = config.UseBreakEvenSizeFilter,
+            DryRunEnabled = config.DryRunEnabled,
+            ForceConcurrentExecution = config.ForceConcurrentExecution,
+            // Infrastructure
+            ReconciliationIntervalCycles = config.ReconciliationIntervalCycles,
         };
 
         return View(model);
@@ -118,6 +141,29 @@ public class BotConfigController : Controller
         config.MaxLeverageCap = model.MaxLeverageCap;
         config.MarginUtilizationAlertPct = model.MarginUtilizationAlertPct;
         config.PnlTargetCooldownMinutes = model.PnlTargetCooldownMinutes!.Value;
+        // Risk Management
+        config.MinHoldBeforePnlTargetMinutes = model.MinHoldBeforePnlTargetMinutes!.Value;
+        config.LiquidationWarningPct = model.LiquidationWarningPct!.Value;
+        config.LiquidationEarlyWarningPct = model.LiquidationEarlyWarningPct!.Value;
+        config.ExchangeCircuitBreakerThreshold = model.ExchangeCircuitBreakerThreshold!.Value;
+        config.ExchangeCircuitBreakerMinutes = model.ExchangeCircuitBreakerMinutes!.Value;
+        config.PriceFeedFailureCloseThreshold = model.PriceFeedFailureCloseThreshold!.Value;
+        // Thresholds
+        config.EmergencyCloseSpreadThreshold = model.EmergencyCloseSpreadThreshold!.Value;
+        config.MinEdgeMultiplier = model.MinEdgeMultiplier!.Value;
+        config.DivergenceAlertMultiplier = model.DivergenceAlertMultiplier!.Value;
+        config.SlippageBufferBps = model.SlippageBufferBps!.Value;
+        config.StablecoinAlertThresholdPct = model.StablecoinAlertThresholdPct!.Value;
+        config.StablecoinCriticalThresholdPct = model.StablecoinCriticalThresholdPct!.Value;
+        config.MinConsecutiveFavorableCycles = model.MinConsecutiveFavorableCycles!.Value;
+        config.FundingFlipExitCycles = model.FundingFlipExitCycles!.Value;
+        // Advanced booleans
+        config.UseRiskBasedDivergenceClose = model.UseRiskBasedDivergenceClose;
+        config.UseBreakEvenSizeFilter = model.UseBreakEvenSizeFilter;
+        config.DryRunEnabled = model.DryRunEnabled;
+        config.ForceConcurrentExecution = model.ForceConcurrentExecution;
+        // Infrastructure
+        config.ReconciliationIntervalCycles = model.ReconciliationIntervalCycles!.Value;
 
         var validation = _configValidator.Validate(config);
         if (!validation.IsValid)
