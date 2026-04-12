@@ -375,6 +375,106 @@ public class TradeAnalyticsServiceTests
     }
 
     [Fact]
+    public async Task GetPositionAnalyticsAsync_OpenPosition_ReturnsEmptyCounterfactuals()
+    {
+        var openedAt = DateTime.UtcNow.AddHours(-12);
+        var pos = new ArbitragePosition
+        {
+            Id = 50,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 1000m,
+            EntrySpreadPerHour = 0.001m,
+            AccumulatedFunding = 10m,
+            RealizedPnl = null,
+            OpenedAt = openedAt,
+            ClosedAt = null,
+            Status = PositionStatus.Open,
+            Asset = new Asset { Symbol = "BTC" },
+            LongExchange = new Exchange { Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Name = "Lighter" },
+        };
+
+        _mockPositionRepo.Setup(r => r.GetByIdAsync(50)).ReturnsAsync(pos);
+
+        var result = await _sut.GetPositionAnalyticsAsync(50);
+
+        result.Should().NotBeNull();
+        result!.IsClosed.Should().BeFalse();
+        result.Counterfactuals.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ComputeCounterfactualPnlAsync_ReturnsEmpty_WhenClosedAtNull()
+    {
+        var position = new ArbitragePosition
+        {
+            Id = 40,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 1000m,
+            ClosedAt = null,
+            Status = PositionStatus.Open,
+        };
+
+        var result = await _sut.ComputeCounterfactualPnlAsync(position, 5.0m, CancellationToken.None);
+
+        result.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ComputeCounterfactualPnlAsync_HandlesMismatchedHourBuckets()
+    {
+        var closeTime = new DateTime(2026, 4, 1, 12, 0, 0, DateTimeKind.Utc);
+        var position = new ArbitragePosition
+        {
+            Id = 41,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 1000m,
+            ClosedAt = closeTime,
+            Status = PositionStatus.Closed,
+        };
+
+        // Long has data at h0, h1, h2; short only has h0 and h2 (partial overlap)
+        var longAggs = new List<FundingRateHourlyAggregate>
+        {
+            new() { HourUtc = closeTime.AddHours(0), AvgRatePerHour = 0.0002m },
+            new() { HourUtc = closeTime.AddHours(1), AvgRatePerHour = 0.0003m },
+            new() { HourUtc = closeTime.AddHours(2), AvgRatePerHour = 0.0001m },
+        };
+        var shortAggs = new List<FundingRateHourlyAggregate>
+        {
+            new() { HourUtc = closeTime.AddHours(0), AvgRatePerHour = 0.0005m },
+            // h1 missing — simulates partial hour overlap
+            new() { HourUtc = closeTime.AddHours(2), AvgRatePerHour = 0.0004m },
+        };
+
+        _mockFundingRateRepo.Setup(r => r.GetHourlyAggregatesAsync(
+                1, 1, closeTime, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(longAggs);
+        _mockFundingRateRepo.Setup(r => r.GetHourlyAggregatesAsync(
+                1, 2, closeTime, It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(shortAggs);
+
+        var result = await _sut.ComputeCounterfactualPnlAsync(position, 5.0m, CancellationToken.None);
+
+        result.Should().HaveCount(4);
+
+        // +1h: only h0 matches (h1 is missing from short)
+        // spread at h0 = 0.0005 - 0.0002 = 0.0003
+        result[0].HypotheticalPnl.Should().Be(5.0m + 0.0003m * 1000m);
+
+        // +4h: h0 and h2 match (h1 skipped because short has no data)
+        // cumulative = (0.0005-0.0002) + (0.0004-0.0001) = 0.0003 + 0.0003 = 0.0006
+        var cumSpread = (0.0005m - 0.0002m) + (0.0004m - 0.0001m);
+        result[1].HypotheticalPnl.Should().Be(5.0m + cumSpread * 1000m);
+    }
+
+    [Fact]
     public async Task GetPositionAnalyticsAsync_ClosedPosition_PopulatesCounterfactuals()
     {
         var openedAt = DateTime.UtcNow.AddHours(-48);

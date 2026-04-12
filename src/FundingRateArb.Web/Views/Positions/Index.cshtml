@@ -22,7 +22,7 @@
 else
 {
     <div class="table-responsive">
-        <table class="table table-striped table-hover">
+        <table class="table table-striped table-hover" id="positions-table" data-details-base-url="@Url.Action("Details", "Positions")">
             <thead class="table-dark">
                 <tr>
                     <th>Asset</th>
@@ -129,8 +129,10 @@ else
     <script src="~/js/shared-time.js" asp-append-version="true"></script>
     <script src="~/js/positions.js" asp-append-version="true"></script>
     <script>
+        var posTable = document.getElementById("positions-table");
+        var detailsBaseUrl = (posTable && posTable.getAttribute("data-details-base-url")) || "/Positions/Details";
         document.querySelectorAll("tr[data-position-id]").forEach(function(row) {
-            function navigate() { window.location.href = "/Positions/Details/" + row.dataset.positionId; }
+            function navigate() { window.location.href = detailsBaseUrl + "/" + row.dataset.positionId; }
             row.addEventListener("click", function(e) {
                 if (e.target.closest("a, button, form")) return;
                 navigate();

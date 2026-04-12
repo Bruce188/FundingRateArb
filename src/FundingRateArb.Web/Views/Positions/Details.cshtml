@@ -44,7 +44,7 @@
             </div>
         </div>
         <div class="mt-2">
-            <a href="/Positions" class="btn btn-sm btn-outline-secondary">Back to Positions</a>
+            <a asp-controller="Positions" asp-action="Index" class="btn btn-sm btn-outline-secondary">Back to Positions</a>
             @if (pos.Status == PositionStatus.Open && User.IsInRole("Admin"))
             {
                 <form asp-action="Close" asp-route-id="@pos.Id" method="post" class="d-inline ms-2"
@@ -131,7 +131,7 @@
     <div class="col-md-6">
         <div class="card shadow-sm mb-3">
             <div class="card-header"><strong>Margin & Liquidation</strong></div>
-            <div class="card-body" id="live-margin-card">
+            <div class="card-body" id="live-margin-card" data-margin-url="/api/positions/@pos.Id/live-margin">
                 @if (pos.Status == PositionStatus.Open)
                 {
                     <div class="text-center py-3" id="margin-spinner">
@@ -231,45 +231,62 @@
     {
         <script>
             (function() {
+                var card = document.getElementById("live-margin-card");
+                var marginUrl = card ? card.getAttribute("data-margin-url") : null;
                 var spinner = document.getElementById("margin-spinner");
                 var dataDiv = document.getElementById("margin-data");
-                fetch("/api/positions/@pos.Id/live-margin")
-                    .then(function(r) { return r.json(); })
-                    .then(function(d) {
-                        if (spinner) spinner.classList.add("d-none");
-                        if (!dataDiv) return;
-                        dataDiv.classList.remove("d-none");
-                        if (d.error) {
-                            var p = document.createElement("p");
-                            p.className = "text-warning mb-0";
-                            p.textContent = d.error;
-                            dataDiv.appendChild(p);
-                            return;
-                        }
-                        var dl = document.createElement("dl");
-                        dl.className = "row mb-0";
-                        function addRow(label, val) {
-                            if (val == null) return;
-                            var dt = document.createElement("dt"); dt.className = "col-sm-6"; dt.textContent = label;
-                            var dd = document.createElement("dd"); dd.className = "col-sm-6"; dd.textContent = val;
-                            dl.appendChild(dt); dl.appendChild(dd);
-                        }
-                        if (d.longMarginUtilization != null) addRow("Long Margin Util.", (d.longMarginUtilization * 100).toFixed(1) + "%");
-                        if (d.shortMarginUtilization != null) addRow("Short Margin Util.", (d.shortMarginUtilization * 100).toFixed(1) + "%");
-                        if (d.longLiquidationPrice != null) addRow("Long Liq. Price", "$" + d.longLiquidationPrice.toFixed(4));
-                        if (d.shortLiquidationPrice != null) addRow("Short Liq. Price", "$" + d.shortLiquidationPrice.toFixed(4));
-                        dataDiv.appendChild(dl);
-                    })
-                    .catch(function() {
-                        if (spinner) spinner.classList.add("d-none");
-                        if (dataDiv) {
+                if (!marginUrl) return;
+
+                function fetchMarginData() {
+                    if (spinner) { spinner.classList.remove("d-none"); }
+                    if (dataDiv) { dataDiv.classList.add("d-none"); dataDiv.textContent = ""; }
+
+                    fetch(marginUrl)
+                        .then(function(r) { return r.json(); })
+                        .then(function(d) {
+                            if (spinner) spinner.classList.add("d-none");
+                            if (!dataDiv) return;
                             dataDiv.classList.remove("d-none");
-                            var p = document.createElement("p");
-                            p.className = "text-warning mb-0";
-                            p.textContent = "Exchange data unavailable";
-                            dataDiv.appendChild(p);
-                        }
-                    });
+                            if (d.error) {
+                                showError(d.error);
+                                return;
+                            }
+                            var dl = document.createElement("dl");
+                            dl.className = "row mb-0";
+                            function addRow(label, val) {
+                                if (val == null) return;
+                                var dt = document.createElement("dt"); dt.className = "col-sm-6"; dt.textContent = label;
+                                var dd = document.createElement("dd"); dd.className = "col-sm-6"; dd.textContent = val;
+                                dl.appendChild(dt); dl.appendChild(dd);
+                            }
+                            if (d.longMarginUtilization != null) addRow("Long Margin Util.", (d.longMarginUtilization * 100).toFixed(1) + "%");
+                            if (d.shortMarginUtilization != null) addRow("Short Margin Util.", (d.shortMarginUtilization * 100).toFixed(1) + "%");
+                            if (d.longLiquidationPrice != null) addRow("Long Liq. Price", "$" + d.longLiquidationPrice.toFixed(4));
+                            if (d.shortLiquidationPrice != null) addRow("Short Liq. Price", "$" + d.shortLiquidationPrice.toFixed(4));
+                            dataDiv.appendChild(dl);
+                        })
+                        .catch(function() {
+                            if (spinner) spinner.classList.add("d-none");
+                            showError("Exchange data unavailable");
+                        });
+                }
+
+                function showError(msg) {
+                    if (!dataDiv) return;
+                    dataDiv.classList.remove("d-none");
+                    var p = document.createElement("p");
+                    p.className = "text-warning mb-0";
+                    p.textContent = msg;
+                    dataDiv.appendChild(p);
+                    var btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "btn btn-sm btn-outline-secondary mt-2";
+                    btn.textContent = "Retry";
+                    btn.addEventListener("click", fetchMarginData);
+                    dataDiv.appendChild(btn);
+                }
+
+                fetchMarginData();
             })();
         </script>
     }

@@ -29,6 +29,7 @@ public class ArbitragePositionMappingExtensionsTests
             CloseReason = CloseReason.PnlTargetReached,
             OpenedAt = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc),
             ClosedAt = new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc),
+            CurrentDivergencePct = 0.15m,
             Notes = "Test position notes",
             Asset = new Asset { Id = 5, Symbol = "BTC", Name = "Bitcoin" },
             LongExchange = new Exchange
@@ -92,7 +93,7 @@ public class ArbitragePositionMappingExtensionsTests
         dto.UnrealizedPnl.Should().Be(0m); // set by caller with live computed value
         dto.ExchangePnl.Should().Be(0m);
         dto.UnifiedPnl.Should().Be(0m);
-        dto.DivergencePct.Should().Be(0m);
+        dto.DivergencePct.Should().Be(0.15m);
         dto.RealizedPnl.Should().Be(25.75m);
         dto.Status.Should().Be(PositionStatus.Open);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
@@ -181,6 +182,7 @@ public class ArbitragePositionMappingExtensionsTests
         dto.CloseReason.Should().Be(CloseReason.PnlTargetReached);
         dto.OpenedAt.Should().Be(new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc));
         dto.ClosedAt.Should().Be(new DateTime(2026, 3, 2, 12, 0, 0, DateTimeKind.Utc));
+        dto.CurrentDivergencePct.Should().Be(0.15m);
         dto.Notes.Should().Be("Test position notes");
     }
 

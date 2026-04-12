@@ -14,6 +14,7 @@ namespace FundingRateArb.Infrastructure.Services;
 public class BalanceRefreshService : BackgroundService
 {
     private const int RefreshIntervalSeconds = 60;
+    private const int MaxUsersPerCycle = 100;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<BalanceRefreshService> _logger;
@@ -59,6 +60,14 @@ public class BalanceRefreshService : BackgroundService
             userIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
         }
 
+        if (userIds.Count > MaxUsersPerCycle)
+        {
+            _logger.LogWarning(
+                "Enabled user count ({Count}) exceeds per-cycle cap ({Cap}); truncating",
+                userIds.Count, MaxUsersPerCycle);
+            userIds = userIds.Take(MaxUsersPerCycle).ToList();
+        }
+
         await Parallel.ForEachAsync(userIds, new ParallelOptions
         {
             MaxDegreeOfParallelism = 4,
@@ -75,7 +84,7 @@ public class BalanceRefreshService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to refresh balance for user {UserId}", userId);
+                _logger.LogWarning(ex, "Failed to refresh balance for user {UserId}", userId);
             }
         });
     }

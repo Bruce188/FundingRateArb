@@ -542,11 +542,15 @@ public class SettingsController : Controller
             return Unauthorized();
         }
 
+        // Build candidate from viewmodel before touching the tracked entity,
+        // matching the BotConfigController validate-before-mutate pattern.
+        var candidateMaxLeverageCap = model.MaxLeverageCap;
+
         // Validate MaxLeverageCap against global cap before any entity mutation
-        if (model.MaxLeverageCap.HasValue)
+        if (candidateMaxLeverageCap.HasValue)
         {
             var globalConfig = await _uow.BotConfig.GetActiveAsync();
-            if (model.MaxLeverageCap.Value > globalConfig.MaxLeverageCap)
+            if (candidateMaxLeverageCap.Value > globalConfig.MaxLeverageCap)
             {
                 ModelState.AddModelError(nameof(model.MaxLeverageCap),
                     $"Cannot exceed the global cap of {globalConfig.MaxLeverageCap}.");
@@ -555,6 +559,7 @@ public class SettingsController : Controller
             }
         }
 
+        // Validation passed — now mutate the tracked entity
         var config = await _settings.GetOrCreateConfigAsync(userId);
 
         config.IsEnabled = model.IsEnabled;
@@ -578,7 +583,7 @@ public class SettingsController : Controller
         config.FundingWindowMinutes = model.FundingWindowMinutes!.Value;
         config.MaxExposurePerAsset = model.MaxExposurePerAsset!.Value;
         config.MaxExposurePerExchange = model.MaxExposurePerExchange!.Value;
-        config.MaxLeverageCap = model.MaxLeverageCap;
+        config.MaxLeverageCap = candidateMaxLeverageCap;
         config.EmailNotificationsEnabled = model.EmailNotificationsEnabled;
         config.EmailCriticalAlerts = model.EmailCriticalAlerts;
         config.EmailDailySummary = model.EmailDailySummary;

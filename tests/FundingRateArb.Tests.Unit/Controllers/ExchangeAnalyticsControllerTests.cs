@@ -5,6 +5,7 @@ using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Web.Areas.Admin.Controllers;
+using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ViewFeatures;
@@ -50,7 +51,21 @@ public class ExchangeAnalyticsControllerTests
     {
         var result = await _controller.Index(CancellationToken.None);
 
-        result.Should().BeOfType<ViewResult>();
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<ExchangeAnalyticsViewModel>().Subject;
+        vm.CoinGlassAvailable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Index_ReturnsView_WithCoinGlassAvailable()
+    {
+        _mockScreening.Setup(s => s.IsAvailable).Returns(true);
+
+        var result = await _controller.Index(CancellationToken.None);
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = viewResult.Model.Should().BeOfType<ExchangeAnalyticsViewModel>().Subject;
+        vm.CoinGlassAvailable.Should().BeTrue();
     }
 
     [Fact]

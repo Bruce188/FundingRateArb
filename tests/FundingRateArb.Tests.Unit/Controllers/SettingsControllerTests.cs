@@ -106,6 +106,7 @@ public class SettingsControllerTests
                 FundingWindowMinutes = 30,
                 MaxExposurePerAsset = 0.5m,
                 MaxExposurePerExchange = 0.7m,
+                MaxLeverageCap = 5,
             });
 
         var result = await _controller.Configuration();
@@ -120,6 +121,9 @@ public class SettingsControllerTests
         model.AdminDefaults.MaxConcurrentPositions.Should().Be(GlobalConfig.MaxConcurrentPositions);
         model.AdminDefaults.OpenThreshold.Should().Be(GlobalConfig.OpenThreshold);
         model.AdminDefaults.StopLossPct.Should().Be(GlobalConfig.StopLossPct);
+
+        // MaxLeverageCap roundtrip: entity -> viewmodel
+        model.MaxLeverageCap.Should().Be(5);
     }
 
     [Fact]

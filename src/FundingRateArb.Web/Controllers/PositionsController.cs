@@ -14,6 +14,8 @@ namespace FundingRateArb.Web.Controllers;
 [Authorize]
 public class PositionsController : Controller
 {
+    private const int LiveMarginTimeoutSeconds = 5;
+
     private readonly IUnitOfWork _uow;
     private readonly IExecutionEngine _executionEngine;
     private readonly IExchangeConnectorFactory _connectorFactory;
@@ -137,7 +139,7 @@ public class PositionsController : Controller
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Failed to fetch margin state for position #{Id}", position.Id);
+                _logger.LogWarning(ex, "Failed to fetch margin state for position #{Id}", position.Id);
             }
         }
 
@@ -267,7 +269,7 @@ public class PositionsController : Controller
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            cts.CancelAfter(TimeSpan.FromSeconds(LiveMarginTimeoutSeconds));
 
             var sameExchange = string.Equals(longExchangeName, shortExchangeName, StringComparison.OrdinalIgnoreCase);
             var longConnector = _connectorFactory.GetConnector(longExchangeName);
@@ -297,7 +299,7 @@ public class PositionsController : Controller
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Live margin fetch failed for position #{Id}", id);
+            _logger.LogWarning(ex, "Live margin fetch failed for position #{Id}", id);
             return StatusCode(503, new { error = "Exchange data unavailable" });
         }
     }

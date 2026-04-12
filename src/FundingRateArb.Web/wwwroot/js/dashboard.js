@@ -9,11 +9,14 @@
     var showToast = window.appSignalR.showToast;
 
     // Row-click navigation: navigate to position details on click/Enter
+    var posTable = document.getElementById("positions-table");
+    var detailsBaseUrl = (posTable && posTable.getAttribute("data-details-base-url")) || "/Positions/Details";
+
     function bindRowClick(row) {
         if (!row || row.dataset.rowClickBound) return;
         row.dataset.rowClickBound = "1";
         function navigate() {
-            window.location.href = "/Positions/Details/" + row.dataset.positionId;
+            window.location.href = detailsBaseUrl + "/" + row.dataset.positionId;
         }
         row.addEventListener("click", function(e) {
             if (e.target.closest("a, button")) return;
