@@ -109,6 +109,51 @@ public class CircuitBreakerManagerTests
         _sut.ExchangeCircuitBreaker[42].BrokenUntil.Should().Be(DateTime.MinValue);
     }
 
+    [Fact]
+    public void IncrementExchangeFailure_SubThreshold_ReturnsFalse()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        _sut.IncrementExchangeFailure(1, config).Should().BeFalse();
+        _sut.IncrementExchangeFailure(1, config).Should().BeFalse();
+    }
+
+    [Fact]
+    public void IncrementExchangeFailure_AtThreshold_ReturnsTrue()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.IncrementExchangeFailure(1, config).Should().BeTrue(
+            "third call reaches threshold and should signal transition");
+    }
+
+    [Fact]
+    public void IncrementExchangeFailure_AlreadyOpen_ReturnsFalse()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.IncrementExchangeFailure(1, config); // opens
+
+        _sut.IncrementExchangeFailure(1, config).Should().BeFalse(
+            "circuit already open — no new transition");
+    }
+
     // ── IncrementAssetExchangeFailure ─────────────────────────────────────────
 
     [Fact]

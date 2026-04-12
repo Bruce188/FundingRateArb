@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.BackgroundServices;
 
-public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
+public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
 {
     // M2: Instance-level semaphore (not static) — avoids cross-instance interference in tests
     private readonly SemaphoreSlim _cycleLock = new(1, 1);
@@ -961,7 +961,8 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     }
                 }
 
-                // Target circuit breaker to the failing exchange
+                // Target circuit breaker to the failing exchange — collect alerts, batch SaveAsync
+                var circuitBreakerAlertAdded = false;
                 if (failingExchangeId.HasValue)
                 {
                     var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
@@ -976,7 +977,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                             Severity = AlertSeverity.Critical,
                             Message = $"{exchangeName} circuit breaker opened — exchange disabled for {duration} minutes",
                         });
-                        await ctx.Uow.SaveAsync(ct);
+                        circuitBreakerAlertAdded = true;
                     }
                 }
                 else
@@ -990,7 +991,7 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                             Severity = AlertSeverity.Critical,
                             Message = $"{opp.LongExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
                         });
-                        await ctx.Uow.SaveAsync(ct);
+                        circuitBreakerAlertAdded = true;
                     }
 
                     if (opp.ShortExchangeId != opp.LongExchangeId)
@@ -1004,9 +1005,14 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                                 Severity = AlertSeverity.Critical,
                                 Message = $"{opp.ShortExchangeName} circuit breaker opened — exchange disabled for {ctx.GlobalConfig.ExchangeCircuitBreakerMinutes} minutes",
                             });
-                            await ctx.Uow.SaveAsync(ct);
+                            circuitBreakerAlertAdded = true;
                         }
                     }
+                }
+
+                if (circuitBreakerAlertAdded)
+                {
+                    await ctx.Uow.SaveAsync(ct);
                 }
 
                 _logger.LogWarning(
@@ -1019,8 +1025,13 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
                     || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true)
                     ? "danger" : "warning";
 
-                var sanitizedError = error?.Length > 200 ? error[..200] + "..." : error ?? "Unknown error";
-                sanitizedError = Regex.Replace(sanitizedError, @"[A-Za-z0-9]{32,}", "[redacted]");
+                var sanitizedError = error is not null
+                    ? SecretPattern().Replace(error, "[redacted]")
+                    : "Unknown error";
+                if (sanitizedError.Length > 200)
+                {
+                    sanitizedError = sanitizedError[..200] + "...";
+                }
 
                 await _notifier.PushStatusExplanationAsync(
                     userId,
@@ -1226,4 +1237,6 @@ public class BotOrchestrator : BackgroundService, IBotControl, IBotDiagnostics
         return null;
     }
 
+    [GeneratedRegex(@"[A-Za-z0-9]{32,}")]
+    private static partial Regex SecretPattern();
 }

@@ -122,32 +122,41 @@ public class CircuitBreakerManager : ICircuitBreakerManager
         var threshold = config.ExchangeCircuitBreakerThreshold;
         var brokenUntil = DateTime.UtcNow.AddMinutes(config.ExchangeCircuitBreakerMinutes);
 
-        var wasAlreadyOpen = _exchangeCircuitBreaker.TryGetValue(exchangeId, out var prev)
-            && prev.Failures >= threshold;
+        // Transition detection via closure — atomic within AddOrUpdate to avoid
+        // TOCTOU races if callers ever become concurrent.
+        var transitioned = false;
 
-        var updated = _exchangeCircuitBreaker.AddOrUpdate(
+        _exchangeCircuitBreaker.AddOrUpdate(
             exchangeId,
             _ =>
             {
-                var f = 1;
-                return (f, f >= threshold ? brokenUntil : DateTime.MinValue);
+                if (1 >= threshold)
+                {
+                    transitioned = true;
+                }
+
+                return (1, 1 >= threshold ? brokenUntil : DateTime.MinValue);
             },
             (_, current) =>
             {
                 var f = current.Failures + 1;
+                var wasOpen = current.Failures >= threshold;
+                if (f >= threshold && !wasOpen)
+                {
+                    transitioned = true;
+                }
+
                 return (f, f >= threshold ? brokenUntil : DateTime.MinValue);
             });
 
-        var justOpened = updated.Failures >= threshold && !wasAlreadyOpen;
-
-        if (updated.Failures >= threshold)
+        if (transitioned)
         {
             _logger.LogWarning(
-                "Circuit breaker OPEN for exchange {ExchangeId}: {Failures} consecutive failures, excluded for {Minutes}m",
-                exchangeId, updated.Failures, config.ExchangeCircuitBreakerMinutes);
+                "Circuit breaker OPEN for exchange {ExchangeId}: {Threshold} consecutive failures, excluded for {Minutes}m",
+                exchangeId, threshold, config.ExchangeCircuitBreakerMinutes);
         }
 
-        return justOpened;
+        return transitioned;
     }
 
     public void IncrementAssetExchangeFailure(int assetId, int exchangeId)

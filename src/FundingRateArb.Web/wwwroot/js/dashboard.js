@@ -765,7 +765,7 @@
                 span.className = "text-warning balance-error";
                 span.title = b.errorMessage;
                 span.textContent = b.exchangeName + ": \u26A0 error";
-                if (b.errorMessage.includes("API key invalid")) {
+                if (b.errorMessage.toLowerCase().includes("api key invalid")) {
                     var settingsLink = document.createElement("a");
                     settingsLink.href = "/Settings";
                     settingsLink.className = "text-warning ms-1";
