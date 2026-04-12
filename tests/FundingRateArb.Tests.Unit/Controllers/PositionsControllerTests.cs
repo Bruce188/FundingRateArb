@@ -642,12 +642,15 @@ public class PositionsControllerTests
     {
         var position = new ArbitragePosition
         {
-            Id = 99, UserId = "trader-id",
+            Id = 99,
+            UserId = "trader-id",
             Status = PositionStatus.Open,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
-            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            AssetId = 1,
         };
         _mockPositions.Setup(p => p.GetByIdAsync(99)).ReturnsAsync(position);
 
@@ -696,7 +699,8 @@ public class PositionsControllerTests
         // B2: Non-admin user accessing another user's position
         var position = new ArbitragePosition
         {
-            Id = 42, UserId = "other-user",
+            Id = 42,
+            UserId = "other-user",
             Status = PositionStatus.Open,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
@@ -716,12 +720,15 @@ public class PositionsControllerTests
         // NB4: When both legs are on the same exchange, only one connector call should be made
         var position = new ArbitragePosition
         {
-            Id = 55, UserId = "trader-id",
+            Id = 55,
+            UserId = "trader-id",
             Status = PositionStatus.Open,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
-            LongExchangeId = 1, ShortExchangeId = 1, AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 1,
+            AssetId = 1,
         };
         _mockPositions.Setup(p => p.GetByIdAsync(55)).ReturnsAsync(position);
 
@@ -750,14 +757,18 @@ public class PositionsControllerTests
     {
         var position = new ArbitragePosition
         {
-            Id = 80, UserId = "trader-id",
+            Id = 80,
+            UserId = "trader-id",
             Status = PositionStatus.Closed,
             CurrentDivergencePct = 0.75m,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
-            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
-            LongEntryPrice = 3000m, ShortEntryPrice = 3001m,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            AssetId = 1,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
             OpenedAt = DateTime.UtcNow.AddHours(-2),
         };
         _mockPositions.Setup(p => p.GetByIdAsync(80)).ReturnsAsync(position);
@@ -776,7 +787,8 @@ public class PositionsControllerTests
         // NB3: position with null LongExchange/ShortExchange/Asset returns BadRequest
         var position = new ArbitragePosition
         {
-            Id = 101, UserId = "trader-id",
+            Id = 101,
+            UserId = "trader-id",
             Status = PositionStatus.Open,
             LongExchange = null!,
             ShortExchange = null!,
@@ -797,12 +809,15 @@ public class PositionsControllerTests
         // NB4: Admin can access positions owned by other users
         var position = new ArbitragePosition
         {
-            Id = 102, UserId = "other-user",
+            Id = 102,
+            UserId = "other-user",
             Status = PositionStatus.Open,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
-            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            AssetId = 1,
         };
         _mockPositions.Setup(p => p.GetByIdAsync(102)).ReturnsAsync(position);
 
@@ -830,12 +845,15 @@ public class PositionsControllerTests
         // N7: Generic exception (non-timeout) returns 503 with generic error message
         var position = new ArbitragePosition
         {
-            Id = 103, UserId = "trader-id",
+            Id = 103,
+            UserId = "trader-id",
             Status = PositionStatus.Open,
             LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
             ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
             Asset = new Asset { Id = 1, Symbol = "ETH" },
-            LongExchangeId = 1, ShortExchangeId = 2, AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            AssetId = 1,
         };
         _mockPositions.Setup(p => p.GetByIdAsync(103)).ReturnsAsync(position);
 
