@@ -62,7 +62,7 @@ public class BalanceAggregator : IBalanceAggregator
             // Skip credentials in auth-error backoff
             if (cred.LastError is not null
                 && cred.LastErrorAt is not null
-                && cred.LastError.Contains("API key invalid", StringComparison.OrdinalIgnoreCase)
+                && IsAuthError(cred.LastError)
                 && DateTime.UtcNow - cred.LastErrorAt.Value < AuthErrorBackoff)
             {
                 balances.Add(new ExchangeBalanceDto
@@ -133,7 +133,7 @@ public class BalanceAggregator : IBalanceAggregator
                 });
 
                 // Persist auth errors to credential for backoff tracking
-                if (sanitized.Contains("API key invalid", StringComparison.OrdinalIgnoreCase))
+                if (IsAuthError(sanitized))
                 {
                     await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, sanitized, ct);
                 }
@@ -161,6 +161,12 @@ public class BalanceAggregator : IBalanceAggregator
             => $"{exchangeName}: API key invalid or expired",
         InvalidOperationException when ex.Message.Contains("No recognized quote asset", StringComparison.Ordinal)
             => $"{exchangeName}: no recognized quote asset (USDT/USDC/USD) found",
+        ArgumentException when ex.Message.Contains("credentials", StringComparison.OrdinalIgnoreCase)
+            => $"{exchangeName}: API key invalid or expired",
         _ => $"{exchangeName}: balance fetch failed",
     };
+
+    private static bool IsAuthError(string? sanitizedMessage) =>
+        sanitizedMessage is not null
+        && sanitizedMessage.Contains("API key invalid", StringComparison.OrdinalIgnoreCase);
 }

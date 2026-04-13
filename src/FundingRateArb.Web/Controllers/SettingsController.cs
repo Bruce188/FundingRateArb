@@ -135,6 +135,12 @@ public class SettingsController : Controller
             TempData["TestResultSuccess"] = false;
             _logger.LogWarning(ex, "TestApiKey rate-limited for exchange {ExchangeId}", exchangeId);
         }
+        catch (ArgumentException ex) when (ex.Message.Contains("credentials", StringComparison.OrdinalIgnoreCase))
+        {
+            TempData["TestResult"] = "Configuration error — credential type mismatch";
+            TempData["TestResultSuccess"] = false;
+            _logger.LogWarning(ex, "TestApiKey credential mismatch for exchange {ExchangeId}", exchangeId);
+        }
         catch (Exception ex)
         {
             TempData["TestResult"] = "Network error";
@@ -243,6 +249,16 @@ public class SettingsController : Controller
                     await validationConnector.GetAvailableBalanceAsync(cts.Token);
                 }
             }
+        }
+        catch (ArgumentException ex) when (ex.Message.Contains("credentials", StringComparison.OrdinalIgnoreCase))
+        {
+            validationWarning = "Credentials saved but the exchange requires different credential types — check your configuration.";
+            _logger.LogWarning(ex, "Credential type mismatch for exchange {ExchangeId} after save", exchangeId);
+        }
+        catch (HttpRequestException ex)
+        {
+            validationWarning = "Credentials saved but the exchange is unreachable — try Test Connection later.";
+            _logger.LogWarning(ex, "Exchange unreachable during credential validation for {ExchangeId}", exchangeId);
         }
         catch (Exception ex)
         {
