@@ -511,6 +511,56 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public async Task ArgumentException_WithCredentialsMessage_ClassifiedAsAuthError()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Be("Aster: API key invalid or expired");
+    }
+
+    [Fact]
+    public async Task ArgumentException_WithGenericMessage_FallsThrough()
+    {
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedWalletAddress = "x" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("some other error"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Be("Aster: balance fetch failed");
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>

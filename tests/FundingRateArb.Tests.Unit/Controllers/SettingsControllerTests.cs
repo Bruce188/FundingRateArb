@@ -701,6 +701,76 @@ public class SettingsControllerTests
         result.Should().BeOfType<NotFoundResult>();
     }
 
+    [Fact]
+    public async Task TestApiKey_WithArgumentException_ReturnsConfigurationError()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+
+        var exchange = new Exchange { Id = 3, Name = "Aster", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 3 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 3))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("api-key", "api-secret", null, null, null, null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
+
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
+                "Aster", "api-key", "api-secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.TestApiKey(3);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        _controller.TempData["TestResultSuccess"].Should().Be(false);
+        var message = _controller.TempData["TestResult"] as string;
+        message.Should().Contain("Configuration error");
+    }
+
+    [Fact]
+    public async Task SaveApiKey_WithArgumentException_ReturnsCredentialTypeMismatch()
+    {
+        // Arrange
+        SetupAuthenticatedUser();
+        var exchange = new Exchange { Id = 3, Name = "Aster", IsActive = true, IsDataOnly = false };
+        _mockSettings.Setup(s => s.GetAvailableExchangesAsync())
+            .ReturnsAsync(new List<Exchange> { exchange });
+
+        var credential = new UserExchangeCredential { UserId = "test-user-id", ExchangeId = 3 };
+        _mockSettings.Setup(s => s.GetCredentialAsync("test-user-id", 3))
+            .ReturnsAsync(credential);
+        _mockSettings.Setup(s => s.DecryptCredential(credential))
+            .Returns(("api-key", "api-secret", null, null, null, null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", "api-key", "api-secret", null, null, null, null))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _controller.SaveApiKey(
+            exchangeId: 3, apiKey: "api-key", apiSecret: "api-secret",
+            walletAddress: null, privateKey: null,
+            subAccountAddress: null, apiKeyIndex: null);
+
+        // Assert
+        var redirect = result.Should().BeOfType<RedirectToActionResult>().Subject;
+        redirect.ActionName.Should().Be("ApiKeys");
+        var errorMsg = _controller.TempData["Error"] as string;
+        errorMsg.Should().NotBeNull();
+        errorMsg.Should().Contain("credential types");
+    }
+
     // ── MaxLeverageCap validation ─────────────────────────────────────────────
 
     [Fact]
