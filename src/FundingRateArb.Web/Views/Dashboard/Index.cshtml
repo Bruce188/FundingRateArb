@@ -684,7 +684,7 @@
                                     @foreach (var cd in Model.ActiveCooldowns)
                                     {
                                         <tr>
-                                            <td class="small text-break">@cd.CooldownKey</td>
+                                            <td class="small text-break">@cd.DisplayName</td>
                                             <td class="small">@cd.RemainingMinutes min</td>
                                             <td class="small"><time class="local-time" datetime="@cd.ExpiresAt.ToString("o")">@cd.ExpiresAt.ToString("HH:mm") UTC</time></td>
                                         </tr>

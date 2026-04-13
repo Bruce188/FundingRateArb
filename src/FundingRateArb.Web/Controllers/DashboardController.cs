@@ -298,7 +298,8 @@ public class DashboardController : Controller
                 RebalanceEnabled = botConfig?.RebalanceEnabled ?? false,
                 PnlProgressByPosition = pnlProgress,
                 DatabaseAvailable = result.DatabaseAvailable,
-                ActiveCooldowns = _circuitBreakerManager.GetActivePairCooldowns().ToList(),
+                ActiveCooldowns = ResolveCooldownNames(
+                    _circuitBreakerManager.GetActivePairCooldowns().ToList(), allOpportunities),
                 CircuitBreakerStates = _circuitBreakerManager.GetCircuitBreakerStates().ToList(),
                 LastFundingRateFetch = result.Diagnostics is not null ? _marketDataCache.GetLastFetchTime() : null,
                 InitialBalances = initialBalances,
@@ -354,6 +355,67 @@ public class DashboardController : Controller
             OpenPositions = [],
             BestSpread = 0m,
         });
+
+    /// <summary>
+    /// Parse cooldown keys and resolve asset/exchange IDs to readable names using
+    /// data already available from the opportunity list. Falls back gracefully
+    /// (DisplayName returns the raw key) when parsing or lookup fails.
+    /// </summary>
+    private static List<ActiveCooldownDto> ResolveCooldownNames(
+        List<ActiveCooldownDto> cooldowns,
+        List<ArbitrageOpportunityDto> opportunities)
+    {
+        if (cooldowns.Count == 0)
+            return cooldowns;
+
+        // Build lookup dictionaries from the opportunity data already in memory
+        var assetLookup = new Dictionary<int, string>();
+        var exchangeLookup = new Dictionary<int, string>();
+        foreach (var opp in opportunities)
+        {
+            assetLookup.TryAdd(opp.AssetId, opp.AssetSymbol);
+            exchangeLookup.TryAdd(opp.LongExchangeId, opp.LongExchangeName);
+            exchangeLookup.TryAdd(opp.ShortExchangeId, opp.ShortExchangeName);
+        }
+
+        foreach (var cd in cooldowns)
+        {
+            // Key format: "{userId}:{assetId}_{longExchangeId}_{shortExchangeId}"
+            // or rotation: "{userId}:{assetId}:{longExchangeId}:{shortExchangeId}"
+            var colonIdx = cd.CooldownKey.IndexOf(':');
+            if (colonIdx < 0)
+                continue;
+
+            var afterUser = cd.CooldownKey[(colonIdx + 1)..];
+            string[] parts;
+
+            if (afterUser.Contains('_'))
+                parts = afterUser.Split('_');
+            else
+                parts = afterUser.Split(':');
+
+            if (parts.Length != 3)
+                continue;
+
+            if (!int.TryParse(parts[0], out var assetId) ||
+                !int.TryParse(parts[1], out var longExId) ||
+                !int.TryParse(parts[2], out var shortExId))
+                continue;
+
+            assetLookup.TryGetValue(assetId, out var symbol);
+            exchangeLookup.TryGetValue(longExId, out var longName);
+            exchangeLookup.TryGetValue(shortExId, out var shortName);
+
+            if (symbol is not null)
+            {
+                cd.AssetSymbol = symbol;
+                cd.LongExchangeName = longName ?? longExId.ToString();
+                cd.ShortExchangeName = shortName ?? shortExId.ToString();
+            }
+        }
+
+        return cooldowns;
+    }
 
     [HttpPost]
     [ValidateAntiForgeryToken]
