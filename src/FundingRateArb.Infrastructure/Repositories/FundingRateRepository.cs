@@ -4,6 +4,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Infrastructure.Repositories;
@@ -11,11 +12,13 @@ namespace FundingRateArb.Infrastructure.Repositories;
 public class FundingRateRepository : IFundingRateRepository
 {
     private readonly AppDbContext _context;
+    private readonly IMemoryCache _cache;
     private readonly ILogger<FundingRateRepository>? _logger;
 
-    public FundingRateRepository(AppDbContext context, ILogger<FundingRateRepository>? logger = null)
+    public FundingRateRepository(AppDbContext context, IMemoryCache cache, ILogger<FundingRateRepository>? logger = null)
     {
         _context = context;
+        _cache = cache;
         _logger = logger;
     }
 
@@ -29,16 +32,13 @@ public class FundingRateRepository : IFundingRateRepository
     // instead of waiting up to 150s for EF's 5-retry × 30s-delay policy to exhaust.
     private static readonly TimeSpan DegradedReadTimeout = TimeSpan.FromSeconds(20);
 
-    // Short-lived cache to prevent thundering-herd on the heavy GroupBy+Join query.
-    // Dashboard and SignalEngine both poll this within seconds of each other.
-    private static volatile List<FundingRateSnapshot>? _latestRatesCache;
-    private static DateTime _latestRatesCacheExpiry;
+    private const string LatestRatesCacheKey = "FundingRates:LatestPerExchangePerAsset";
     private static readonly TimeSpan LatestRatesCacheTtl = TimeSpan.FromSeconds(5);
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
         // Return cached result if still fresh (prevents thundering-herd from concurrent callers)
-        if (_latestRatesCache is { } cached && DateTime.UtcNow < _latestRatesCacheExpiry)
+        if (_cache.TryGetValue(LatestRatesCacheKey, out List<FundingRateSnapshot>? cached) && cached is not null)
         {
             return cached;
         }
@@ -63,8 +63,7 @@ public class FundingRateRepository : IFundingRateRepository
                 .AsNoTracking()
                 .ToListAsync(timeoutCts.Token);
 
-            _latestRatesCache = result;
-            _latestRatesCacheExpiry = DateTime.UtcNow.Add(LatestRatesCacheTtl);
+            _cache.Set(LatestRatesCacheKey, result, LatestRatesCacheTtl);
             return result;
         }
         catch (SqlException ex) when (IsTransientLoginFailure(ex))
