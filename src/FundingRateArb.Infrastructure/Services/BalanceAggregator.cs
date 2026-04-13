@@ -10,7 +10,8 @@ public class BalanceAggregator : IBalanceAggregator
 {
     internal const string CredentialsNotConfiguredMessage = "Credentials not configured";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan AuthErrorBackoff = TimeSpan.FromMinutes(5);
+    internal static TimeSpan GetAuthErrorBackoff(int consecutiveFailures) =>
+        TimeSpan.FromMinutes(Math.Min(5 * Math.Pow(2, Math.Max(0, consecutiveFailures - 1)), 60));
 
     private readonly IUserSettingsService _userSettings;
     private readonly IExchangeConnectorFactory _connectorFactory;
@@ -63,7 +64,7 @@ public class BalanceAggregator : IBalanceAggregator
             if (cred.LastError is not null
                 && cred.LastErrorAt is not null
                 && IsAuthError(cred.LastError)
-                && DateTime.UtcNow - cred.LastErrorAt.Value < AuthErrorBackoff)
+                && DateTime.UtcNow - cred.LastErrorAt.Value < GetAuthErrorBackoff(cred.ConsecutiveFailures))
             {
                 balances.Add(new ExchangeBalanceDto
                 {

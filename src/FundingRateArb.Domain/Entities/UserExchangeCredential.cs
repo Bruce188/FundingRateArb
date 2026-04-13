@@ -20,6 +20,7 @@ public class UserExchangeCredential
     [MaxLength(500)]
     public string? LastError { get; set; }
     public DateTime? LastErrorAt { get; set; }
+    public int ConsecutiveFailures { get; set; }
 
     // Navigation
     public ApplicationUser User { get; set; } = null!;

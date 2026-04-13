@@ -561,6 +561,94 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public void GetAuthErrorBackoff_FirstFailure_Returns5Minutes()
+    {
+        var backoff = BalanceAggregator.GetAuthErrorBackoff(1);
+        backoff.Should().Be(TimeSpan.FromMinutes(5));
+    }
+
+    [Fact]
+    public void GetAuthErrorBackoff_ThirdFailure_Returns20Minutes()
+    {
+        var backoff = BalanceAggregator.GetAuthErrorBackoff(3);
+        backoff.Should().Be(TimeSpan.FromMinutes(20));
+    }
+
+    [Fact]
+    public void GetAuthErrorBackoff_FifthFailure_Returns60Minutes()
+    {
+        var backoff = BalanceAggregator.GetAuthErrorBackoff(5);
+        backoff.Should().Be(TimeSpan.FromMinutes(60));
+    }
+
+    [Fact]
+    public void GetAuthErrorBackoff_HighFailures_CappedAt60Minutes()
+    {
+        var backoff = BalanceAggregator.GetAuthErrorBackoff(10);
+        backoff.Should().Be(TimeSpan.FromMinutes(60));
+    }
+
+    [Fact]
+    public async Task AuthError_WithHighConsecutiveFailures_UsesLongerBackoff()
+    {
+        // Credential with ConsecutiveFailures=3 and error 15min ago
+        // Backoff for 3 failures = 20 min, so 15 min is still within backoff -> should be skipped
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 1, ExchangeId = 1,
+                Exchange = new Exchange { Id = 1, Name = "Binance" },
+                EncryptedApiKey = "k",
+                LastError = "Binance: API key invalid or expired",
+                LastErrorAt = DateTime.UtcNow.AddMinutes(-15),
+                ConsecutiveFailures = 3,
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Contain("API key invalid");
+        // Connector should NOT have been created — still in backoff
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task AuthError_WithLowConsecutiveFailures_RetriesEarlier()
+    {
+        // Credential with ConsecutiveFailures=1 and error 3min ago
+        // Backoff for 1 failure = 5 min, so 3 min is within backoff -> should be skipped
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 1, ExchangeId = 1,
+                Exchange = new Exchange { Id = 1, Name = "Binance" },
+                EncryptedApiKey = "k",
+                LastError = "Binance: API key invalid or expired",
+                LastErrorAt = DateTime.UtcNow.AddMinutes(-3),
+                ConsecutiveFailures = 1,
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+
+        var result = await _sut.GetBalanceSnapshotAsync("user1");
+
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].ErrorMessage.Should().Contain("API key invalid");
+        // Connector should NOT have been created — still in 5-min backoff
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>

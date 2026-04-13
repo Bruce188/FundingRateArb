@@ -199,6 +199,15 @@ public class UserSettingsService : IUserSettingsService
             return;
         }
 
+        if (error is not null)
+        {
+            credential.ConsecutiveFailures++;
+        }
+        else
+        {
+            credential.ConsecutiveFailures = 0;
+        }
+
         credential.LastError = error;
         credential.LastErrorAt = error is not null ? DateTime.UtcNow : null;
         _uow.UserCredentials.Update(credential);
