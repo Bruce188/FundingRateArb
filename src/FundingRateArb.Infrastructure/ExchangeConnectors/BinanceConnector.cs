@@ -662,6 +662,12 @@ public class BinanceConnector : IExchangeConnector, IDisposable
 
     public async Task<LeverageTier[]?> GetLeverageTiersAsync(string asset, CancellationToken ct = default)
     {
+        if (!_restClient.UsdFuturesApi.Authenticated)
+        {
+            _logger.LogDebug("Skipping leverageBracket call — no Binance credentials configured");
+            return null;
+        }
+
         try
         {
             var symbol = asset + "USDT";
