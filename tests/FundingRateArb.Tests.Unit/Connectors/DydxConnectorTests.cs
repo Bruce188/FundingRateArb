@@ -345,10 +345,10 @@ public class DydxConnectorTests
     }
 
     [Fact]
-    public void IsEstimatedFillExchange_IsFalse()
+    public void IsEstimatedFillExchange_IsTrue()
     {
         using var connector = BuildConnector();
-        connector.IsEstimatedFillExchange.Should().BeFalse();
+        connector.IsEstimatedFillExchange.Should().BeTrue();
     }
 
     [Fact]

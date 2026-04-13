@@ -17,7 +17,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// Uses a custom HttpClient for REST API calls and the native lighter-signer
 /// library (via P/Invoke) for cryptographic order signing.
 /// </summary>
-public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpectedFillAware, IDisposable
+public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpectedFillAware, IEntryPriceReconcilable, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<LighterConnector> _logger;
@@ -50,6 +50,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     // In-flight refresh task — prevents thundering-herd when multiple callers see an expired cache.
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
     private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
+
+    // Short-lived cache for GetAccountAsync — eliminates redundant HTTP round-trip when
+    // GetActualEntryPriceAsync is called immediately after VerifyPositionOpenedAsync.
+    private LighterAccountResponse? _accountCache;
+    private DateTime _accountCacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan AccountCacheTtl = TimeSpan.FromSeconds(5);
 
     // Cached config values populated in EnsureSignerReady (read once, used many times)
     private long _accountIndex;
@@ -381,6 +387,67 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         bool FoundAtBaseline,
         decimal Size,
         decimal BaselineSize);
+
+    /// <inheritdoc />
+    public async Task<decimal?> GetActualEntryPriceAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var accountIndex = GetAccountIndex();
+            var accountResponse = await GetAccountAsync(accountIndex, useCache: true, cts.Token);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+
+            if (account?.Positions is null)
+            {
+                _logger.LogWarning("No positions found on Lighter when reconciling entry price for {Asset} {Side}", asset, side);
+                return null;
+            }
+
+            foreach (var p in account.Positions)
+            {
+                if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var size) || size == 0)
+                {
+                    continue;
+                }
+
+                var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
+                if (!isSideMatch)
+                {
+                    continue;
+                }
+
+                if (decimal.TryParse(p.AvgEntryPrice, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var avgEntryPrice) && avgEntryPrice > 0)
+                {
+                    return avgEntryPrice;
+                }
+
+                _logger.LogWarning("Failed to parse AvgEntryPrice '{Raw}' for {Asset} {Side}", p.AvgEntryPrice, asset, side);
+                return null;
+            }
+
+            _logger.LogWarning("Position not found on Lighter for {Asset} {Side} during entry price reconciliation", asset, side);
+            return null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reconcile entry price for {Asset} {Side} from Lighter", asset, side);
+            return null;
+        }
+    }
 
     /// <summary>
     /// Checks whether a position exists on this exchange for the given asset and side.
@@ -1282,14 +1349,44 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     /// Fetch the account data for the configured account index from the Lighter API.
     /// Extracted helper to avoid duplicate HTTP fetches in ClosePositionAsync.
     /// </summary>
-    private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, CancellationToken ct)
+    private Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, CancellationToken ct)
+        => GetAccountAsync(accountIndex, useCache: false, ct);
+
+    private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, bool useCache, CancellationToken ct)
     {
+        if (useCache)
+        {
+            await _cacheLock.WaitAsync(ct);
+            try
+            {
+                if (_accountCache is not null && DateTime.UtcNow < _accountCacheExpiry)
+                    return _accountCache;
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
+        }
+
         var response = await _httpClient.GetAsync(
             $"account?by=index&value={accountIndex}", ct);
         response.EnsureSuccessStatusCode();
 
-        return await response.Content
+        var result = await response.Content
             .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
+
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            _accountCache = result;
+            _accountCacheExpiry = DateTime.UtcNow.Add(AccountCacheTtl);
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
+
+        return result;
     }
 
     /// <summary>

@@ -704,6 +704,49 @@ public class ExecutionEngine : IExecutionEngine
                 }
             }
 
+            // Reconcile estimated entry prices with actual exchange-reported prices.
+            // Both legs are fired concurrently when both need reconciliation.
+            var longReconcilable = longResult.IsEstimatedFill ? longConnector as IEntryPriceReconcilable : null;
+            var shortReconcilable = shortResult.IsEstimatedFill ? shortConnector as IEntryPriceReconcilable : null;
+
+            async Task<decimal?> SafeReconcileAsync(IEntryPriceReconcilable reconcilable, string asset, Side side)
+            {
+                try
+                {
+                    return await reconcilable.GetActualEntryPriceAsync(asset, side, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to reconcile {Side} entry price for {Asset}", side, asset);
+                    return null;
+                }
+            }
+
+            var longReconcileTask = longReconcilable is not null
+                ? SafeReconcileAsync(longReconcilable, opp.AssetSymbol, Side.Long)
+                : Task.FromResult<decimal?>(null);
+            var shortReconcileTask = shortReconcilable is not null
+                ? SafeReconcileAsync(shortReconcilable, opp.AssetSymbol, Side.Short)
+                : Task.FromResult<decimal?>(null);
+
+            await Task.WhenAll(longReconcileTask, shortReconcileTask);
+
+            var longActual = await longReconcileTask;
+            if (longActual.HasValue && longActual.Value > 0)
+            {
+                _logger.LogInformation("Reconciled long entry price for {Asset}: estimated {Estimated} → actual {Actual}",
+                    opp.AssetSymbol, position.LongEntryPrice, longActual.Value);
+                position.LongEntryPrice = longActual.Value;
+            }
+
+            var shortActual = await shortReconcileTask;
+            if (shortActual.HasValue && shortActual.Value > 0)
+            {
+                _logger.LogInformation("Reconciled short entry price for {Asset}: estimated {Estimated} → actual {Actual}",
+                    opp.AssetSymbol, position.ShortEntryPrice, shortActual.Value);
+                position.ShortEntryPrice = shortActual.Value;
+            }
+
             position.Status = PositionStatus.Open;
             if (!position.IsDryRun)
             {

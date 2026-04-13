@@ -202,12 +202,24 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 }
 
                 // M5: Compute net unrealized PnL for stop-loss check
-                var avgEntryPrice = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
-                var estimatedQty = avgEntryPrice > 0
-                    ? pos.SizeUsdc * pos.Leverage / avgEntryPrice
-                    : 0m;
-                var longPnl = (currentLongMark - pos.LongEntryPrice) * estimatedQty;
-                var shortPnl = (pos.ShortEntryPrice - currentShortMark) * estimatedQty;
+                decimal longQty, shortQty;
+                if (pos.LongFilledQuantity is > 0m and var lq
+                    && pos.ShortFilledQuantity is > 0m and var sq)
+                {
+                    longQty = lq;
+                    shortQty = sq;
+                }
+                else
+                {
+                    var avgEntryPrice = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
+                    var estimatedQty = avgEntryPrice > 0
+                        ? pos.SizeUsdc * pos.Leverage / avgEntryPrice
+                        : 0m;
+                    longQty = estimatedQty;
+                    shortQty = estimatedQty;
+                }
+                var longPnl = (currentLongMark - pos.LongEntryPrice) * longQty;
+                var shortPnl = (pos.ShortEntryPrice - currentShortMark) * shortQty;
                 var unrealizedPnl = longPnl + shortPnl;
 
                 // Unified PnL: both legs valued against single reference price
@@ -216,8 +228,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 decimal unifiedLongPnl, unifiedShortPnl;
                 if (unifiedPrice > 0)
                 {
-                    unifiedLongPnl = (unifiedPrice - pos.LongEntryPrice) * estimatedQty;
-                    unifiedShortPnl = (pos.ShortEntryPrice - unifiedPrice) * estimatedQty;
+                    unifiedLongPnl = (unifiedPrice - pos.LongEntryPrice) * longQty;
+                    unifiedShortPnl = (pos.ShortEntryPrice - unifiedPrice) * shortQty;
                     unifiedUnrealizedPnl = unifiedLongPnl + unifiedShortPnl;
                 }
                 else

@@ -117,6 +117,20 @@ public interface IPositionVerifiable
 }
 
 /// <summary>
+/// Implemented by connectors that can provide actual entry prices after position verification.
+/// Used by the execution engine to reconcile estimated fill prices with exchange-reported
+/// average entry prices.
+/// </summary>
+public interface IEntryPriceReconcilable
+{
+    /// <summary>
+    /// Returns the actual entry price for the given asset and side from the exchange API.
+    /// Returns null if the price cannot be determined (position not found, API failure).
+    /// </summary>
+    Task<decimal?> GetActualEntryPriceAsync(string asset, Side side, CancellationToken ct = default);
+}
+
+/// <summary>
 /// Implemented by connectors that support setting an expected fill quantity
 /// to improve position verification when baseline size matches current size.
 /// </summary>

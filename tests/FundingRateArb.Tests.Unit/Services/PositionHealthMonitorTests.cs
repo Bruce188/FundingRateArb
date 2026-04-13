@@ -3987,4 +3987,78 @@ public class PositionHealthMonitorTests
                 $"PnL gap should explain divergence for scenario: {scenario}");
         }
     }
+
+    // ── Per-leg filled quantities in PnL ────────────────────────────
+
+    [Fact]
+    public async Task CheckAndAct_UsesFilledQuantities_WhenAvailable()
+    {
+        // Position with known filled quantities
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        pos.LongFilledQuantity = 0.20m;
+        pos.ShortFilledQuantity = 0.18m;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m);
+
+        // With per-leg quantities:
+        // longPnl  = (2500 - 3000) * 0.20 = -100.0
+        // shortPnl = (3001 - 3001) * 0.18 = 0.0
+        // unrealizedPnl = -100.0 → |100| > 15 → triggers stop-loss
+        var result = await _sut.CheckAndActAsync();
+
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_FallsBackToEstimatedQty_WhenFilledQuantitiesNull()
+    {
+        // Position without filled quantities → falls back to estimated qty
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        pos.LongFilledQuantity = null;
+        pos.ShortFilledQuantity = null;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m);
+
+        // With estimated qty: avgEntry=3000.5, estimatedQty=500/3000.5≈0.16664
+        // longPnl ≈ (2500-3000)*0.16664 ≈ -83.32 → |83.32| > 15 → triggers
+        var result = await _sut.CheckAndActAsync();
+
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_FallsBackToEstimatedQty_WhenFilledQuantityZero()
+    {
+        // Position with zero filled quantities → falls back to estimated qty
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        pos.LongFilledQuantity = 0m;
+        pos.ShortFilledQuantity = 0m;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+    }
+
+    [Fact]
+    public async Task CheckAndAct_AsymmetricFilledQuantities_FallsBackToEstimated()
+    {
+        // One leg has a filled quantity, the other is null — should fall back to estimated qty for both legs
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        pos.LongFilledQuantity = 0.20m;
+        pos.ShortFilledQuantity = null;
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2500m, shortMark: 3001m);
+
+        // With estimated qty (fallback): avgEntry=3000.5, estimatedQty=500/3000.5≈0.16664
+        // longPnl ≈ (2500-3000)*0.16664 ≈ -83.32 → |83.32| > 15 → triggers stop-loss
+        var result = await _sut.CheckAndActAsync();
+
+        result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+    }
 }
