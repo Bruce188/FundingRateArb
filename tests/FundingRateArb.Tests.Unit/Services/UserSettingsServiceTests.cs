@@ -777,6 +777,80 @@ public class UserSettingsServiceTests
     }
 
     [Fact]
+    public async Task UpdateCredentialError_IncrementsConsecutiveFailures()
+    {
+        // Arrange
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastError = null,
+            LastErrorAt = null,
+            ConsecutiveFailures = 0
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+
+        // Act — set error twice
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid");
+        // Reset mock short-circuit: after first call, LastError is now "API key invalid",
+        // so second call with same value would short-circuit. Use a different error value.
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid again");
+
+        // Assert
+        credential.ConsecutiveFailures.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task UpdateCredentialError_ClearsConsecutiveFailuresOnSuccess()
+    {
+        // Arrange
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastError = "some error",
+            LastErrorAt = DateTime.UtcNow.AddMinutes(-5),
+            ConsecutiveFailures = 3
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+
+        // Act — clear error (success)
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, null);
+
+        // Assert
+        credential.ConsecutiveFailures.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task UpdateCredentialError_SameErrorRepeated_IncrementsConsecutiveFailures()
+    {
+        // Arrange — B1: repeated identical error strings must still increment the counter
+        var credential = new UserExchangeCredential
+        {
+            UserId = UserId,
+            ExchangeId = 1,
+            LastError = null,
+            LastErrorAt = null,
+            ConsecutiveFailures = 0
+        };
+        _mockCredentials
+            .Setup(r => r.GetByUserAndExchangeAsync(UserId, 1))
+            .ReturnsAsync(credential);
+
+        // Act — same error string three times
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid");
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid");
+        await _sut.UpdateCredentialErrorAsync(UserId, 1, "API key invalid");
+
+        // Assert
+        credential.ConsecutiveFailures.Should().Be(3);
+    }
+
+    [Fact]
     public async Task SaveCredentialAsync_ExistingWithError_ClearsErrorFields()
     {
         // Arrange
