@@ -2592,6 +2592,65 @@ public class LighterConnectorTests
         // AvgEntryPrice=0 parsed as 0, which fails the > 0 check → logs warning and returns null
         price.Should().BeNull();
     }
+
+    [Fact]
+    public async Task GetActualEntryPrice_MalformedPosition_ReturnsNull()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var malformedJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "code": 0,
+                        "account_index": 281474976624240,
+                        "available_balance": "107.50",
+                        "positions": [
+                            {
+                                "market_id": 0,
+                                "symbol": "ETH",
+                                "sign": 1,
+                                "position": "invalid",
+                                "avg_entry_price": "3400.00",
+                                "position_value": "0.00",
+                                "unrealized_pnl": "0.00",
+                                "realized_pnl": "0.00",
+                                "liquidation_price": "0.00",
+                                "margin_mode": 0
+                            }
+                        ]
+                    }
+                ]
+            }
+            """;
+        var sut = CreateConnector(malformedJson);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        // "invalid" cannot be parsed as decimal → position skipped → returns null
+        price.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetActualEntryPrice_CachesAccountResponse_AvoidsDuplicateHttpCall()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var countingHandler = new CountingHttpMessageHandler(AccountJson);
+        var httpClient = new HttpClient(countingHandler)
+        {
+            BaseAddress = new Uri("https://test.invalid/api/v1/")
+        };
+        var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
+
+        // Two rapid calls should only make one HTTP request (5s TTL cache)
+        var price1 = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price2 = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        price1.Should().Be(3400.00m);
+        price2.Should().Be(3400.00m);
+        countingHandler.CallCount.Should().Be(1, "second call should use cached account response");
+    }
 }
 
 /// <summary>

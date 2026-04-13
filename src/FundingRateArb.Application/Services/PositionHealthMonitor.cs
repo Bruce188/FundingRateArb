@@ -203,11 +203,11 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
                 // M5: Compute net unrealized PnL for stop-loss check
                 decimal longQty, shortQty;
-                if (pos.LongFilledQuantity.HasValue && pos.LongFilledQuantity.Value > 0
-                    && pos.ShortFilledQuantity.HasValue && pos.ShortFilledQuantity.Value > 0)
+                if (pos.LongFilledQuantity is > 0m and var lq
+                    && pos.ShortFilledQuantity is > 0m and var sq)
                 {
-                    longQty = pos.LongFilledQuantity.Value;
-                    shortQty = pos.ShortFilledQuantity.Value;
+                    longQty = lq;
+                    shortQty = sq;
                 }
                 else
                 {

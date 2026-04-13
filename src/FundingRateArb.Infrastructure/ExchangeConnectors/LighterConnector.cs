@@ -51,6 +51,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
     private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
 
+    // Short-lived cache for GetAccountAsync — eliminates redundant HTTP round-trip when
+    // GetActualEntryPriceAsync is called immediately after VerifyPositionOpenedAsync.
+    private LighterAccountResponse? _accountCache;
+    private DateTime _accountCacheExpiry = DateTime.MinValue;
+    private static readonly TimeSpan AccountCacheTtl = TimeSpan.FromSeconds(5);
+
     // Cached config values populated in EnsureSignerReady (read once, used many times)
     private long _accountIndex;
     private string _apiKeyIndexStr = "2";
@@ -391,7 +397,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             cts.CancelAfter(TimeSpan.FromSeconds(5));
 
             var accountIndex = GetAccountIndex();
-            var accountResponse = await GetAccountAsync(accountIndex, cts.Token);
+            var accountResponse = await GetAccountAsync(accountIndex, useCache: true, cts.Token);
             var account = accountResponse?.Accounts?.FirstOrDefault();
 
             if (account?.Positions is null)
@@ -1343,14 +1349,29 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     /// Fetch the account data for the configured account index from the Lighter API.
     /// Extracted helper to avoid duplicate HTTP fetches in ClosePositionAsync.
     /// </summary>
-    private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, CancellationToken ct)
+    private Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, CancellationToken ct)
+        => GetAccountAsync(accountIndex, useCache: false, ct);
+
+    private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, bool useCache, CancellationToken ct)
     {
+        // Return cached response if still fresh (avoids redundant HTTP call when
+        // GetActualEntryPriceAsync runs immediately after VerifyPositionOpenedAsync)
+        if (useCache && _accountCache is not null && DateTime.UtcNow < _accountCacheExpiry)
+        {
+            return _accountCache;
+        }
+
         var response = await _httpClient.GetAsync(
             $"account?by=index&value={accountIndex}", ct);
         response.EnsureSuccessStatusCode();
 
-        return await response.Content
+        var result = await response.Content
             .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
+
+        _accountCache = result;
+        _accountCacheExpiry = DateTime.UtcNow.Add(AccountCacheTtl);
+
+        return result;
     }
 
     /// <summary>
