@@ -1450,4 +1450,22 @@ public class BinanceConnectorTests
         rates[0].RawRate.Should().Be(0m, "null funding rate should default to zero");
         rates[0].RatePerHour.Should().Be(0m, "null funding rate / 8 should be zero");
     }
+
+    // ── GetLeverageTiersAsync ────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetLeverageTiers_NoCredentials_ReturnsNull()
+    {
+        var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Authenticated).Returns(false);
+
+        var clientMock = new Mock<IBinanceRestClient>();
+        clientMock.SetupGet(c => c.UsdFuturesApi).Returns(futuresApiMock.Object);
+
+        var sut = new BinanceConnector(clientMock.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var result = await sut.GetLeverageTiersAsync("ETH");
+
+        result.Should().BeNull("no credentials means the leverageBracket call should be skipped");
+    }
 }
