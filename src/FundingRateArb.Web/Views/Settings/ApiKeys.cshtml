@@ -67,9 +67,9 @@ else
                                 {
                                     var errorDiff = DateTime.UtcNow - exchange.LastErrorAt.Value;
                                     if (errorDiff.TotalMinutes < 1) errorTime = "just now";
-                                    else if (errorDiff.TotalHours < 1) errorTime = $"{(int)errorDiff.TotalMinutes} minutes ago";
-                                    else if (errorDiff.TotalDays < 1) errorTime = $"{(int)errorDiff.TotalHours} hours ago";
-                                    else errorTime = $"{(int)errorDiff.TotalDays} days ago";
+                                    else if (errorDiff.TotalHours < 1) { var m = (int)errorDiff.TotalMinutes; errorTime = $"{m} {(m == 1 ? "minute" : "minutes")} ago"; }
+                                    else if (errorDiff.TotalDays < 1) { var h = (int)errorDiff.TotalHours; errorTime = $"{h} {(h == 1 ? "hour" : "hours")} ago"; }
+                                    else { var d = (int)errorDiff.TotalDays; errorTime = $"{d} {(d == 1 ? "day" : "days")} ago"; }
                                 }
                                 <span class="badge bg-danger mt-1" title="@exchange.LastError@(errorTime != "" ? $" ({errorTime})" : "")">
                                     <i class="bi bi-x-circle"></i> Error

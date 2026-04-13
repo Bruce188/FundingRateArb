@@ -193,8 +193,9 @@ public class UserSettingsService : IUserSettingsService
             return;
         }
 
-        // Short-circuit: skip DB write when value is unchanged
-        if (credential.LastError == error)
+        // Short-circuit: skip DB write only for repeated success clears (null → null).
+        // Repeated errors must still increment ConsecutiveFailures for escalating backoff.
+        if (credential.LastError == error && error is null)
         {
             return;
         }
