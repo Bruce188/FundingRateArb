@@ -12,6 +12,7 @@ using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Polly;
@@ -2084,5 +2085,72 @@ public class AsterConnectorTests
             "V3 mode must route SetLeverageAsync through FuturesV3Api.Account");
         v1Account.Verify(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never,
             "V3 mode must not call FuturesApi.Account.SetLeverageAsync");
+    }
+
+    // ── Factory V3 Detection ──────────────────────────────────────────────────
+
+    private static ExchangeConnectorFactory BuildFactoryForAsterTests()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
+        services.AddHttpClient();
+
+        var mockProvider = new Mock<ResiliencePipelineProvider<string>>();
+        mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(ResiliencePipeline.Empty);
+        services.AddSingleton(mockProvider.Object);
+
+        var sp = services.BuildServiceProvider();
+        var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+        return new ExchangeConnectorFactory(sp, factoryLogger);
+    }
+
+    /// <summary>
+    /// Reads the private _useV3Api field from an AsterConnector via reflection.
+    /// </summary>
+    private static bool GetUseV3Api(AsterConnector connector)
+    {
+        var field = typeof(AsterConnector).GetField("_useV3Api", BindingFlags.NonPublic | BindingFlags.Instance);
+        field.Should().NotBeNull("AsterConnector must have a _useV3Api field");
+        return (bool)field!.GetValue(connector)!;
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithV3Credentials_PassesUseV3ApiTrue()
+    {
+        var factory = BuildFactoryForAsterTests();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: null, apiSecret: null,
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull("V3 credentials must produce a non-null connector");
+        factory.LastAsterCredentials.Should().NotBeNull();
+        factory.LastAsterCredentials!.V3.Should().NotBeNull(
+            "wallet+key pair must select the V3 credential path");
+        GetUseV3Api(connector!).Should().BeTrue(
+            "factory must pass useV3Api=true when V3 credentials are detected");
+    }
+
+    [Fact]
+    public void CreateAsterConnector_WithBothV1AndV3Credentials_PrefersV3()
+    {
+        var factory = BuildFactoryForAsterTests();
+        var walletAddress = "0x" + new string('a', 64);
+        var privateKey = "0x" + new string('b', 64);
+
+        var connector = factory.CreateAsterConnector(
+            apiKey: "testkey", apiSecret: "testsecret",
+            walletAddress: walletAddress, privateKey: privateKey);
+
+        connector.Should().NotBeNull(
+            "when both V1 and V3 credentials are supplied, V3 takes precedence");
+        factory.LastAsterCredentials.Should().NotBeNull();
+        factory.LastAsterCredentials!.V3.Should().NotBeNull(
+            "when both credential types are present the factory must prefer V3 over V1");
+        GetUseV3Api(connector!).Should().BeTrue(
+            "factory must pass useV3Api=true when V3 credentials take precedence over V1");
     }
 }
