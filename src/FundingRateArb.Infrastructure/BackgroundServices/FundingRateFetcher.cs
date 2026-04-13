@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Common.Services;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Domain.Entities;
@@ -123,6 +124,12 @@ public class FundingRateFetcher : BackgroundService
                 }
             }
         }
+
+        // Auto-discover any symbols not yet in the Assets table so the assetMap lookup below
+        // finds them. The discovery service invalidates the asset cache on insertion, so the
+        // GetActiveAsync call below returns the updated list.
+        var discovery = scope.ServiceProvider.GetRequiredService<IAssetDiscoveryService>();
+        await discovery.EnsureAssetsExistAsync(allRates.Select(r => r.Symbol), ct);
 
         // Resolve exchange and asset lookup tables once
         var exchanges = await uow.Exchanges.GetActiveAsync();

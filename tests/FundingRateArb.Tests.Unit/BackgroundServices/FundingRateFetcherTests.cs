@@ -1,6 +1,7 @@
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Common.Services;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
 using FundingRateArb.Domain.Entities;
@@ -33,6 +34,7 @@ public class FundingRateFetcherTests
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
+    private readonly Mock<IAssetDiscoveryService> _mockDiscovery = new();
     private readonly FundingRateFetcher _sut;
 
     private static readonly List<Exchange> Exchanges =
@@ -55,6 +57,10 @@ public class FundingRateFetcherTests
         _mockScope.Setup(s => s.ServiceProvider).Returns(_mockScopeProvider.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(_mockUow.Object);
         _mockScopeProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(_mockFactory.Object);
+        // Default discovery service: returns 0 (no new assets) — keeps existing tests green
+        _mockDiscovery.Setup(d => d.EnsureAssetsExistAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        _mockScopeProvider.Setup(p => p.GetService(typeof(IAssetDiscoveryService))).Returns(_mockDiscovery.Object);
 
         // Wire UoW
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
