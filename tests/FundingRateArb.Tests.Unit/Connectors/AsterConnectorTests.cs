@@ -2220,4 +2220,69 @@ public class AsterConnectorTests
         GetUseV3Api(connector!).Should().BeTrue(
             "factory must pass useV3Api=true when V3 credentials take precedence over V1");
     }
+
+    // ── V3 routing for GetSymbolConstraintsAsync ──────────────────────────────
+
+    [Fact]
+    public async Task GetSymbolConstraints_WithV3Mode_UsesFuturesV3ApiExchangeData()
+    {
+        var (client, _, _, _, _) = BuildDualSurfaceClient();
+
+        var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
+        v3ExchangeDataMock
+            .Setup(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessExchangeInfo(new AsterExchangeInfo
+            {
+                Symbols = [new AsterSymbol { Name = "ETHUSDT", QuantityPrecision = 3, PricePrecision = 2, Filters = [] }],
+            }));
+
+        var v3ApiMock = Mock.Get(client.Object.FuturesV3Api);
+        v3ApiMock.SetupGet(a => a.ExchangeData).Returns(v3ExchangeDataMock.Object);
+
+        var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        var constraints = await sut.GetSymbolConstraintsAsync("ETH");
+
+        constraints.Should().NotBeNull();
+        v3ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "V3 mode must route constraints refresh through FuturesV3Api.ExchangeData");
+        v1ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Never,
+            "V3 mode must not call FuturesApi.ExchangeData.GetExchangeInfoAsync for constraints");
+    }
+
+    [Fact]
+    public async Task GetSymbolConstraints_WithV1Mode_UsesFuturesApiExchangeData()
+    {
+        var (client, _, _, _, _) = BuildDualSurfaceClient();
+
+        var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+        v1ExchangeDataMock
+            .Setup(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessExchangeInfo(new AsterExchangeInfo
+            {
+                Symbols = [new AsterSymbol { Name = "ETHUSDT", QuantityPrecision = 3, PricePrecision = 2, Filters = [] }],
+            }));
+
+        var v3ExchangeDataMock = Mock.Get(client.Object.FuturesV3Api.ExchangeData);
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: false);
+
+        var constraints = await sut.GetSymbolConstraintsAsync("ETH");
+
+        constraints.Should().NotBeNull();
+        v1ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "V1 mode must route constraints refresh through FuturesApi.ExchangeData");
+        v3ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Never,
+            "V1 mode must not call FuturesV3Api.ExchangeData.GetExchangeInfoAsync for constraints");
+    }
 }
