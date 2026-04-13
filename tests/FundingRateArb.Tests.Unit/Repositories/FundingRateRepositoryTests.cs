@@ -9,6 +9,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace FundingRateArb.Tests.Unit.Repositories;
 
@@ -22,7 +23,7 @@ public class FundingRateRepositoryTests
         // Arrange — context whose FundingRateSnapshots throws a transient SqlException on iteration
         var transientEx = SqlExceptionFactory.Create(10928);
         var context = CreateThrowingContext(transientEx);
-        var sut = new FundingRateRepository(context);
+        var sut = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
 
         // Act & Assert
         await sut.Invoking(r => r.GetLatestPerExchangePerAssetAsync())
@@ -36,7 +37,7 @@ public class FundingRateRepositoryTests
         // Arrange — context throws a non-transient SqlException (99999 not in allowlist)
         var nonTransientEx = SqlExceptionFactory.Create(99999);
         var context = CreateThrowingContext(nonTransientEx);
-        var sut = new FundingRateRepository(context);
+        var sut = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
 
         // Act & Assert — non-transient SqlException must propagate unchanged (not wrapped)
         var thrown = await sut.Invoking(r => r.GetLatestPerExchangePerAssetAsync())
@@ -49,7 +50,7 @@ public class FundingRateRepositoryTests
     {
         // Arrange — context that stalls longer than the repository's 20s internal CTS
         var context = CreateStallingContext(delaySeconds: 25);
-        var sut = new FundingRateRepository(context);
+        var sut = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
 
         // Act — internal 20s CTS fires before the 25s stall completes.
         // Use a 22s outer timeout so the test does not hang if the internal CTS misfires.

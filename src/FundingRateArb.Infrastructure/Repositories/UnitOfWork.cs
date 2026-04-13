@@ -13,7 +13,7 @@ public class UnitOfWork : IUnitOfWork
         _context = context;
         Exchanges = new ExchangeRepository(context, cache);
         Assets = new AssetRepository(context, cache);
-        FundingRates = new FundingRateRepository(context);
+        FundingRates = new FundingRateRepository(context, cache);
         Positions = new PositionRepository(context);
         Alerts = new AlertRepository(context);
         BotConfig = new BotConfigRepository(context, cache);
