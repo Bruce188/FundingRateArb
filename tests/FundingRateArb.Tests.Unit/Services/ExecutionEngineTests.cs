@@ -3775,4 +3775,89 @@ public class ExecutionEngineTests
             Times.AtLeastOnce,
             "Reconciliation should call HasOpenPositionAsync even when position is absent");
     }
+
+    // ── Entry Price Reconciliation (IEntryPriceReconcilable) ─────
+
+    [Fact]
+    public async Task OpenPosition_ReconcilableConnector_UpdatesEntryPrice()
+    {
+        // Short connector is reconcilable and returns estimated fill
+        var mockReconcilableShort = new Mock<IExchangeConnector>();
+        mockReconcilableShort.As<IEntryPriceReconcilable>();
+        mockReconcilableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockReconcilableShort.Setup(c => c.IsEstimatedFillExchange).Returns(false);
+        mockReconcilableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockReconcilableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockReconcilableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        mockReconcilableShort.As<IEntryPriceReconcilable>()
+            .Setup(r => r.GetActualEntryPriceAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(2999.50m);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockReconcilableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.ShortEntryPrice.Should().Be(2999.50m, "reconciled price should replace estimated fill");
+    }
+
+    [Fact]
+    public async Task OpenPosition_NonReconcilableConnector_KeepsEstimatedPrice()
+    {
+        // Default mock connectors don't implement IEntryPriceReconcilable
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.ShortEntryPrice.Should().Be(3001m, "non-reconcilable connector should keep estimated price");
+    }
+
+    [Fact]
+    public async Task OpenPosition_ReconcilationReturnsNull_KeepsEstimatedPrice()
+    {
+        var mockReconcilableShort = new Mock<IExchangeConnector>();
+        mockReconcilableShort.As<IEntryPriceReconcilable>();
+        mockReconcilableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockReconcilableShort.Setup(c => c.IsEstimatedFillExchange).Returns(false);
+        mockReconcilableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockReconcilableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockReconcilableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
+        // Reconciliation returns null (API failure)
+        mockReconcilableShort.As<IEntryPriceReconcilable>()
+            .Setup(r => r.GetActualEntryPriceAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((decimal?)null);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockReconcilableShort.Object);
+
+        ArbitragePosition? addedPosition = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => addedPosition = p);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeTrue();
+        addedPosition.Should().NotBeNull();
+        addedPosition!.ShortEntryPrice.Should().Be(3001m, "null reconciliation should keep estimated price");
+    }
 }

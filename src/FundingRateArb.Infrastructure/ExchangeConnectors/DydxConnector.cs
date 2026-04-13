@@ -73,7 +73,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
     public string ExchangeName => "dYdX";
 
-    public bool IsEstimatedFillExchange => false;
+    public bool IsEstimatedFillExchange => true;
 
     private DydxSigner RequireSigner() =>
         _signer ?? throw new InvalidOperationException(

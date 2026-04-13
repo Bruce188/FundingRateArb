@@ -704,6 +704,42 @@ public class ExecutionEngine : IExecutionEngine
                 }
             }
 
+            // Reconcile estimated entry prices with actual exchange-reported prices
+            if (longResult.IsEstimatedFill && longConnector is IEntryPriceReconcilable longReconcilable)
+            {
+                try
+                {
+                    var actualPrice = await longReconcilable.GetActualEntryPriceAsync(opp.AssetSymbol, Side.Long, ct);
+                    if (actualPrice.HasValue && actualPrice.Value > 0)
+                    {
+                        _logger.LogInformation("Reconciled long entry price for {Asset}: estimated {Estimated} → actual {Actual}",
+                            opp.AssetSymbol, position.LongEntryPrice, actualPrice.Value);
+                        position.LongEntryPrice = actualPrice.Value;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to reconcile long entry price for {Asset}", opp.AssetSymbol);
+                }
+            }
+            if (shortResult.IsEstimatedFill && shortConnector is IEntryPriceReconcilable shortReconcilable)
+            {
+                try
+                {
+                    var actualPrice = await shortReconcilable.GetActualEntryPriceAsync(opp.AssetSymbol, Side.Short, ct);
+                    if (actualPrice.HasValue && actualPrice.Value > 0)
+                    {
+                        _logger.LogInformation("Reconciled short entry price for {Asset}: estimated {Estimated} → actual {Actual}",
+                            opp.AssetSymbol, position.ShortEntryPrice, actualPrice.Value);
+                        position.ShortEntryPrice = actualPrice.Value;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to reconcile short entry price for {Asset}", opp.AssetSymbol);
+                }
+            }
+
             position.Status = PositionStatus.Open;
             if (!position.IsDryRun)
             {

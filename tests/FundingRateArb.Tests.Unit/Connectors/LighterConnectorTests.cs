@@ -2492,6 +2492,106 @@ public class LighterConnectorTests
 
         result.Should().Be(0m);
     }
+
+    // ── GetActualEntryPriceAsync (IEntryPriceReconcilable) ───────
+
+    [Fact]
+    public async Task GetActualEntryPrice_ReturnsAvgEntryPrice_WhenPositionExists()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector(AccountJson);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        price.Should().Be(3400.00m);
+    }
+
+    [Fact]
+    public async Task GetActualEntryPrice_ReturnsNull_WhenPositionNotFound()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var emptyAccountJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "code": 0,
+                        "account_index": 281474976624240,
+                        "available_balance": "107.50",
+                        "positions": []
+                    }
+                ]
+            }
+            """;
+        var sut = CreateConnector(emptyAccountJson);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        price.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetActualEntryPrice_ReturnsNull_WhenWrongSide()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        // AccountJson has ETH Long (sign=1, position=0.0500), querying Short should return null
+        var sut = CreateConnector(AccountJson);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Short);
+
+        price.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetActualEntryPrice_ReturnsNull_OnApiFailure()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var sut = CreateConnector("server error", HttpStatusCode.InternalServerError);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        price.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetActualEntryPrice_ReturnsNull_WhenAvgEntryPriceZero()
+    {
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+        var zeroEntryJson = """
+            {
+                "code": 200,
+                "total": 1,
+                "accounts": [
+                    {
+                        "code": 0,
+                        "account_index": 281474976624240,
+                        "available_balance": "107.50",
+                        "positions": [
+                            {
+                                "market_id": 0,
+                                "symbol": "ETH",
+                                "sign": 1,
+                                "position": "0.0500",
+                                "avg_entry_price": "0",
+                                "position_value": "0.00",
+                                "unrealized_pnl": "0.00",
+                                "realized_pnl": "0.00",
+                                "liquidation_price": "0.00",
+                                "margin_mode": 0
+                            }
+                        ]
+                    }
+                ]
+            }
+            """;
+        var sut = CreateConnector(zeroEntryJson);
+
+        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+
+        // AvgEntryPrice=0 parsed as 0, which fails the > 0 check → logs warning and returns null
+        price.Should().BeNull();
+    }
 }
 
 /// <summary>

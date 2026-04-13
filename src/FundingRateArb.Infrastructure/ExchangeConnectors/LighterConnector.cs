@@ -17,7 +17,7 @@ namespace FundingRateArb.Infrastructure.ExchangeConnectors;
 /// Uses a custom HttpClient for REST API calls and the native lighter-signer
 /// library (via P/Invoke) for cryptographic order signing.
 /// </summary>
-public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpectedFillAware, IDisposable
+public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpectedFillAware, IEntryPriceReconcilable, IDisposable
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<LighterConnector> _logger;
@@ -381,6 +381,67 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         bool FoundAtBaseline,
         decimal Size,
         decimal BaselineSize);
+
+    /// <inheritdoc />
+    public async Task<decimal?> GetActualEntryPriceAsync(string asset, Side side, CancellationToken ct = default)
+    {
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+            var accountIndex = GetAccountIndex();
+            var accountResponse = await GetAccountAsync(accountIndex, cts.Token);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+
+            if (account?.Positions is null)
+            {
+                _logger.LogWarning("No positions found on Lighter when reconciling entry price for {Asset} {Side}", asset, side);
+                return null;
+            }
+
+            foreach (var p in account.Positions)
+            {
+                if (!p.Symbol.Equals(asset, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var size) || size == 0)
+                {
+                    continue;
+                }
+
+                var isSideMatch = (side == Side.Long && size > 0) || (side == Side.Short && size < 0);
+                if (!isSideMatch)
+                {
+                    continue;
+                }
+
+                if (decimal.TryParse(p.AvgEntryPrice, System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out var avgEntryPrice) && avgEntryPrice > 0)
+                {
+                    return avgEntryPrice;
+                }
+
+                _logger.LogWarning("Failed to parse AvgEntryPrice '{Raw}' for {Asset} {Side}", p.AvgEntryPrice, asset, side);
+                return null;
+            }
+
+            _logger.LogWarning("Position not found on Lighter for {Asset} {Side} during entry price reconciliation", asset, side);
+            return null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to reconcile entry price for {Asset} {Side} from Lighter", asset, side);
+            return null;
+        }
+    }
 
     /// <summary>
     /// Checks whether a position exists on this exchange for the given asset and side.
