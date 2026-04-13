@@ -50,6 +50,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private readonly ResiliencePipelineProvider<string> _pipelineProvider;
     private readonly ILogger<AsterConnector> _logger;
     private readonly IMarkPriceCache _markPriceCache;
+    private readonly bool _useV3Api;
     private readonly ConcurrentDictionary<string, int> _quantityPrecisionCache = new();
     private readonly ConcurrentDictionary<string, decimal> _tickSizeCache = new();
     private readonly ConcurrentDictionary<string, AsterSymbolConstraints> _symbolConstraintsCache = new();
@@ -70,12 +71,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
         IAsterRestClient restClient,
         ResiliencePipelineProvider<string> pipelineProvider,
         ILogger<AsterConnector> logger,
-        IMarkPriceCache markPriceCache)
+        IMarkPriceCache markPriceCache,
+        bool useV3Api = false)
     {
         _restClient = restClient;
         _pipelineProvider = pipelineProvider;
         _markPriceCache = markPriceCache;
         _logger = logger;
+        _useV3Api = useV3Api;
     }
 
     public string ExchangeName => "Aster";
@@ -172,7 +175,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             : RoundToTickSize(markPrice * 0.995m, tickSize);
 
         // B2: Abort order if SetLeverageAsync fails
-        var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
+        var leverageResult = _useV3Api
+            ? await _restClient.FuturesV3Api.Account.SetLeverageAsync(symbol, leverage, null, ct)
+            : await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
         if (!leverageResult.Success)
         {
             return new OrderResultDto
@@ -185,24 +190,43 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
 
         var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                orderSide,
-                OrderType.Limit,
-                quantity: quantity,
-                price: limitPrice,
-                positionSide: null,
-                timeInForce: TimeInForce.ImmediateOrCancel,
-                reduceOnly: null,
-                clientOrderId: null,
-                stopPrice: null,
-                closePosition: null,
-                activationPrice: null,
-                callbackRate: null,
-                workingType: null,
-                priceProtect: null,
-                receiveWindow: null,
-                ct: token),
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.Trading.PlaceOrderAsync(
+                    symbol,
+                    orderSide,
+                    OrderType.Limit,
+                    quantity: quantity,
+                    price: limitPrice,
+                    positionSide: null,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: null,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token)
+                : await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    orderSide,
+                    OrderType.Limit,
+                    quantity: quantity,
+                    price: limitPrice,
+                    positionSide: null,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: null,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token),
             ct);
 
         if (!result.Success)
@@ -262,7 +286,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             ? RoundToTickSize(markPrice * 1.005m, tickSize)
             : RoundToTickSize(markPrice * 0.995m, tickSize);
 
-        var leverageResult = await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
+        var leverageResult = _useV3Api
+            ? await _restClient.FuturesV3Api.Account.SetLeverageAsync(symbol, leverage, null, ct)
+            : await _restClient.FuturesApi.Account.SetLeverageAsync(symbol, leverage, null, ct);
         if (!leverageResult.Success)
         {
             return new OrderResultDto
@@ -275,24 +301,43 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
 
         var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                orderSide,
-                OrderType.Limit,
-                quantity: roundedQuantity,
-                price: limitPrice,
-                positionSide: null,
-                timeInForce: TimeInForce.ImmediateOrCancel,
-                reduceOnly: null,
-                clientOrderId: null,
-                stopPrice: null,
-                closePosition: null,
-                activationPrice: null,
-                callbackRate: null,
-                workingType: null,
-                priceProtect: null,
-                receiveWindow: null,
-                ct: token),
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.Trading.PlaceOrderAsync(
+                    symbol,
+                    orderSide,
+                    OrderType.Limit,
+                    quantity: roundedQuantity,
+                    price: limitPrice,
+                    positionSide: null,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: null,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token)
+                : await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    orderSide,
+                    OrderType.Limit,
+                    quantity: roundedQuantity,
+                    price: limitPrice,
+                    positionSide: null,
+                    timeInForce: TimeInForce.ImmediateOrCancel,
+                    reduceOnly: null,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token),
             ct);
 
         if (!result.Success)
@@ -355,7 +400,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
         // Fetch current position to get explicit quantity (Aster API requires it)
         var posResult = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.Trading.GetPositionsAsync(symbol, ct: token)
+                : await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token),
+            ct);
         if (!posResult.Success)
         {
             return new OrderResultDto { Success = false, Error = $"Failed to fetch position: {posResult.Error?.Message ?? "Unknown error"}" };
@@ -373,24 +421,43 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var orderPipeline = _pipelineProvider.GetPipeline("OrderClose");
 
         var result = await orderPipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
-                symbol,
-                closeSide,
-                OrderType.Market,
-                quantity: quantity,
-                price: null,
-                positionSide: null,
-                timeInForce: null,
-                reduceOnly: true,          // closes existing position
-                clientOrderId: null,
-                stopPrice: null,
-                closePosition: null,
-                activationPrice: null,
-                callbackRate: null,
-                workingType: null,
-                priceProtect: null,
-                receiveWindow: null,
-                ct: token),
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.Trading.PlaceOrderAsync(
+                    symbol,
+                    closeSide,
+                    OrderType.Market,
+                    quantity: quantity,
+                    price: null,
+                    positionSide: null,
+                    timeInForce: null,
+                    reduceOnly: true,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token)
+                : await _restClient.FuturesApi.Trading.PlaceOrderAsync(
+                    symbol,
+                    closeSide,
+                    OrderType.Market,
+                    quantity: quantity,
+                    price: null,
+                    positionSide: null,
+                    timeInForce: null,
+                    reduceOnly: true,
+                    clientOrderId: null,
+                    stopPrice: null,
+                    closePosition: null,
+                    activationPrice: null,
+                    callbackRate: null,
+                    workingType: null,
+                    priceProtect: null,
+                    receiveWindow: null,
+                    ct: token),
             ct);
 
         if (!result.Success)
@@ -526,8 +593,11 @@ public class AsterConnector : IExchangeConnector, IDisposable
             }
 
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
-                    symbol, incomeType, cursor, to, limit: pageSize, ct: token),
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Account.GetIncomeHistoryAsync(
+                        symbol, incomeType, cursor, to, limit: pageSize, ct: token)
+                    : await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                        symbol, incomeType, cursor, to, limit: pageSize, ct: token),
                 ct);
 
             if (!result.Success || result.Data is null)
@@ -563,7 +633,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
         var result = await pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.Account.GetBalancesAsync(null, token),
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.Account.GetBalancesAsync(null, token)
+                : await _restClient.FuturesApi.Account.GetBalancesAsync(null, token),
             ct);
 
         if (!result.Success)
@@ -626,7 +698,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token), ct);
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Account.GetLeverageBracketsAsync(symbol, ct: token)
+                    : await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token),
+                ct);
 
             if (!result.Success || result.Data is null)
             {
@@ -940,7 +1015,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var symbol = asset + "USDT";
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Trading.GetPositionsAsync(symbol, ct: token)
+                    : await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token),
+                ct);
 
             if (!result.Success)
             {
@@ -964,7 +1042,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var symbol = asset + "USDT";
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token), ct);
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Account.GetLeverageBracketsAsync(symbol, ct: token)
+                    : await _restClient.FuturesApi.Account.GetLeverageBracketsAsync(symbol, ct: token),
+                ct);
 
             if (!result.Success || result.Data is null)
             {
@@ -1001,7 +1082,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var symbol = asset + "USDT";
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token), ct);
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Trading.GetPositionsAsync(symbol, ct: token)
+                    : await _restClient.FuturesApi.Trading.GetPositionsAsync(symbol, ct: token),
+                ct);
 
             if (!result.Success)
             {

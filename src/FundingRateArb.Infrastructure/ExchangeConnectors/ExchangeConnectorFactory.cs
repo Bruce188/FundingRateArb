@@ -200,10 +200,11 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         });
 
         LastAsterCredentials = credentials;
+        var isV3 = credentials.V3 is not null;
         var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
         var logger = _serviceProvider.GetRequiredService<ILogger<AsterConnector>>();
         var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
-        return new AsterConnector(restClient, pipelineProvider, logger, markPriceCache);
+        return new AsterConnector(restClient, pipelineProvider, logger, markPriceCache, useV3Api: isV3);
     }
 
     private BinanceConnector? CreateBinanceConnector(string? apiKey, string? apiSecret)

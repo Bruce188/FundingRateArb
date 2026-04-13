@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using Aster.Net.Interfaces.Clients;
 using Aster.Net.Interfaces.Clients.FuturesApi;
+using Aster.Net.Interfaces.Clients.FuturesV3Api;
 using Aster.Net.Objects;
 using Aster.Net.Objects.Models;
 using CryptoExchange.Net.Objects;
@@ -1895,5 +1896,193 @@ public class AsterConnectorTests
         raw.MaxNotionalValue.Should().Be(1_500_000m);
         normalized.MaxNotionalValue.Should().Be(1_500_000m,
             "normalized form must hit the same cache slot as raw form");
+    }
+
+    // ── V3 API Surface Routing ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds a mock IAsterRestClient with both FuturesApi and FuturesV3Api wired.
+    /// FuturesApi.ExchangeData is always needed for mark price lookups (public calls stay on V1).
+    /// </summary>
+    private static (Mock<IAsterRestClient> Client,
+                     Mock<IAsterRestClientFuturesApiTrading> V1Trading,
+                     Mock<IAsterRestClientFuturesV3ApiTrading> V3Trading,
+                     Mock<IAsterRestClientFuturesApiAccount> V1Account,
+                     Mock<IAsterRestClientFuturesV3ApiAccount> V3Account)
+        BuildDualSurfaceClient(decimal markPrice = 3500m)
+    {
+        // V1 mocks
+        var v1TradingMock = new Mock<IAsterRestClientFuturesApiTrading>();
+        v1TradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 1, QuantityFilled = 0.1m }));
+        v1TradingMock
+            .Setup(x => x.GetPositionsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([new AsterPosition { Symbol = "ETHUSDT", PositionAmount = 0.5m }]));
+
+        var v1AccountMock = new Mock<IAsterRestClientFuturesApiAccount>();
+        v1AccountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+        v1AccountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessBalances([new AsterBalance { Asset = "USDT", AvailableBalance = 1000m }]));
+
+        var exchangeDataMock = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        exchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", markPrice, markPrice - 5m, 0.0001m)]));
+        exchangeDataMock
+            .Setup(x => x.GetTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessTickers([]));
+
+        var futuresApiMock = new Mock<IAsterRestClientFuturesApi>();
+        futuresApiMock.SetupGet(f => f.Trading).Returns(v1TradingMock.Object);
+        futuresApiMock.SetupGet(f => f.Account).Returns(v1AccountMock.Object);
+        futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
+
+        // V3 mocks
+        var v3TradingMock = new Mock<IAsterRestClientFuturesV3ApiTrading>();
+        v3TradingMock
+            .Setup(x => x.PlaceOrderAsync(
+                It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+                It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+                It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+                It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+                It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder(new AsterOrder { Id = 2, QuantityFilled = 0.1m }));
+        v3TradingMock
+            .Setup(x => x.GetPositionsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessPositions([new AsterPosition { Symbol = "ETHUSDT", PositionAmount = 0.5m }]));
+
+        var v3AccountMock = new Mock<IAsterRestClientFuturesV3ApiAccount>();
+        v3AccountMock
+            .Setup(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessLeverage());
+        v3AccountMock
+            .Setup(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessBalances([new AsterBalance { Asset = "USDT", AvailableBalance = 2000m }]));
+
+        var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
+        var v3ApiMock = new Mock<IAsterRestClientFuturesV3Api>();
+        v3ApiMock.SetupGet(a => a.Trading).Returns(v3TradingMock.Object);
+        v3ApiMock.SetupGet(a => a.Account).Returns(v3AccountMock.Object);
+        v3ApiMock.SetupGet(a => a.ExchangeData).Returns(v3ExchangeDataMock.Object);
+
+        // Client with both surfaces
+        var clientMock = new Mock<IAsterRestClient>();
+        clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
+        clientMock.SetupGet(c => c.FuturesV3Api).Returns(v3ApiMock.Object);
+
+        return (clientMock, v1TradingMock, v3TradingMock, v1AccountMock, v3AccountMock);
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderAsync_WithV3Mode_UsesFuturesV3ApiTrading()
+    {
+        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
+
+        result.Success.Should().BeTrue();
+        v3Trading.Verify(x => x.PlaceOrderAsync(
+            It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+            It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+            It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+            It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+            It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+            It.IsAny<CancellationToken>()), Times.Once, "V3 mode must route PlaceOrderAsync through FuturesV3Api.Trading");
+        v1Trading.Verify(x => x.PlaceOrderAsync(
+            It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+            It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+            It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+            It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+            It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+            It.IsAny<CancellationToken>()), Times.Never, "V3 mode must not call FuturesApi.Trading.PlaceOrderAsync");
+    }
+
+    [Fact]
+    public async Task GetBalancesAsync_WithV3Mode_UsesFuturesV3ApiAccount()
+    {
+        var (client, _, _, v1Account, v3Account) = BuildDualSurfaceClient();
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        var balance = await sut.GetAvailableBalanceAsync();
+
+        balance.Should().Be(2000m, "V3 Account mock returns 2000 USDT");
+        v3Account.Verify(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Once,
+            "V3 mode must route GetBalancesAsync through FuturesV3Api.Account");
+        v1Account.Verify(x => x.GetBalancesAsync(It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never,
+            "V3 mode must not call FuturesApi.Account.GetBalancesAsync");
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_WithV3Mode_UsesFuturesV3ApiTrading()
+    {
+        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
+
+        result.Success.Should().BeTrue();
+        v3Trading.Verify(x => x.GetPositionsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Once,
+            "V3 mode must route GetPositionsAsync through FuturesV3Api.Trading");
+        v3Trading.Verify(x => x.PlaceOrderAsync(
+            It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+            It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+            It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+            It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+            It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+            It.IsAny<CancellationToken>()), Times.Once, "V3 close must use FuturesV3Api.Trading.PlaceOrderAsync");
+        v1Trading.Verify(x => x.GetPositionsAsync(It.IsAny<string>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never,
+            "V3 mode must not call FuturesApi.Trading.GetPositionsAsync");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrderAsync_WithV1Mode_UsesFuturesApiTrading()
+    {
+        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: false);
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
+
+        result.Success.Should().BeTrue();
+        v1Trading.Verify(x => x.PlaceOrderAsync(
+            It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+            It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+            It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+            It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+            It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+            It.IsAny<CancellationToken>()), Times.Once, "V1 mode must route through FuturesApi.Trading");
+        v3Trading.Verify(x => x.PlaceOrderAsync(
+            It.IsAny<string>(), It.IsAny<Aster.Net.Enums.OrderSide>(), It.IsAny<Aster.Net.Enums.OrderType>(),
+            It.IsAny<decimal?>(), It.IsAny<decimal?>(), It.IsAny<Aster.Net.Enums.PositionSide?>(),
+            It.IsAny<Aster.Net.Enums.TimeInForce?>(), It.IsAny<bool?>(), It.IsAny<string>(),
+            It.IsAny<decimal?>(), It.IsAny<bool?>(), It.IsAny<decimal?>(), It.IsAny<decimal?>(),
+            It.IsAny<Aster.Net.Enums.WorkingType?>(), It.IsAny<bool?>(), It.IsAny<long?>(),
+            It.IsAny<CancellationToken>()), Times.Never, "V1 mode must not call FuturesV3Api.Trading");
+    }
+
+    [Fact]
+    public async Task SetLeverageAsync_WithV3Mode_UsesFuturesV3ApiAccount()
+    {
+        var (client, _, _, v1Account, v3Account) = BuildDualSurfaceClient();
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        // PlaceMarketOrderAsync calls SetLeverageAsync internally
+        await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
+
+        v3Account.Verify(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Once,
+            "V3 mode must route SetLeverageAsync through FuturesV3Api.Account");
+        v1Account.Verify(x => x.SetLeverageAsync(It.IsAny<string>(), It.IsAny<int>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never,
+            "V3 mode must not call FuturesApi.Account.SetLeverageAsync");
     }
 }
