@@ -25,12 +25,24 @@ public class FundingRateRepository : IFundingRateRepository
     private static bool IsTransientLoginFailure(SqlException ex) =>
         SqlTransientErrorNumbers.Contains(ex.Number);
 
-    // NB9 from review-v131: cap the degraded path at 10s so the banner renders promptly
+    // Cap the degraded path so the banner renders promptly
     // instead of waiting up to 150s for EF's 5-retry × 30s-delay policy to exhaust.
-    private static readonly TimeSpan DegradedReadTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan DegradedReadTimeout = TimeSpan.FromSeconds(20);
+
+    // Short-lived cache to prevent thundering-herd on the heavy GroupBy+Join query.
+    // Dashboard and SignalEngine both poll this within seconds of each other.
+    private static volatile List<FundingRateSnapshot>? _latestRatesCache;
+    private static DateTime _latestRatesCacheExpiry;
+    private static readonly TimeSpan LatestRatesCacheTtl = TimeSpan.FromSeconds(5);
 
     public async Task<List<FundingRateSnapshot>> GetLatestPerExchangePerAssetAsync()
     {
+        // Return cached result if still fresh (prevents thundering-herd from concurrent callers)
+        if (_latestRatesCache is { } cached && DateTime.UtcNow < _latestRatesCacheExpiry)
+        {
+            return cached;
+        }
+
         // H5: Replace O(N^2) correlated subquery with GroupBy + Max + Join for O(N log N) performance.
         // The correlated subquery re-scans the entire table per row; with 3.6M rows this is the bottleneck.
         var maxTimes = _context.FundingRateSnapshots
@@ -41,7 +53,7 @@ public class FundingRateRepository : IFundingRateRepository
 
         try
         {
-            return await _context.FundingRateSnapshots
+            var result = await _context.FundingRateSnapshots
                 .Join(maxTimes,
                     f => new { f.ExchangeId, f.AssetId, f.RecordedAt },
                     m => new { m.ExchangeId, m.AssetId, RecordedAt = m.MaxAt },
@@ -50,6 +62,10 @@ public class FundingRateRepository : IFundingRateRepository
                 .Include(f => f.Asset)
                 .AsNoTracking()
                 .ToListAsync(timeoutCts.Token);
+
+            _latestRatesCache = result;
+            _latestRatesCacheExpiry = DateTime.UtcNow.Add(LatestRatesCacheTtl);
+            return result;
         }
         catch (SqlException ex) when (IsTransientLoginFailure(ex))
         {
