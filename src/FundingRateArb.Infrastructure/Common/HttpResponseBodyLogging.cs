@@ -24,7 +24,7 @@ internal static class HttpResponseBodyLogging
     // the rest of the body stays in the log.
     // Case-insensitive + compiled + timeout bounded to guard against pathological input.
     private static readonly Regex CredentialPattern = new(
-        @"(CG-API-KEY|Authorization|Proxy-Authorization|X-API-Key|X-Auth-Token|""?api[_-]?key""?|""?token""?|""?secret""?)\s*[:=]\s*""?[^""\r\n,}]*""?",
+        @"(CG-API-KEY|Authorization|Proxy-Authorization|X-API-Key|X-Auth-Token|""?api[_-]?key""?|""?token""?|""?secret""?)\s*[:=]\s*(?:""[^""]*""|[^,}\r\n]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(200));
 
