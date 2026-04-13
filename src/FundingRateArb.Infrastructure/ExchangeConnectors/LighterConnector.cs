@@ -1354,11 +1354,18 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
 
     private async Task<LighterAccountResponse?> GetAccountAsync(long accountIndex, bool useCache, CancellationToken ct)
     {
-        // Return cached response if still fresh (avoids redundant HTTP call when
-        // GetActualEntryPriceAsync runs immediately after VerifyPositionOpenedAsync)
-        if (useCache && _accountCache is not null && DateTime.UtcNow < _accountCacheExpiry)
+        if (useCache)
         {
-            return _accountCache;
+            await _cacheLock.WaitAsync(ct);
+            try
+            {
+                if (_accountCache is not null && DateTime.UtcNow < _accountCacheExpiry)
+                    return _accountCache;
+            }
+            finally
+            {
+                _cacheLock.Release();
+            }
         }
 
         var response = await _httpClient.GetAsync(
@@ -1368,8 +1375,16 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         var result = await response.Content
             .ReadFromJsonAsync<LighterAccountResponse>(JsonOptions, ct);
 
-        _accountCache = result;
-        _accountCacheExpiry = DateTime.UtcNow.Add(AccountCacheTtl);
+        await _cacheLock.WaitAsync(ct);
+        try
+        {
+            _accountCache = result;
+            _accountCacheExpiry = DateTime.UtcNow.Add(AccountCacheTtl);
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
 
         return result;
     }
