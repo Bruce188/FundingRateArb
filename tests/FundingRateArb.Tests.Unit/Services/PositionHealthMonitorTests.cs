@@ -3069,7 +3069,7 @@ public class PositionHealthMonitorTests
     {
         // Arrange: USDCUSDT at 0.99 → 1% spread → critical
         var mockBinance = new Mock<IExchangeConnector>();
-        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDC", It.IsAny<CancellationToken>()))
             .ReturnsAsync(0.99m);
         _mockFactory.Setup(f => f.GetConnector("Binance")).Returns(mockBinance.Object);
 
@@ -3141,7 +3141,7 @@ public class PositionHealthMonitorTests
     {
         // Arrange: Binance connector throws
         var mockBinance = new Mock<IExchangeConnector>();
-        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDC", It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("Connection failed"));
         _mockFactory.Setup(f => f.GetConnector("Binance")).Returns(mockBinance.Object);
 
@@ -3176,7 +3176,7 @@ public class PositionHealthMonitorTests
     {
         // Arrange: USDCUSDT at 0.98 → 2% spread → critical
         var mockBinance = new Mock<IExchangeConnector>();
-        mockBinance.Setup(c => c.GetMarkPriceAsync("USDCUSDT", It.IsAny<CancellationToken>()))
+        mockBinance.Setup(c => c.GetMarkPriceAsync("USDC", It.IsAny<CancellationToken>()))
             .ReturnsAsync(0.98m);
         mockBinance.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
             .ReturnsAsync(3000m);
