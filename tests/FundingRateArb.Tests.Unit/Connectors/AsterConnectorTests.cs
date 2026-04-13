@@ -2087,6 +2087,73 @@ public class AsterConnectorTests
             "V3 mode must not call FuturesApi.Account.SetLeverageAsync");
     }
 
+    [Fact]
+    public async Task GetQuantityPrecision_WithV3Mode_UsesFuturesV3ApiExchangeData()
+    {
+        // Build a dual-surface client with V3 exchange data wired for GetExchangeInfoAsync
+        var (client, _, _, _, _) = BuildDualSurfaceClient();
+
+        // Set up V3 exchange data to return valid exchange info
+        var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
+        v3ExchangeDataMock
+            .Setup(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessExchangeInfo(new AsterExchangeInfo
+            {
+                Symbols = [new AsterSymbol { Name = "ETHUSDT", QuantityPrecision = 2, PricePrecision = 2 }],
+            }));
+
+        var v3ApiMock = Mock.Get(client.Object.FuturesV3Api);
+        v3ApiMock.SetupGet(a => a.ExchangeData).Returns(v3ExchangeDataMock.Object);
+
+        // V1 exchange data should NOT be called for exchange info
+        var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
+
+        var precision = await sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(2, "V3 exchange info should provide the precision");
+        v3ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "V3 mode must route GetExchangeInfoAsync through FuturesV3Api.ExchangeData");
+        v1ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Never,
+            "V3 mode must not call FuturesApi.ExchangeData.GetExchangeInfoAsync");
+    }
+
+    [Fact]
+    public async Task GetQuantityPrecision_WithV1Mode_UsesFuturesApiExchangeData()
+    {
+        var (client, _, _, _, _) = BuildDualSurfaceClient();
+
+        // Set up V1 exchange data to return valid exchange info
+        var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+        v1ExchangeDataMock
+            .Setup(x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessExchangeInfo(new AsterExchangeInfo
+            {
+                Symbols = [new AsterSymbol { Name = "ETHUSDT", QuantityPrecision = 4, PricePrecision = 2 }],
+            }));
+
+        var v3ExchangeDataMock = Mock.Get(client.Object.FuturesV3Api.ExchangeData);
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: false);
+
+        var precision = await sut.GetQuantityPrecisionAsync("ETH");
+
+        precision.Should().Be(4, "V1 exchange info should provide the precision");
+        v1ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "V1 mode must route GetExchangeInfoAsync through FuturesApi.ExchangeData");
+        v3ExchangeDataMock.Verify(
+            x => x.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Never,
+            "V1 mode must not call FuturesV3Api.ExchangeData.GetExchangeInfoAsync");
+    }
+
     // ── Factory V3 Detection ──────────────────────────────────────────────────
 
     private static ExchangeConnectorFactory BuildFactoryForAsterTests()

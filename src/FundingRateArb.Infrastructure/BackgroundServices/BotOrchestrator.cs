@@ -943,6 +943,12 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
                 _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow + delay, failures);
 
+                // Classify the error: credential/auth errors should not count toward circuit breaker
+                var isAuthError = error?.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("-2015", StringComparison.Ordinal) == true
+                    || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("credentials not provided", StringComparison.OrdinalIgnoreCase) == true;
+
                 // Identify the culpable exchange from error context (used for both cooldown and circuit breaker)
                 var failingExchangeId = ExtractFailingExchange(error, opp);
 
@@ -965,7 +971,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 var circuitBreakerAlertAdded = false;
                 if (failingExchangeId.HasValue)
                 {
-                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig, isAuthError);
                     if (circuitJustOpened)
                     {
                         var exchangeName = opp.LongExchangeId == failingExchangeId.Value ? opp.LongExchangeName : opp.ShortExchangeName;
@@ -982,7 +988,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 }
                 else
                 {
-                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig))
+                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig, isAuthError))
                     {
                         ctx.Uow.Alerts.Add(new Alert
                         {
@@ -996,7 +1002,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
                     if (opp.ShortExchangeId != opp.LongExchangeId)
                     {
-                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig))
+                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig, isAuthError))
                         {
                             ctx.Uow.Alerts.Add(new Alert
                             {

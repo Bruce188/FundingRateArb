@@ -154,6 +154,59 @@ public class CircuitBreakerManagerTests
             "circuit already open — no new transition");
     }
 
+    [Fact]
+    public void IncrementExchangeFailure_AuthError_DoesNotIncrement()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 1,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        var result = _sut.IncrementExchangeFailure(1, config, isAuthError: true);
+
+        result.Should().BeFalse("auth errors should not trigger circuit breaker transition");
+        _sut.ExchangeCircuitBreaker.Should().NotContainKey(1,
+            "auth errors should not increment the failure counter");
+    }
+
+    [Fact]
+    public void IncrementExchangeFailure_AuthError_DoesNotTripCircuitBreaker()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 3,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        // Two transient failures — just below threshold
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.IncrementExchangeFailure(1, config);
+        _sut.ExchangeCircuitBreaker[1].Failures.Should().Be(2);
+
+        // Auth error should NOT push it over the threshold
+        _sut.IncrementExchangeFailure(1, config, isAuthError: true);
+        _sut.ExchangeCircuitBreaker[1].Failures.Should().Be(2,
+            "auth error must not increment the counter");
+        _sut.ExchangeCircuitBreaker[1].BrokenUntil.Should().Be(DateTime.MinValue,
+            "circuit breaker should remain closed");
+    }
+
+    [Fact]
+    public void IncrementExchangeFailure_TransientError_StillTripsNormally()
+    {
+        var config = new BotConfiguration
+        {
+            ExchangeCircuitBreakerThreshold = 2,
+            ExchangeCircuitBreakerMinutes = 15,
+        };
+
+        _sut.IncrementExchangeFailure(1, config, isAuthError: false);
+        _sut.IncrementExchangeFailure(1, config, isAuthError: false).Should().BeTrue(
+            "non-auth failures should still trip the circuit breaker at threshold");
+        _sut.ExchangeCircuitBreaker[1].BrokenUntil.Should().BeAfter(DateTime.UtcNow);
+    }
+
     // ── IncrementAssetExchangeFailure ─────────────────────────────────────────
 
     [Fact]
