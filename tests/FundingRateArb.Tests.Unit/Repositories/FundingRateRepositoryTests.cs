@@ -47,21 +47,21 @@ public class FundingRateRepositoryTests
     [Fact]
     public async Task GetLatestPerExchangePerAssetAsync_InternalTimeout_ThrowsDatabaseUnavailable()
     {
-        // Arrange — context that stalls longer than the repository's 10s internal CTS
-        var context = CreateStallingContext(delaySeconds: 15);
+        // Arrange — context that stalls longer than the repository's 20s internal CTS
+        var context = CreateStallingContext(delaySeconds: 25);
         var sut = new FundingRateRepository(context);
 
-        // Act — internal 10s CTS fires before the 15s stall completes.
-        // Use a 12s outer timeout so the test does not hang if the internal CTS misfires.
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
+        // Act — internal 20s CTS fires before the 25s stall completes.
+        // Use a 22s outer timeout so the test does not hang if the internal CTS misfires.
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(22));
         var task = sut.GetLatestPerExchangePerAssetAsync();
         var completedTask = await Task.WhenAny(task, Task.Delay(Timeout.Infinite, timeoutCts.Token));
-        completedTask.Should().Be(task, "repository must complete within 12s via its internal 10s CTS");
+        completedTask.Should().Be(task, "repository must complete within 22s via its internal 20s CTS");
 
         // Assert — unwrap the completed task and verify the exception type
         var act = async () => await task;
         await act.Should().ThrowAsync<DatabaseUnavailableException>(
-            "timeout from internal 10s CTS must surface as DatabaseUnavailableException");
+            "timeout from internal 20s CTS must surface as DatabaseUnavailableException");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
