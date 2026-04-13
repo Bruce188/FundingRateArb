@@ -366,7 +366,9 @@ public class DashboardController : Controller
         List<ArbitrageOpportunityDto> opportunities)
     {
         if (cooldowns.Count == 0)
+        {
             return cooldowns;
+        }
 
         // Build lookup dictionaries from the opportunity data already in memory
         var assetLookup = new Dictionary<int, string>();
@@ -384,23 +386,33 @@ public class DashboardController : Controller
             // or rotation: "{userId}:{assetId}:{longExchangeId}:{shortExchangeId}"
             var colonIdx = cd.CooldownKey.IndexOf(':');
             if (colonIdx < 0)
+            {
                 continue;
+            }
 
             var afterUser = cd.CooldownKey[(colonIdx + 1)..];
             string[] parts;
 
             if (afterUser.Contains('_'))
+            {
                 parts = afterUser.Split('_');
+            }
             else
+            {
                 parts = afterUser.Split(':');
+            }
 
             if (parts.Length != 3)
+            {
                 continue;
+            }
 
             if (!int.TryParse(parts[0], out var assetId) ||
                 !int.TryParse(parts[1], out var longExId) ||
                 !int.TryParse(parts[2], out var shortExId))
+            {
                 continue;
+            }
 
             assetLookup.TryGetValue(assetId, out var symbol);
             exchangeLookup.TryGetValue(longExId, out var longName);

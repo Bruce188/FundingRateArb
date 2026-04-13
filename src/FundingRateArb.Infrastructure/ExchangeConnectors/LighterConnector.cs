@@ -1360,7 +1360,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             try
             {
                 if (_accountCache is not null && DateTime.UtcNow < _accountCacheExpiry)
+                {
                     return _accountCache;
+                }
             }
             finally
             {
