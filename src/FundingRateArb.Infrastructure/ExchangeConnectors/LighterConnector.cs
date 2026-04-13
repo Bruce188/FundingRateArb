@@ -1921,9 +1921,19 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 var response = await _httpClient.GetAsync(url, ct);
                 if (!response.IsSuccessStatusCode)
                 {
-                    _logger.LogWarning(
-                        "Lighter trades returned {Status} for {Asset} (page {Page})",
-                        (int)response.StatusCode, asset, page);
+                    if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+                    {
+                        _logger.LogDebug(
+                            "Lighter trades returned 400 for {Asset} (page {Page}) — asset may not be supported",
+                            asset, page);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Lighter trades returned {Status} for {Asset} (page {Page})",
+                            (int)response.StatusCode, asset, page);
+                    }
+
                     return null;
                 }
 
@@ -2031,9 +2041,19 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 var response = await _httpClient.GetAsync(url, ct);
                 if (!response.IsSuccessStatusCode)
                 {
-                    _logger.LogWarning(
-                        "Lighter positionFunding returned {Status} for {Asset} (page {Page})",
-                        (int)response.StatusCode, asset, page);
+                    if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
+                    {
+                        _logger.LogDebug(
+                            "Lighter positionFunding returned 400 for {Asset} (page {Page}) — asset may not be supported",
+                            asset, page);
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "Lighter positionFunding returned {Status} for {Asset} (page {Page})",
+                            (int)response.StatusCode, asset, page);
+                    }
+
                     return null;
                 }
 
