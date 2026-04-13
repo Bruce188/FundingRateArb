@@ -900,7 +900,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         try
         {
             var binance = _connectorFactory.GetConnector(BinanceExchangeName);
-            var price = await binance.GetMarkPriceAsync("USDCUSDT", ct);
+            var price = await binance.GetMarkPriceAsync("USDC", ct);
             if (price <= 0)
             {
                 return false;
