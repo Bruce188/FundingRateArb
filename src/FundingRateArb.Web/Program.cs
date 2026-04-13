@@ -93,6 +93,8 @@ try
             .MinimumLevel.Information()
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
+            .MinimumLevel.Override("Binance.Net", LogEventLevel.Error)
+            .MinimumLevel.Override("CryptoExchange.Net", LogEventLevel.Error)
             .Enrich.FromLogContext()
             .Enrich.WithMachineName()
             .Enrich.WithThreadId()
