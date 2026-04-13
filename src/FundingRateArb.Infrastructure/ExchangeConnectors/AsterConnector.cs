@@ -861,7 +861,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct)
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.ExchangeData.GetExchangeInfoAsync(token)
+                    : await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct)
                 .ConfigureAwait(false);
 
             if (result.Success && result.Data?.Symbols is { } symbols)
@@ -969,7 +971,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
 
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async token => await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.ExchangeData.GetExchangeInfoAsync(token)
+                    : await _restClient.FuturesApi.ExchangeData.GetExchangeInfoAsync(token), ct);
 
             if (result.Success && result.Data?.Symbols != null)
             {

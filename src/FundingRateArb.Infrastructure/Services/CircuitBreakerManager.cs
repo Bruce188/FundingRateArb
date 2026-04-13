@@ -117,8 +117,16 @@ public class CircuitBreakerManager : ICircuitBreakerManager
         }
     }
 
-    public bool IncrementExchangeFailure(int exchangeId, BotConfiguration config)
+    public bool IncrementExchangeFailure(int exchangeId, BotConfiguration config, bool isAuthError = false)
     {
+        if (isAuthError)
+        {
+            _logger.LogWarning(
+                "Auth error for exchange {ExchangeId} — not counting toward circuit breaker",
+                exchangeId);
+            return false;
+        }
+
         var threshold = config.ExchangeCircuitBreakerThreshold;
         var brokenUntil = DateTime.UtcNow.AddMinutes(config.ExchangeCircuitBreakerMinutes);
 

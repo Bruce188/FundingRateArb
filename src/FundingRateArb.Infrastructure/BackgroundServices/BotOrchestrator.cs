@@ -937,27 +937,41 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
             }
             else
             {
+                // Classify the error: credential/auth errors should not count toward failure tracking
+                var isAuthError = error?.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("-2015", StringComparison.Ordinal) == true
+                    || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true
+                    || error?.Contains("credentials not provided", StringComparison.OrdinalIgnoreCase) == true;
+
                 var existingEntry = _circuitBreaker.GetCooldownEntry(cooldownKey);
-                var failures = existingEntry.Failures + 1;
-                var delay = TimeSpan.FromTicks(
-                    Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
-                _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow + delay, failures);
+                var failures = existingEntry.Failures;
+                var delay = TimeSpan.Zero;
+
+                if (!isAuthError)
+                {
+                    failures += 1;
+                    delay = TimeSpan.FromTicks(
+                        Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
+                    _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow + delay, failures);
+                }
 
                 // Identify the culpable exchange from error context (used for both cooldown and circuit breaker)
                 var failingExchangeId = ExtractFailingExchange(error, opp);
 
-                // Track asset-exchange level failures — target only the culpable exchange
-                if (failingExchangeId.HasValue)
+                // Track asset-exchange level failures — skip for auth errors (permanent, not transient)
+                if (!isAuthError)
                 {
-                    _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, failingExchangeId.Value);
-                }
-                else
-                {
-                    // Fallback: increment both when the failing exchange can't be identified
-                    _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, opp.LongExchangeId);
-                    if (opp.ShortExchangeId != opp.LongExchangeId)
+                    if (failingExchangeId.HasValue)
                     {
-                        _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, opp.ShortExchangeId);
+                        _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, failingExchangeId.Value);
+                    }
+                    else
+                    {
+                        _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, opp.LongExchangeId);
+                        if (opp.ShortExchangeId != opp.LongExchangeId)
+                        {
+                            _circuitBreaker.IncrementAssetExchangeFailure(opp.AssetId, opp.ShortExchangeId);
+                        }
                     }
                 }
 
@@ -965,7 +979,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 var circuitBreakerAlertAdded = false;
                 if (failingExchangeId.HasValue)
                 {
-                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig);
+                    var circuitJustOpened = _circuitBreaker.IncrementExchangeFailure(failingExchangeId.Value, ctx.GlobalConfig, isAuthError);
                     if (circuitJustOpened)
                     {
                         var exchangeName = opp.LongExchangeId == failingExchangeId.Value ? opp.LongExchangeName : opp.ShortExchangeName;
@@ -982,7 +996,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 }
                 else
                 {
-                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig))
+                    if (_circuitBreaker.IncrementExchangeFailure(opp.LongExchangeId, ctx.GlobalConfig, isAuthError))
                     {
                         ctx.Uow.Alerts.Add(new Alert
                         {
@@ -996,7 +1010,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
                     if (opp.ShortExchangeId != opp.LongExchangeId)
                     {
-                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig))
+                        if (_circuitBreaker.IncrementExchangeFailure(opp.ShortExchangeId, ctx.GlobalConfig, isAuthError))
                         {
                             ctx.Uow.Alerts.Add(new Alert
                             {
@@ -1020,10 +1034,7 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName, userId, failures, DateTime.UtcNow + delay);
                 _logger.LogError("Failed to open position: {Error}", error);
 
-                var failureSeverity = (error?.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase) == true
-                    || error?.Contains("-2015", StringComparison.Ordinal) == true
-                    || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true)
-                    ? "danger" : "warning";
+                var failureSeverity = isAuthError ? "danger" : "warning";
 
                 var sanitizedError = error is not null
                     ? SecretPattern().Replace(error, "[redacted]")
