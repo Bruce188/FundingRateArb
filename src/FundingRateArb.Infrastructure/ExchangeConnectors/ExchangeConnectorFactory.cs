@@ -294,14 +294,23 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             return null;
         }
 
-        var signer = new Dydx.DydxSigner(mnemonic);
-        var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();
-        var indexerClient = httpClientFactory.CreateClient("DydxIndexer");
-        var validatorClient = httpClientFactory.CreateClient("DydxValidator");
-        var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
-        var logger = _serviceProvider.GetRequiredService<ILogger<DydxConnector>>();
-        var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
-        return new DydxConnector(indexerClient, validatorClient, signer, pipelineProvider, logger, markPriceCache);
+        try
+        {
+            var signer = new Dydx.DydxSigner(mnemonic);
+            var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();
+            var indexerClient = httpClientFactory.CreateClient("DydxIndexer");
+            var validatorClient = httpClientFactory.CreateClient("DydxValidator");
+            var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
+            var logger = _serviceProvider.GetRequiredService<ILogger<DydxConnector>>();
+            var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
+            return new DydxConnector(indexerClient, validatorClient, signer, pipelineProvider, logger, markPriceCache);
+        }
+        catch (Exception ex)
+        {
+            var logger = _serviceProvider.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+            logger.LogWarning(ex, "Failed to create dYdX connector: {Reason}", ex.Message);
+            return null;
+        }
     }
 
     /// <summary>

@@ -85,7 +85,13 @@ public class BalanceAggregator : IBalanceAggregator
 
             if (connector is null)
             {
-                _logger.LogWarning("Could not create connector for {Exchange} (user {UserId})", exchangeName, userId);
+                var suppressKey = $"connector-warn:{userId}:{exchangeName}";
+                if (!_cache.TryGetValue(suppressKey, out _))
+                {
+                    _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — check credential configuration", exchangeName, userId);
+                    _cache.Set(suppressKey, true, TimeSpan.FromMinutes(15));
+                }
+
                 balances.Add(new ExchangeBalanceDto
                 {
                     ExchangeId = cred.ExchangeId,
