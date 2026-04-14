@@ -279,6 +279,7 @@ try
 
     // --- Unit of Work (cursus BankingApp pattern) ---
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+    builder.Services.AddScoped<IAssetRepository, AssetRepository>();
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
 
     // --- Services ---
