@@ -129,11 +129,18 @@ public class FundingRateFetcher : BackgroundService
         // finds them. The discovery service invalidates the asset cache on insertion, so the
         // GetActiveAsync call below returns the updated list.
         var discovery = scope.ServiceProvider.GetRequiredService<IAssetDiscoveryService>();
-        await discovery.EnsureAssetsExistAsync(allRates.Select(r => r.Symbol), ct);
+        var discovered = await discovery.EnsureAssetsExistAsync(
+            allRates.Select(r => r.Symbol), ct);
 
-        // Resolve exchange and asset lookup tables once
+        // Resolve exchange and asset lookup tables once.
+        // NB11: GetActiveAsync shallow-clones the cached list on every call. On the
+        // no-op discovery path (99.9% of cycles) discovery returned 0 and the cache
+        // is still valid from the call inside the service — we intentionally let
+        // the shared cache absorb the duplication there. When discovery inserted
+        // rows, it invalidated the cache, so this call re-hydrates from the DB.
         var exchanges = await uow.Exchanges.GetActiveAsync();
         var assets = await uow.Assets.GetActiveAsync();
+        _ = discovered; // keeping the count for future telemetry hooks
 
         // H-FR2: Build lookup dictionaries before the loop — O(N+M) instead of O(N*M)
         var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);

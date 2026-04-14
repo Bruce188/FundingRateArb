@@ -12,6 +12,7 @@ using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
 using FundingRateArb.Infrastructure.Services;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
@@ -138,24 +139,24 @@ public class FundingRateFetcherAssetDiscoveryTests
             Times.Once);
     }
 
-    // ── Test: Discovery runs before asset map lookup (temporal order) ────────
+    // ── Test: Discovery runs before asset map lookup (MockSequence) ──────────
 
     [Fact]
     public async Task FetchAllAsync_DiscoveryRunsBeforeAssetMapLookup()
     {
-        var callOrder = new List<string>();
-
+        // NB9: uses Moq's MockSequence, which raises immediately on an out-of-order
+        // invocation rather than silently recording the first-seen order.
         var mockScopeFactory = new Mock<IServiceScopeFactory>();
         var mockScope = new Mock<IServiceScope>();
         var mockProvider = new Mock<IServiceProvider>();
         var mockUow = new Mock<IUnitOfWork>();
         var mockExchanges = new Mock<IExchangeRepository>();
-        var mockAssets = new Mock<IAssetRepository>();
+        var mockAssets = new Mock<IAssetRepository>(MockBehavior.Strict);
         var mockFundingRates = new Mock<IFundingRateRepository>();
         var mockPositions = new Mock<IPositionRepository>();
         var mockFactory = new Mock<IExchangeConnectorFactory>();
         var mockConnector = new Mock<IExchangeConnector>();
-        var mockDiscovery = new Mock<IAssetDiscoveryService>();
+        var mockDiscovery = new Mock<IAssetDiscoveryService>(MockBehavior.Strict);
 
         mockScopeFactory.Setup(f => f.CreateScope()).Returns(mockScope.Object);
         mockScope.Setup(s => s.ServiceProvider).Returns(mockProvider.Object);
@@ -180,14 +181,16 @@ public class FundingRateFetcherAssetDiscoveryTests
             .ReturnsAsync(false);
         mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
 
-        // Record call order: discovery before GetActiveAsync
-        mockDiscovery.Setup(d => d.EnsureAssetsExistAsync(
+        // Enforce strict ordering: discovery MUST be called before GetActiveAsync.
+        var seq = new MockSequence();
+        mockDiscovery
+            .InSequence(seq)
+            .Setup(d => d.EnsureAssetsExistAsync(
                 It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .Callback(() => callOrder.Add("discovery"))
             .ReturnsAsync(0);
-
-        mockAssets.Setup(a => a.GetActiveAsync())
-            .Callback(() => callOrder.Add("getActive"))
+        mockAssets
+            .InSequence(seq)
+            .Setup(a => a.GetActiveAsync())
             .ReturnsAsync([]);
 
         mockConnector.Setup(c => c.ExchangeName).Returns("Hyperliquid");
@@ -197,11 +200,136 @@ public class FundingRateFetcherAssetDiscoveryTests
 
         var sut = CreateFetcher(mockScopeFactory.Object);
 
-        // Act
+        // Act — any out-of-order call would throw MockException here.
         await sut.FetchAllAsync(CancellationToken.None);
 
-        // Assert: discovery was called before GetActiveAsync
-        callOrder.Should().ContainInOrder("discovery", "getActive");
+        mockDiscovery.Verify(
+            d => d.EnsureAssetsExistAsync(
+                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        mockAssets.Verify(a => a.GetActiveAsync(), Times.Once);
+    }
+
+    // ── NB8: fetcher forwards the exact CancellationToken instance ──────────
+
+    [Fact]
+    public async Task FetchAllAsync_ForwardsCancellationTokenToDiscovery()
+    {
+        var mockScopeFactory = new Mock<IServiceScopeFactory>();
+        var mockScope = new Mock<IServiceScope>();
+        var mockProvider = new Mock<IServiceProvider>();
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockExchanges = new Mock<IExchangeRepository>();
+        var mockAssets = new Mock<IAssetRepository>();
+        var mockFundingRates = new Mock<IFundingRateRepository>();
+        var mockPositions = new Mock<IPositionRepository>();
+        var mockFactory = new Mock<IExchangeConnectorFactory>();
+        var mockConnector = new Mock<IExchangeConnector>();
+        var mockDiscovery = new Mock<IAssetDiscoveryService>();
+
+        mockScopeFactory.Setup(f => f.CreateScope()).Returns(mockScope.Object);
+        mockScope.Setup(s => s.ServiceProvider).Returns(mockProvider.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(mockUow.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(mockFactory.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IAssetDiscoveryService))).Returns(mockDiscovery.Object);
+
+        mockUow.Setup(u => u.Exchanges).Returns(mockExchanges.Object);
+        mockUow.Setup(u => u.Assets).Returns(mockAssets.Object);
+        mockUow.Setup(u => u.FundingRates).Returns(mockFundingRates.Object);
+        mockUow.Setup(u => u.Positions).Returns(mockPositions.Object);
+        mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync([]);
+        mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync([]);
+        mockFundingRates.Setup(f => f.GetSnapshotsInRangeAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        mockFundingRates.Setup(f => f.PurgeAggregatesOlderThanAsync(
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        mockFundingRates.Setup(f => f.HourlyAggregatesExistAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+
+        mockConnector.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockConnector.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(MakeRates("Lighter", "BTC"));
+        mockFactory.Setup(f => f.GetAllConnectors()).Returns([mockConnector.Object]);
+
+        mockDiscovery
+            .Setup(d => d.EnsureAssetsExistAsync(
+                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        var sut = CreateFetcher(mockScopeFactory.Object);
+        using var cts = new CancellationTokenSource();
+
+        // Act
+        await sut.FetchAllAsync(cts.Token);
+
+        // Verify the EXACT token instance (not It.IsAny<CancellationToken>()) reached discovery.
+        mockDiscovery.Verify(
+            d => d.EnsureAssetsExistAsync(It.IsAny<IEnumerable<string>>(), cts.Token),
+            Times.Once);
+    }
+
+    // ── NB10: empty-rates case (defensive behaviour) ────────────────────────
+
+    [Fact]
+    public async Task FetchAllAsync_NoRatesFetched_DiscoveryHandlesEmptyGracefully()
+    {
+        var mockScopeFactory = new Mock<IServiceScopeFactory>();
+        var mockScope = new Mock<IServiceScope>();
+        var mockProvider = new Mock<IServiceProvider>();
+        var mockUow = new Mock<IUnitOfWork>();
+        var mockExchanges = new Mock<IExchangeRepository>();
+        var mockAssets = new Mock<IAssetRepository>();
+        var mockFundingRates = new Mock<IFundingRateRepository>();
+        var mockPositions = new Mock<IPositionRepository>();
+        var mockFactory = new Mock<IExchangeConnectorFactory>();
+        var mockDiscovery = new Mock<IAssetDiscoveryService>();
+
+        mockScopeFactory.Setup(f => f.CreateScope()).Returns(mockScope.Object);
+        mockScope.Setup(s => s.ServiceProvider).Returns(mockProvider.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IUnitOfWork))).Returns(mockUow.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(mockFactory.Object);
+        mockProvider.Setup(p => p.GetService(typeof(IAssetDiscoveryService))).Returns(mockDiscovery.Object);
+
+        mockUow.Setup(u => u.Exchanges).Returns(mockExchanges.Object);
+        mockUow.Setup(u => u.Assets).Returns(mockAssets.Object);
+        mockUow.Setup(u => u.FundingRates).Returns(mockFundingRates.Object);
+        mockUow.Setup(u => u.Positions).Returns(mockPositions.Object);
+        mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(0);
+        mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync([]);
+        mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync([]);
+        mockFundingRates.Setup(f => f.GetSnapshotsInRangeAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        mockFundingRates.Setup(f => f.PurgeAggregatesOlderThanAsync(
+                It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+        mockFundingRates.Setup(f => f.HourlyAggregatesExistAsync(
+                It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([]);
+
+        mockFactory.Setup(f => f.GetAllConnectors()).Returns([]);
+
+        mockDiscovery
+            .Setup(d => d.EnsureAssetsExistAsync(
+                It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        var sut = CreateFetcher(mockScopeFactory.Object);
+
+        var act = () => sut.FetchAllAsync(CancellationToken.None);
+        await act.Should().NotThrowAsync();
+
+        mockDiscovery.Verify(
+            d => d.EnsureAssetsExistAsync(
+                It.Is<IEnumerable<string>>(s => !s.Any()),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     // ── Test: End-to-end snapshot persistence for a newly-discovered symbol ──
@@ -209,10 +337,21 @@ public class FundingRateFetcherAssetDiscoveryTests
     [Fact]
     public async Task FetchAllAsync_AfterDiscovery_PersistsSnapshotForNewSymbol()
     {
-        // Arrange: in-memory DB seeded with an exchange but NO YZY asset
-        var dbName = Guid.NewGuid().ToString();
-        await using var context = CreateContext(dbName);
+        // NB10: swapped from UseInMemoryDatabase + reflection-based _lastPurgeUtc to
+        // SQLite in-memory. SQLite supports ExecuteDelete() so the hourly purge path
+        // runs naturally — no private-field bypass needed. A rename of the field
+        // will no longer silently break this test.
+        using var connection = new SqliteConnection("DataSource=:memory:");
+        connection.Open();
 
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseSqlite(connection)
+            .Options;
+
+        await using var schemaCtx = new AppDbContext(options);
+        await schemaCtx.Database.EnsureCreatedAsync();
+
+        await using var context = new AppDbContext(options);
         var exchange = new Exchange
         {
             Name = "Lighter",
@@ -251,12 +390,6 @@ public class FundingRateFetcherAssetDiscoveryTests
         mockProvider.Setup(p => p.GetService(typeof(IExchangeConnectorFactory))).Returns(mockFactory.Object);
 
         var sut = CreateFetcher(mockScopeFactory.Object);
-
-        // Set _lastPurgeUtc to prevent hourly purge from running — PurgeOlderThanAsync
-        // uses ExecuteDelete() which is not supported by the in-memory provider.
-        var lastPurgeField = typeof(FundingRateFetcher)
-            .GetField("_lastPurgeUtc", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        lastPurgeField.SetValue(sut, DateTime.UtcNow);
 
         // Act
         await sut.FetchAllAsync(CancellationToken.None);

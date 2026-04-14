@@ -143,6 +143,81 @@ public class UserPreferenceReconcilerTests
     }
 
     [Fact]
+    public async Task ReconcileUserAssetPreferencesAsync_InactiveAsset_SkipsAsset()
+    {
+        // NB5: asserts the IsActive filter still engages in the LINQ fallback.
+        await using var context = CreateContext();
+        context.Users.Add(new ApplicationUser { Id = "u1", UserName = "user1" });
+        context.Assets.AddRange(
+            new Asset { Symbol = "BTC", Name = "Bitcoin", IsActive = true },
+            new Asset { Symbol = "OLD", Name = "OldCoin", IsActive = false });
+        await context.SaveChangesAsync();
+
+        await UserPreferenceReconciler.ReconcileUserAssetPreferencesAsync(context);
+
+        var prefs = await context.UserAssetPreferences.ToListAsync();
+        prefs.Should().HaveCount(1);
+        var activeId = (await context.Assets.SingleAsync(a => a.Symbol == "BTC")).Id;
+        prefs.Single().AssetId.Should().Be(activeId);
+    }
+
+    [Fact]
+    public async Task ReconcileUserExchangePreferencesAsync_InactiveExchange_SkipsExchange()
+    {
+        // NB5: symmetric exchange coverage.
+        await using var context = CreateContext();
+        context.Users.Add(new ApplicationUser { Id = "u1", UserName = "user1" });
+        var active = new Exchange
+        {
+            Name = "Hyperliquid",
+            ApiBaseUrl = "https://api.hyperliquid.xyz",
+            WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
+            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingIntervalHours = 1,
+            IsActive = true
+        };
+        var inactive = new Exchange
+        {
+            Name = "Retired",
+            ApiBaseUrl = "https://retired.example",
+            WsBaseUrl = "wss://retired.example/ws",
+            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingIntervalHours = 1,
+            IsActive = false
+        };
+        context.Exchanges.AddRange(active, inactive);
+        await context.SaveChangesAsync();
+
+        await UserPreferenceReconciler.ReconcileUserExchangePreferencesAsync(context);
+
+        var prefs = await context.UserExchangePreferences.ToListAsync();
+        prefs.Should().HaveCount(1);
+        prefs.Single().ExchangeId.Should().Be(active.Id);
+    }
+
+    [Fact]
+    public async Task ReconcileUserAssetPreferencesAsync_Scoped_OnlyAffectsNamedAssets()
+    {
+        // NB3: the scoped overload limits the cross-join to the supplied asset IDs.
+        await using var context = CreateContext();
+        context.Users.AddRange(
+            new ApplicationUser { Id = "u1", UserName = "user1" },
+            new ApplicationUser { Id = "u2", UserName = "user2" });
+        var kept = new Asset { Symbol = "BTC", Name = "Bitcoin", IsActive = true };
+        var scoped = new Asset { Symbol = "YZY", Name = "YZY", IsActive = true };
+        context.Assets.AddRange(kept, scoped);
+        await context.SaveChangesAsync();
+
+        await UserPreferenceReconciler.ReconcileUserAssetPreferencesAsync(
+            context, new[] { scoped.Id });
+
+        var prefs = await context.UserAssetPreferences.ToListAsync();
+        // Expect exactly 2 rows (2 users × 1 scoped asset) — NOT 4 (no BTC rows).
+        prefs.Should().HaveCount(2);
+        prefs.Should().OnlyContain(p => p.AssetId == scoped.Id);
+    }
+
+    [Fact]
     public async Task ReconcileUserExchangePreferencesAsync_PartialExisting_OnlyAddsMissing()
     {
         await using var context = CreateContext();
