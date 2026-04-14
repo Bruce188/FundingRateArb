@@ -441,7 +441,10 @@ public class AssetDiscoveryServiceTests
         mockRepo.Setup(r => r.GetActiveAsync())
             .ReturnsAsync(existingAssets.Select(a => new Asset
             {
-                Id = a.Id, Symbol = a.Symbol, Name = a.Name, IsActive = true,
+                Id = a.Id,
+                Symbol = a.Symbol,
+                Name = a.Name,
+                IsActive = true,
             }).ToList());
         var sut = CreateSut(context, mockRepo.Object);
 
