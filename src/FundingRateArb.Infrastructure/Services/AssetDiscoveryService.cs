@@ -238,7 +238,7 @@ public class AssetDiscoveryService : IAssetDiscoveryService
     /// Shortens the symbol list when it is very long so the log line does not
     /// become an amplification vector (NB2).
     /// </summary>
-    private static string FormatSymbolListForLog(IReadOnlyList<string> symbols)
+    private static string FormatSymbolListForLog(List<string> symbols)
     {
         if (symbols.Count <= MaxLoggedSymbols)
         {
