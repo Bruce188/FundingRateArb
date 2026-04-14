@@ -5,6 +5,7 @@ using Binance.Net;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Interfaces;
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Common.Services;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
@@ -303,6 +304,7 @@ try
     builder.Services.AddSingleton<IEmailService, EmailService>();
     builder.Services.AddScoped<IConnectivityTestService, ConnectivityTestService>();
     builder.Services.AddScoped<IExchangeAnalyticsService, ExchangeAnalyticsService>();
+    builder.Services.AddScoped<IAssetDiscoveryService, AssetDiscoveryService>();
 
     // --- Polly Resilience Pipelines ---
     // "ExchangeSdk" — wraps HyperLiquid.Net and Aster.Net SDK calls
