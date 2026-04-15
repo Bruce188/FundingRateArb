@@ -1909,7 +1909,9 @@ public class AsterConnectorTests
                      Mock<IAsterRestClientFuturesApiTrading> V1Trading,
                      Mock<IAsterRestClientFuturesV3ApiTrading> V3Trading,
                      Mock<IAsterRestClientFuturesApiAccount> V1Account,
-                     Mock<IAsterRestClientFuturesV3ApiAccount> V3Account)
+                     Mock<IAsterRestClientFuturesV3ApiAccount> V3Account,
+                     Mock<IAsterRestClientFuturesApiExchangeData> V1ExchangeData,
+                     Mock<IAsterRestClientFuturesV3ApiExchangeData> V3ExchangeData)
         BuildDualSurfaceClient(decimal markPrice = 3500m)
     {
         // V1 mocks
@@ -1972,6 +1974,13 @@ public class AsterConnectorTests
             .ReturnsAsync(SuccessBalances([new AsterBalance { Asset = "USDT", AvailableBalance = 2000m }]));
 
         var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
+        v3ExchangeDataMock
+            .Setup(x => x.GetMarkPricesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessMarkPrices([MakeMarkPrice("ETHUSDT", markPrice, markPrice - 5m, 0.0001m)]));
+        v3ExchangeDataMock
+            .Setup(x => x.GetTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessTickers([]));
+
         var v3ApiMock = new Mock<IAsterRestClientFuturesV3Api>();
         v3ApiMock.SetupGet(a => a.Trading).Returns(v3TradingMock.Object);
         v3ApiMock.SetupGet(a => a.Account).Returns(v3AccountMock.Object);
@@ -1982,13 +1991,13 @@ public class AsterConnectorTests
         clientMock.SetupGet(c => c.FuturesApi).Returns(futuresApiMock.Object);
         clientMock.SetupGet(c => c.FuturesV3Api).Returns(v3ApiMock.Object);
 
-        return (clientMock, v1TradingMock, v3TradingMock, v1AccountMock, v3AccountMock);
+        return (clientMock, v1TradingMock, v3TradingMock, v1AccountMock, v3AccountMock, exchangeDataMock, v3ExchangeDataMock);
     }
 
     [Fact]
     public async Task PlaceMarketOrderAsync_WithV3Mode_UsesFuturesV3ApiTrading()
     {
-        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var (client, v1Trading, v3Trading, _, _, _, _) = BuildDualSurfaceClient();
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
 
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
@@ -2013,7 +2022,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task GetBalancesAsync_WithV3Mode_UsesFuturesV3ApiAccount()
     {
-        var (client, _, _, v1Account, v3Account) = BuildDualSurfaceClient();
+        var (client, _, _, v1Account, v3Account, _, _) = BuildDualSurfaceClient();
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
 
         var balance = await sut.GetAvailableBalanceAsync();
@@ -2028,7 +2037,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task ClosePositionAsync_WithV3Mode_UsesFuturesV3ApiTrading()
     {
-        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var (client, v1Trading, v3Trading, _, _, _, _) = BuildDualSurfaceClient();
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
 
         var result = await sut.ClosePositionAsync("ETH", Side.Long);
@@ -2050,7 +2059,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task PlaceMarketOrderAsync_WithV1Mode_UsesFuturesApiTrading()
     {
-        var (client, v1Trading, v3Trading, _, _) = BuildDualSurfaceClient();
+        var (client, v1Trading, v3Trading, _, _, _, _) = BuildDualSurfaceClient();
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: false);
 
         var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 175m, 5);
@@ -2075,7 +2084,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task SetLeverageAsync_WithV3Mode_UsesFuturesV3ApiAccount()
     {
-        var (client, _, _, v1Account, v3Account) = BuildDualSurfaceClient();
+        var (client, _, _, v1Account, v3Account, _, _) = BuildDualSurfaceClient();
         var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache(), useV3Api: true);
 
         // PlaceMarketOrderAsync calls SetLeverageAsync internally
@@ -2091,7 +2100,7 @@ public class AsterConnectorTests
     public async Task GetQuantityPrecision_WithV3Mode_UsesFuturesV3ApiExchangeData()
     {
         // Build a dual-surface client with V3 exchange data wired for GetExchangeInfoAsync
-        var (client, _, _, _, _) = BuildDualSurfaceClient();
+        var (client, _, _, _, _, _, _) = BuildDualSurfaceClient();
 
         // Set up V3 exchange data to return valid exchange info
         var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
@@ -2126,7 +2135,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task GetQuantityPrecision_WithV1Mode_UsesFuturesApiExchangeData()
     {
-        var (client, _, _, _, _) = BuildDualSurfaceClient();
+        var (client, _, _, _, _, _, _) = BuildDualSurfaceClient();
 
         // Set up V1 exchange data to return valid exchange info
         var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
@@ -2226,7 +2235,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task GetSymbolConstraints_WithV3Mode_UsesFuturesV3ApiExchangeData()
     {
-        var (client, _, _, _, _) = BuildDualSurfaceClient();
+        var (client, _, _, _, _, _, _) = BuildDualSurfaceClient();
 
         var v3ExchangeDataMock = new Mock<IAsterRestClientFuturesV3ApiExchangeData>();
         v3ExchangeDataMock
@@ -2259,7 +2268,7 @@ public class AsterConnectorTests
     [Fact]
     public async Task GetSymbolConstraints_WithV1Mode_UsesFuturesApiExchangeData()
     {
-        var (client, _, _, _, _) = BuildDualSurfaceClient();
+        var (client, _, _, _, _, _, _) = BuildDualSurfaceClient();
 
         var v1ExchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
         v1ExchangeDataMock

@@ -601,6 +601,7 @@ try
     builder.Services.AddHostedService<DailySummaryService>();
     builder.Services.AddHostedService<LeverageTierRefresher>();
     builder.Services.AddHostedService<BalanceRefreshService>();
+    builder.Services.AddHostedService<SnapshotRetentionService>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>
