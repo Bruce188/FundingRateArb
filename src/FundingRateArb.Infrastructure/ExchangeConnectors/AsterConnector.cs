@@ -99,9 +99,13 @@ public class AsterConnector : IExchangeConnector, IDisposable
         var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
 
         var markPricesTask = pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token), ct).AsTask();
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.ExchangeData.GetMarkPricesAsync(token)
+                : await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(token), ct).AsTask();
         var tickersTask = pipeline.ExecuteAsync(
-            async token => await _restClient.FuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.ExchangeData.GetTickersAsync(token)
+                : await _restClient.FuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
 
         await Task.WhenAll(markPricesTask, tickersTask);
 
@@ -487,7 +491,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
         {
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t),
+                async t => _useV3Api
+                    ? await _restClient.FuturesV3Api.ExchangeData.GetMarkPricesAsync(t)
+                    : await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t),
                 token);
             if (!result.Success)
             {
@@ -517,7 +523,9 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var symbol = asset + "USDT";
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
-                async t => await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t), ct);
+                async t => _useV3Api
+                    ? await _restClient.FuturesV3Api.ExchangeData.GetMarkPricesAsync(t)
+                    : await _restClient.FuturesApi.ExchangeData.GetMarkPricesAsync(t), ct);
 
             if (!result.Success || result.Data is null)
             {
