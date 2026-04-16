@@ -124,7 +124,11 @@ public class ExecutionEngineTests
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator
+            .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), mockBalanceAggregator.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
@@ -132,6 +136,24 @@ public class ExecutionEngineTests
 
     private static OrderResultDto FailOrder(string error = "Insufficient margin") =>
         new() { Success = false, Error = error };
+
+    private ExecutionEngine CreateEngineWithBalance(BalanceSnapshotDto snapshot)
+    {
+        var mockBalance = new Mock<IBalanceAggregator>();
+        mockBalance.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(snapshot);
+        var connectorLifecycle = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
+        var emergencyClose = new EmergencyCloseHandler(_mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
+        var positionCloser = new PositionCloser(_mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
+        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser,
+            _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            mockBalance.Object,
+            NullLogger<ExecutionEngine>.Instance);
+    }
 
     // ── OpenPositionAsync ──────────────────────────────────────────────────────
 
@@ -4201,5 +4223,92 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Lighter tx reverted: Slippage",
             "concurrent-path RevertReason must be enriched so BotOrchestrator applies reason-specific cooldown");
+    }
+
+    // ── Balance unavailability guard tests ────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_UnavailableExchange_RejectsTrade()
+    {
+        // Arrange: long exchange (Hyperliquid) is marked unavailable
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
+
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 1000m,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert
+        success.Should().BeFalse();
+        error.Should().Contain("unavailable");
+        error.Should().Contain("Hyperliquid");
+    }
+
+    [Fact]
+    public async Task OpenPosition_StaleExchange_AllowsTrade()
+    {
+        // Arrange: long exchange has a stale balance (IsStale=true) but is NOT unavailable
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
+
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 2000m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 1000m,
+                    IsStale = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 1000m,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act — the test verifies the trade proceeds PAST the balance guard;
+        // it may still fail at connector creation (no cred mock set up for this engine),
+        // but the failure should NOT be about unavailability.
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert: if it fails, it must not be the unavailability guard
+        if (!success)
+        {
+            error.Should().NotContain("unavailable");
+        }
     }
 }

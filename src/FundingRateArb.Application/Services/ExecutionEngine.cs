@@ -21,6 +21,7 @@ public class ExecutionEngine : IExecutionEngine
     private readonly IPositionCloser _positionCloser;
     private readonly IUserSettingsService _userSettings;
     private readonly ILeverageTierProvider _tierProvider;
+    private readonly IBalanceAggregator _balanceAggregator;
     private readonly ILogger<ExecutionEngine> _logger;
 
     public ExecutionEngine(
@@ -30,6 +31,7 @@ public class ExecutionEngine : IExecutionEngine
         IPositionCloser positionCloser,
         IUserSettingsService userSettings,
         ILeverageTierProvider tierProvider,
+        IBalanceAggregator balanceAggregator,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
@@ -38,6 +40,7 @@ public class ExecutionEngine : IExecutionEngine
         _positionCloser = positionCloser;
         _userSettings = userSettings;
         _tierProvider = tierProvider;
+        _balanceAggregator = balanceAggregator;
         _logger = logger;
     }
 
@@ -56,6 +59,18 @@ public class ExecutionEngine : IExecutionEngine
             _logger.LogWarning("Order rejected in state {State} for {Asset} — defense-in-depth guard",
                 config.OperatingState, opp.AssetSymbol);
             return (false, $"Order rejected: bot operating state is {config.OperatingState}, not Armed or Trading");
+        }
+
+        // Pre-flight: reject trades when either exchange has an unavailable balance (credential error or no cached balance)
+        var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
+        var longBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeName == opp.LongExchangeName);
+        var shortBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeName == opp.ShortExchangeName);
+        if (longBal?.IsUnavailable == true || shortBal?.IsUnavailable == true)
+        {
+            var unavailable = longBal?.IsUnavailable == true ? opp.LongExchangeName : opp.ShortExchangeName;
+            _logger.LogWarning("Trade rejected: {Exchange} balance unavailable for user {UserId}, asset {Asset}",
+                unavailable, userId, opp.AssetSymbol);
+            return (false, $"Trade rejected: {unavailable} balance unavailable (credential error or no cached balance)");
         }
 
         // B6: Absolute order size cap

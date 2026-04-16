@@ -157,8 +157,12 @@ public class PositionSizer : IPositionSizer
         }
 
         // Per-exchange balance cap: each leg needs the full margin on its own exchange
+        // Unavailable exchanges (credential errors or no cached balance) are excluded from sizing
+        var unavailableExchangeIds = new HashSet<int>(
+            balanceSnapshot.Balances.Where(b => b.IsUnavailable).Select(b => b.ExchangeId));
+
         var exchangeBalances = balanceSnapshot.Balances
-            .Where(b => b.ErrorMessage is null)
+            .Where(b => !b.IsUnavailable)
             .GroupBy(b => b.ExchangeId)
             .ToDictionary(g => g.Key, g => g.Sum(b => b.AvailableUsdc));
 
@@ -170,6 +174,14 @@ public class PositionSizer : IPositionSizer
             }
 
             var opp = opportunities[i];
+
+            // Reject if either exchange is unavailable
+            if (unavailableExchangeIds.Contains(opp.LongExchangeId) || unavailableExchangeIds.Contains(opp.ShortExchangeId))
+            {
+                sizes[i] = 0;
+                continue;
+            }
+
             var longBalance = exchangeBalances.GetValueOrDefault(opp.LongExchangeId);
             var shortBalance = exchangeBalances.GetValueOrDefault(opp.ShortExchangeId);
             var maxByBalance = Math.Min(longBalance, shortBalance);

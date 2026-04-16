@@ -71,6 +71,10 @@ public class ArmingStateTests
             .Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 5 });
 
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator
+            .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
         var engine = new ExecutionEngine(
             mockUow.Object,
             mockConnectorLifecycle.Object,
@@ -78,6 +82,7 @@ public class ArmingStateTests
             mockPositionCloser.Object,
             mockUserSettings.Object,
             Mock.Of<ILeverageTierProvider>(),
+            mockBalanceAggregator.Object,
             NullLogger<ExecutionEngine>.Instance);
 
         return (engine, mockBotConfig);
