@@ -4300,15 +4300,89 @@ public class ExecutionEngineTests
 
         var engine = CreateEngineWithBalance(snapshot);
 
-        // Act — the test verifies the trade proceeds PAST the balance guard;
-        // it may still fail at connector creation (no cred mock set up for this engine),
-        // but the failure should NOT be about unavailability.
+        // Act — mock connector at the next layer to fail with a known distinct error,
+        // so we can assert unconditionally that the failure is NOT the unavailability guard.
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
+
+        var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // NB7: deterministic assertion — failure (if any) must be InsufficientMargin, not "unavailable"
+        error.Should().NotContain("unavailable");
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothExchangesUnavailable_RejectsMentioningBoth()
+    {
+        // Arrange: both long and short exchanges are unavailable
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act
         var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
 
-        // Assert: if it fails, it must not be the unavailability guard
-        if (!success)
+        // Assert: both exchange names must appear in the error
+        success.Should().BeFalse();
+        error.Should().Contain("Hyperliquid");
+        error.Should().Contain("Lighter");
+        error.Should().Contain("unavailable");
+    }
+
+    [Fact]
+    public async Task OpenPosition_ExchangeNotInSnapshot_AllowsTrade()
+    {
+        // NB5: when the snapshot has no entry for an exchange, FirstOrDefault returns null.
+        // null?.IsUnavailable == true evaluates to false, so the guard does not block.
+        // Document this as intended: missing-from-snapshot is treated as available.
+        var snapshot = new BalanceSnapshotDto
         {
-            error.Should().NotContain("unavailable");
-        }
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>() // empty — neither exchange in snapshot
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act — connector is mocked to fail with a known error so we can distinguish the guard failure
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
+
+        var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // The guard must NOT reject — trade proceeds (and fails for an unrelated reason)
+        error.Should().NotContain("unavailable",
+            "missing-from-snapshot is treated as available (not unavailable)");
     }
 }

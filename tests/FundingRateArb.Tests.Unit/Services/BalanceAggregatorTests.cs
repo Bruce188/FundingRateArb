@@ -730,6 +730,11 @@ public class BalanceAggregatorTests
         result.Balances[0].AvailableUsdc.Should().Be(100m);
         result.Balances[0].IsUnavailable.Should().BeFalse();
         result.Balances[0].ErrorMessage.Should().Contain("cached balance");
+
+        // N2: transient error must NOT trigger UpdateCredentialErrorAsync
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync(userId, It.IsAny<int>(), It.Is<string>(s => s != null), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -902,6 +907,39 @@ public class BalanceAggregatorTests
         result.Balances.Should().Contain(b => b.ExchangeName == "Lighter" && b.IsStale == true && b.IsUnavailable == false && b.AvailableUsdc == 30m);
         result.Balances.Should().Contain(b => b.ExchangeName == "Binance" && b.IsUnavailable == true);
         result.TotalAvailableUsdc.Should().Be(80m, "total must include healthy (50m) + stale (30m) but exclude unavailable");
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_ConnectorNull_SetsUnavailable()
+    {
+        // Arrange — B1: null connector (credentials not configured) must set IsUnavailable
+        const string userId = "user-null-connector";
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 60, ExchangeId = 60,
+                Exchange = new Exchange { Id = 60, Name = "Lighter" },
+                EncryptedPrivateKey = "pk",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", null, null, null, "pk", null, null))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: null connector must produce IsUnavailable=true so downstream guards block trading
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+        result.TotalAvailableUsdc.Should().Be(0m, "unavailable exchange must be excluded from total");
     }
 
     [Fact]

@@ -63,14 +63,17 @@ public class ExecutionEngine : IExecutionEngine
 
         // Pre-flight: reject trades when either exchange has an unavailable balance (credential error or no cached balance)
         var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
-        var longBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeName == opp.LongExchangeName);
-        var shortBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeName == opp.ShortExchangeName);
+        var longBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeId == opp.LongExchangeId);
+        var shortBal = balanceSnapshot.Balances.FirstOrDefault(b => b.ExchangeId == opp.ShortExchangeId);
         if (longBal?.IsUnavailable == true || shortBal?.IsUnavailable == true)
         {
-            var unavailable = longBal?.IsUnavailable == true ? opp.LongExchangeName : opp.ShortExchangeName;
-            _logger.LogWarning("Trade rejected: {Exchange} balance unavailable for user {UserId}, asset {Asset}",
-                unavailable, userId, opp.AssetSymbol);
-            return (false, $"Trade rejected: {unavailable} balance unavailable (credential error or no cached balance)");
+            var unavailableNames = new List<string>();
+            if (longBal?.IsUnavailable == true) unavailableNames.Add(opp.LongExchangeName);
+            if (shortBal?.IsUnavailable == true) unavailableNames.Add(opp.ShortExchangeName);
+            var unavailableStr = string.Join(", ", unavailableNames);
+            _logger.LogWarning("Trade rejected: {Exchanges} balance unavailable for user {UserId}, asset {Asset}",
+                unavailableStr, userId, opp.AssetSymbol);
+            return (false, $"Trade rejected: {unavailableStr} balance currently unavailable");
         }
 
         // B6: Absolute order size cap

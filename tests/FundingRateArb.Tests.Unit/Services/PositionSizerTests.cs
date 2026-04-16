@@ -909,6 +909,53 @@ public class PositionSizerTests
         sizes[0].Should().Be(0m);
     }
 
+    [Theory]
+    [InlineData(true, false, "short-leg unavailable")]
+    [InlineData(false, true, "long-leg unavailable")]
+    [InlineData(true, true, "both legs unavailable")]
+    public async Task CalculateBatchSizes_UnavailableExchange_SetsSizeToZero_Parameterized(
+        bool longUnavailable, bool shortUnavailable, string scenario)
+    {
+        // NB6: cover short-leg-only and both-legs scenarios
+        _ = scenario; // used only for test name readability
+        var config = DefaultConfig(totalCapital: 10_000m, maxCapitalPerPos: 1.0m);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 5_000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "Exchange1", AvailableUsdc = longUnavailable ? 0m : 5_000m, IsUnavailable = longUnavailable, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "Exchange2", AvailableUsdc = shortUnavailable ? 0m : 5_000m, IsUnavailable = shortUnavailable, FetchedAt = DateTime.UtcNow },
+                }
+            });
+
+        var opps = new List<ArbitrageOpportunityDto>
+        {
+            new()
+            {
+                AssetId = 1,
+                LongExchangeId = 1,
+                ShortExchangeId = 2,
+                LongExchangeName = "Exchange1",
+                ShortExchangeName = "Exchange2",
+                SpreadPerHour = 0.001m,
+                NetYieldPerHour = 0.001m,
+                LongVolume24h = 100_000_000m,
+                ShortVolume24h = 100_000_000m,
+                LongMarkPrice = 100m,
+                ShortMarkPrice = 100m,
+            }
+        };
+
+        var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-unavailable-param");
+
+        sizes[0].Should().Be(0m, $"size must be 0 when {scenario}");
+    }
+
     [Fact]
     public async Task CalculateBatchSizes_StaleExchange_UsesCachedBalance()
     {

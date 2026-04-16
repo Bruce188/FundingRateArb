@@ -100,6 +100,7 @@ public class BalanceAggregator : IBalanceAggregator
                     AvailableUsdc = 0m,
                     ErrorMessage = CredentialsNotConfiguredMessage,
                     FetchedAt = DateTime.UtcNow,
+                    IsUnavailable = true,
                 });
                 continue;
             }
@@ -136,7 +137,7 @@ public class BalanceAggregator : IBalanceAggregator
                 if (IsAuthError(sanitized))
                 {
                     // Credential error: mark exchange unavailable, disable trading
-                    _logger.LogWarning("Binance credentials invalid for user {UserId}, trading disabled for this exchange", userId);
+                    _logger.LogWarning("{Exchange} credentials invalid for user {UserId}, trading disabled for this exchange", exchangeName, userId);
                     balances.Add(new ExchangeBalanceDto
                     {
                         ExchangeId = exchangeId,
