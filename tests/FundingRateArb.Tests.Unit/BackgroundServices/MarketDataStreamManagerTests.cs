@@ -8,6 +8,7 @@ using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -23,6 +24,7 @@ public class MarketDataStreamManagerTests
     private readonly Mock<IHubContext<DashboardHub, IDashboardClient>> _mockHubContext = new();
     private readonly Mock<IHubClients<IDashboardClient>> _mockHubClients = new();
     private readonly Mock<IDashboardClient> _mockDashboardClient = new();
+    private readonly Mock<IExchangeSupportedSymbolsCache> _mockSymbolsCache = new();
 
     private static readonly List<Asset> ActiveAssets =
     [
@@ -41,14 +43,25 @@ public class MarketDataStreamManagerTests
 
         _mockHubContext.Setup(h => h.Clients).Returns(_mockHubClients.Object);
         _mockHubClients.Setup(c => c.Group(It.IsAny<string>())).Returns(_mockDashboardClient.Object);
+
+        // Default: cache returns all known symbols (no filtering)
+        _mockSymbolsCache
+            .Setup(c => c.GetSupportedSymbolsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(ActiveAssets.Select(a => a.Symbol), StringComparer.OrdinalIgnoreCase));
     }
 
     private MarketDataStreamManager CreateSut(params IMarketDataStream[] streams)
+        => CreateSut(_mockSymbolsCache.Object, streams);
+
+    private MarketDataStreamManager CreateSut(
+        IExchangeSupportedSymbolsCache symbolsCache,
+        params IMarketDataStream[] streams)
     {
         return new MarketDataStreamManager(
             streams,
             _mockScopeFactory.Object,
             _mockHubContext.Object,
+            symbolsCache,
             NullLogger<MarketDataStreamManager>.Instance);
     }
 
@@ -193,5 +206,134 @@ public class MarketDataStreamManagerTests
         // StopAsync should not throw even if streams never started
         var act = () => sut.StopAsync(CancellationToken.None);
         await act.Should().NotThrowAsync();
+    }
+
+    // ── Per-exchange symbol filtering tests ────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_FiltersSymbolsPerExchange()
+    {
+        // DB returns BTC, ETH, NVDA
+        _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(
+        [
+            new Asset { Id = 1, Symbol = "BTC", IsActive = true },
+            new Asset { Id = 2, Symbol = "ETH", IsActive = true },
+            new Asset { Id = 3, Symbol = "NVDA", IsActive = true },
+        ]);
+
+        // Hyperliquid supports BTC, ETH only (no NVDA)
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync("Hyperliquid", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(["BTC", "ETH"], StringComparer.OrdinalIgnoreCase));
+        // Lighter supports BTC, ETH, NVDA (all)
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync("Lighter", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(["BTC", "ETH", "NVDA"], StringComparer.OrdinalIgnoreCase));
+
+        List<string>? hlReceivedSymbols = null;
+        List<string>? lighterReceivedSymbols = null;
+
+        var hlStream = new Mock<IMarketDataStream>();
+        hlStream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
+        hlStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => hlReceivedSymbols = syms.ToList())
+            .Returns(Task.CompletedTask);
+
+        var lighterStream = new Mock<IMarketDataStream>();
+        lighterStream.Setup(s => s.ExchangeName).Returns("Lighter");
+        lighterStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => lighterReceivedSymbols = syms.ToList())
+            .Returns(Task.CompletedTask);
+
+        var sut = CreateSut(cacheMock.Object, hlStream.Object, lighterStream.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        await Task.Delay(200);
+        await sut.StopAsync(CancellationToken.None);
+
+        hlReceivedSymbols.Should().NotBeNull();
+        hlReceivedSymbols.Should().BeEquivalentTo(["BTC", "ETH"],
+            "NVDA is not supported on Hyperliquid and should be filtered out");
+
+        lighterReceivedSymbols.Should().NotBeNull();
+        lighterReceivedSymbols.Should().BeEquivalentTo(["BTC", "ETH", "NVDA"],
+            "Lighter supports all three symbols");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CacheEmpty_PassesFullList()
+    {
+        // Cache returns empty set — graceful degradation means full list passes through
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        List<string>? receivedSymbols = null;
+        var stream = new Mock<IMarketDataStream>();
+        stream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
+        stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => receivedSymbols = syms.ToList())
+            .Returns(Task.CompletedTask);
+
+        var sut = CreateSut(cacheMock.Object, stream.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        await Task.Delay(200);
+        await sut.StopAsync(CancellationToken.None);
+
+        receivedSymbols.Should().NotBeNull();
+        receivedSymbols.Should().BeEquivalentTo(["ETH", "BTC"],
+            "empty cache means full unfiltered list is passed as fallback");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_LogsSkippedSymbols()
+    {
+        // DB returns BTC, ETH, NVDA
+        _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(
+        [
+            new Asset { Id = 1, Symbol = "BTC", IsActive = true },
+            new Asset { Id = 2, Symbol = "ETH", IsActive = true },
+            new Asset { Id = 3, Symbol = "NVDA", IsActive = true },
+        ]);
+
+        // Exchange only supports BTC, ETH
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync("TestExchange", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(["BTC", "ETH"], StringComparer.OrdinalIgnoreCase));
+
+        var stream = new Mock<IMarketDataStream>();
+        stream.Setup(s => s.ExchangeName).Returns("TestExchange");
+        stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var mockLogger = new Mock<ILogger<MarketDataStreamManager>>();
+
+        var sut = new MarketDataStreamManager(
+            [stream.Object],
+            _mockScopeFactory.Object,
+            _mockHubContext.Object,
+            cacheMock.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await sut.StartAsync(cts.Token);
+        await Task.Delay(200);
+        await sut.StopAsync(CancellationToken.None);
+
+        // Verify that an Information-level log was emitted about skipped symbols
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("symbols supported, skipped")),
+                It.IsAny<Exception?>(),
+                (Func<It.IsAnyType, Exception?, string>)It.IsAny<object>()),
+            Times.Once);
     }
 }

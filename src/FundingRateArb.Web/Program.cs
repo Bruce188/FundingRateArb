@@ -550,6 +550,8 @@ try
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<AsterMarketDataStream>());
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<HyperliquidMarketDataStream>());
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<LighterMarketDataStream>());
+    builder.Services.AddSingleton<ExchangeSupportedSymbolsCache>();
+    builder.Services.AddSingleton<IExchangeSupportedSymbolsCache>(sp => sp.GetRequiredService<ExchangeSupportedSymbolsCache>());
 
     // --- SignalR ---
     builder.Services.AddSignalR(options =>
