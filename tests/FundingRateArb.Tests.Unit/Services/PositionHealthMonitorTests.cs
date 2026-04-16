@@ -4044,6 +4044,75 @@ public class PositionHealthMonitorTests
         result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
+    // ── Unified-PnL guard for PnlTargetReached (fix/pnl-target-reached-unified-pnl-guard) ──
+
+    private static BotConfiguration MakePnlTargetConfig(decimal pnlTargetUnifiedTolerance = 0m) => new()
+    {
+        AdaptiveHoldEnabled = true,
+        TargetPnlMultiplier = 2.0m,
+        StopLossPct = 0.15m,
+        MaxHoldTimeHours = 72,
+        CloseThreshold = -0.00005m,
+        MinHoldBeforePnlTargetMinutes = 60,
+        PnlTargetUnifiedTolerance = pnlTargetUnifiedTolerance,
+    };
+
+    // entryFee = SizeUsdc(100) * Leverage(5) * 2 * GetTakerFeeRate("Hyperliquid","Lighter")(0.00045) = 0.45
+    // target   = TargetPnlMultiplier(2.0) * 0.45 = 0.90
+    // Use AccumulatedFunding=1.0 → >= target, < 3×target(2.70) → not hasOverperformed
+    // hoursOpen=2 → minutesOpen=120 >= MinHoldBeforePnlTargetMinutes(60) ✓
+
+    [Fact]
+    public void PnlTargetReached_UnifiedNegative_DoesNotClose()
+    {
+        // totalPnl = -0.07 + 1.0 - 0.45 = 0.48 > 0 ✓
+        // unifiedPnl = -0.07 < -PnlTargetUnifiedTolerance(0m) → gate blocks close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0m),
+            unrealizedPnl: -0.07m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().NotBe(CloseReason.PnlTargetReached,
+            "unified PnL is negative and below tolerance — position must not be closed at PnL target");
+    }
+
+    [Fact]
+    public void PnlTargetReached_UnifiedPositive_ClosesAsBefore()
+    {
+        // totalPnl = 0.10 + 1.0 - 0.45 = 0.65 > 0 ✓
+        // unifiedPnl = 0.10 >= 0 → gate passes → close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0m),
+            unrealizedPnl: 0.10m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached,
+            "unified PnL is non-negative — close must fire as before the guard was introduced");
+    }
+
+    [Fact]
+    public void PnlTargetReached_UnifiedWithinTolerance_ClosesWhenToleranceSet()
+    {
+        // totalPnl = -0.03 + 1.0 - 0.45 = 0.52 > 0 ✓
+        // unifiedPnl = -0.03 >= -PnlTargetUnifiedTolerance(0.05m) → within tolerance → close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0.05m),
+            unrealizedPnl: -0.03m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached,
+            "unified PnL of -0.03 is within tolerance of 0.05 — close must fire");
+    }
+
     [Fact]
     public async Task CheckAndAct_AsymmetricFilledQuantities_FallsBackToEstimated()
     {

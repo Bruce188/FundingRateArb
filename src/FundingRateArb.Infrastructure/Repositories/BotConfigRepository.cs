@@ -95,6 +95,7 @@ public class BotConfigRepository : IBotConfigRepository
         ExchangeCircuitBreakerThreshold = src.ExchangeCircuitBreakerThreshold,
         ExchangeCircuitBreakerMinutes = src.ExchangeCircuitBreakerMinutes,
         MinHoldBeforePnlTargetMinutes = src.MinHoldBeforePnlTargetMinutes,
+        PnlTargetUnifiedTolerance = src.PnlTargetUnifiedTolerance,
         EmergencyCloseSpreadThreshold = src.EmergencyCloseSpreadThreshold,
         PriceFeedFailureCloseThreshold = src.PriceFeedFailureCloseThreshold,
         SlippageBufferBps = src.SlippageBufferBps,

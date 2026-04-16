@@ -663,6 +663,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     var divergenceAlertLevel = entrySpreadCostPct > 0m
                         ? entrySpreadCostPct * config.DivergenceAlertMultiplier
                         : 0m;
+                    // Overperformed positions close regardless of unified PnL — funding has
+                    // accumulated so far beyond target that extra hold risk is not justified.
                     var hasOverperformed = pos.AccumulatedFunding >= 3m * config.TargetPnlMultiplier * entryFee;
                     if (divergenceAlertLevel > 0m
                         && currentDivergencePct > divergenceAlertLevel
@@ -670,7 +672,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     {
                         // Defer — wait for convergence
                     }
-                    else
+                    else if (hasOverperformed || unrealizedPnl >= -config.PnlTargetUnifiedTolerance)
                     {
                         return CloseReason.PnlTargetReached;
                     }
