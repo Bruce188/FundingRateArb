@@ -1,9 +1,10 @@
+using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using FundingRateArb.Domain.Enums;
 
 namespace FundingRateArb.Domain.Entities;
 
-public class BotConfiguration
+public class BotConfiguration : IValidatableObject
 {
     public int Id { get; set; }
     public bool IsEnabled { get; set; }
@@ -124,6 +125,22 @@ public class BotConfiguration
     [Range(0, 50)]
     public int SlippageBufferBps { get; set; } = 5;
 
+    /// <summary>
+    /// Lighter DEX order slippage floor (default 0.75%). Replaces hardcoded 0.5%.
+    /// Must not exceed <see cref="LighterSlippageMaxPct"/>; cross-property constraint is enforced
+    /// at runtime by <c>ISlippageConfigurable.ConfigureSlippage</c> which throws <see cref="ArgumentException"/>
+    /// when floor &gt; max.
+    /// </summary>
+    [Range(0.001, 0.05)]
+    public decimal LighterSlippageFloorPct { get; set; } = 0.0075m;
+
+    /// <summary>
+    /// Lighter DEX maximum adaptive slippage cap (default 3%). Replaces hardcoded 2%.
+    /// Must be at least as large as <see cref="LighterSlippageFloorPct"/>.
+    /// </summary>
+    [Range(0.005, 0.10)]
+    public decimal LighterSlippageMaxPct { get; set; } = 0.03m;
+
     /// <summary>Fraction of distance-to-liquidation at which to close. 0.5 = close when 50% of the safe range remains (i.e. half consumed).</summary>
     [Range(0.1, 0.9)]
     public decimal LiquidationWarningPct { get; set; } = 0.50m;
@@ -219,4 +236,15 @@ public class BotConfiguration
 
     public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
     public string UpdatedByUserId { get; set; } = null!;
+
+    /// <inheritdoc/>
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (LighterSlippageFloorPct > LighterSlippageMaxPct)
+        {
+            yield return new ValidationResult(
+                $"LighterSlippageFloorPct ({LighterSlippageFloorPct}) must not exceed LighterSlippageMaxPct ({LighterSlippageMaxPct}).",
+                [nameof(LighterSlippageFloorPct), nameof(LighterSlippageMaxPct)]);
+        }
+    }
 }

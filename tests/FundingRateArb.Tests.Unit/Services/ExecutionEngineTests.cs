@@ -3973,4 +3973,233 @@ public class ExecutionEngineTests
         addedPosition.Should().NotBeNull();
         addedPosition!.ShortEntryPrice.Should().Be(3001m, "dYdX is not IEntryPriceReconcilable — estimated price preserved");
     }
+
+    // ── Lighter revert reason surfacing tests ─────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_LighterRevertSlippage_ReturnsRevertErrorString()
+    {
+        // The short connector (Lighter) is estimated-fill, triggering the sequential path
+        // where revert reason surfacing occurs
+        _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed", RevertReason = LighterOrderRevertReason.Slippage });
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Lighter tx reverted: Slippage",
+            "revert reason should be surfaced in the error string for downstream cooldown parsing");
+    }
+
+    [Fact]
+    public async Task OpenPosition_RevertReasonNone_UsesOriginalError()
+    {
+        var originalError = "Insufficient margin on exchange";
+        _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = originalError, RevertReason = LighterOrderRevertReason.None });
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain(originalError,
+            "when RevertReason is None, the original error should be used verbatim");
+    }
+
+    [Fact]
+    public async Task OpenPosition_TimeoutRevertReason_VerificationStillCalled()
+    {
+        // When connector returns Success=true, IsEstimatedFill=true, RevertReason=Timeout (tx still pending),
+        // ExecutionEngine should still call VerifyPositionOpenedAsync to confirm the position on-chain.
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true, RevertReason = LighterOrderRevertReason.Timeout });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Verify(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()),
+                Times.Once,
+                "VerifyPositionOpenedAsync must be called even when RevertReason=Timeout — tx may still have landed");
+    }
+
+    [Fact]
+    public async Task OpenPosition_SlippageConfigurable_CallsConfigureSlippage()
+    {
+        // Use a mock that also implements ISlippageConfigurable
+        var mockSlippageConnector = new Mock<IExchangeConnector>();
+        var mockSlippageConfigurable = mockSlippageConnector.As<ISlippageConfigurable>();
+
+        mockSlippageConnector.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockSlippageConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1000m);
+        mockSlippageConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        mockSlippageConnector
+            .Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(6);
+        mockSlippageConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockSlippageConnector.Object);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        mockSlippageConfigurable.Verify(
+            s => s.ConfigureSlippage(DefaultConfig.LighterSlippageFloorPct, DefaultConfig.LighterSlippageMaxPct),
+            Times.AtLeastOnce,
+            "ConfigureSlippage should be called with BotConfig values before order placement");
+    }
+
+    [Fact]
+    public async Task OpenPosition_PositionNotFoundWithRevert_IncludesRevertDetail()
+    {
+        // First leg: estimated fill with revert reason, verification fails, position doesn't exist
+        var mockVerifiableShort = new Mock<IExchangeConnector>();
+        mockVerifiableShort.As<IPositionVerifiable>();
+        mockVerifiableShort.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        mockVerifiableShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true, RevertReason = LighterOrderRevertReason.Slippage });
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        mockVerifiableShort.As<IPositionVerifiable>()
+            .Setup(v => v.CheckPositionExistsAsync("ETH", Side.Short, It.IsAny<IReadOnlyDictionary<(string, string), decimal>?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockVerifiableShort.Object);
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("(Lighter tx reverted: Slippage)",
+            "when position not found and RevertReason is set, revert detail should be included");
+    }
+
+    [Fact]
+    public async Task OpenPosition_ConcurrentPath_BothSlippageConfigurable_CallsConfigureSlippageOnEach()
+    {
+        // Both connectors are non-estimated-fill, triggering the concurrent (Task.WhenAll) path.
+        // Both implement ISlippageConfigurable.
+        var mockLong = new Mock<IExchangeConnector>();
+        var mockLongSlippage = mockLong.As<ISlippageConfigurable>();
+        mockLong.Setup(c => c.ExchangeName).Returns("Hyperliquid");
+        mockLong.Setup(c => c.IsEstimatedFillExchange).Returns(false);
+        mockLong.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockLong.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockLong.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockLong.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var mockShort = new Mock<IExchangeConnector>();
+        var mockShortSlippage = mockShort.As<ISlippageConfigurable>();
+        mockShort.Setup(c => c.ExchangeName).Returns("Lighter");
+        mockShort.Setup(c => c.IsEstimatedFillExchange).Returns(false);
+        mockShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
+        mockShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
+        mockShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
+        mockShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockLong.Object);
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(mockShort.Object);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        mockLongSlippage.Verify(
+            s => s.ConfigureSlippage(DefaultConfig.LighterSlippageFloorPct, DefaultConfig.LighterSlippageMaxPct),
+            Times.Once,
+            "ConfigureSlippage should be called on long connector in concurrent path");
+        mockShortSlippage.Verify(
+            s => s.ConfigureSlippage(DefaultConfig.LighterSlippageFloorPct, DefaultConfig.LighterSlippageMaxPct),
+            Times.Once,
+            "ConfigureSlippage should be called on short connector in concurrent path");
+    }
+
+    [Fact]
+    public async Task OpenPosition_SecondLegLighterRevert_ReturnsRevertErrorString()
+    {
+        // Sequential path: long (Hyperliquid) is estimated-fill → opens first.
+        // Short (Lighter) is the second leg and returns RevertReason=Slippage.
+        _mockLongConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed on-chain", RevertReason = LighterOrderRevertReason.Slippage });
+        // Emergency close of first leg (long) after second leg failure
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Lighter tx reverted: Slippage",
+            "second-leg RevertReason should be surfaced in error string for BotOrchestrator cooldown parsing");
+    }
+
+    [Fact]
+    public async Task OpenPosition_ConcurrentPath_LighterRevert_ReturnsEnrichedErrorString()
+    {
+        // Concurrent path: both connectors are non-estimated-fill (Task.WhenAll).
+        // Short (Lighter) fails with RevertReason=Slippage.
+        // Long succeeds, triggering emergency close of the long leg.
+        // The returned error must be enriched with "Lighter tx reverted: Slippage"
+        // so BotOrchestrator can parse it for reason-specific cooldown durations.
+
+        // Both connectors default to IsEstimatedFillExchange=false → concurrent path
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed on-chain", RevertReason = LighterOrderRevertReason.Slippage });
+        // Emergency close of the successful long leg after short leg failure
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder());
+
+        var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Lighter tx reverted: Slippage",
+            "concurrent-path RevertReason must be enriched so BotOrchestrator applies reason-specific cooldown");
+    }
 }

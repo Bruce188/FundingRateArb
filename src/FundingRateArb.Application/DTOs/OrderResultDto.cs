@@ -1,3 +1,5 @@
+using FundingRateArb.Domain.Enums;
+
 namespace FundingRateArb.Application.DTOs;
 
 public class OrderResultDto
@@ -8,4 +10,5 @@ public class OrderResultDto
     public decimal FilledPrice { get; set; }
     public decimal FilledQuantity { get; set; }
     public bool IsEstimatedFill { get; set; }
+    public LighterOrderRevertReason RevertReason { get; set; }
 }
