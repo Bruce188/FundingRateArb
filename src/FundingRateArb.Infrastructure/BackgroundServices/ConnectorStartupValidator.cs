@@ -51,7 +51,10 @@ public class ConnectorStartupValidator : BackgroundService
 
                 foreach (var userId in userIds)
                 {
-                    if (stoppingToken.IsCancellationRequested) break;
+                    if (stoppingToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
 
                     var r = await factory.ValidateDydxAsync(userId, stoppingToken);
                     if (r.Reason != DydxCredentialFailureReason.None)
