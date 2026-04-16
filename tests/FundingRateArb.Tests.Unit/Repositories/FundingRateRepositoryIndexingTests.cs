@@ -19,7 +19,7 @@ public class FundingRateRepositoryIndexingTests
     // so that SQL Server-specific annotations (SqlServer:Include, IsDescending) are present.
     // Use IDesignTimeModel to access the full design-time metadata (not the read-optimized runtime model).
     // The model is immutable; build it once and reuse across all tests in this class.
-    private static readonly Lazy<IModel> _model = new(() =>
+    private static readonly Lazy<IModel> Model = new(() =>
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer("Server=(none);Database=ModelOnly;")
@@ -31,7 +31,7 @@ public class FundingRateRepositoryIndexingTests
     [Fact]
     public void CoveringIndex_HasCorrectKeyColumns()
     {
-        var entityType = _model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
+        var entityType = Model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
         var index = entityType.GetIndexes().FirstOrDefault(i => i.GetDatabaseName() == IndexName);
         index.Should().NotBeNull($"expected index '{IndexName}' to exist on FundingRateSnapshot");
 
@@ -42,7 +42,7 @@ public class FundingRateRepositoryIndexingTests
     [Fact]
     public void CoveringIndex_HasDescendingRecordedAt()
     {
-        var entityType = _model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
+        var entityType = Model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
         var index = entityType.GetIndexes().FirstOrDefault(i => i.GetDatabaseName() == IndexName);
         index.Should().NotBeNull($"expected index '{IndexName}' to exist on FundingRateSnapshot");
 
@@ -52,7 +52,7 @@ public class FundingRateRepositoryIndexingTests
     [Fact]
     public void CoveringIndex_IncludesMarkPriceAndRatePerHour()
     {
-        var entityType = _model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
+        var entityType = Model.Value.FindEntityType(typeof(FundingRateSnapshot))!;
         var index = entityType.GetIndexes().FirstOrDefault(i => i.GetDatabaseName() == IndexName);
         index.Should().NotBeNull($"expected index '{IndexName}' to exist on FundingRateSnapshot");
 

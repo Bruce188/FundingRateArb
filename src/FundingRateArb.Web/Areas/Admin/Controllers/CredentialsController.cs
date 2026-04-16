@@ -29,7 +29,9 @@ public class CredentialsController : Controller
     public async Task<IActionResult> DydxValidate(string userId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(userId))
+        {
             return BadRequest(new { error = "userId required" });
+        }
 
         try
         {
