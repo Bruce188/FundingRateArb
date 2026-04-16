@@ -5,6 +5,9 @@ using Aster.Net.Clients;
 using Aster.Net.Objects;
 using Binance.Net.Clients;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
+using FundingRateArb.Application.Services;
 using HyperLiquid.Net;
 using HyperLiquid.Net.Clients;
 using Microsoft.Extensions.Configuration;
@@ -19,6 +22,8 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ExchangeConnectorFactory> _logger;
     private readonly ConcurrentDictionary<string, KeyPool> _keyPools = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IDydxConnectorFactory _dydxFactory;
+    private readonly ConcurrentDictionary<string, DydxCredentialCheckResult> _lastDydxFailures = new();
 
     // ── Test hook (internal; InternalsVisibleTo FundingRateArb.Tests.Unit) ───────
     // Set by CreateAsterConnector so tests can assert which credential variant was used.
@@ -34,10 +39,14 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         { "CoinGlass",   typeof(CoinGlassConnector) }
     };
 
-    public ExchangeConnectorFactory(IServiceProvider serviceProvider, ILogger<ExchangeConnectorFactory> logger)
+    public ExchangeConnectorFactory(
+        IServiceProvider serviceProvider,
+        ILogger<ExchangeConnectorFactory> logger,
+        IDydxConnectorFactory dydxFactory)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _dydxFactory = dydxFactory;
     }
 
     /// <summary>
@@ -112,8 +121,9 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         string? apiSecret,
         string? walletAddress,
         string? privateKey,
-        string? subAccountAddress = null,
-        string? apiKeyIndex = null)
+        string? subAccountAddress,
+        string? apiKeyIndex,
+        string? userId)
     {
         IExchangeConnector? connector = exchangeName.ToLowerInvariant() switch
         {
@@ -121,7 +131,7 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
             "aster" => CreateAsterConnector(apiKey, apiSecret, walletAddress, privateKey),
             "binance" => CreateBinanceConnector(apiKey, apiSecret),
             "lighter" => CreateLighterConnector(walletAddress, privateKey, apiKeyIndex),
-            "dydx" => CreateDydxConnector(privateKey),
+            "dydx" => CreateDydxConnector(privateKey, userId),
             "coinglass" => throw new NotSupportedException("CoinGlass is a read-only data source and cannot be used for trading"),
             _ => null
         };
@@ -141,6 +151,37 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
                     "Check DI registration in Program.cs.", ex);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<DydxCredentialCheckResult> ValidateDydxAsync(string userId, CancellationToken ct)
+    {
+        var userSettings = _serviceProvider.GetRequiredService<IUserSettingsService>();
+        var credentials = await userSettings.GetActiveCredentialsAsync(userId);
+        var dydxCred = credentials.FirstOrDefault(c =>
+            string.Equals(c.Exchange?.Name, "dydx", StringComparison.OrdinalIgnoreCase));
+
+        if (dydxCred is null)
+        {
+            var missingResult = new DydxCredentialCheckResult
+            {
+                Reason = DydxCredentialFailureReason.MissingMnemonic,
+                MissingField = "Mnemonic"
+            };
+            _lastDydxFailures[userId] = missingResult;
+            return missingResult;
+        }
+
+        var decrypted = userSettings.DecryptCredential(dydxCred);
+        var result = await _dydxFactory.ValidateSignedAsync(decrypted.PrivateKey, decrypted.SubAccountAddress, ct);
+        _lastDydxFailures[userId] = result;
+        return result;
+    }
+
+    /// <inheritdoc />
+    public bool TryGetLastDydxFailure(string userId, out DydxCredentialCheckResult result)
+    {
+        return _lastDydxFailures.TryGetValue(userId, out result!);
     }
 
     private HyperliquidConnector? CreateHyperliquidConnector(string? walletAddress, string? privateKey, string? subAccountAddress)
@@ -286,31 +327,31 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
         return new LighterConnector(httpClient, logger, userConfig);
     }
 
-    // privateKey field stores BIP39 mnemonic for dYdX
-    private DydxConnector? CreateDydxConnector(string? mnemonic)
+    // privateKey field stores BIP39 mnemonic for dYdX.
+    // Delegates to IDydxConnectorFactory for per-field validation and construction.
+    private IExchangeConnector? CreateDydxConnector(string? mnemonic, string? userId)
     {
-        if (string.IsNullOrEmpty(mnemonic))
+        if (_dydxFactory.TryCreate(mnemonic, subAccountAddress: null, out var connector, out var result))
         {
-            return null;
+            if (userId is not null)
+            {
+                _lastDydxFailures.TryRemove(userId, out _);
+            }
+            return connector;
         }
 
-        try
+        if (userId is not null)
         {
-            var signer = new Dydx.DydxSigner(mnemonic);
-            var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();
-            var indexerClient = httpClientFactory.CreateClient("DydxIndexer");
-            var validatorClient = httpClientFactory.CreateClient("DydxValidator");
-            var pipelineProvider = _serviceProvider.GetRequiredService<ResiliencePipelineProvider<string>>();
-            var logger = _serviceProvider.GetRequiredService<ILogger<DydxConnector>>();
-            var markPriceCache = _serviceProvider.GetRequiredService<IMarkPriceCache>();
-            return new DydxConnector(indexerClient, validatorClient, signer, pipelineProvider, logger, markPriceCache);
+            _lastDydxFailures[userId] = result;
         }
-        catch (Exception ex)
+
+        // Preserve the PR #187 fallback for SignerConstructionFailed (unexpected failure paths).
+        if (result.Reason == DydxCredentialFailureReason.SignerConstructionFailed)
         {
-            var logger = _serviceProvider.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
-            logger.LogWarning(ex, "Failed to create dYdX connector: {Reason}", ex.Message);
-            return null;
+            _logger.LogWarning("Failed to create dYdX connector — {Reason}", result.Reason);
         }
+
+        return null;
     }
 
     /// <summary>

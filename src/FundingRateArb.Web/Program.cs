@@ -12,6 +12,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Infrastructure.ExchangeConnectors.Dydx;
 using FundingRateArb.Infrastructure.HealthChecks;
 using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
@@ -537,6 +538,7 @@ try
         // but not custom headers, so any 3xx to an attacker-controlled host would leak the key.
         AllowAutoRedirect = false,
     });
+    builder.Services.AddSingleton<IDydxConnectorFactory, DydxConnectorFactory>();
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- WebSocket Market Data Streaming ---
@@ -604,6 +606,7 @@ try
     builder.Services.AddHostedService<LeverageTierRefresher>();
     builder.Services.AddHostedService<BalanceRefreshService>();
     builder.Services.AddHostedService<SnapshotRetentionService>();
+    builder.Services.AddHostedService<ConnectorStartupValidator>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>

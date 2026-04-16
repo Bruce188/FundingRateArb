@@ -66,9 +66,10 @@ public class FundingRateRepositoryIndexingTests
     {
         var migration = new RefreshStatisticsAfterCoveringIndex();
         var builder = new MigrationBuilder("SqlServer");
-        typeof(RefreshStatisticsAfterCoveringIndex)
-            .GetMethod("Up", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(migration, [builder]);
+        var upMethod = typeof(RefreshStatisticsAfterCoveringIndex)
+            .GetMethod("Up", BindingFlags.Instance | BindingFlags.NonPublic);
+        upMethod.Should().NotBeNull("migration should have a protected Up method");
+        upMethod!.Invoke(migration, [builder]);
 
         builder.Operations.Should().ContainSingle()
             .Which.Should().BeOfType<SqlOperation>()
@@ -80,9 +81,10 @@ public class FundingRateRepositoryIndexingTests
     {
         var migration = new RefreshStatisticsAfterCoveringIndex();
         var builder = new MigrationBuilder("SqlServer");
-        typeof(RefreshStatisticsAfterCoveringIndex)
-            .GetMethod("Down", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(migration, [builder]);
+        var downMethod = typeof(RefreshStatisticsAfterCoveringIndex)
+            .GetMethod("Down", BindingFlags.Instance | BindingFlags.NonPublic);
+        downMethod.Should().NotBeNull("migration should have a protected Down method");
+        downMethod!.Invoke(migration, [builder]);
 
         builder.Operations.Should().BeEmpty();
     }

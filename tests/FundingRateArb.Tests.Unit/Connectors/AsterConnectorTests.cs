@@ -10,6 +10,7 @@ using CryptoExchange.Net.Objects;
 using CryptoExchange.Net.Objects.Errors;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using Microsoft.Extensions.DependencyInjection;
@@ -2178,7 +2179,7 @@ public class AsterConnectorTests
 
         var sp = services.BuildServiceProvider();
         var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
-        return new ExchangeConnectorFactory(sp, factoryLogger);
+        return new ExchangeConnectorFactory(sp, factoryLogger, Mock.Of<IDydxConnectorFactory>());
     }
 
     /// <summary>

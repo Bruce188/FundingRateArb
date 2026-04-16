@@ -166,7 +166,8 @@ public class ConnectivityTestService : IConnectivityTestService
                 decrypted.WalletAddress,
                 decrypted.PrivateKey,
                 decrypted.SubAccountAddress,
-                decrypted.ApiKeyIndex);
+                decrypted.ApiKeyIndex,
+                userId: null);
 
             if (connector is null)
             {

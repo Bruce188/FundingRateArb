@@ -81,14 +81,32 @@ public class BalanceAggregator : IBalanceAggregator
             var connector = await _connectorFactory.CreateForUserAsync(
                 exchangeName, decrypted.ApiKey, decrypted.ApiSecret,
                 decrypted.WalletAddress, decrypted.PrivateKey,
-                decrypted.SubAccountAddress, decrypted.ApiKeyIndex);
+                decrypted.SubAccountAddress, decrypted.ApiKeyIndex, userId);
 
             if (connector is null)
             {
-                var suppressKey = $"connector-warn:{userId}:{exchangeName}";
+                var dydxField = "";
+                if (exchangeName.Equals("dydx", StringComparison.OrdinalIgnoreCase)
+                    && _connectorFactory.TryGetLastDydxFailure(userId, out var dydxReason)
+                    && dydxReason.Reason != DydxCredentialFailureReason.None)
+                {
+                    dydxField = $"-{dydxReason.MissingField}";
+                }
+                var suppressKey = $"connector-warn:{userId}:{exchangeName}{dydxField}";
                 if (!_cache.TryGetValue(suppressKey, out _))
                 {
-                    _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — check credential configuration", exchangeName, userId);
+                    if (exchangeName.Equals("dydx", StringComparison.OrdinalIgnoreCase)
+                        && _connectorFactory.TryGetLastDydxFailure(userId, out var dydxWarnReason)
+                        && dydxWarnReason.Reason != DydxCredentialFailureReason.None)
+                    {
+                        _logger.LogWarning(
+                            "Could not create connector for dYdX (user {UserId}) — {Reason}: {Field}",
+                            userId, dydxWarnReason.Reason, dydxWarnReason.MissingField);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — check credential configuration", exchangeName, userId);
+                    }
                     _cache.Set(suppressKey, true, TimeSpan.FromMinutes(15));
                 }
 

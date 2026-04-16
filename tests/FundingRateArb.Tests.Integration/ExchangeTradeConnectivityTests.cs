@@ -1,4 +1,6 @@
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using Microsoft.Extensions.DependencyInjection;
@@ -54,7 +56,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var ct = cts.Token;
 
-        var connector = await _factory.CreateForUserAsync("hyperliquid", null, null, _hlWallet, _hlKey);
+        var connector = await _factory.CreateForUserAsync("hyperliquid", null, null, _hlWallet, _hlKey, null, null, null);
         Assert.NotNull(connector);
 
         try
@@ -106,7 +108,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
         var ct = cts.Token;
 
         var connector = await _factory.CreateForUserAsync(
-            "lighter", null, null, _lighterAccount, _lighterKey, null, _lighterApiKeyIndex);
+            "lighter", null, null, _lighterAccount, _lighterKey, null, _lighterApiKeyIndex, null);
         Assert.NotNull(connector);
 
         try
@@ -166,7 +168,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var ct = cts.Token;
 
-        var connector = await _factory.CreateForUserAsync("aster", _asterKey, _asterSecret, null, null);
+        var connector = await _factory.CreateForUserAsync("aster", _asterKey, _asterSecret, null, null, null, null, null);
         Assert.NotNull(connector);
 
         try
@@ -231,7 +233,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
         {
             try
             {
-                var connector = await _factory.CreateForUserAsync("hyperliquid", null, null, _hlWallet, _hlKey);
+                var connector = await _factory.CreateForUserAsync("hyperliquid", null, null, _hlWallet, _hlKey, null, null, null);
                 Assert.NotNull(connector);
 
                 try
@@ -294,7 +296,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
             try
             {
                 var connector = await _factory.CreateForUserAsync(
-                    "lighter", null, null, _lighterAccount, _lighterKey, null, _lighterApiKeyIndex);
+                    "lighter", null, null, _lighterAccount, _lighterKey, null, _lighterApiKeyIndex, null);
                 Assert.NotNull(connector);
 
                 try
@@ -364,7 +366,7 @@ public class ExchangeTradeConnectivityTests : IDisposable
         {
             try
             {
-                var connector = await _factory.CreateForUserAsync("aster", _asterKey, _asterSecret, null, null);
+                var connector = await _factory.CreateForUserAsync("aster", _asterKey, _asterSecret, null, null, null, null, null);
                 Assert.NotNull(connector);
 
                 try
@@ -491,6 +493,23 @@ public class ExchangeTradeConnectivityTests : IDisposable
         var sp = services.BuildServiceProvider();
         var logger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
 
-        return (new ExchangeConnectorFactory(sp, logger), sp);
+        return (new ExchangeConnectorFactory(sp, logger, new NullDydxConnectorFactory()), sp);
+    }
+}
+
+/// <summary>Minimal stub for tests that don't exercise dYdX paths.</summary>
+file sealed class NullDydxConnectorFactory : IDydxConnectorFactory
+{
+    public DydxCredentialCheckResult Validate(string? mnemonic, string? subAccountAddress)
+        => new() { Reason = DydxCredentialFailureReason.MissingMnemonic, MissingField = "Mnemonic" };
+
+    public Task<DydxCredentialCheckResult> ValidateSignedAsync(string? mnemonic, string? subAccountAddress, CancellationToken ct)
+        => Task.FromResult(Validate(mnemonic, subAccountAddress));
+
+    public bool TryCreate(string? mnemonic, string? subAccountAddress, out IExchangeConnector? connector, out DydxCredentialCheckResult result)
+    {
+        connector = null;
+        result = Validate(mnemonic, subAccountAddress);
+        return false;
     }
 }
