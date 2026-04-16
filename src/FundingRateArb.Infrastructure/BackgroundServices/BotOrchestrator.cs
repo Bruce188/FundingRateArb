@@ -867,7 +867,8 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     }
                 }
             }
-            else if (error != null && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
+            else if (error != null && !error.Contains("Lighter tx reverted:", StringComparison.OrdinalIgnoreCase)
+                                    && (error.Contains("Insufficient margin", StringComparison.OrdinalIgnoreCase)
                                        || error.Contains("balance", StringComparison.OrdinalIgnoreCase)))
             {
                 _logger.LogWarning("Balance exhausted for user {UserId}: {Error}", userId, error);
@@ -943,6 +944,26 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     || error?.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase) == true
                     || error?.Contains("credentials not provided", StringComparison.OrdinalIgnoreCase) == true;
 
+                // Detect Lighter revert reason for reason-specific cooldown durations
+                LighterOrderRevertReason? lighterReason = null;
+                if (error?.Contains("Lighter tx reverted:", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    if (error.Contains("Slippage", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.Slippage;
+                    else if (error.Contains("MarginInsufficient", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.MarginInsufficient;
+                    else if (error.Contains("LiquidityInsufficient", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.LiquidityInsufficient;
+                    else if (error.Contains("BalanceInsufficient", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.BalanceInsufficient;
+                    else if (error.Contains("InsufficientDepth", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.InsufficientDepth;
+                    else if (error.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+                        lighterReason = LighterOrderRevertReason.Timeout;
+                    else
+                        lighterReason = LighterOrderRevertReason.Unknown;
+                }
+
                 var existingEntry = _circuitBreaker.GetCooldownEntry(cooldownKey);
                 var failures = existingEntry.Failures;
                 var delay = TimeSpan.Zero;
@@ -950,8 +971,32 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 if (!isAuthError)
                 {
                     failures += 1;
-                    delay = TimeSpan.FromTicks(
-                        Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
+
+                    // Lighter revert reason overrides: short cooldown for transient issues,
+                    // long cooldown for structural problems
+                    if (lighterReason.HasValue && lighterReason.Value is LighterOrderRevertReason.Slippage or LighterOrderRevertReason.InsufficientDepth)
+                    {
+                        delay = TimeSpan.FromMinutes(2);
+                    }
+                    else if (lighterReason.HasValue && lighterReason.Value is LighterOrderRevertReason.MarginInsufficient or LighterOrderRevertReason.BalanceInsufficient)
+                    {
+                        delay = TimeSpan.FromMinutes(15);
+                    }
+                    else if (lighterReason.HasValue && lighterReason.Value == LighterOrderRevertReason.LiquidityInsufficient)
+                    {
+                        delay = TimeSpan.FromMinutes(5);
+                        // Advisory only — logs a suggestion for the operator. Programmatic adaptive
+                        // slippage widening (e.g., auto-bumping _slippageFloor) is a future enhancement.
+                        _logger.LogWarning(
+                            "Lighter liquidity insufficient for {Asset} — consider widening slippage tolerance",
+                            opp.AssetSymbol);
+                    }
+                    else
+                    {
+                        // Default exponential backoff for Timeout/Unknown/non-Lighter failures
+                        delay = TimeSpan.FromTicks(
+                            Math.Min(_circuitBreaker.BaseCooldownDuration.Ticks * (1L << Math.Min(failures - 1, 4)), _circuitBreaker.MaxCooldownDuration.Ticks));
+                    }
                     _circuitBreaker.SetCooldown(cooldownKey, DateTime.UtcNow + delay, failures);
                 }
 

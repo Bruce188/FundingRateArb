@@ -15,17 +15,20 @@ public class MarketDataStreamManager : BackgroundService
     private readonly IEnumerable<IMarketDataStream> _streams;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
+    private readonly IExchangeSupportedSymbolsCache _symbolsCache;
     private readonly ILogger<MarketDataStreamManager> _logger;
 
     public MarketDataStreamManager(
         IEnumerable<IMarketDataStream> streams,
         IServiceScopeFactory scopeFactory,
         IHubContext<DashboardHub, IDashboardClient> hubContext,
+        IExchangeSupportedSymbolsCache symbolsCache,
         ILogger<MarketDataStreamManager> logger)
     {
         _streams = streams;
         _scopeFactory = scopeFactory;
         _hubContext = hubContext;
+        _symbolsCache = symbolsCache;
         _logger = logger;
     }
 
@@ -44,12 +47,36 @@ public class MarketDataStreamManager : BackgroundService
             _logger.LogInformation("Starting WebSocket streams for {Count} symbols: {Symbols}",
                 symbols.Count, string.Join(", ", symbols));
 
-            // Start all streams in parallel
+            // Start all streams in parallel, filtering symbols per exchange
             var startTasks = _streams.Select(async stream =>
             {
                 try
                 {
-                    await stream.StartAsync(symbols, ct);
+                    var supported = await _symbolsCache.GetSupportedSymbolsAsync(stream.ExchangeName, ct);
+                    List<string> filtered;
+                    if (supported.Count > 0)
+                    {
+                        filtered = symbols.Where(s => supported.Contains(s)).ToList();
+                        var skipped = symbols.Where(s => !supported.Contains(s)).ToList();
+                        if (skipped.Count > 0)
+                        {
+                            _logger.LogInformation(
+                                "WebSocket stream {Exchange}: {FilteredCount}/{TotalCount} symbols supported, skipped {SkippedCount}: {Skipped}",
+                                stream.ExchangeName, filtered.Count, symbols.Count, skipped.Count,
+                                skipped.Count <= 20
+                                    ? string.Join(", ", skipped)
+                                    : string.Join(", ", skipped.Take(20)) + $" (+{skipped.Count - 20} more)");
+                        }
+                    }
+                    else
+                    {
+                        filtered = symbols;
+                        _logger.LogWarning(
+                            "No supported symbols loaded for {Exchange} — passing full list as fallback",
+                            stream.ExchangeName);
+                    }
+
+                    await stream.StartAsync(filtered, ct);
                     stream.OnRateUpdate += rate => OnRateReceived(rate);
                     stream.OnDisconnected += (exchange, reason) =>
                         _logger.LogWarning("WebSocket disconnected: {Exchange} — {Reason}", exchange, reason);

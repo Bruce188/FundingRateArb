@@ -45,9 +45,9 @@ public class BalanceAggregatorTests
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(30m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockLighter.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -72,7 +72,7 @@ public class BalanceAggregatorTests
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(100m);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         // First call
@@ -103,9 +103,9 @@ public class BalanceAggregatorTests
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(30m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockLighter.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -129,7 +129,7 @@ public class BalanceAggregatorTests
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new Exception("down"));
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -165,7 +165,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("API key expired"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -192,7 +192,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -214,7 +214,7 @@ public class BalanceAggregatorTests
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
             .Returns(((string?)null, (string?)null, "wallet", "key", (string?)null, (string?)null));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -240,7 +240,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused: internal-host.exchange.com:443"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -270,9 +270,9 @@ public class BalanceAggregatorTests
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("timeout"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockLighter.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -302,7 +302,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new Exception("something unexpected"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -330,7 +330,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException(errorMessage));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -355,7 +355,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("No recognized quote asset (USDT/USDC/USD) in balance response. Assets found: BNB, ETH"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -380,7 +380,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         await _sut.GetBalanceSnapshotAsync("user1");
@@ -415,7 +415,7 @@ public class BalanceAggregatorTests
 
         // Connector should never have been created
         _mockConnectorFactory.Verify(
-            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -442,7 +442,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -453,7 +453,7 @@ public class BalanceAggregatorTests
 
         // Connector SHOULD have been created — backoff expired
         _mockConnectorFactory.Verify(
-            f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null),
+            f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()),
             Times.Once);
     }
 
@@ -473,7 +473,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         await _sut.GetBalanceSnapshotAsync("user1");
@@ -499,7 +499,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         await _sut.GetBalanceSnapshotAsync("user1");
@@ -526,7 +526,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -551,7 +551,7 @@ public class BalanceAggregatorTests
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("some other error"));
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -614,7 +614,7 @@ public class BalanceAggregatorTests
         result.Balances[0].ErrorMessage.Should().Contain("API key invalid");
         // Connector should NOT have been created — still in backoff
         _mockConnectorFactory.Verify(
-            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -644,7 +644,7 @@ public class BalanceAggregatorTests
         result.Balances[0].ErrorMessage.Should().Contain("API key invalid");
         // Connector should NOT have been created — still in 5-min backoff
         _mockConnectorFactory.Verify(
-            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -664,9 +664,9 @@ public class BalanceAggregatorTests
         var mockHl = new Mock<IExchangeConnector>();
         mockHl.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(500m);
 
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockHl.Object);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Lighter", null, null, "wallet", "key", null, null, It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
 
         var result = await _sut.GetBalanceSnapshotAsync("user1");
@@ -679,5 +679,181 @@ public class BalanceAggregatorTests
         // Structural property: TotalAvailableUsdc must equal the sum of non-error balances
         result.Balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc)
             .Should().Be(result.TotalAvailableUsdc, "TotalAvailableUsdc must only sum non-error balances");
+    }
+
+    // ── Task 4.3: per-field dYdX warning ────────────────────────────────────
+
+    [Fact]
+    public async Task BalanceAggregator_DydxNullConnector_LogsMissingFieldMessage()
+    {
+        // Arrange: dYdX credential exists but connector returns null; factory reports MissingMnemonic.
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "dYdX" } },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync("user1")).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, (string?)null, (string?)null, (string?)null));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("dYdX", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var dydxResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.MissingMnemonic,
+            MissingField = "Mnemonic"
+        };
+        _mockConnectorFactory
+            .Setup(f => f.TryGetLastDydxFailure("user1", out dydxResult))
+            .Returns(true);
+
+        var capturedMessages = new List<string>();
+        var loggerMock = new Mock<ILogger<BalanceAggregator>>(MockBehavior.Loose);
+        loggerMock
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => CaptureMsg(capturedMessages, state.ToString()!)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
+
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+
+        // Act
+        var result = await sut.GetBalanceSnapshotAsync("user1");
+
+        // Assert: balance entry has the credentials-not-configured message
+        result.Balances.Should().ContainSingle(b => b.ExchangeName == "dYdX" && b.ErrorMessage == "Credentials not configured");
+
+        // Assert: log contains the field-specific reason
+        capturedMessages.Should().Contain(m => m.Contains("MissingMnemonic") || m.Contains("Mnemonic"),
+            "per-field warning must be logged for dYdX missing mnemonic");
+    }
+
+    [Fact]
+    public async Task BalanceAggregator_DydxNullConnector_SuppressKeyIncludesField_TwoReasonsProduceTwoWarnings()
+    {
+        // Two calls with different missing fields should produce two distinct log entries
+        // because the suppress-key includes the field name.
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "dYdX" } },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(It.IsAny<string>())).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, (string?)null, (string?)null, (string?)null));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("dYdX", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // First call: MissingMnemonic
+        var firstResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.MissingMnemonic,
+            MissingField = "Mnemonic"
+        };
+        // Second call: InvalidMnemonic (different field → different suppress-key)
+        var secondResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.InvalidMnemonic,
+            MissingField = "Mnemonic"
+        };
+
+        var callCount = 0;
+        _mockConnectorFactory
+            .Setup(f => f.TryGetLastDydxFailure(It.IsAny<string>(), out It.Ref<DydxCredentialCheckResult>.IsAny))
+            .Returns((string uid, ref DydxCredentialCheckResult res) =>
+            {
+                res = callCount++ == 0 ? firstResult : secondResult;
+                return true;
+            });
+
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var capturedMessages = new List<string>();
+        var loggerMock = new Mock<ILogger<BalanceAggregator>>(MockBehavior.Loose);
+        loggerMock
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => CaptureMsg(capturedMessages, state.ToString()!)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
+
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+
+        // First call — MissingMnemonic warning should be logged
+        await sut.GetBalanceSnapshotAsync("user1");
+        // Clear the balance cache so the second call re-fetches
+        freshCache.Remove("balance:user1");
+
+        // Second call — InvalidMnemonic is a different suppress-key, warning should log again
+        await sut.GetBalanceSnapshotAsync("user1");
+
+        // Both warning messages should have been captured
+        capturedMessages.Should().Contain(m => m.Contains("MissingMnemonic") || m.Contains("Mnemonic"),
+            "first warning for MissingMnemonic must appear");
+        capturedMessages.Should().Contain(m => m.Contains("InvalidMnemonic"),
+            "second warning for InvalidMnemonic must appear because suppress-key changed");
+    }
+
+    [Fact]
+    public async Task BalanceAggregator_DydxNullConnector_SameReasonWithin15Min_SuppressedOnSecondCall()
+    {
+        // Same MissingField twice within 15 min → warning only logged once.
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "dYdX" } },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(It.IsAny<string>())).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, (string?)null, (string?)null, (string?)null));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("dYdX", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var sameResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.MissingMnemonic,
+            MissingField = "Mnemonic"
+        };
+        _mockConnectorFactory
+            .Setup(f => f.TryGetLastDydxFailure(It.IsAny<string>(), out sameResult))
+            .Returns(true);
+
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var warnCount = 0;
+        var loggerMock = new Mock<ILogger<BalanceAggregator>>(MockBehavior.Loose);
+        loggerMock
+            .Setup(l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
+            .Callback(() => warnCount++);
+
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+
+        // First call — warning logged
+        await sut.GetBalanceSnapshotAsync("user1");
+        freshCache.Remove("balance:user1");
+
+        // Second call (same reason) — same suppress-key, warning should be suppressed
+        await sut.GetBalanceSnapshotAsync("user1");
+
+        warnCount.Should().Be(1, "same reason within 15 min must be suppressed on second call");
+    }
+
+    private static bool CaptureMsg(List<string> list, string message)
+    {
+        list.Add(message);
+        return true;
     }
 }

@@ -2645,4 +2645,224 @@ public class BotOrchestratorTests
             It.Is<string>(s => s.Contains("Unknown error")),
             "warning"), Times.Once);
     }
+
+    // ── Lighter revert reason cooldown tests ──────────────────────────────────
+
+    private void SetupLighterRevertCooldownScenario(string errorMessage)
+    {
+        SetupEnabledUser();
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(EnabledConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeId = 2,
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+        };
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+        _mockExecEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, errorMessage));
+    }
+
+    [Fact]
+    public async Task LighterRevert_Slippage_Sets2MinCooldown()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: Slippage");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        remaining.Should().BeCloseTo(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(10),
+            "Slippage revert should set a 2-minute cooldown");
+    }
+
+    [Fact]
+    public async Task LighterRevert_InsufficientDepth_Sets2MinCooldown()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: InsufficientDepth");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        remaining.Should().BeCloseTo(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(10),
+            "InsufficientDepth revert should set a 2-minute cooldown");
+    }
+
+    [Fact]
+    public async Task LighterRevert_MarginInsufficient_Sets15MinCooldown()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: MarginInsufficient");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        remaining.Should().BeCloseTo(TimeSpan.FromMinutes(15), TimeSpan.FromSeconds(10),
+            "MarginInsufficient revert should set a 15-minute cooldown");
+    }
+
+    [Fact]
+    public async Task LighterRevert_LiquidityInsufficient_Sets5MinCooldown()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: LiquidityInsufficient");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        remaining.Should().BeCloseTo(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(10),
+            "LiquidityInsufficient revert should set a 5-minute cooldown");
+    }
+
+    [Fact]
+    public async Task LighterRevert_BalanceInsufficient_Sets15MinCooldown()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: BalanceInsufficient");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        remaining.Should().BeCloseTo(TimeSpan.FromMinutes(15), TimeSpan.FromSeconds(10),
+            "BalanceInsufficient revert should set a 15-minute cooldown");
+    }
+
+    [Fact]
+    public async Task LighterRevert_BalanceInsufficient_DoesNotTriggerBalanceExhaustedSkip()
+    {
+        // Arrange: two candidates. First fails with Lighter revert BalanceInsufficient.
+        // The guard !error.Contains("Lighter tx reverted:") must prevent routing into the
+        // generic balance-exhaustion branch, so the second candidate is NOT skipped.
+        SetupEnabledUser();
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 5,
+                TotalCapitalUsdc = 1000m,
+                AllocationStrategy = AllocationStrategy.EqualSpread,
+                AllocationTopN = 3,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+            });
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(CircuitBreakerConfig);
+        _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync(new List<ArbitragePosition>());
+
+        var opp1 = new ArbitrageOpportunityDto
+        {
+            AssetId = 1,
+            AssetSymbol = "ETH",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.002m,
+            SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+        };
+        var opp2 = new ArbitrageOpportunityDto
+        {
+            AssetId = 2,
+            AssetSymbol = "BTC",
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Lighter",
+            NetYieldPerHour = 0.001m,
+            SpreadPerHour = 0.001m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+        };
+
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp1, opp2] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<AllocationStrategy>(), It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m, 100m]);
+        _mockUow.Setup(u => u.OpportunitySnapshots).Returns(new Mock<IOpportunitySnapshotRepository>().Object);
+
+        // First call returns Lighter revert BalanceInsufficient error; second succeeds
+        _mockExecEngine.SetupSequence(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((false, "Position open failed on Lighter \u2014 Lighter tx reverted: BalanceInsufficient"))
+            .ReturnsAsync((true, (string?)null));
+
+        // Act
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Assert: second candidate must NOT be skipped — both should have been attempted
+        _mockExecEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), 100m, It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
+            Times.Exactly(2),
+            "Lighter revert BalanceInsufficient must not route into balance-exhaustion skip — second candidate must still be attempted");
+    }
+
+    [Fact]
+    public async Task LighterRevert_Unknown_UsesDefaultExponentialBackoff()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter — Lighter tx reverted: Unknown");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        // Default exponential backoff: first failure = BaseCooldown (5 min)
+        remaining.Should().BeCloseTo(CircuitBreakerManager.BaseCooldown, TimeSpan.FromSeconds(10),
+            "Unknown revert should fall through to default exponential backoff");
+    }
+
+    [Fact]
+    public async Task LighterRevert_Timeout_UsesDefaultExponentialBackoff()
+    {
+        SetupLighterRevertCooldownScenario("Position open failed on Lighter \u2014 Lighter tx reverted: Timeout");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        // Timeout falls through to default exponential backoff: first failure = BaseCooldown (5 min)
+        remaining.Should().BeCloseTo(CircuitBreakerManager.BaseCooldown, TimeSpan.FromSeconds(10),
+            "Timeout revert should fall through to default exponential backoff");
+    }
+
+    [Fact]
+    public async Task NonLighterError_UsesDefaultExponentialBackoff()
+    {
+        SetupLighterRevertCooldownScenario("Exchange error: connection timeout");
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        var key = $"{TestUserId}:1_1_2";
+        _circuitBreaker.FailedOpCooldowns.Should().ContainKey(key);
+        var entry = _circuitBreaker.FailedOpCooldowns[key];
+        var remaining = entry.CooldownUntil - DateTime.UtcNow;
+        // Default exponential backoff: first failure = BaseCooldown (5 min)
+        remaining.Should().BeCloseTo(CircuitBreakerManager.BaseCooldown, TimeSpan.FromSeconds(10),
+            "Non-Lighter errors should use default exponential backoff");
+    }
 }

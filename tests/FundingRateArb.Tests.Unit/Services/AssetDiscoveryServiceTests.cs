@@ -455,6 +455,29 @@ public class AssetDiscoveryServiceTests
         afterCount.Should().Be(beforeCount + 2);
     }
 
+    // ── DB union is preserved regardless of per-exchange support ──────────────
+
+    [Fact]
+    public async Task EnsureAssetsExistAsync_PersistsUnionRegardlessOfExchangeSupport()
+    {
+        await using var context = CreateContext();
+
+        var mockRepo = new Mock<IAssetRepository>();
+        mockRepo.Setup(r => r.GetActiveAsync()).ReturnsAsync([]);
+
+        var sut = CreateSut(context, mockRepo.Object);
+
+        // Both BTC and NVDA should be persisted to DB, even though NVDA is not
+        // supported by all exchanges. Per-exchange filtering happens downstream
+        // in MarketDataStreamManager, not in AssetDiscoveryService.
+        var result = await sut.EnsureAssetsExistAsync(["BTC", "NVDA"]);
+
+        result.Should().Be(2);
+        var assets = await context.Assets.ToListAsync();
+        assets.Should().HaveCount(2);
+        assets.Select(a => a.Symbol).Should().BeEquivalentTo(["BTC", "NVDA"]);
+    }
+
     // ── Pre-cancelled token throws and never touches the cache ──────────────
 
     [Fact]

@@ -297,6 +297,12 @@ public class ExecutionEngine : IExecutionEngine
                     }
                 }
 
+                // Configure slippage tolerance if the connector supports it
+                if (firstConnector is ISlippageConfigurable firstSlippageConfig)
+                {
+                    firstSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
+                }
+
                 // Open first leg (with 45-second timeout)
                 OrderResultDto firstResult;
                 try
@@ -324,6 +330,18 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (!firstResult.Success)
                 {
+                    // Surface revert reason if available
+                    var errorMsg = firstResult.RevertReason != LighterOrderRevertReason.None
+                        ? $"Position open failed on {firstExchangeName} — Lighter tx reverted: {firstResult.RevertReason}"
+                        : firstResult.Error;
+
+                    if (firstResult.RevertReason == LighterOrderRevertReason.Slippage)
+                    {
+                        _logger.LogWarning(
+                            "Lighter order reverted due to slippage — consider increasing LighterSlippageFloorPct (currently {SlippageFloor})",
+                            config.LighterSlippageFloorPct);
+                    }
+
                     // First leg failed cleanly — no fees lost, just abort
                     position.Status = PositionStatus.Failed;
                     position.ClosedAt = DateTime.UtcNow;
@@ -333,10 +351,10 @@ public class ExecutionEngine : IExecutionEngine
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) failed: {TruncateError(firstResult.Error)}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — first leg ({firstExchangeName}) failed: {TruncateError(errorMsg)}",
                     });
                     await _uow.SaveAsync(ct);
-                    return (false, firstResult.Error);
+                    return (false, errorMsg);
                 }
 
                 // If first leg is estimated fill, verify it actually executed on-chain
@@ -389,21 +407,25 @@ public class ExecutionEngine : IExecutionEngine
                         else if (positionExists == false)
                         {
                             // Position never existed on-chain
+                            var revertDetail = firstResult.RevertReason != LighterOrderRevertReason.None
+                                ? $" (Lighter tx reverted: {firstResult.RevertReason})"
+                                : "";
                             _logger.LogInformation(
-                                "No position found on {Exchange} for {Asset} — tx likely failed on-chain",
-                                firstExchangeName, opp.AssetSymbol);
+                                "No position found on {Exchange} for {Asset} — tx likely failed on-chain{RevertDetail}",
+                                firstExchangeName, opp.AssetSymbol, revertDetail);
                             position.Status = PositionStatus.Failed;
                             position.ClosedAt = DateTime.UtcNow;
                             _uow.Positions.Update(position);
+                            var failMsg = $"Position open failed on {firstExchangeName} — tx never opened on-chain{revertDetail}";
                             _uow.Alerts.Add(new Alert
                             {
                                 UserId = userId,
                                 Type = AlertType.LegFailed,
                                 Severity = AlertSeverity.Warning,
-                                Message = $"Position open failed for {opp.AssetSymbol} on {firstExchangeName} — tx never opened on-chain",
+                                Message = $"Position open failed for {opp.AssetSymbol} on {firstExchangeName} — tx never opened on-chain{revertDetail}",
                             });
                             await _uow.SaveAsync(ct);
-                            return (false, $"Position open failed on {firstExchangeName} — tx never opened on-chain");
+                            return (false, failMsg);
                         }
                         else // null — check failed, fall back to emergency close
                         {
@@ -431,6 +453,12 @@ public class ExecutionEngine : IExecutionEngine
                             return (false, $"Position verification failed on {firstExchangeName}");
                         }
                     }
+                }
+
+                // Configure slippage tolerance for second connector if supported
+                if (secondConnector is ISlippageConfigurable secondSlippageConfig)
+                {
+                    secondSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
                 }
 
                 // First leg confirmed — now open second leg (with 45-second timeout)
@@ -470,10 +498,15 @@ public class ExecutionEngine : IExecutionEngine
 
                 if (!secondResult.Success)
                 {
+                    // Surface revert reason if available on second leg
+                    var secondErrorMsg = secondResult.RevertReason != LighterOrderRevertReason.None
+                        ? $"Position open failed on {secondExchangeName} — Lighter tx reverted: {secondResult.RevertReason}"
+                        : secondResult.Error;
+
                     // Second leg failed — emergency close first leg
                     _logger.LogError(
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
-                        opp.AssetSymbol, secondExchangeName, secondResult.Error);
+                        opp.AssetSymbol, secondExchangeName, secondErrorMsg);
                     var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
                     position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
@@ -487,10 +520,10 @@ public class ExecutionEngine : IExecutionEngine
                         UserId = userId,
                         Type = AlertType.LegFailed,
                         Severity = AlertSeverity.Critical,
-                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) failed: {TruncateError(secondResult.Error)}",
+                        Message = $"Emergency close: {opp.AssetSymbol} — second leg ({secondExchangeName}) failed: {TruncateError(secondErrorMsg)}",
                     });
                     await _uow.SaveAsync(ct);
-                    return (false, secondResult.Error);
+                    return (false, secondErrorMsg);
                 }
 
                 // Both legs succeeded — assign results back to long/short
@@ -499,6 +532,16 @@ public class ExecutionEngine : IExecutionEngine
             }
             else
             {
+                // Configure slippage for concurrent connectors if supported
+                if (longConnector is ISlippageConfigurable longSlippageConfig)
+                {
+                    longSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
+                }
+                if (shortConnector is ISlippageConfigurable shortSlippageConfig)
+                {
+                    shortSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
+                }
+
                 // Concurrent path: both connectors are reliable, use Task.WhenAll for speed (with 45-second timeout)
                 using var concurrentCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 concurrentCts.CancelAfter(TimeSpan.FromSeconds(45));
@@ -591,7 +634,14 @@ public class ExecutionEngine : IExecutionEngine
                     position.Status = concurrentNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
-                    var error = !longResult.Success ? longResult.Error : shortResult.Error;
+
+                    // Surface revert reason for BotOrchestrator cooldown parsing (mirrors sequential path)
+                    var failingResult = !longResult.Success ? longResult : shortResult;
+                    var failingExchangeName = !longResult.Success ? opp.LongExchangeName : opp.ShortExchangeName;
+                    var error = failingResult.RevertReason != LighterOrderRevertReason.None
+                        ? $"Position open failed on {failingExchangeName} — Lighter tx reverted: {failingResult.RevertReason}"
+                        : failingResult.Error;
+
                     _uow.Alerts.Add(new Alert
                     {
                         UserId = userId,

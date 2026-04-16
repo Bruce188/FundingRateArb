@@ -1,8 +1,10 @@
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.ValueObjects;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -40,10 +42,10 @@ public class ConnectorLifecycleManagerTests
         var mockLong = new Mock<IExchangeConnector>();
         var mockShort = new Mock<IExchangeConnector>();
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockShort.Object);
 
         // Act
@@ -131,10 +133,10 @@ public class ConnectorLifecycleManagerTests
         var mockLong = new Mock<IExchangeConnector>();
         var disposable = mockLong.As<IDisposable>();
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ThrowsAsync(new Exception("Connection failed"));
 
         // Act
@@ -163,10 +165,10 @@ public class ConnectorLifecycleManagerTests
         var mockShort = new Mock<IExchangeConnector>();
         var shortDisposable = mockShort.As<IDisposable>();
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockShort.Object);
 
         // Act
@@ -193,10 +195,10 @@ public class ConnectorLifecycleManagerTests
         var mockLong = new Mock<IExchangeConnector>();
         var longDisposable = mockLong.As<IDisposable>();
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockLong.Object);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync((IExchangeConnector?)null);
 
         // Act
@@ -235,7 +237,7 @@ public class ConnectorLifecycleManagerTests
         var mockLong = new Mock<IExchangeConnector>();
         var longDisposable = mockLong.As<IDisposable>();
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockLong.Object);
 
         // Act
@@ -411,5 +413,119 @@ public class ConnectorLifecycleManagerTests
         mockTierProvider.Verify(
             p => p.UpdateTiers(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<LeverageTier[]>()),
             Times.Never);
+    }
+
+    // ── Task 4.3: per-field dYdX warning ────────────────────────────────────
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_DydxNullConnector_LogsMissingFieldMessage()
+    {
+        // Arrange: dYdX long connector returns null; factory reports MissingMnemonic.
+        var dydxCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "dYdX" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { dydxCred, shortCred });
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, (string?)null, (string?)null, (string?)null));
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("dYdX", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        var dydxResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.MissingMnemonic,
+            MissingField = "Mnemonic"
+        };
+        _mockFactory
+            .Setup(f => f.TryGetLastDydxFailure("user1", out dydxResult))
+            .Returns(true);
+
+        var loggerMock = new Mock<ILogger<ConnectorLifecycleManager>>(MockBehavior.Loose);
+        var capturedMessages = new List<string>();
+        loggerMock
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => CaptureMessage(capturedMessages, state.ToString()!)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
+
+        var sut = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            loggerMock.Object);
+
+        // Act
+        var (_, _, error) = await sut.CreateUserConnectorsAsync("user1", "dYdX", "Lighter");
+
+        // Assert
+        error.Should().Contain("MissingMnemonic");
+        error.Should().Contain("Mnemonic");
+        capturedMessages.Should().Contain(m => m.Contains("MissingMnemonic") || m.Contains("Mnemonic"),
+            "log message must include the failure reason and field name");
+    }
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_DydxNullConnector_FactoryHasNoFailureRecord_FallsBackToGenericMessage()
+    {
+        // Arrange: dYdX long connector returns null; factory has no failure record.
+        var dydxCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "dYdX" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { dydxCred, shortCred });
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, (string?)null, (string?)null, (string?)null));
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("dYdX", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // TryGetLastDydxFailure returns false (no record)
+        DydxCredentialCheckResult noResult = default!;
+        _mockFactory
+            .Setup(f => f.TryGetLastDydxFailure("user1", out noResult))
+            .Returns(false);
+
+        // Act
+        var (_, _, error) = await _sut.CreateUserConnectorsAsync("user1", "dYdX", "Lighter");
+
+        // Assert: falls back to the generic "invalid credentials" message
+        error.Should().Contain("invalid credentials");
+    }
+
+    [Fact]
+    public async Task CreateUserConnectorsAsync_NonDydxNullConnector_KeepsGenericMessage()
+    {
+        // Regression guard for PR #187: non-dYdX exchange keeps the generic message.
+        var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
+        var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
+        _mockUserSettings
+            .Setup(s => s.GetActiveCredentialsAsync("user1"))
+            .ReturnsAsync(new List<UserExchangeCredential> { longCred, shortCred });
+        _mockUserSettings
+            .Setup(s => s.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", "wallet", "pk", (string?)null, (string?)null));
+
+        _mockFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // Act
+        var (_, _, error) = await _sut.CreateUserConnectorsAsync("user1", "Hyperliquid", "Lighter");
+
+        // Assert: uses the generic message (not dYdX-specific)
+        error.Should().Contain("invalid credentials");
+        error.Should().NotContain("MissingMnemonic");
+    }
+
+    private static bool CaptureMessage(List<string> list, string message)
+    {
+        list.Add(message);
+        return true;
     }
 }

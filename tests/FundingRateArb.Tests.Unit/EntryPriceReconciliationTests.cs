@@ -108,7 +108,7 @@ public class EntryPriceReconciliationTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "long-1", FilledPrice = 3000m, FilledQuantity = 0.1m });
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(_mockLongConnector.Object);
 
         var connectorLifecycle = new ConnectorLifecycleManager(
@@ -133,7 +133,7 @@ public class EntryPriceReconciliationTests
     {
         var mockShort = CreateReconcilableShortConnector(2999.50m);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockShort.Object);
 
         ArbitragePosition? addedPosition = null;
@@ -167,7 +167,7 @@ public class EntryPriceReconciliationTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
 
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockShort.Object);
 
         ArbitragePosition? addedPosition = null;
@@ -190,7 +190,7 @@ public class EntryPriceReconciliationTests
     {
         var mockShort = CreateReconcilableShortConnector(reconcilePrice: null);
         _mockFactory
-            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
+            .Setup(f => f.CreateForUserAsync("Lighter", It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockShort.Object);
 
         ArbitragePosition? addedPosition = null;

@@ -598,7 +598,7 @@ public class SettingsControllerTests
             .ReturnsAsync(100m);
 
         _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
-                "Binance", "api-key", "api-secret", null, null, null, null))
+                "Binance", "api-key", "api-secret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -634,7 +634,7 @@ public class SettingsControllerTests
             .ThrowsAsync(new Exception(innerMessage));
 
         _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
-                "Binance", "bad-key", "bad-secret", null, null, null, null))
+                "Binance", "bad-key", "bad-secret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -672,7 +672,7 @@ public class SettingsControllerTests
             .ThrowsAsync(new OperationCanceledException());
 
         _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
-                "Binance", "api-key", "api-secret", null, null, null, null))
+                "Binance", "api-key", "api-secret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -722,7 +722,7 @@ public class SettingsControllerTests
             .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
 
         _mockConnectorFactory.Setup(f => f.CreateForUserAsync(
-                "Aster", "api-key", "api-secret", null, null, null, null))
+                "Aster", "api-key", "api-secret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -754,7 +754,7 @@ public class SettingsControllerTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("V1 credentials not provided"));
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", "api-key", "api-secret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Aster", "api-key", "api-secret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -966,7 +966,7 @@ public class SettingsControllerTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(100m);
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "testkey", "testsecret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "testkey", "testsecret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
@@ -1000,7 +1000,7 @@ public class SettingsControllerTests
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
-        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "badkey", "badsecret", null, null, null, null))
+        _mockConnectorFactory.Setup(f => f.CreateForUserAsync("Binance", "badkey", "badsecret", null, null, null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         // Act
