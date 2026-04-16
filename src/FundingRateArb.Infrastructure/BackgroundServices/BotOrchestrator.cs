@@ -949,19 +949,33 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 if (error?.Contains("Lighter tx reverted:", StringComparison.OrdinalIgnoreCase) == true)
                 {
                     if (error.Contains("Slippage", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.Slippage;
+                    }
                     else if (error.Contains("MarginInsufficient", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.MarginInsufficient;
+                    }
                     else if (error.Contains("LiquidityInsufficient", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.LiquidityInsufficient;
+                    }
                     else if (error.Contains("BalanceInsufficient", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.BalanceInsufficient;
+                    }
                     else if (error.Contains("InsufficientDepth", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.InsufficientDepth;
+                    }
                     else if (error.Contains("Timeout", StringComparison.OrdinalIgnoreCase))
+                    {
                         lighterReason = LighterOrderRevertReason.Timeout;
+                    }
                     else
+                    {
                         lighterReason = LighterOrderRevertReason.Unknown;
+                    }
                 }
 
                 var existingEntry = _circuitBreaker.GetCooldownEntry(cooldownKey);
