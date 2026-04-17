@@ -4,8 +4,10 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using System.Threading;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
@@ -14,6 +16,18 @@ public class FundingRateRepository : IFundingRateRepository
     private readonly AppDbContext _context;
     private readonly IMemoryCache _cache;
     private readonly ILogger<FundingRateRepository>? _logger;
+
+    private DateTimeOffset? _purgeRetryCooldownUntil;
+    private long _suppressedPurgeCount;
+
+    internal long SuppressedPurgeCount => Interlocked.Read(ref _suppressedPurgeCount);
+
+    // Test hook: allows unit tests to set the cooldown to a past timestamp without real-time delay.
+    internal DateTimeOffset? PurgeRetryCooldownUntil
+    {
+        get => _purgeRetryCooldownUntil;
+        set => _purgeRetryCooldownUntil = value;
+    }
 
     public FundingRateRepository(AppDbContext context, IMemoryCache cache, ILogger<FundingRateRepository>? logger = null)
     {
@@ -110,9 +124,34 @@ public class FundingRateRepository : IFundingRateRepository
 
     public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
     {
-        return await _context.FundingRateSnapshots
-            .Where(s => s.RecordedAt < cutoff)
-            .ExecuteDeleteAsync(ct);
+        var now = DateTimeOffset.UtcNow;
+        if (_purgeRetryCooldownUntil.HasValue)
+        {
+            if (now < _purgeRetryCooldownUntil.Value)
+            {
+                _logger?.LogTrace(
+                    "PurgeOlderThanAsync suppressed — cooldown active until {Until:O}",
+                    _purgeRetryCooldownUntil.Value);
+                Interlocked.Increment(ref _suppressedPurgeCount);
+                return 0;
+            }
+            _purgeRetryCooldownUntil = null; // expired — clear
+        }
+
+        try
+        {
+            return await _context.FundingRateSnapshots
+                .Where(s => s.RecordedAt < cutoff)
+                .ExecuteDeleteAsync(ct);
+        }
+        catch (RetryLimitExceededException ex)
+        {
+            _logger?.LogWarning(
+                ex,
+                "PurgeOlderThanAsync: EF retry limit exceeded; setting 15-minute cooldown");
+            _purgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(15);
+            throw;
+        }
     }
 
     // ── Hourly Aggregate Methods ─────────────────────────────────
