@@ -27,7 +27,7 @@ public class BotConfigRepository : IBotConfigRepository
             return ShallowCopy(cached);
         }
 
-        var config = await _context.BotConfigurations.AsNoTracking().FirstOrDefaultAsync();
+        var config = await _context.BotConfigurations.AsNoTracking().OrderBy(c => c.Id).FirstOrDefaultAsync();
         if (config is null)
         {
             throw new InvalidOperationException(
@@ -44,7 +44,7 @@ public class BotConfigRepository : IBotConfigRepository
 
     public async Task<BotConfiguration> GetActiveTrackedAsync()
     {
-        var config = await _context.BotConfigurations.FirstOrDefaultAsync();
+        var config = await _context.BotConfigurations.OrderBy(c => c.Id).FirstOrDefaultAsync();
         if (config is null)
         {
             throw new InvalidOperationException(
