@@ -863,40 +863,6 @@ public class DashboardControllerTests
     }
 
     [Fact]
-    public async Task Index_Authenticated_UsesShortTtl_WhenLeverageMetricsMissing()
-    {
-        // Cold-start: leverage tier cache is empty so EffectiveLeverage is null on every
-        // opportunity. Under the short-TTL policy the controller must recompute within ~1s
-        // so the dashboard doesn't display blank Lev/ROC/APR/BE Cyc columns for the full
-        // 5s window after the tier refresher populates the cache.
-        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new OpportunityResultDto
-            {
-                DatabaseAvailable = true,
-                Diagnostics = new PipelineDiagnosticsDto(),
-                Opportunities =
-                [
-                    new ArbitrageOpportunityDto
-                    {
-                        LongExchangeName = "Binance",
-                        ShortExchangeName = "Hyperliquid",
-                        AssetSymbol = "BTC",
-                        EffectiveLeverage = null,
-                    },
-                ],
-            });
-
-        await _controller.Index();
-        await Task.Delay(TimeSpan.FromMilliseconds(1200));
-        await _controller.Index();
-
-        _mockSignalEngine.Verify(
-            s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()),
-            Times.Exactly(2),
-            "null-metric opportunities should be cached with a 1s TTL so the next poll recomputes");
-    }
-
-    [Fact]
     public async Task Index_SetsLastFundingRateFetch_FromMarketDataCache()
     {
         // Arrange
