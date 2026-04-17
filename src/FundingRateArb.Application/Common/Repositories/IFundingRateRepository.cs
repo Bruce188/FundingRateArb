@@ -8,7 +8,11 @@ public interface IFundingRateRepository
     Task<List<FundingRateSnapshot>> GetHistoryAsync(int assetId, int exchangeId, DateTime from, DateTime to, int take = 1000, int skip = 0);
     void Add(FundingRateSnapshot snapshot);
     void AddRange(IEnumerable<FundingRateSnapshot> snapshots);
-    Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
+    /// <param name="force">When true AND the internal suppression counter > 0, bypasses the 15-minute cooldown window for this invocation only. Default false.</param>
+    Task<int> PurgeOlderThanAsync(DateTime cutoff, bool force = false, CancellationToken ct = default);
+
+    /// <summary>Returns the current count of purge invocations suppressed by cooldown since the last successful run.</summary>
+    int GetSuppressedPurgeCount();
 
     // Hourly aggregate methods (30-day retention)
     Task<List<FundingRateHourlyAggregate>> GetHourlyAggregatesAsync(

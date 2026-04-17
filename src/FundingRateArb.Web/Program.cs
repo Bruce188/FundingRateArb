@@ -294,6 +294,7 @@ try
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
     builder.Services.AddScoped<IAssetRepository, AssetRepository>();
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
+    builder.Services.AddScoped<IDatabaseSpaceHealthProbe, DatabaseSpaceHealthProbe>();
 
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();

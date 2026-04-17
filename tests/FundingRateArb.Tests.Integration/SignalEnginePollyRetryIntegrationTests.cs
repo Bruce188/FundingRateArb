@@ -261,7 +261,8 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
 
             public void Add(FundingRateSnapshot snapshot) { }
             public void AddRange(IEnumerable<FundingRateSnapshot> snapshots) { }
-            public Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default) => Task.FromResult(0);
+            public Task<int> PurgeOlderThanAsync(DateTime cutoff, bool force = false, CancellationToken ct = default) => Task.FromResult(0);
+            public int GetSuppressedPurgeCount() => 0;
             public Task<List<FundingRateHourlyAggregate>> GetHourlyAggregatesAsync(
                 int? assetId, int? exchangeId, DateTime from, DateTime to, CancellationToken ct = default)
                 => Task.FromResult(new List<FundingRateHourlyAggregate>());

@@ -122,10 +122,13 @@ public class FundingRateRepository : IFundingRateRepository
     public void AddRange(IEnumerable<FundingRateSnapshot> snapshots) =>
         _context.FundingRateSnapshots.AddRange(snapshots);
 
-    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    public async Task<int> PurgeOlderThanAsync(DateTime cutoff, bool force = false, CancellationToken ct = default)
     {
         var now = DateTimeOffset.UtcNow;
-        if (_purgeRetryCooldownUntil.HasValue)
+        var suppressed = Volatile.Read(ref _suppressedPurgeCount);
+        var bypassCooldown = force && suppressed > 0;
+
+        if (!bypassCooldown && _purgeRetryCooldownUntil.HasValue)
         {
             if (now < _purgeRetryCooldownUntil.Value)
             {
@@ -140,9 +143,17 @@ public class FundingRateRepository : IFundingRateRepository
 
         try
         {
-            return await _context.FundingRateSnapshots
+            var result = await _context.FundingRateSnapshots
                 .Where(s => s.RecordedAt < cutoff)
                 .ExecuteDeleteAsync(ct);
+
+            if (bypassCooldown)
+            {
+                Interlocked.Exchange(ref _suppressedPurgeCount, 0);
+                _purgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(15);
+            }
+
+            return result;
         }
         catch (RetryLimitExceededException ex)
         {
@@ -150,9 +161,15 @@ public class FundingRateRepository : IFundingRateRepository
                 ex,
                 "PurgeOlderThanAsync: EF retry limit exceeded; setting 15-minute cooldown");
             _purgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(15);
+            if (bypassCooldown)
+            {
+                Interlocked.Exchange(ref _suppressedPurgeCount, 0);
+            }
             throw;
         }
     }
+
+    public int GetSuppressedPurgeCount() => (int)Volatile.Read(ref _suppressedPurgeCount);
 
     // ── Hourly Aggregate Methods ─────────────────────────────────
 

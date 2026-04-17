@@ -1,4 +1,5 @@
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Common.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -19,15 +20,20 @@ public class SnapshotRetentionService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SnapshotRetentionService> _logger;
+    private readonly IDatabaseSpaceHealthProbe _spaceProbe;
+
+    private DateTimeOffset _lastForceOverrideUtc = DateTimeOffset.MinValue;
 
     public SnapshotRetentionService(
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
-        ILogger<SnapshotRetentionService> logger)
+        ILogger<SnapshotRetentionService> logger,
+        IDatabaseSpaceHealthProbe spaceProbe)
     {
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _logger = logger;
+        _spaceProbe = spaceProbe;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -69,20 +75,48 @@ public class SnapshotRetentionService : BackgroundService
 
     internal async Task PurgeExpiredSnapshotsAsync(CancellationToken ct)
     {
+        var retentionDays = GetRetentionDays();
+        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
+
+        _logger.LogInformation(
+            "SnapshotRetentionService cycle starting at {Timestamp}, cutoff {CutoffDate}",
+            DateTimeOffset.UtcNow, cutoff);
+
+        // Force-override: at most once per 24 h when storage > 80%
+        var force = false;
+        if (DateTimeOffset.UtcNow - _lastForceOverrideUtc >= TimeSpan.FromHours(24))
+        {
+            try
+            {
+                var ratio = await _spaceProbe.GetUsedSpaceRatioAsync(ct);
+                if (ratio > 0.80)
+                {
+                    force = true;
+                    _lastForceOverrideUtc = DateTimeOffset.UtcNow;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Space probe failed; skipping force override.");
+            }
+        }
+
         try
         {
-            var retentionDays = GetRetentionDays();
-            var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
-
             using var scope = _scopeFactory.CreateScope();
             var repository = scope.ServiceProvider.GetRequiredService<IFundingRateRepository>();
 
-            var purgedCount = await repository.PurgeOlderThanAsync(cutoff, ct);
+            var purgedCount = await repository.PurgeOlderThanAsync(cutoff, force, ct);
 
             _logger.LogInformation(
                 "SnapshotRetentionService purged {Count} snapshots older than {CutoffDate}",
                 purgedCount,
                 cutoff);
+        }
+        catch (OperationCanceledException oce)
+        {
+            _logger.LogDebug(oce, "SnapshotRetentionService cycle canceled.");
+            throw;
         }
         catch (Exception ex)
         {

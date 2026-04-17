@@ -80,7 +80,7 @@ public class FundingRateRepositoryTests
         var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()), logger);
 
         // Act — first call: should throw and set cooldown
-        var act = async () => await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        var act = async () => await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
         await act.Should().ThrowAsync<RetryLimitExceededException>(
             "RetryLimitExceededException must be rethrown after catch");
 
@@ -90,7 +90,7 @@ public class FundingRateRepositoryTests
         warnings[0].Ex.Should().Be(retryEx, "the caught exception must be attached to the log entry");
 
         // Assert — subsequent call short-circuits (cooldown is active)
-        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
         result.Should().Be(0, "call during cooldown must short-circuit and return 0");
         repository.SuppressedPurgeCount.Should().Be(1,
             "suppressed counter must be incremented on the short-circuited call");
@@ -105,11 +105,11 @@ public class FundingRateRepositoryTests
         var repository = new FundingRateRepository(throwingContext, new MemoryCache(new MemoryCacheOptions()));
 
         // Prime cooldown
-        try { await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None); }
+        try { await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); }
         catch (RetryLimitExceededException) { /* expected — primes cooldown */ }
 
         // Act — second call during active cooldown (throwing context would throw if reached)
-        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
 
         // Assert — short-circuit: returns 0, does NOT reach ExecuteDeleteAsync (no throw), counter incremented
         result.Should().Be(0, "call during cooldown must return 0 without invoking ExecuteDeleteAsync");
@@ -129,7 +129,7 @@ public class FundingRateRepositoryTests
         repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(-1);
 
         // Act
-        var deletedCount = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        var deletedCount = await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
 
         // Assert — delete proceeded (not short-circuited), cooldown cleared
         deletedCount.Should().Be(expectedDeleted,
@@ -138,6 +138,100 @@ public class FundingRateRepositoryTests
             "expired cooldown must be cleared after normal execution resumes");
         repository.SuppressedPurgeCount.Should().Be(0,
             "no suppression occurred — this was a normal post-expiry call");
+    }
+
+    // ── Force override tests ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_WithForceTrue_AndSuppressedCountZero_DoesNotBypassCooldown()
+    {
+        // Arrange — a repository whose cooldown is active but suppressedCount == 0
+        var context = CreateSucceedingContext(5);
+        var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
+
+        // Set an active cooldown without ever having a suppressed call (counter stays 0)
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+
+        // Act — force=true but counter is 0 → bypassCooldown = false → cooldown still guards
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: true, ct: CancellationToken.None);
+
+        // Assert — short-circuited (cooldown still active), suppressed counter incremented
+        result.Should().Be(0, "force has no effect when suppressed counter is 0");
+        repository.SuppressedPurgeCount.Should().Be(1,
+            "cooldown was active so the call was suppressed and counter incremented");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_WithForceTrue_AndSuppressedCountPositive_BypassesCooldown()
+    {
+        // Arrange — prime counter > 0 by triggering a RetryLimitExceededException
+        var retryEx = new RetryLimitExceededException("retry limit exceeded", new Exception("inner"));
+        var throwingContext = CreateThrowingContext(retryEx);
+        var throwingRepository = new FundingRateRepository(throwingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        try { await throwingRepository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); }
+        catch (RetryLimitExceededException) { /* primes cooldown */ }
+
+        // Suppress a call to make counter > 0
+        await throwingRepository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
+
+        // Now swap to a succeeding context by creating a fresh repo with the counter pre-set
+        var succeedingContext = CreateSucceedingContext(10);
+        var repository = new FundingRateRepository(succeedingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        // Simulate active cooldown + suppressed count > 0
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        // We access the internal counter via SuppressedPurgeCount — set it by doing a suppressed call
+        // Since this new repo has no cooldown, prime it:
+        // Set cooldown first then do a suppressed call to increment counter
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); // increments suppressed count
+        repository.SuppressedPurgeCount.Should().Be(1, "counter should be 1 after one suppressed call");
+
+        // Act — force=true with counter > 0 inside cooldown window → should execute the purge
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: true, ct: CancellationToken.None);
+
+        // Assert — purge ran (returned 10 from succeeding context)
+        result.Should().Be(10, "force=true with counter > 0 must bypass cooldown and execute purge");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_WithForceTrue_ResetsSuppressedCountAfterSuccess()
+    {
+        // Arrange — repository with active cooldown and suppressed count > 0
+        var succeedingContext = CreateSucceedingContext(3);
+        var repository = new FundingRateRepository(succeedingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); // prime counter
+        repository.SuppressedPurgeCount.Should().Be(1, "pre-condition: counter == 1");
+
+        // Act — forced purge succeeds
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: true, ct: CancellationToken.None);
+
+        // Assert — counter reset to 0 after successful forced purge
+        result.Should().Be(3, "forced purge must execute");
+        repository.SuppressedPurgeCount.Should().Be(0,
+            "counter must be reset to 0 after a successful forced purge");
+    }
+
+    [Fact]
+    public async Task GetSuppressedPurgeCount_ReturnsCurrentCounter()
+    {
+        // Arrange — prime the cooldown
+        var retryEx = new RetryLimitExceededException("retry limit exceeded", new Exception("inner"));
+        var context = CreateThrowingContext(retryEx);
+        var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
+
+        try { await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); }
+        catch (RetryLimitExceededException) { /* expected */ }
+
+        // Make one suppressed call to increment the counter
+        await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
+
+        // Assert — GetSuppressedPurgeCount round-trips through the interface
+        repository.GetSuppressedPurgeCount().Should().Be(1,
+            "GetSuppressedPurgeCount must return the current suppression counter value");
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

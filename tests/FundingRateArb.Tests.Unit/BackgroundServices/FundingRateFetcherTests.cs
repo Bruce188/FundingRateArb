@@ -400,7 +400,7 @@ public class FundingRateFetcherTests
             .ReturnsAsync([]);
 
         _mockFundingRates
-            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
 
         var before = DateTime.UtcNow;
@@ -412,6 +412,7 @@ public class FundingRateFetcherTests
                 It.Is<DateTime>(dt =>
                     dt >= before.AddHours(-48).AddSeconds(-5) &&
                     dt <= after.AddHours(-48).AddSeconds(5)),
+                It.IsAny<bool>(),
                 It.IsAny<CancellationToken>()),
             Times.Once);
     }
@@ -429,7 +430,7 @@ public class FundingRateFetcherTests
             .ReturnsAsync([]);
 
         _mockFundingRates
-            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .Setup(f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(0);
 
         // First call — purge should happen
@@ -439,7 +440,7 @@ public class FundingRateFetcherTests
 
         // Purge called exactly once across two consecutive fetches
         _mockFundingRates.Verify(
-            f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()),
+            f => f.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 

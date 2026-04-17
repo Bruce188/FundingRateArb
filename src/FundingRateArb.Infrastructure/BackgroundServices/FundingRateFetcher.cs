@@ -228,7 +228,7 @@ public class FundingRateFetcher : BackgroundService
         if (DateTime.UtcNow - _lastPurgeUtc >= TimeSpan.FromHours(1))
         {
             var cutoff = DateTime.UtcNow.AddHours(-48);
-            var purged = await uow.FundingRates.PurgeOlderThanAsync(cutoff, ct);
+            var purged = await uow.FundingRates.PurgeOlderThanAsync(cutoff, ct: ct);
             _lastPurgeUtc = DateTime.UtcNow;
             _logger.LogInformation("Purged {Count} funding rate snapshots older than {Cutoff:u}", purged, cutoff);
         }
