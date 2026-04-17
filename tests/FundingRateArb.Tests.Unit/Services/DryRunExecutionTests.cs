@@ -100,7 +100,11 @@ public class DryRunExecutionTests
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, Mock.Of<IPnlReconciliationService>(), NullLogger<PositionCloser>.Instance);
 
-        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator
+            .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
+        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), mockBalanceAggregator.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     // ── ExecutionEngine dry-run tests ─────────────────────────────────────

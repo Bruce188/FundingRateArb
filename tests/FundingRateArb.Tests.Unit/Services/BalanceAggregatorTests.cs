@@ -649,6 +649,300 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
+    public async Task GetBalanceSnapshot_AuthError_SetsUnavailableNotZero()
+    {
+        // Arrange — use distinct userId to avoid cache pollution from other tests
+        const string userId = "user-auth-unavailable";
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 1, ExchangeId = 1,
+                Exchange = new Exchange { Id = 1, Name = "Binance" },
+                EncryptedApiKey = "k",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+        result.TotalAvailableUsdc.Should().Be(0m, "unavailable exchange must be excluded from total");
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_TransientError_FallsBackToLastKnownGood()
+    {
+        // Arrange — use a fresh BalanceAggregator with its own cache to control LKG population
+        const string userId = "user-lkg-fallback";
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 10, ExchangeId = 10,
+                Exchange = new Exchange { Id = 10, Name = "Aster" },
+                EncryptedApiKey = "k",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        var sequence = mockConnector.SetupSequence(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()));
+        sequence.ReturnsAsync(100m).ThrowsAsync(new HttpRequestException("timeout"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Aster", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // First call: populates LKG cache
+        await sut.GetBalanceSnapshotAsync(userId);
+
+        // Expire the main balance cache so next call re-fetches
+        freshCache.Remove($"balance:{userId}");
+
+        // Act: second call hits the transient error path
+        var result = await sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: LKG fallback is used
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].AvailableUsdc.Should().Be(100m);
+        result.Balances[0].IsUnavailable.Should().BeFalse();
+        result.Balances[0].ErrorMessage.Should().Contain("cached balance");
+
+        // N2: transient error must NOT trigger UpdateCredentialErrorAsync
+        _mockUserSettings.Verify(
+            u => u.UpdateCredentialErrorAsync(userId, It.IsAny<int>(), It.Is<string>(s => s != null), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_TransientError_NoPriorBalance_SetsUnavailable()
+    {
+        // Arrange — use distinct userId; no prior successful call so no LKG
+        const string userId = "user-no-lkg";
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 20, ExchangeId = 20,
+                Exchange = new Exchange { Id = 20, Name = "Hyperliquid" },
+                EncryptedWalletAddress = "w",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "w", (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "w", null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_TransientError_StaleBalance_SetsIsStale()
+    {
+        // Arrange — use a fresh cache and pre-populate LKG with old timestamp
+        const string userId = "user-stale-lkg";
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 30, ExchangeId = 30,
+                Exchange = new Exchange { Id = 30, Name = "Lighter" },
+                EncryptedPrivateKey = "pk",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
+
+        // Manually pre-populate LKG cache with a stale (>10 min ago) timestamp
+        var staleTimestamp = DateTime.UtcNow.AddMinutes(-15);
+        freshCache.Set($"balance-lkg:{userId}:30", (Value: 75m, FetchedAt: staleTimestamp), TimeSpan.FromHours(1));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("timeout"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", null, null, null, "pk", null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsStale.Should().BeTrue();
+        result.Balances[0].IsUnavailable.Should().BeFalse();
+        result.Balances[0].AvailableUsdc.Should().Be(75m);
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_AuthErrorBackoff_SetsUnavailable()
+    {
+        // Arrange — credential in auth-error backoff
+        const string userId = "user-backoff-unavailable";
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 40, ExchangeId = 40,
+                Exchange = new Exchange { Id = 40, Name = "Binance" },
+                EncryptedApiKey = "k",
+                LastError = "Binance: API key invalid or expired",
+                LastErrorAt = DateTime.UtcNow.AddMinutes(-1),
+                ConsecutiveFailures = 1,
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: backoff-skip path must now set IsUnavailable
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+        _mockConnectorFactory.Verify(
+            f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_TotalAvailableUsdc_IncludesStaleButNotUnavailable()
+    {
+        // Arrange — three exchanges: healthy (50m), stale fallback (30m), unavailable (auth error)
+        const string userId = "user-mixed-total";
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 50, ExchangeId = 50, Exchange = new Exchange { Id = 50, Name = "Hyperliquid" }, EncryptedWalletAddress = "w" },
+            new() { Id = 51, ExchangeId = 51, Exchange = new Exchange { Id = 51, Name = "Lighter" }, EncryptedPrivateKey = "pk" },
+            new() { Id = 52, ExchangeId = 52, Exchange = new Exchange { Id = 52, Name = "Binance" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 50)))
+            .Returns(((string?)null, (string?)null, "w", (string?)null, (string?)null, (string?)null));
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 51)))
+            .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.Is<UserExchangeCredential>(c => c.ExchangeId == 52)))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        // Hyperliquid: healthy fetch returns 50m
+        var mockHl = new Mock<IExchangeConnector>();
+        mockHl.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(50m);
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "w", null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockHl.Object);
+
+        // Lighter: transient error, with stale LKG of 30m pre-populated
+        var staleTimestamp = DateTime.UtcNow.AddMinutes(-15);
+        freshCache.Set($"balance-lkg:{userId}:51", (Value: 30m, FetchedAt: staleTimestamp), TimeSpan.FromHours(1));
+        var mockLighter = new Mock<IExchangeConnector>();
+        mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("timeout"));
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", null, null, null, "pk", null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockLighter.Object);
+
+        // Binance: auth error → unavailable
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockBinance.Object);
+
+        // Act
+        var result = await sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert
+        result.Balances.Should().HaveCount(3);
+        result.Balances.Should().Contain(b => b.ExchangeName == "Hyperliquid" && b.IsUnavailable == false && b.IsStale == false);
+        result.Balances.Should().Contain(b => b.ExchangeName == "Lighter" && b.IsStale == true && b.IsUnavailable == false && b.AvailableUsdc == 30m);
+        result.Balances.Should().Contain(b => b.ExchangeName == "Binance" && b.IsUnavailable == true);
+        result.TotalAvailableUsdc.Should().Be(80m, "total must include healthy (50m) + stale (30m) but exclude unavailable");
+    }
+
+    [Fact]
+    public async Task GetBalanceSnapshot_ConnectorNull_SetsUnavailable()
+    {
+        // Arrange — B1: null connector (credentials not configured) must set IsUnavailable
+        const string userId = "user-null-connector";
+        var creds = new List<UserExchangeCredential>
+        {
+            new()
+            {
+                Id = 60, ExchangeId = 60,
+                Exchange = new Exchange { Id = 60, Name = "Lighter" },
+                EncryptedPrivateKey = "pk",
+            },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", null, null, null, "pk", null, null, It.IsAny<string?>()))
+            .ReturnsAsync((IExchangeConnector?)null);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: null connector must produce IsUnavailable=true so downstream guards block trading
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
+        result.TotalAvailableUsdc.Should().Be(0m, "unavailable exchange must be excluded from total");
+    }
+
+    [Fact]
     public async Task MixedScenario_OneSuccessOneNull_CorrectTotalAndErrors()
     {
         var creds = new List<UserExchangeCredential>

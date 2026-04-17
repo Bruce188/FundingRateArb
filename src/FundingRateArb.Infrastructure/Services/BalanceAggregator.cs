@@ -73,6 +73,7 @@ public class BalanceAggregator : IBalanceAggregator
                     AvailableUsdc = 0m,
                     ErrorMessage = cred.LastError,
                     FetchedAt = DateTime.UtcNow,
+                    IsUnavailable = true,
                 });
                 continue;
             }
@@ -117,6 +118,7 @@ public class BalanceAggregator : IBalanceAggregator
                     AvailableUsdc = 0m,
                     ErrorMessage = CredentialsNotConfiguredMessage,
                     FetchedAt = DateTime.UtcNow,
+                    IsUnavailable = true,
                 });
                 continue;
             }
@@ -140,27 +142,66 @@ public class BalanceAggregator : IBalanceAggregator
                     FetchedAt = now,
                 });
 
+                // Write last-known-good cache for transient error fallback
+                _cache.Set($"balance-lkg:{userId}:{exchangeId}", (Value: balance, FetchedAt: now), TimeSpan.FromHours(1));
+
                 // Clear credential error on success
                 await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, null, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to fetch balance from {Exchange} for user {UserId}, using 0",
-                    exchangeName, userId);
                 var sanitized = SanitizeErrorMessage(ex, exchangeName);
-                balances.Add(new ExchangeBalanceDto
-                {
-                    ExchangeId = exchangeId,
-                    ExchangeName = exchangeName,
-                    AvailableUsdc = 0m,
-                    ErrorMessage = sanitized,
-                    FetchedAt = now,
-                });
 
-                // Persist auth errors to credential for backoff tracking
                 if (IsAuthError(sanitized))
                 {
+                    // Credential error: mark exchange unavailable, disable trading
+                    _logger.LogWarning("{Exchange} credentials invalid for user {UserId}, trading disabled for this exchange", exchangeName, userId);
+                    balances.Add(new ExchangeBalanceDto
+                    {
+                        ExchangeId = exchangeId,
+                        ExchangeName = exchangeName,
+                        AvailableUsdc = 0m,
+                        ErrorMessage = sanitized,
+                        FetchedAt = now,
+                        IsUnavailable = true,
+                    });
+
+                    // Persist auth error to credential for backoff tracking
                     await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, sanitized, ct);
+                }
+                else
+                {
+                    // Transient error: fall back to last-known-good balance
+                    var lkgKey = $"balance-lkg:{userId}:{exchangeId}";
+                    if (_cache.TryGetValue<(decimal Value, DateTime FetchedAt)>(lkgKey, out var lkg))
+                    {
+                        var isStale = now - lkg.FetchedAt > TimeSpan.FromMinutes(10);
+                        _logger.LogWarning(ex, "Transient balance fetch error for {Exchange}, user {UserId} — using last-known-good",
+                            exchangeName, userId);
+                        balances.Add(new ExchangeBalanceDto
+                        {
+                            ExchangeId = exchangeId,
+                            ExchangeName = exchangeName,
+                            AvailableUsdc = lkg.Value,
+                            ErrorMessage = $"{exchangeName}: using cached balance",
+                            FetchedAt = now,
+                            IsStale = isStale,
+                        });
+                    }
+                    else
+                    {
+                        _logger.LogWarning(ex, "Transient balance fetch error for {Exchange}, user {UserId} — no cached balance available",
+                            exchangeName, userId);
+                        balances.Add(new ExchangeBalanceDto
+                        {
+                            ExchangeId = exchangeId,
+                            ExchangeName = exchangeName,
+                            AvailableUsdc = 0m,
+                            ErrorMessage = sanitized,
+                            FetchedAt = now,
+                            IsUnavailable = true,
+                        });
+                    }
                 }
             }
         }
@@ -168,7 +209,7 @@ public class BalanceAggregator : IBalanceAggregator
         var snapshot = new BalanceSnapshotDto
         {
             Balances = balances,
-            TotalAvailableUsdc = balances.Where(b => b.ErrorMessage is null).Sum(b => b.AvailableUsdc),
+            TotalAvailableUsdc = balances.Where(b => !b.IsUnavailable).Sum(b => b.AvailableUsdc),
             FetchedAt = now,
         };
 
