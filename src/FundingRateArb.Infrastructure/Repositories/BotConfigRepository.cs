@@ -27,7 +27,7 @@ public class BotConfigRepository : IBotConfigRepository
             return ShallowCopy(cached);
         }
 
-        var config = await _context.BotConfigurations.AsNoTracking().FirstOrDefaultAsync();
+        var config = await _context.BotConfigurations.AsNoTracking().OrderBy(c => c.Id).FirstOrDefaultAsync();
         if (config is null)
         {
             throw new InvalidOperationException(
@@ -44,7 +44,7 @@ public class BotConfigRepository : IBotConfigRepository
 
     public async Task<BotConfiguration> GetActiveTrackedAsync()
     {
-        var config = await _context.BotConfigurations.FirstOrDefaultAsync();
+        var config = await _context.BotConfigurations.OrderBy(c => c.Id).FirstOrDefaultAsync();
         if (config is null)
         {
             throw new InvalidOperationException(
@@ -95,11 +95,13 @@ public class BotConfigRepository : IBotConfigRepository
         ExchangeCircuitBreakerThreshold = src.ExchangeCircuitBreakerThreshold,
         ExchangeCircuitBreakerMinutes = src.ExchangeCircuitBreakerMinutes,
         MinHoldBeforePnlTargetMinutes = src.MinHoldBeforePnlTargetMinutes,
+        PnlTargetUnifiedTolerance = src.PnlTargetUnifiedTolerance,
         EmergencyCloseSpreadThreshold = src.EmergencyCloseSpreadThreshold,
         PriceFeedFailureCloseThreshold = src.PriceFeedFailureCloseThreshold,
         SlippageBufferBps = src.SlippageBufferBps,
         LiquidationWarningPct = src.LiquidationWarningPct,
         ReconciliationIntervalCycles = src.ReconciliationIntervalCycles,
+        OpenConfirmTimeoutSeconds = src.OpenConfirmTimeoutSeconds,
         DivergenceAlertMultiplier = src.DivergenceAlertMultiplier,
         UseRiskBasedDivergenceClose = src.UseRiskBasedDivergenceClose,
         MinEdgeMultiplier = src.MinEdgeMultiplier,
@@ -107,6 +109,8 @@ public class BotConfigRepository : IBotConfigRepository
         MaxLeverageCap = src.MaxLeverageCap,
         MarginUtilizationAlertPct = src.MarginUtilizationAlertPct,
         LiquidationEarlyWarningPct = src.LiquidationEarlyWarningPct,
+        LighterSlippageFloorPct = src.LighterSlippageFloorPct,
+        LighterSlippageMaxPct = src.LighterSlippageMaxPct,
         PnlTargetCooldownMinutes = src.PnlTargetCooldownMinutes,
         MinConsecutiveFavorableCycles = src.MinConsecutiveFavorableCycles,
         FundingFlipExitCycles = src.FundingFlipExitCycles,

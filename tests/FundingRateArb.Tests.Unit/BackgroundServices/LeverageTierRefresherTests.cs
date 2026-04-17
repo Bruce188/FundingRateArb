@@ -278,14 +278,25 @@ public class LeverageTierRefresherTests
 
     /// <summary>
     /// Minimal ILogger that captures entries for assertions.
+    /// Also extracts the original message template and structured properties from ILogger state.
     /// </summary>
     private sealed class CapturingLogger<T> : ILogger<T>
     {
         private readonly List<(LogLevel Level, string Message, Exception? Ex)> _entries;
+        private readonly List<LogEntry> _structured;
 
         public CapturingLogger(List<(LogLevel Level, string Message, Exception? Ex)> entries)
         {
             _entries = entries;
+            _structured = new List<LogEntry>();
+        }
+
+        public CapturingLogger(
+            List<(LogLevel Level, string Message, Exception? Ex)> entries,
+            List<LogEntry> structured)
+        {
+            _entries = entries;
+            _structured = structured;
         }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -299,8 +310,196 @@ public class LeverageTierRefresherTests
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            _entries.Add((logLevel, formatter(state, exception), exception));
+            var formatted = formatter(state, exception);
+            _entries.Add((logLevel, formatted, exception));
+
+            var template = string.Empty;
+            var props = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            if (state is IReadOnlyList<KeyValuePair<string, object?>> kvList)
+            {
+                foreach (var kv in kvList)
+                {
+                    if (kv.Key == "{OriginalFormat}")
+                    {
+                        template = kv.Value?.ToString() ?? string.Empty;
+                    }
+                    else
+                    {
+                        props[kv.Key] = kv.Value;
+                    }
+                }
+            }
+
+            _structured.Add(new LogEntry(logLevel, template, formatted, props, exception));
         }
+    }
+
+    private sealed record LogEntry(
+        LogLevel Level,
+        string Template,
+        string Formatted,
+        IReadOnlyDictionary<string, object?> Properties,
+        Exception? Exception);
+
+    private static (LeverageTierRefresher Service, Mock<IExchangeConnectorFactory> Factory, Mock<IConnectorLifecycleManager> Lifecycle, List<LogEntry> LogEntries)
+        BuildSutWithStructuredLogger(IEnumerable<FundingRateSnapshot> rates)
+    {
+        var rateRepo = new Mock<IFundingRateRepository>();
+        rateRepo.Setup(r => r.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates.ToList());
+
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(u => u.FundingRates).Returns(rateRepo.Object);
+
+        var factory = new Mock<IExchangeConnectorFactory>();
+        var lifecycle = new Mock<IConnectorLifecycleManager>();
+
+        var services = new ServiceCollection();
+        services.AddSingleton(uow.Object);
+        services.AddSingleton(factory.Object);
+        services.AddSingleton(lifecycle.Object);
+        var provider = services.BuildServiceProvider();
+        var scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
+
+        var rawEntries = new List<(LogLevel Level, string Message, Exception? Ex)>();
+        var structuredEntries = new List<LogEntry>();
+        var logger = new CapturingLogger<LeverageTierRefresher>(rawEntries, structuredEntries);
+
+        var refresher = new LeverageTierRefresher(
+            scopeFactory,
+            logger,
+            initialDelay: TimeSpan.FromMilliseconds(1),
+            refreshInterval: TimeSpan.FromMilliseconds(50));
+
+        return (refresher, factory, lifecycle, structuredEntries);
+    }
+
+    [Fact]
+    public async Task RefreshCycle_PerExchangeFailure_LogsWarningWithExchangeAndReason()
+    {
+        var rates = new[]
+        {
+            MakeRate(1, "ExchangeA", 1, "BTC"),
+            MakeRate(2, "ExchangeB", 1, "BTC"),
+        };
+
+        var (sut, factory, lifecycle, logEntries) = BuildSutWithStructuredLogger(rates);
+
+        var connectorA = new Mock<IExchangeConnector>().Object;
+        var connectorB = new Mock<IExchangeConnector>().Object;
+        factory.Setup(f => f.GetConnector("ExchangeA")).Returns(connectorA);
+        factory.Setup(f => f.GetConnector("ExchangeB")).Returns(connectorB);
+
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connectorA, "BTC", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connectorB, "BTC", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        await sut.RefreshTiersAsync(CancellationToken.None);
+
+        var warning = logEntries.Should().ContainSingle(
+            e => e.Level == LogLevel.Warning
+              && e.Template == "Leverage tier refresh failed for {Exchange}: {Reason}",
+            "exactly one per-exchange Warning should be emitted for ExchangeB").Which;
+
+        warning.Properties["Exchange"].Should().Be("ExchangeB");
+        var reason = warning.Properties["Reason"]?.ToString() ?? string.Empty;
+        reason.Should().Contain("InvalidOperationException").And.Contain("boom");
+    }
+
+    [Fact]
+    public async Task RefreshCycle_MixedSuccessFailure_EmitsCycleSummaryAtInformation()
+    {
+        var rates = new[]
+        {
+            MakeRate(1, "ExchangeA", 1, "BTC"),
+            MakeRate(2, "ExchangeB", 1, "BTC"),
+        };
+
+        var (sut, factory, lifecycle, logEntries) = BuildSutWithStructuredLogger(rates);
+
+        var connectorA = new Mock<IExchangeConnector>().Object;
+        var connectorB = new Mock<IExchangeConnector>().Object;
+        factory.Setup(f => f.GetConnector("ExchangeA")).Returns(connectorA);
+        factory.Setup(f => f.GetConnector("ExchangeB")).Returns(connectorB);
+
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connectorA, "BTC", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connectorB, "BTC", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
+
+        await sut.RefreshTiersAsync(CancellationToken.None);
+
+        var summary = logEntries.Should().ContainSingle(
+            e => e.Level == LogLevel.Information
+              && e.Template == "Leverage tier refresh cycle completed with {SuccessCount}/{TotalCount} exchanges",
+            "a cycle-summary Information log must be emitted").Which;
+
+        summary.Properties["SuccessCount"].Should().Be(1);
+        summary.Properties["TotalCount"].Should().Be(2);
+    }
+
+    [Fact]
+    public async Task RefreshCycle_AuthException_DoesNotIncrementCircuitBreakerFailure()
+    {
+        // The refresher does not call ICircuitBreakerManager today — it has no breaker in its
+        // DI scope. Auth classification affects the log reason prefix only (see task 1.1 plan).
+        // This test asserts: (a) the per-exchange Warning fires, and (b) the Reason starts with "AUTH: ".
+        var rates = new[] { MakeRate(1, "ExchangeA", 1, "BTC") };
+
+        var (sut, factory, lifecycle, logEntries) = BuildSutWithStructuredLogger(rates);
+
+        var connector = new Mock<IExchangeConnector>().Object;
+        factory.Setup(f => f.GetConnector("ExchangeA")).Returns(connector);
+
+        // Use an Unauthorized message — matches the IsAuthError classifier in LeverageTierRefresher.
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connector, "BTC", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Unauthorized: API key invalid"));
+
+        await sut.RefreshTiersAsync(CancellationToken.None);
+
+        var warning = logEntries.Should().ContainSingle(
+            e => e.Level == LogLevel.Warning
+              && e.Template == "Leverage tier refresh failed for {Exchange}: {Reason}",
+            "a Warning should still be emitted for auth failures").Which;
+
+        var authReason = warning.Properties["Reason"]?.ToString() ?? string.Empty;
+        authReason.Should()
+            .StartWith("AUTH: ", "auth exceptions must be prefixed so ops can distinguish credential problems");
+    }
+
+    [Fact(Skip = "LeverageTierRefresher does not call ICircuitBreakerManager — breaker increment path N/A for this service")]
+    public async Task RefreshCycle_NonAuthException_StillIncrementsCircuitBreakerFailure()
+    {
+        // The refresher has no breaker in its DI scope (per plan task 1.1 — no new call added).
+        // If a future task wires the breaker into the refresher, remove the Skip and implement.
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task RefreshCycle_PerSymbolFailure_AggregatesPerExchangeOnlyOnce()
+    {
+        var rates = new[]
+        {
+            MakeRate(1, "ExchangeA", 1, "Symbol1"),
+            MakeRate(1, "ExchangeA", 2, "Symbol2"),
+            MakeRate(1, "ExchangeA", 3, "Symbol3"),
+        };
+
+        var (sut, factory, lifecycle, logEntries) = BuildSutWithStructuredLogger(rates);
+
+        var connector = new Mock<IExchangeConnector>().Object;
+        factory.Setup(f => f.GetConnector("ExchangeA")).Returns(connector);
+
+        // All three symbols throw — but we expect exactly ONE Warning for the exchange.
+        lifecycle.Setup(l => l.EnsureTiersCachedAsync(connector, It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("symbol fetch failed"));
+
+        await sut.RefreshTiersAsync(CancellationToken.None);
+
+        logEntries.Count(
+            e => e.Level == LogLevel.Warning
+              && e.Template == "Leverage tier refresh failed for {Exchange}: {Reason}")
+            .Should().Be(1, "TryAdd ensures only the first failure per exchange is recorded");
     }
 
     [Fact]

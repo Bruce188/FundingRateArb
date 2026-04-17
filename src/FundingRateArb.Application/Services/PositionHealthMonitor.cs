@@ -107,6 +107,17 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         foreach (var pos in openPositions)
         {
+            // Defense-in-depth: ReconciliationDrift rows must contribute zero to PnL aggregation.
+            // Normally they never appear here because their Status is Failed (not Open),
+            // but guard explicitly to prevent ghost PnL if state ever drifts.
+            if (pos.CloseReason == CloseReason.ReconciliationDrift)
+            {
+                _logger.LogWarning(
+                    "Position #{Id} has CloseReason=ReconciliationDrift but Status={Status} — skipping PnL aggregation",
+                    pos.Id, pos.Status);
+                continue;
+            }
+
             var assetSymbol = pos.Asset?.Symbol ?? "?";
             var longExchangeName = pos.LongExchange?.Name ?? "?";
             var shortExchangeName = pos.ShortExchange?.Name ?? "?";
@@ -663,6 +674,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     var divergenceAlertLevel = entrySpreadCostPct > 0m
                         ? entrySpreadCostPct * config.DivergenceAlertMultiplier
                         : 0m;
+                    // Overperformed positions close regardless of unified PnL — funding has
+                    // accumulated so far beyond target that extra hold risk is not justified.
                     var hasOverperformed = pos.AccumulatedFunding >= 3m * config.TargetPnlMultiplier * entryFee;
                     if (divergenceAlertLevel > 0m
                         && currentDivergencePct > divergenceAlertLevel
@@ -670,7 +683,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     {
                         // Defer — wait for convergence
                     }
-                    else
+                    else if (hasOverperformed || unrealizedPnl >= -config.PnlTargetUnifiedTolerance)
                     {
                         return CloseReason.PnlTargetReached;
                     }

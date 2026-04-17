@@ -4,6 +4,7 @@ using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,13 +12,15 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260415232123_RefreshStatisticsAfterCoveringIndex")]
+    partial class RefreshStatisticsAfterCoveringIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "8.0.26")
+                .HasAnnotation("ProductVersion", "8.0.25")
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
@@ -230,9 +233,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
 
-                    b.Property<DateTime?>("OpenConfirmedAt")
-                        .HasColumnType("datetime2");
-
                     b.Property<DateTime>("OpenedAt")
                         .HasColumnType("datetime2");
 
@@ -404,12 +404,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<DateTime>("LastUpdatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<decimal>("LighterSlippageFloorPct")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<decimal>("LighterSlippageMaxPct")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<decimal>("LiquidationEarlyWarningPct")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,4)")
@@ -472,9 +466,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                     b.Property<decimal>("MinVolume24hUsdc")
                         .HasColumnType("decimal(18,2)");
 
-                    b.Property<int>("OpenConfirmTimeoutSeconds")
-                        .HasColumnType("int");
-
                     b.Property<decimal>("OpenThreshold")
                         .HasColumnType("decimal(18,10)");
 
@@ -485,9 +476,6 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.Property<int>("PnlTargetCooldownMinutes")
                         .HasColumnType("int");
-
-                    b.Property<decimal>("PnlTargetUnifiedTolerance")
-                        .HasColumnType("decimal(18,2)");
 
                     b.Property<int>("PriceFeedFailureCloseThreshold")
                         .HasColumnType("int");

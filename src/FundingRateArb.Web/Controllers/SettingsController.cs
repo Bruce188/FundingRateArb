@@ -102,7 +102,8 @@ public class SettingsController : Controller
                 decrypted.WalletAddress,
                 decrypted.PrivateKey,
                 decrypted.SubAccountAddress,
-                decrypted.ApiKeyIndex);
+                decrypted.ApiKeyIndex,
+                userId: null);
 
             if (connector is null)
             {
@@ -241,7 +242,7 @@ public class SettingsController : Controller
                 validationConnector = await _connectorFactory.CreateForUserAsync(
                     exchange?.Name ?? "", decrypted.ApiKey, decrypted.ApiSecret,
                     decrypted.WalletAddress, decrypted.PrivateKey,
-                    decrypted.SubAccountAddress, decrypted.ApiKeyIndex);
+                    decrypted.SubAccountAddress, decrypted.ApiKeyIndex, userId: null);
 
                 if (validationConnector is not null)
                 {

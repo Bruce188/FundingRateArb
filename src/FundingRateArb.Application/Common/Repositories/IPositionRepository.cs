@@ -51,6 +51,13 @@ public interface IPositionRepository
     /// <summary>Returns per-exchange-pair KPI breakdown via SQL GROUP BY. No row materialization.</summary>
     Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns Opening positions whose OpenConfirmedAt is null and CreatedAt is older than
+    /// <paramref name="olderThan"/>. Used by the boot-time last-resort sweep in BotOrchestrator
+    /// to detect positions that exited the both-leg confirmation window without being resolved.
+    /// </summary>
+    Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(TimeSpan olderThan, CancellationToken ct);
+
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }

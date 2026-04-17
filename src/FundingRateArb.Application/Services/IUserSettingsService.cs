@@ -33,6 +33,7 @@ public interface IUserSettingsService
 
     // Validation
     Task<bool> HasValidCredentialsAsync(string userId);
+    Task<List<string>> GetUsersWithCredentialsAsync(string exchange, CancellationToken ct = default);
 
     // Error tracking
     Task UpdateCredentialErrorAsync(string userId, int exchangeId, string? error, CancellationToken ct = default);

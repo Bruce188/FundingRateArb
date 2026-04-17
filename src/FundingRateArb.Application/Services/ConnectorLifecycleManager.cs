@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Logging;
 
@@ -85,7 +86,7 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
                 longConnector = await _connectorFactory.CreateForUserAsync(
                     longExchangeName, longDecrypted.ApiKey, longDecrypted.ApiSecret,
                     longDecrypted.WalletAddress, longDecrypted.PrivateKey,
-                    longDecrypted.SubAccountAddress, longDecrypted.ApiKeyIndex);
+                    longDecrypted.SubAccountAddress, longDecrypted.ApiKeyIndex, userId);
             }
 
             // Decrypt + create short connector in tight scope
@@ -100,7 +101,7 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
                 shortConnector = await _connectorFactory.CreateForUserAsync(
                     shortExchangeName, shortDecrypted.ApiKey, shortDecrypted.ApiSecret,
                     shortDecrypted.WalletAddress, shortDecrypted.PrivateKey,
-                    shortDecrypted.SubAccountAddress, shortDecrypted.ApiKeyIndex);
+                    shortDecrypted.SubAccountAddress, shortDecrypted.ApiKeyIndex, userId);
             }
         }
         catch (Exception ex)
@@ -115,6 +116,17 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
         if (longConnector is null)
         {
             await DisposeConnectorAsync(shortConnector);
+            if (longExchangeName.Equals("dydx", StringComparison.OrdinalIgnoreCase)
+                && _connectorFactory.TryGetLastDydxFailure(userId, out var dydxLongReason)
+                && dydxLongReason.Reason != DydxCredentialFailureReason.None)
+            {
+                _logger.LogWarning(
+                    "Could not create connector for dYdX (user {UserId}) — {Reason}: {Field}",
+                    userId, dydxLongReason.Reason, dydxLongReason.MissingField);
+                return (null!, null!,
+                    $"Could not create connector for dYdX — {dydxLongReason.Reason} ({dydxLongReason.MissingField})");
+            }
+            // PR #187 generic message — unchanged for non-dYdX or unknown-reason cases.
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", longExchangeName, userId);
             return (null!, null!, $"Could not create connector for {longExchangeName} — invalid credentials");
         }
@@ -122,6 +134,17 @@ public class ConnectorLifecycleManager : IConnectorLifecycleManager
         if (shortConnector is null)
         {
             await DisposeConnectorAsync(longConnector);
+            if (shortExchangeName.Equals("dydx", StringComparison.OrdinalIgnoreCase)
+                && _connectorFactory.TryGetLastDydxFailure(userId, out var dydxShortReason)
+                && dydxShortReason.Reason != DydxCredentialFailureReason.None)
+            {
+                _logger.LogWarning(
+                    "Could not create connector for dYdX (user {UserId}) — {Reason}: {Field}",
+                    userId, dydxShortReason.Reason, dydxShortReason.MissingField);
+                return (null!, null!,
+                    $"Could not create connector for dYdX — {dydxShortReason.Reason} ({dydxShortReason.MissingField})");
+            }
+            // PR #187 generic message — unchanged for non-dYdX or unknown-reason cases.
             _logger.LogWarning("Could not create connector for {Exchange} (user {UserId}) — invalid credentials", shortExchangeName, userId);
             return (null!, null!, $"Could not create connector for {shortExchangeName} — invalid credentials");
         }

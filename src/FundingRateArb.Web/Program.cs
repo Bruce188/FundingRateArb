@@ -12,6 +12,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Infrastructure.ExchangeConnectors.Dydx;
 using FundingRateArb.Infrastructure.HealthChecks;
 using FundingRateArb.Infrastructure.Hubs;
 using FundingRateArb.Infrastructure.Repositories;
@@ -96,6 +97,18 @@ try
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
             .MinimumLevel.Override("Binance.Net", LogEventLevel.Error)
             .MinimumLevel.Override("CryptoExchange.Net", LogEventLevel.Error)
+            // Suppress the high-volume "DateTime value of null" Warning emitted by the
+            // CryptoExchange source-generated JSON resolver. MinimumLevel.Override only
+            // matches "CryptoExchange.Net"; the resolver logs under the bare "CryptoExchange"
+            // SourceContext and bypasses that rule. Exact-string match so SDK upgrades that
+            // reword the message resurface the noise for re-review.
+            .Filter.ByExcluding(le =>
+                le.Level == LogEventLevel.Warning &&
+                le.Properties.TryGetValue("SourceContext", out var scValue) &&
+                scValue is ScalarValue scScalar &&
+                scScalar.Value is string scStr &&
+                scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) &&
+                le.MessageTemplate.Text == "DateTime value of null, but property is not nullable. Resolver: BinanceSourceGenerationContext")
             .Enrich.FromLogContext()
             .Enrich.WithMachineName()
             .Enrich.WithThreadId()
@@ -537,6 +550,7 @@ try
         // but not custom headers, so any 3xx to an attacker-controlled host would leak the key.
         AllowAutoRedirect = false,
     });
+    builder.Services.AddSingleton<IDydxConnectorFactory, DydxConnectorFactory>();
     builder.Services.AddScoped<IExchangeConnectorFactory, ExchangeConnectorFactory>();
 
     // --- WebSocket Market Data Streaming ---
@@ -604,6 +618,7 @@ try
     builder.Services.AddHostedService<LeverageTierRefresher>();
     builder.Services.AddHostedService<BalanceRefreshService>();
     builder.Services.AddHostedService<SnapshotRetentionService>();
+    builder.Services.AddHostedService<ConnectorStartupValidator>();
 
     // --- MVC ---
     builder.Services.AddControllersWithViews(options =>

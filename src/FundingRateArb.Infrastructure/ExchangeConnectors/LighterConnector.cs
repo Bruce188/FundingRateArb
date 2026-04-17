@@ -100,7 +100,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     public void ConfigureSlippage(decimal floor, decimal max)
     {
         if (floor <= 0 || max <= 0 || floor > max)
+        {
             throw new ArgumentException($"Invalid slippage config: floor={floor}, max={max}. Both must be positive and floor <= max.");
+        }
 
         _slippageFloor = floor;
         _slippageMax = max;

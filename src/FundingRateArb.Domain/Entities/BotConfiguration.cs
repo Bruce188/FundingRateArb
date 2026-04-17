@@ -113,6 +113,14 @@ public class BotConfiguration : IValidatableObject
     [Range(5, 1440)]
     public int PnlTargetCooldownMinutes { get; set; } = 30;
 
+    /// <summary>
+    /// Unified-PnL tolerance for PnlTargetReached gate. The position will not auto-close at PnL target
+    /// when unifiedPnl &lt; -PnlTargetUnifiedTolerance, even if totalPnl &gt; 0. Default 0m = strict
+    /// (unified PnL must be non-negative). Raise to permit closing when unified PnL is slightly negative.
+    /// </summary>
+    [Range(0, (double)decimal.MaxValue)]
+    public decimal PnlTargetUnifiedTolerance { get; set; } = 0m;
+
     /// <summary>Spread/hr below which SpreadCollapsed bypasses MinHoldTimeHours. Deeply negative = emergency.</summary>
     [Range(-1.0, 0)]
     public decimal EmergencyCloseSpreadThreshold { get; set; } = -0.001m;
@@ -156,6 +164,14 @@ public class BotConfiguration : IValidatableObject
     /// <summary>Number of bot cycles between exchange position reconciliation checks.</summary>
     [Range(1, 100)]
     public int ReconciliationIntervalCycles { get; set; } = 10;
+
+    /// <summary>
+    /// Seconds to wait for both-leg confirmation after the sequential open flow completes.
+    /// If either leg has not confirmed within this window, the confirmed leg is rolled back
+    /// via ClosePositionAsync and the position is marked Failed with ReconciliationDrift.
+    /// </summary>
+    [Range(5, 300)]
+    public int OpenConfirmTimeoutSeconds { get; set; } = 30;
 
     /// <summary>Alert when price divergence exceeds this multiple of entry spread cost. Default 2.0.</summary>
     [Range(0.5, 10.0)]

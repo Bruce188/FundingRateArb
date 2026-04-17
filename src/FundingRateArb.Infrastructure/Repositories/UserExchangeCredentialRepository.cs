@@ -28,6 +28,15 @@ public class UserExchangeCredentialRepository : IUserExchangeCredentialRepositor
             .Where(c => c.UserId == userId)
             .ToListAsync();
 
+    public Task<List<string>> GetDistinctUserIdsByExchangeNameAsync(string exchangeName, CancellationToken ct = default) =>
+        _context.UserExchangeCredentials
+            .Include(c => c.Exchange)
+            .Where(c => c.IsActive && c.Exchange != null
+                && c.Exchange.Name == exchangeName)
+            .Select(c => c.UserId)
+            .Distinct()
+            .ToListAsync(ct);
+
     public void Add(UserExchangeCredential credential) =>
         _context.UserExchangeCredentials.Add(credential);
 

@@ -16,4 +16,11 @@
          CA1822: Members that can be static in exchange connector helpers -->
     <NoWarn>CA1848;CA1873;CA1711;CA1716;CA1725;CA1861;CA1822</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pin vulnerable transitive packages to patched versions (GHSA-37gx-xxp4-5rgx, GHSA-g4vj-cjjj-v7hg) -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.3" />
+    <PackageReference Include="NuGet.Protocol" Version="6.11.2" />
+    <PackageReference Include="NuGet.Packaging" Version="6.11.2" />
+  </ItemGroup>
 </Project>

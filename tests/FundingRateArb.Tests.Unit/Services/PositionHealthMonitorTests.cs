@@ -4044,6 +4044,75 @@ public class PositionHealthMonitorTests
         result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
 
+    // ── Unified-PnL guard for PnlTargetReached (fix/pnl-target-reached-unified-pnl-guard) ──
+
+    private static BotConfiguration MakePnlTargetConfig(decimal pnlTargetUnifiedTolerance = 0m) => new()
+    {
+        AdaptiveHoldEnabled = true,
+        TargetPnlMultiplier = 2.0m,
+        StopLossPct = 0.15m,
+        MaxHoldTimeHours = 72,
+        CloseThreshold = -0.00005m,
+        MinHoldBeforePnlTargetMinutes = 60,
+        PnlTargetUnifiedTolerance = pnlTargetUnifiedTolerance,
+    };
+
+    // entryFee = SizeUsdc(100) * Leverage(5) * 2 * GetTakerFeeRate("Hyperliquid","Lighter")(0.00045) = 0.45
+    // target   = TargetPnlMultiplier(2.0) * 0.45 = 0.90
+    // Use AccumulatedFunding=1.0 → >= target, < 3×target(2.70) → not hasOverperformed
+    // hoursOpen=2 → minutesOpen=120 >= MinHoldBeforePnlTargetMinutes(60) ✓
+
+    [Fact]
+    public void PnlTargetReached_UnifiedNegative_DoesNotClose()
+    {
+        // totalPnl = -0.07 + 1.0 - 0.45 = 0.48 > 0 ✓
+        // unifiedPnl = -0.07 < -PnlTargetUnifiedTolerance(0m) → gate blocks close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0m),
+            unrealizedPnl: -0.07m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().NotBe(CloseReason.PnlTargetReached,
+            "unified PnL is negative and below tolerance — position must not be closed at PnL target");
+    }
+
+    [Fact]
+    public void PnlTargetReached_UnifiedPositive_ClosesAsBefore()
+    {
+        // totalPnl = 0.10 + 1.0 - 0.45 = 0.65 > 0 ✓
+        // unifiedPnl = 0.10 >= 0 → gate passes → close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0m),
+            unrealizedPnl: 0.10m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached,
+            "unified PnL is non-negative — close must fire as before the guard was introduced");
+    }
+
+    [Fact]
+    public void PnlTargetReached_UnifiedWithinTolerance_ClosesWhenToleranceSet()
+    {
+        // totalPnl = -0.03 + 1.0 - 0.45 = 0.52 > 0 ✓
+        // unifiedPnl = -0.03 >= -PnlTargetUnifiedTolerance(0.05m) → within tolerance → close
+        var pos = MakeOpenPosition();
+        pos.SizeUsdc = 100m;
+        pos.AccumulatedFunding = 1.0m;
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, MakePnlTargetConfig(pnlTargetUnifiedTolerance: 0.05m),
+            unrealizedPnl: -0.03m, hoursOpen: 2m, spread: 0.001m);
+
+        result.Should().Be(CloseReason.PnlTargetReached,
+            "unified PnL of -0.03 is within tolerance of 0.05 — close must fire");
+    }
+
     [Fact]
     public async Task CheckAndAct_AsymmetricFilledQuantities_FallsBackToEstimated()
     {
@@ -4060,5 +4129,68 @@ public class PositionHealthMonitorTests
         var result = await _sut.CheckAndActAsync();
 
         result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
+    }
+
+    // ── ReconciliationDrift PnL exclusion ──────────────────────────────────────
+
+    /// <summary>
+    /// A position with CloseReason=ReconciliationDrift must be skipped in the open-position
+    /// health loop so it contributes zero unrealized PnL to the aggregation result.
+    /// Normally such rows have Status=Failed and never appear in GetOpenTrackedAsync, but
+    /// the guard fires if state ever drifts.
+    /// </summary>
+    [Fact]
+    public async Task ReconciliationDriftRows_ContributeZeroToPnlAggregate()
+    {
+        // Row with stale non-zero leg values that would produce non-zero PnL if computed
+        var driftPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        driftPos.CloseReason = CloseReason.ReconciliationDrift;
+        driftPos.LongFilledQuantity = 0.1m;
+        driftPos.ShortFilledQuantity = 0.1m;
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([driftPos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 4000m, shortMark: 2000m); // extreme prices → would be large PnL if not skipped
+
+        var result = await _sut.CheckAndActAsync();
+
+        // The drift row must not appear in the computed PnL dictionary — zero contribution
+        result.ComputedPnl.Should().NotContainKey(driftPos.Id,
+            "ReconciliationDrift position must be skipped and contribute zero to PnL aggregation");
+        // And it must not trigger a close decision (the guard uses continue, not toClose)
+        result.ToClose.Should().BeEmpty(
+            "ReconciliationDrift rows must not generate close decisions from the health loop");
+    }
+
+    /// <summary>
+    /// When an Open position and a ReconciliationDrift position coexist in the tracked set,
+    /// only the Open position's PnL is aggregated; the drift row is excluded.
+    /// </summary>
+    [Fact]
+    public async Task DriftAndOpenRowsMixed_OnlyOpenRowsAggregated()
+    {
+        var openPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        openPos.Id = 10;
+        openPos.LongFilledQuantity = 0.1m;
+        openPos.ShortFilledQuantity = 0.1m;
+
+        var driftPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        driftPos.Id = 11;
+        driftPos.CloseReason = CloseReason.ReconciliationDrift;
+        driftPos.LongFilledQuantity = 0.1m;
+        driftPos.ShortFilledQuantity = 0.1m;
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([openPos, driftPos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 3100m, shortMark: 2900m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        // Open position must be in the PnL map
+        result.ComputedPnl.Should().ContainKey(openPos.Id,
+            "the Open position must have its PnL computed");
+        // Drift position must NOT be in the PnL map
+        result.ComputedPnl.Should().NotContainKey(driftPos.Id,
+            "the ReconciliationDrift position must be excluded from PnL aggregation");
     }
 }

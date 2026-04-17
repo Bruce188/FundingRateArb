@@ -144,7 +144,7 @@ public class ConnectivityTestServiceTests
             });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mock.Object);
 
         return mock;
@@ -237,7 +237,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "Position not found" });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -334,7 +334,7 @@ public class ConnectivityTestServiceTests
 
         // Override connector factory to return null
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync((IExchangeConnector?)null);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
@@ -359,7 +359,7 @@ public class ConnectivityTestServiceTests
             .ThrowsAsync(new InvalidOperationException("Unexpected SDK error"));
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -421,7 +421,7 @@ public class ConnectivityTestServiceTests
 
         // First call: factory returns null (connector creation fails)
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync((IExchangeConnector?)null);
 
         var firstResult = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -459,7 +459,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "close-789" });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -523,7 +523,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "close-456" });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false, cts.Token);
@@ -561,7 +561,7 @@ public class ConnectivityTestServiceTests
         // CreateForUserAsync should never be called since decryption failed
         _mockConnectorFactory.Verify(
             f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 
@@ -655,7 +655,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx"))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx", null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -664,7 +664,7 @@ public class ConnectivityTestServiceTests
 
         // Verify CreateForUserAsync received exact credential values
         _mockConnectorFactory.Verify(
-            f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx"),
+            f => f.CreateForUserAsync("Hyperliquid", "api-key", "api-secret", null, null, "sub-account", "key-idx", null),
             Times.Once);
     }
 
@@ -685,7 +685,7 @@ public class ConnectivityTestServiceTests
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "c-1" });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockDisposableConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false);
@@ -707,7 +707,7 @@ public class ConnectivityTestServiceTests
             .ThrowsAsync(new Exception("Connection refused"));
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockDisposableConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId);
@@ -747,7 +747,7 @@ public class ConnectivityTestServiceTests
             });
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mockConnector.Object);
 
         var result = await _sut.RunTestAsync(AdminUserId, TargetUserId, TestExchangeId, dryRun: false, cts.Token);
@@ -907,7 +907,7 @@ public class ConnectivityTestServiceTests
         }
 
         _mockConnectorFactory
-            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null))
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "wallet-addr", "private-key", null, null, null))
             .ReturnsAsync(mock.Object);
 
         return mock;
@@ -1048,7 +1048,7 @@ public class ConnectivityTestServiceTests
         // No connector methods should be called
         _mockConnectorFactory.Verify(
             f => f.CreateForUserAsync(It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(),
-                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
+                It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()),
             Times.Never);
     }
 

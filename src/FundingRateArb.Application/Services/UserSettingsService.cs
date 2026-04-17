@@ -183,6 +183,9 @@ public class UserSettingsService : IUserSettingsService
         return active.Count >= 2;
     }
 
+    public Task<List<string>> GetUsersWithCredentialsAsync(string exchange, CancellationToken ct = default) =>
+        _uow.UserCredentials.GetDistinctUserIdsByExchangeNameAsync(exchange, ct);
+
     // --- Error tracking ---
 
     public async Task UpdateCredentialErrorAsync(string userId, int exchangeId, string? error, CancellationToken ct = default)

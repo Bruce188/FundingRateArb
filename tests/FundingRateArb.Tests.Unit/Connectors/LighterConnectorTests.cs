@@ -1,8 +1,10 @@
 using System.Net;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
+using FundingRateArb.Infrastructure.ExchangeConnectors.Dydx;
 using FundingRateArb.Infrastructure.ExchangeConnectors.Models;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -3163,7 +3165,7 @@ public class ExchangeConnectorFactoryTests
 
         var sp = services.BuildServiceProvider();
         var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
-        return new ExchangeConnectorFactory(sp, factoryLogger);
+        return new ExchangeConnectorFactory(sp, factoryLogger, Mock.Of<IDydxConnectorFactory>());
     }
 
     [Theory]
@@ -3236,7 +3238,7 @@ public class ExchangeConnectorFactoryTests
 
         var sp = services.BuildServiceProvider();
         var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
-        return new ExchangeConnectorFactory(sp, factoryLogger);
+        return new ExchangeConnectorFactory(sp, factoryLogger, Mock.Of<IDydxConnectorFactory>());
     }
 
     [Fact]
@@ -3246,7 +3248,7 @@ public class ExchangeConnectorFactoryTests
 
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: "1", apiSecret: null,
-            walletAddress: "12345", privateKey: "0xabc123def456");
+            walletAddress: "12345", privateKey: "0xabc123def456", subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull();
         connector.Should().BeOfType<LighterConnector>();
@@ -3260,7 +3262,7 @@ public class ExchangeConnectorFactoryTests
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: "1", apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
-            privateKey: "0xprivatekey");
+            privateKey: "0xprivatekey", subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull("Lighter requires a numeric account index, not a hex wallet address");
     }
@@ -3272,7 +3274,7 @@ public class ExchangeConnectorFactoryTests
 
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: "1", apiSecret: null,
-            walletAddress: "not-a-number", privateKey: "0xprivatekey");
+            walletAddress: "not-a-number", privateKey: "0xprivatekey", subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull("Lighter requires a numeric account index");
     }
@@ -3284,7 +3286,7 @@ public class ExchangeConnectorFactoryTests
 
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: "1", apiSecret: null,
-            walletAddress: "12345", privateKey: null);
+            walletAddress: "12345", privateKey: null, subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull("private key is required for Lighter");
     }
@@ -3297,7 +3299,7 @@ public class ExchangeConnectorFactoryTests
         var connector = await factory.CreateForUserAsync(
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
-            privateKey: "0xprivatekey123");
+            privateKey: "0xprivatekey123", subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull();
         connector.Should().BeOfType<HyperliquidConnector>();
@@ -3310,7 +3312,7 @@ public class ExchangeConnectorFactoryTests
 
         var connector = await factory.CreateForUserAsync(
             "hyperliquid", apiKey: null, apiSecret: null,
-            walletAddress: null, privateKey: "0xprivatekey123");
+            walletAddress: null, privateKey: "0xprivatekey123", subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull("wallet address is required for Hyperliquid");
     }
@@ -3323,7 +3325,7 @@ public class ExchangeConnectorFactoryTests
         var connector = await factory.CreateForUserAsync(
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
-            privateKey: null);
+            privateKey: null, subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull("private key is required for Hyperliquid");
     }
@@ -3337,7 +3339,7 @@ public class ExchangeConnectorFactoryTests
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: null, apiSecret: null,
             walletAddress: "99999999999999999999", privateKey: "0xprivatekey",
-            apiKeyIndex: "42");
+            subAccountAddress: null, apiKeyIndex: "42", userId: null);
 
         connector.Should().BeNull("an overflow numeric index should fail validation");
     }
@@ -3356,13 +3358,13 @@ public class ExchangeConnectorFactoryTests
 
         // Use a mock logger to verify masked output
         var mockLogger = new Mock<ILogger<ExchangeConnectorFactory>>();
-        var factory = new ExchangeConnectorFactory(sp, mockLogger.Object);
+        var factory = new ExchangeConnectorFactory(sp, mockLogger.Object, Mock.Of<IDydxConnectorFactory>());
 
         var hexWallet = "0xAbC123DeF456789012345678901234567890aBcD";
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: null, apiSecret: null,
             walletAddress: hexWallet, privateKey: "0xprivatekey",
-            apiKeyIndex: "42");
+            subAccountAddress: null, apiKeyIndex: "42", userId: null);
 
         connector.Should().BeNull();
 
@@ -3386,7 +3388,7 @@ public class ExchangeConnectorFactoryTests
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
             privateKey: "0xprivatekey123",
-            subAccountAddress: "0x1234567890AbCdEf1234567890AbCdEf12345678");
+            subAccountAddress: "0x1234567890AbCdEf1234567890AbCdEf12345678", apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull();
         connector.Should().BeOfType<HyperliquidConnector>();
@@ -3401,7 +3403,7 @@ public class ExchangeConnectorFactoryTests
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
             privateKey: "0xprivatekey123",
-            subAccountAddress: null);
+            subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull();
         connector.Should().BeOfType<HyperliquidConnector>();
@@ -3419,7 +3421,7 @@ public class ExchangeConnectorFactoryTests
         var connector = await factory.CreateForUserAsync(
             "lighter", apiKey: null, apiSecret: null,
             walletAddress: "12345", privateKey: "0xprivatekey",
-            apiKeyIndex: apiKeyIndex);
+            subAccountAddress: null, apiKeyIndex: apiKeyIndex, userId: null);
 
         connector.Should().BeNull(
             $"apiKeyIndex={apiKeyIndex} is outside the valid range 2-254 and should be rejected");
@@ -3438,7 +3440,7 @@ public class ExchangeConnectorFactoryTests
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
             privateKey: "0xprivatekey123",
-            subAccountAddress: subAccountAddress);
+            subAccountAddress: subAccountAddress, apiKeyIndex: null, userId: null);
 
         connector.Should().BeNull(
             $"subAccountAddress='{subAccountAddress}' is not a valid Ethereum address and should be rejected");
@@ -3453,7 +3455,7 @@ public class ExchangeConnectorFactoryTests
             "hyperliquid", apiKey: null, apiSecret: null,
             walletAddress: "0xAbC123DeF456789012345678901234567890aBcD",
             privateKey: "0xprivatekey123",
-            subAccountAddress: "0x1234567890abcdef1234567890abcdef12345678");
+            subAccountAddress: "0x1234567890abcdef1234567890abcdef12345678", apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull();
         connector.Should().BeOfType<HyperliquidConnector>();
@@ -3590,7 +3592,7 @@ public class ExchangeConnectorFactoryTests
 
         var connector = await factory.CreateForUserAsync(
             "binance", apiKey: "testkey", apiSecret: "testsecret",
-            walletAddress: null, privateKey: null);
+            walletAddress: null, privateKey: null, subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull("valid API key + secret must produce a Binance connector");
         connector.Should().BeOfType<BinanceConnector>();
@@ -3607,13 +3609,35 @@ public class ExchangeConnectorFactoryTests
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon " +
             "abandon art";
 
-        var factory = BuildFactoryForUserCreation();
+        var factory = BuildFactoryForUserCreationWithRealDydx();
 
         var connector = await factory.CreateForUserAsync(
             "dydx", apiKey: null, apiSecret: null,
-            walletAddress: null, privateKey: mnemonic24);
+            walletAddress: null, privateKey: mnemonic24, subAccountAddress: null, apiKeyIndex: null, userId: null);
 
         connector.Should().NotBeNull("a valid BIP39 24-word mnemonic must produce a dYdX connector");
         connector.Should().BeOfType<DydxConnector>();
+    }
+
+    private static ExchangeConnectorFactory BuildFactoryForUserCreationWithRealDydx()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
+        services.AddHttpClient();
+
+        var mockProvider = new Mock<Polly.Registry.ResiliencePipelineProvider<string>>();
+        mockProvider.Setup(p => p.GetPipeline(It.IsAny<string>())).Returns(Polly.ResiliencePipeline.Empty);
+        services.AddSingleton(mockProvider.Object);
+
+        var sp = services.BuildServiceProvider();
+        var factoryLogger = sp.GetRequiredService<ILogger<ExchangeConnectorFactory>>();
+        var dydxFactory = new DydxConnectorFactory(
+            sp.GetRequiredService<IHttpClientFactory>(),
+            sp.GetRequiredService<Polly.Registry.ResiliencePipelineProvider<string>>(),
+            sp.GetRequiredService<ILogger<DydxConnectorFactory>>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetRequiredService<IMarkPriceCache>());
+        return new ExchangeConnectorFactory(sp, factoryLogger, dydxFactory);
     }
 }
