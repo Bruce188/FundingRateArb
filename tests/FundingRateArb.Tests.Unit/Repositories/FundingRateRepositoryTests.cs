@@ -9,7 +9,9 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Query;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Tests.Unit.Repositories;
 
@@ -65,6 +67,79 @@ public class FundingRateRepositoryTests
             "timeout from internal 20s CTS must surface as DatabaseUnavailableException");
     }
 
+    // ── Cooldown + suppression tests ─────────────────────────────────────────
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_WhenRetryLimitExceeded_LogsWarningOnceAndSetsCooldown()
+    {
+        // Arrange — context whose ExecuteDeleteAsync throws RetryLimitExceededException
+        var retryEx = new RetryLimitExceededException("retry limit exceeded", new Exception("inner"));
+        var context = CreateThrowingContext(retryEx);
+        var logEntries = new List<(LogLevel Level, string Message, Exception? Ex)>();
+        var logger = new CapturingLogger<FundingRateRepository>(logEntries);
+        var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()), logger);
+
+        // Act — first call: should throw and set cooldown
+        var act = async () => await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        await act.Should().ThrowAsync<RetryLimitExceededException>(
+            "RetryLimitExceededException must be rethrown after catch");
+
+        // Assert — exactly one Warning log entry
+        var warnings = logEntries.Where(e => e.Level == LogLevel.Warning).ToList();
+        warnings.Should().HaveCount(1, "warning must be emitted exactly once");
+        warnings[0].Ex.Should().Be(retryEx, "the caught exception must be attached to the log entry");
+
+        // Assert — subsequent call short-circuits (cooldown is active)
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+        result.Should().Be(0, "call during cooldown must short-circuit and return 0");
+        repository.SuppressedPurgeCount.Should().Be(1,
+            "suppressed counter must be incremented on the short-circuited call");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_DuringCooldown_ShortCircuitsAndIncrementsSuppressedCount()
+    {
+        // Arrange — prime the cooldown by triggering a RetryLimitExceededException first
+        var retryEx = new RetryLimitExceededException("retry limit exceeded", new Exception("inner"));
+        var throwingContext = CreateThrowingContext(retryEx);
+        var repository = new FundingRateRepository(throwingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        // Prime cooldown
+        try { await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None); }
+        catch (RetryLimitExceededException) { /* expected — primes cooldown */ }
+
+        // Act — second call during active cooldown (throwing context would throw if reached)
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+
+        // Assert — short-circuit: returns 0, does NOT reach ExecuteDeleteAsync (no throw), counter incremented
+        result.Should().Be(0, "call during cooldown must return 0 without invoking ExecuteDeleteAsync");
+        repository.SuppressedPurgeCount.Should().Be(1,
+            "suppressed counter must be exactly 1 after one short-circuited call");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_AfterCooldownExpiry_ResumesNormalExecution()
+    {
+        // Arrange — context that returns a fixed delete count (simulates successful bulk delete)
+        const int expectedDeleted = 2;
+        var context = CreateSucceedingContext(expectedDeleted);
+        var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
+
+        // Set cooldown to a past timestamp (simulates an already-expired cooldown)
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(-1);
+
+        // Act
+        var deletedCount = await repository.PurgeOlderThanAsync(DateTime.UtcNow, CancellationToken.None);
+
+        // Assert — delete proceeded (not short-circuited), cooldown cleared
+        deletedCount.Should().Be(expectedDeleted,
+            "expired cooldown must not prevent the delete from executing");
+        repository.PurgeRetryCooldownUntil.Should().BeNull(
+            "expired cooldown must be cleared after normal execution resumes");
+        repository.SuppressedPurgeCount.Should().Be(0,
+            "no suppression occurred — this was a normal post-expiry call");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private static AppDbContext CreateThrowingContext(Exception exceptionToThrow)
@@ -81,6 +156,132 @@ public class FundingRateRepositoryTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return new StallingFundingRateContext(options, delaySeconds);
+    }
+
+    private static AppDbContext CreateSucceedingContext(int rowCount)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        return new SucceedingFundingRateContext(options, rowCount);
+    }
+}
+
+// ── SucceedingDbSet<T> ────────────────────────────────────────────────────────
+
+internal sealed class SucceedingDbSet<T> : DbSet<T>, IQueryable<T>, IAsyncEnumerable<T>
+    where T : class
+{
+    private readonly int _rowCount;
+    private readonly IQueryable<T> _empty;
+
+    public SucceedingDbSet(int rowCount)
+    {
+        _rowCount = rowCount;
+        _empty = Enumerable.Empty<T>().AsQueryable();
+    }
+
+    public override IEntityType EntityType
+        => throw new NotSupportedException("EntityType not supported in SucceedingDbSet");
+
+    IEnumerator<T> IEnumerable<T>.GetEnumerator() => _empty.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => _empty.GetEnumerator();
+    Type IQueryable.ElementType => typeof(T);
+    Expression IQueryable.Expression => _empty.Expression;
+    IQueryProvider IQueryable.Provider => new SucceedingAsyncQueryProvider(_rowCount);
+
+    public new IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken ct = default)
+        => new EmptyAsyncEnumerator<T>();
+}
+
+/// <summary>
+/// <see cref="IAsyncQueryProvider"/> that returns a successfully-completed <see cref="Task{int}"/>
+/// with a pre-configured row count, simulating a successful <c>ExecuteDeleteAsync</c>.
+/// </summary>
+internal sealed class SucceedingAsyncQueryProvider : IAsyncQueryProvider
+{
+    private readonly int _rowCount;
+
+    public SucceedingAsyncQueryProvider(int rowCount) => _rowCount = rowCount;
+
+    public IQueryable CreateQuery(Expression expression)
+        => new SucceedingEnumerable<object>(expression, _rowCount);
+
+    public IQueryable<TElement> CreateQuery<TElement>(Expression expression)
+        => new SucceedingEnumerable<TElement>(expression, _rowCount);
+
+    public object? Execute(Expression expression) => _rowCount;
+
+    public TResult Execute<TResult>(Expression expression) => default!;
+
+    public TResult ExecuteAsync<TResult>(Expression expression, CancellationToken ct = default)
+    {
+        // TResult is Task<int> for ExecuteDeleteAsync
+        if (typeof(TResult) == typeof(Task<int>))
+        {
+            return (TResult)(object)Task.FromResult(_rowCount);
+        }
+
+        var resultElementType = typeof(TResult).GetGenericArguments()[0];
+        var method = typeof(SucceedingAsyncQueryProvider)
+            .GetMethod(nameof(MakeSucceedingTask), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .MakeGenericMethod(resultElementType);
+        return (TResult)method.Invoke(this, null)!;
+    }
+
+    private Task<TElement> MakeSucceedingTask<TElement>() => Task.FromResult(default(TElement)!);
+}
+
+internal sealed class SucceedingEnumerable<T> : IQueryable<T>, IAsyncEnumerable<T>
+{
+    private readonly int _rowCount;
+
+    public SucceedingEnumerable(Expression expression, int rowCount)
+    {
+        Expression = expression;
+        _rowCount = rowCount;
+    }
+
+    public Type ElementType => typeof(T);
+    public Expression Expression { get; }
+    public IQueryProvider Provider => new SucceedingAsyncQueryProvider(_rowCount);
+
+    public IEnumerator<T> GetEnumerator() => Enumerable.Empty<T>().GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => Enumerable.Empty<T>().GetEnumerator();
+
+    public IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken ct = default)
+        => new EmptyAsyncEnumerator<T>();
+}
+
+// ── EmptyAsyncEnumerator<T> ───────────────────────────────────────────────────
+
+internal sealed class EmptyAsyncEnumerator<T> : IAsyncEnumerator<T>
+{
+    public T Current => default!;
+    public ValueTask<bool> MoveNextAsync() => new(false);
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+// ── CapturingLogger<T> ───────────────────────────────────────────────────────
+
+internal sealed class CapturingLogger<T> : ILogger<T>
+{
+    private readonly List<(LogLevel Level, string Message, Exception? Ex)> _entries;
+
+    public CapturingLogger(List<(LogLevel Level, string Message, Exception? Ex)> entries)
+        => _entries = entries;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        _entries.Add((logLevel, formatter(state, exception), exception));
     }
 }
 
@@ -118,6 +319,25 @@ internal sealed class StallingFundingRateContext : AppDbContext
         if (typeof(T) == typeof(FundingRateSnapshot))
         {
             return (DbSet<T>)(object)new StallingDbSet<FundingRateSnapshot>(_delaySeconds);
+        }
+
+        return base.Set<T>();
+    }
+}
+
+internal sealed class SucceedingFundingRateContext : AppDbContext
+{
+    private readonly int _rowCount;
+
+    public SucceedingFundingRateContext(DbContextOptions<AppDbContext> options, int rowCount)
+        : base(options) => _rowCount = rowCount;
+
+    public override DbSet<T> Set<T>()
+        where T : class
+    {
+        if (typeof(T) == typeof(FundingRateSnapshot))
+        {
+            return (DbSet<T>)(object)new SucceedingDbSet<FundingRateSnapshot>(_rowCount);
         }
 
         return base.Set<T>();

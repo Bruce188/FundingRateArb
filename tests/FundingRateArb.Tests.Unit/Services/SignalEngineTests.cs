@@ -7,6 +7,7 @@ using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Tests.Unit.Common;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Moq;
 
@@ -3173,5 +3174,90 @@ public class SignalEngineTests
         result.Opportunities.Should().BeEmpty(
             "MinHoldTimeHours=0 with filter on must reject every opportunity");
         result.Diagnostics!.PairsFilteredByBreakEvenSize.Should().Be(1);
+    }
+
+    // ── Unified TTL caching ───────────────────────────────────────────────────
+    // After the first successful leverage-tier load (prewarm), SignalEngine caches
+    // the result for OpportunityCacheTtl (5 s). A second EvaluateAllAsync call within
+    // that window must return the cached result without re-invoking the DB repositories.
+
+    [Fact]
+    public async Task EvaluateAllAsync_WithinCacheTtl_DoesNotReEvaluate()
+    {
+        // Arrange: build a SignalEngine with a real IMemoryCache and a tier provider
+        // so that the first call produces leverage-metric-enriched opportunities.
+        using var memCache = new MemoryCache(new MemoryCacheOptions());
+
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(20);
+
+        var sutWithCache = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            tierProvider: mockTierProvider.Object,
+            opportunityCache: memCache);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Act — first call primes the cache
+        await sutWithCache.EvaluateAllAsync(CancellationToken.None);
+
+        // Act — second call within the 5 s TTL window
+        await sutWithCache.EvaluateAllAsync(CancellationToken.None);
+
+        // Assert: underlying repository was called exactly once (cache hit on second call)
+        _mockFundingRates.Verify(
+            f => f.GetLatestPerExchangePerAssetAsync(),
+            Times.Once,
+            "second EvaluateAllAsync within the TTL window must be served from cache");
+    }
+
+    [Fact]
+    public async Task EvaluateAllAsync_AfterCacheExpiry_ReEvaluates()
+    {
+        // Arrange: use a very short TTL entry to simulate expiry
+        using var memCache = new MemoryCache(new MemoryCacheOptions());
+
+        var sutWithCache = new SignalEngine(
+            _mockUow.Object,
+            _mockCache.Object,
+            opportunityCache: memCache);
+
+        var config = new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>());
+
+        // Prime the cache with the normal 5 s TTL path
+        await sutWithCache.EvaluateAllAsync(CancellationToken.None);
+
+        // Manually expire the cache entry so the next call re-evaluates
+        memCache.Remove(SignalEngine.OpportunityCacheKey);
+
+        await sutWithCache.EvaluateAllAsync(CancellationToken.None);
+
+        // Assert: repository called twice (once on prime, once after expiry)
+        _mockFundingRates.Verify(
+            f => f.GetLatestPerExchangePerAssetAsync(),
+            Times.Exactly(2),
+            "after cache expiry, EvaluateAllAsync must re-evaluate from the DB");
     }
 }

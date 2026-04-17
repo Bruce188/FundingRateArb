@@ -4,12 +4,21 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 
 namespace FundingRateArb.Application.Services;
 
 public class SignalEngine : ISignalEngine
 {
+    // Unified 5 s opportunity cache — shared across all scoped SignalEngine instances via
+    // the Singleton IMemoryCache. Once leverage tiers have been pre-warmed by FundingRateFetcher,
+    // every dashboard request hits this cache and skips the full evaluation tree.
+    // The 1 s cold-start TTL has been removed; the prewarm (FundingRateFetcher Task 1.2) ensures
+    // tiers are loaded before the first dashboard request arrives.
+    internal const string OpportunityCacheKey = "se:opportunities:v1";
+    internal static readonly TimeSpan OpportunityCacheTtl = TimeSpan.FromSeconds(5);
+
     private readonly IUnitOfWork _uow;
     private readonly IMarketDataCache _cache;
     private readonly IRatePredictionService? _predictionService;
@@ -18,6 +27,7 @@ public class SignalEngine : ISignalEngine
     private readonly IExchangeSymbolConstraintsProvider? _symbolConstraintsProvider;
     private readonly ILogger<SignalEngine>? _logger;
     private readonly ISignalEngineMetrics? _metrics;
+    private readonly IMemoryCache? _opportunityCache;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -27,7 +37,8 @@ public class SignalEngine : ISignalEngine
         ICoinGlassScreeningProvider? screeningProvider = null,
         IExchangeSymbolConstraintsProvider? symbolConstraintsProvider = null,
         ILogger<SignalEngine>? logger = null,
-        ISignalEngineMetrics? metrics = null)
+        ISignalEngineMetrics? metrics = null,
+        IMemoryCache? opportunityCache = null)
     {
         _uow = uow;
         _cache = cache;
@@ -37,6 +48,7 @@ public class SignalEngine : ISignalEngine
         _symbolConstraintsProvider = symbolConstraintsProvider;
         _logger = logger;
         _metrics = metrics;
+        _opportunityCache = opportunityCache;
     }
 
     /// <summary>
@@ -57,8 +69,23 @@ public class SignalEngine : ISignalEngine
         return result.Opportunities;
     }
 
+    /// <inheritdoc/>
+    public async Task EvaluateAllAsync(CancellationToken ct = default)
+    {
+        await GetOpportunitiesWithDiagnosticsAsync(ct);
+    }
+
     public async Task<OpportunityResultDto> GetOpportunitiesWithDiagnosticsAsync(CancellationToken ct = default)
     {
+        // Serve from the shared opportunity cache when available (unified 5 s TTL — no cold-start
+        // shortcut; FundingRateFetcher pre-warms the cache after the first successful fetch).
+        if (_opportunityCache is not null
+            && _opportunityCache.TryGetValue(OpportunityCacheKey, out OpportunityResultDto? cached)
+            && cached is not null)
+        {
+            return cached;
+        }
+
         var cycleStopwatch = System.Diagnostics.Stopwatch.StartNew();
         BotConfiguration config;
         List<FundingRateSnapshot> latestRates;
@@ -513,11 +540,17 @@ public class SignalEngine : ISignalEngine
             _logger?.LogWarning(ex, "SignalEngine metrics emission failed — continuing without metric");
         }
 
-        return new OpportunityResultDto
+        var result = new OpportunityResultDto
         {
             Opportunities = sorted,
             AllNetPositive = netPositiveList.OrderByDescending(o => o.NetYieldPerHour).Take(26).ToList(),
             Diagnostics = diagnostics
         };
+
+        // Store in shared opportunity cache so the next call within the TTL window
+        // returns immediately without re-evaluating the full funding-rate tree.
+        _opportunityCache?.Set(OpportunityCacheKey, result, OpportunityCacheTtl);
+
+        return result;
     }
 }

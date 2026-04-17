@@ -75,8 +75,16 @@ public class ExecutionEngine : IExecutionEngine
         if (longBal?.IsUnavailable == true || shortBal?.IsUnavailable == true)
         {
             var unavailableNames = new List<string>();
-            if (longBal?.IsUnavailable == true) unavailableNames.Add(opp.LongExchangeName);
-            if (shortBal?.IsUnavailable == true) unavailableNames.Add(opp.ShortExchangeName);
+            if (longBal?.IsUnavailable == true)
+            {
+                unavailableNames.Add(opp.LongExchangeName);
+            }
+
+            if (shortBal?.IsUnavailable == true)
+            {
+                unavailableNames.Add(opp.ShortExchangeName);
+            }
+
             var unavailableStr = string.Join(", ", unavailableNames);
             _logger.LogWarning("Trade rejected: {Exchanges} balance unavailable for user {UserId}, asset {Asset}",
                 unavailableStr, userId, opp.AssetSymbol);
