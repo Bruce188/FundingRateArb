@@ -218,7 +218,9 @@ internal sealed class SucceedingAsyncQueryProvider : IAsyncQueryProvider
     {
         // TResult is Task<int> for ExecuteDeleteAsync
         if (typeof(TResult) == typeof(Task<int>))
+        {
             return (TResult)(object)Task.FromResult(_rowCount);
+        }
 
         var resultElementType = typeof(TResult).GetGenericArguments()[0];
         var method = typeof(SucceedingAsyncQueryProvider)

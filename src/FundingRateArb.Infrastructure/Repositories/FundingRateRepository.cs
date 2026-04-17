@@ -1,3 +1,4 @@
+using System.Threading;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
@@ -7,7 +8,6 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
-using System.Threading;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
