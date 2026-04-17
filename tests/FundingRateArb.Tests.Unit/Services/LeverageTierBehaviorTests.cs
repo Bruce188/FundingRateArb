@@ -122,7 +122,11 @@ public class LeverageTierBehaviorTests
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, _tierCache, NullLogger<ExecutionEngine>.Instance);
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator
+            .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, _tierCache, mockBalanceAggregator.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     // ── Test: Effective leverage constrained by most restrictive exchange tier ─

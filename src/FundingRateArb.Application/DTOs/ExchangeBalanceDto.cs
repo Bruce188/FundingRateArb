@@ -7,6 +7,8 @@ public class ExchangeBalanceDto
     public decimal AvailableUsdc { get; set; }
     public string? ErrorMessage { get; set; }
     public DateTime FetchedAt { get; set; }
+    public bool IsStale { get; set; }
+    public bool IsUnavailable { get; set; }
 }
 
 public class BalanceSnapshotDto

@@ -148,7 +148,11 @@ public class ExecutionEngineTests
         var positionCloser = new PositionCloser(
             _mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
 
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), NullLogger<ExecutionEngine>.Instance);
+        var mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        mockBalanceAggregator
+            .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue), mockBalanceAggregator.Object, NullLogger<ExecutionEngine>.Instance);
     }
 
     private static OrderResultDto SuccessOrder(string orderId = "1", decimal price = 3000m, decimal qty = 0.1m) =>
@@ -156,6 +160,24 @@ public class ExecutionEngineTests
 
     private static OrderResultDto FailOrder(string error = "Insufficient margin") =>
         new() { Success = false, Error = error };
+
+    private ExecutionEngine CreateEngineWithBalance(BalanceSnapshotDto snapshot)
+    {
+        var mockBalance = new Mock<IBalanceAggregator>();
+        mockBalance.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(snapshot);
+        var connectorLifecycle = new ConnectorLifecycleManager(
+            _mockFactory.Object, _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            NullLogger<ConnectorLifecycleManager>.Instance);
+        var emergencyClose = new EmergencyCloseHandler(_mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
+        var positionCloser = new PositionCloser(_mockUow.Object, connectorLifecycle, _mockReconciliation.Object, NullLogger<PositionCloser>.Instance);
+        return new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser,
+            _mockUserSettings.Object,
+            Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
+            mockBalance.Object,
+            NullLogger<ExecutionEngine>.Instance);
+    }
 
     // ── OpenPositionAsync ──────────────────────────────────────────────────────
 
@@ -4225,6 +4247,167 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Lighter tx reverted: Slippage",
             "concurrent-path RevertReason must be enriched so BotOrchestrator applies reason-specific cooldown");
+    }
+
+    // ── Balance unavailability guard tests ────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPosition_UnavailableExchange_RejectsTrade()
+    {
+        // Arrange: long exchange (Hyperliquid) is marked unavailable
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
+
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 1000m,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert
+        success.Should().BeFalse();
+        error.Should().Contain("unavailable");
+        error.Should().Contain("Hyperliquid");
+    }
+
+    [Fact]
+    public async Task OpenPosition_StaleExchange_AllowsTrade()
+    {
+        // Arrange: long exchange has a stale balance (IsStale=true) but is NOT unavailable
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
+
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 2000m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 1000m,
+                    IsStale = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 1000m,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act — mock connector at the next layer to fail with a known distinct error,
+        // so we can assert unconditionally that the failure is NOT the unavailability guard.
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
+
+        var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // NB7: deterministic assertion — failure (if any) must be InsufficientMargin, not "unavailable"
+        error.Should().NotContain("unavailable");
+    }
+
+    [Fact]
+    public async Task OpenPosition_BothExchangesUnavailable_RejectsMentioningBoth()
+    {
+        // Arrange: both long and short exchanges are unavailable
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1,
+                    ExchangeName = "Hyperliquid",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2,
+                    ExchangeName = "Lighter",
+                    AvailableUsdc = 0m,
+                    IsUnavailable = true,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // Assert: both exchange names must appear in the error
+        success.Should().BeFalse();
+        error.Should().Contain("Hyperliquid");
+        error.Should().Contain("Lighter");
+        error.Should().Contain("unavailable");
+    }
+
+    [Fact]
+    public async Task OpenPosition_ExchangeNotInSnapshot_AllowsTrade()
+    {
+        // NB5: when the snapshot has no entry for an exchange, FirstOrDefault returns null.
+        // null?.IsUnavailable == true evaluates to false, so the guard does not block.
+        // Document this as intended: missing-from-snapshot is treated as available.
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 0m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>() // empty — neither exchange in snapshot
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        // Act — connector is mocked to fail with a known error so we can distinguish the guard failure
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
+
+        var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        // The guard must NOT reject — trade proceeds (and fails for an unrelated reason)
+        error.Should().NotContain("unavailable",
+            "missing-from-snapshot is treated as available (not unavailable)");
     }
 
     // ── Both-leg confirmation window (ReconciliationDrift) ──────────────────────
