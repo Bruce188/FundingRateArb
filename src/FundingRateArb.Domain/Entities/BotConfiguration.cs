@@ -165,6 +165,14 @@ public class BotConfiguration : IValidatableObject
     [Range(1, 100)]
     public int ReconciliationIntervalCycles { get; set; } = 10;
 
+    /// <summary>
+    /// Seconds to wait for both-leg confirmation after the sequential open flow completes.
+    /// If either leg has not confirmed within this window, the confirmed leg is rolled back
+    /// via ClosePositionAsync and the position is marked Failed with ReconciliationDrift.
+    /// </summary>
+    [Range(5, 300)]
+    public int OpenConfirmTimeoutSeconds { get; set; } = 30;
+
     /// <summary>Alert when price divergence exceeds this multiple of entry spread cost. Default 2.0.</summary>
     [Range(0.5, 10.0)]
     public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;

@@ -15,5 +15,6 @@ public enum CloseReason
     Rotation,
     FundingFlipped,
     StablecoinDepeg,
-    DivergenceCritical
+    DivergenceCritical,
+    ReconciliationDrift
 }

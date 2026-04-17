@@ -4130,4 +4130,67 @@ public class PositionHealthMonitorTests
 
         result.ToClose.Should().ContainSingle(r => r.Position == pos && r.Reason == CloseReason.StopLoss);
     }
+
+    // ── ReconciliationDrift PnL exclusion ──────────────────────────────────────
+
+    /// <summary>
+    /// A position with CloseReason=ReconciliationDrift must be skipped in the open-position
+    /// health loop so it contributes zero unrealized PnL to the aggregation result.
+    /// Normally such rows have Status=Failed and never appear in GetOpenTrackedAsync, but
+    /// the guard fires if state ever drifts.
+    /// </summary>
+    [Fact]
+    public async Task ReconciliationDriftRows_ContributeZeroToPnlAggregate()
+    {
+        // Row with stale non-zero leg values that would produce non-zero PnL if computed
+        var driftPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        driftPos.CloseReason = CloseReason.ReconciliationDrift;
+        driftPos.LongFilledQuantity = 0.1m;
+        driftPos.ShortFilledQuantity = 0.1m;
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([driftPos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 4000m, shortMark: 2000m); // extreme prices → would be large PnL if not skipped
+
+        var result = await _sut.CheckAndActAsync();
+
+        // The drift row must not appear in the computed PnL dictionary — zero contribution
+        result.ComputedPnl.Should().NotContainKey(driftPos.Id,
+            "ReconciliationDrift position must be skipped and contribute zero to PnL aggregation");
+        // And it must not trigger a close decision (the guard uses continue, not toClose)
+        result.ToClose.Should().BeEmpty(
+            "ReconciliationDrift rows must not generate close decisions from the health loop");
+    }
+
+    /// <summary>
+    /// When an Open position and a ReconciliationDrift position coexist in the tracked set,
+    /// only the Open position's PnL is aggregated; the drift row is excluded.
+    /// </summary>
+    [Fact]
+    public async Task DriftAndOpenRowsMixed_OnlyOpenRowsAggregated()
+    {
+        var openPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        openPos.Id = 10;
+        openPos.LongFilledQuantity = 0.1m;
+        openPos.ShortFilledQuantity = 0.1m;
+
+        var driftPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        driftPos.Id = 11;
+        driftPos.CloseReason = CloseReason.ReconciliationDrift;
+        driftPos.LongFilledQuantity = 0.1m;
+        driftPos.ShortFilledQuantity = 0.1m;
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([openPos, driftPos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 3100m, shortMark: 2900m);
+
+        var result = await _sut.CheckAndActAsync();
+
+        // Open position must be in the PnL map
+        result.ComputedPnl.Should().ContainKey(openPos.Id,
+            "the Open position must have its PnL computed");
+        // Drift position must NOT be in the PnL map
+        result.ComputedPnl.Should().NotContainKey(driftPos.Id,
+            "the ReconciliationDrift position must be excluded from PnL aggregation");
+    }
 }

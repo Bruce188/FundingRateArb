@@ -15,6 +15,13 @@ public class ExecutionEngine : IExecutionEngine
 
     private readonly ConcurrentDictionary<(string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
+    /// <summary>
+    /// Position IDs for which a ReconciliationDrift rollback is in progress.
+    /// Guards against concurrent watchers issuing a double ClosePositionAsync on the same position.
+    /// Keys are removed after the rollback completes (success or failure).
+    /// </summary>
+    private readonly ConcurrentDictionary<int, byte> _rollbackInFlight = new();
+
     private readonly IUnitOfWork _uow;
     private readonly IConnectorLifecycleManager _connectorLifecycle;
     private readonly IEmergencyCloseHandler _emergencyClose;
@@ -797,10 +804,30 @@ public class ExecutionEngine : IExecutionEngine
                 position.ShortEntryPrice = shortActual.Value;
             }
 
+            // Both-leg confirmation window: poll both connectors until confirmed or timeout.
+            // Dry-run positions skip the window (simulated fills are always "confirmed").
+            if (!position.IsDryRun)
+            {
+                var confirmed = await AwaitBothLegConfirmationAsync(
+                    position, opp.AssetSymbol,
+                    longConnector, shortConnector,
+                    opp.LongExchangeName, opp.ShortExchangeName,
+                    firstResult: longResult, secondResult: shortResult,
+                    isSequential: useSequential,
+                    userId, config.OpenConfirmTimeoutSeconds, ct);
+
+                if (!confirmed)
+                {
+                    // Position has already been persisted as Failed+ReconciliationDrift by the helper.
+                    return (false, $"Both-leg confirmation failed for {opp.AssetSymbol} — position rolled back");
+                }
+            }
+
             position.Status = PositionStatus.Open;
             if (!position.IsDryRun)
             {
                 position.ConfirmedAtUtc = DateTime.UtcNow;
+                position.OpenConfirmedAt = DateTime.UtcNow;
             }
 
             var longNotional = position.LongEntryPrice * longResult.FilledQuantity;
@@ -869,6 +896,211 @@ public class ExecutionEngine : IExecutionEngine
             await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
             await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
         }
+    }
+
+    /// <summary>
+    /// Polls both exchange connectors until both legs confirm open, or the timeout elapses.
+    /// On success: sets <see cref="ArbitragePosition.OpenConfirmedAt"/> and returns true.
+    /// On timeout / one-leg failure: atomically rolls back the confirmed leg via
+    /// <see cref="IExchangeConnector.ClosePositionAsync"/>, persists Failed+ReconciliationDrift,
+    /// and returns false. If the rollback itself throws, the position is still persisted as
+    /// Failed+ReconciliationDrift and a Critical alert is raised for manual unwind.
+    /// </summary>
+    private async Task<bool> AwaitBothLegConfirmationAsync(
+        ArbitragePosition position,
+        string assetSymbol,
+        IExchangeConnector longConnector,
+        IExchangeConnector shortConnector,
+        string longExchangeName,
+        string shortExchangeName,
+        OrderResultDto firstResult,
+        OrderResultDto secondResult,
+        bool isSequential,
+        string userId,
+        int timeoutSeconds,
+        CancellationToken ct)
+    {
+        using var confirmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        confirmCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        var confirmToken = confirmCts.Token;
+
+        bool longConfirmed = false;
+        bool shortConfirmed = false;
+        // Track whether either leg returned an explicit false (not-open), as opposed to null (unknown).
+        // When both legs return null throughout the window, the confirmation result is genuinely
+        // indeterminate — we proceed rather than rolling back a position that may well be live.
+        bool longExplicitlyNotOpen = false;
+        bool shortExplicitlyNotOpen = false;
+
+        // Poll both legs at 2-second intervals until both confirm or timeout fires.
+        const int pollIntervalMs = 2_000;
+        while (!longConfirmed || !shortConfirmed)
+        {
+            if (confirmToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                if (!longConfirmed)
+                {
+                    var result = await longConnector.HasOpenPositionAsync(assetSymbol, Side.Long, confirmToken);
+                    if (result == true)
+                    {
+                        longConfirmed = true;
+                    }
+                    else if (result == false)
+                    {
+                        longExplicitlyNotOpen = true;
+                    }
+                    // null → unknown, keep polling
+                }
+
+                if (!shortConfirmed)
+                {
+                    var result = await shortConnector.HasOpenPositionAsync(assetSymbol, Side.Short, confirmToken);
+                    if (result == true)
+                    {
+                        shortConfirmed = true;
+                    }
+                    else if (result == false)
+                    {
+                        shortExplicitlyNotOpen = true;
+                    }
+                    // null → unknown, keep polling
+                }
+
+                if (longConfirmed && shortConfirmed)
+                {
+                    return true;
+                }
+
+                await Task.Delay(pollIntervalMs, confirmToken);
+            }
+            catch (OperationCanceledException) when (confirmToken.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                // Confirmation window timed out — fall through to rollback evaluation.
+                break;
+            }
+            catch (OperationCanceledException)
+            {
+                // Caller's CancellationToken fired — propagate.
+                throw;
+            }
+        }
+
+        // Rollback only when at least one leg explicitly reported not-open (false).
+        // If the window timed out but no leg returned false (all null = indeterminate or already
+        // confirmed), proceed to Open to avoid rolling back a potentially live position when
+        // the exchange API is temporarily unavailable or does not support HasOpenPositionAsync.
+        if (!longExplicitlyNotOpen && !shortExplicitlyNotOpen)
+        {
+            if (!longConfirmed || !shortConfirmed)
+            {
+                _logger.LogWarning(
+                    "Both-leg confirmation window timed out for position #{Id} ({Asset}) with indeterminate results. " +
+                    "Proceeding to Open — ops should verify manually.",
+                    position.Id, assetSymbol);
+            }
+            return true;
+        }
+
+        // Idempotency guard: only one rollback per position, even if two concurrent callers
+        // reach this point (possible under concurrent watcher patterns).
+        if (!_rollbackInFlight.TryAdd(position.Id, 0))
+        {
+            // Another caller has the rollback in flight; wait briefly then check the outcome.
+            _logger.LogWarning(
+                "Rollback for position #{Id} already in flight — skipping duplicate", position.Id);
+            return false;
+        }
+
+        _logger.LogWarning(
+            "Both-leg confirmation timed out for position #{Id} ({Asset}) — longConfirmed={Long}, shortConfirmed={Short}. Rolling back.",
+            position.Id, assetSymbol, longConfirmed, shortConfirmed);
+
+        try
+        {
+            // Roll back the confirmed leg(s) only.
+            if (longConfirmed)
+            {
+                await RollbackLegAsync(longConnector, assetSymbol, Side.Long, longExchangeName, position, userId, ct);
+            }
+
+            if (shortConfirmed)
+            {
+                await RollbackLegAsync(shortConnector, assetSymbol, Side.Short, shortExchangeName, position, userId, ct);
+            }
+        }
+        finally
+        {
+            _rollbackInFlight.TryRemove(position.Id, out _);
+        }
+
+        // Persist Failed + ReconciliationDrift regardless of rollback outcome.
+        position.Status = PositionStatus.Failed;
+        position.CloseReason = CloseReason.ReconciliationDrift;
+        position.ClosedAt = DateTime.UtcNow;
+        _uow.Positions.Update(position);
+        await _uow.SaveAsync(ct);
+
+        return false;
+    }
+
+    /// <summary>
+    /// Attempts to close a single confirmed leg as part of a ReconciliationDrift rollback.
+    /// If the close fails, logs and raises a Critical alert for manual unwind — the
+    /// position will still be persisted as Failed+ReconciliationDrift by the caller.
+    /// </summary>
+    private async Task RollbackLegAsync(
+        IExchangeConnector connector,
+        string assetSymbol,
+        Side side,
+        string exchangeName,
+        ArbitragePosition position,
+        string userId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var result = await connector.ClosePositionAsync(assetSymbol, side, ct);
+            if (!result.Success)
+            {
+                _logger.LogError(
+                    "ReconciliationDrift rollback close returned failure for position #{Id} on {Exchange} {Side}: {Error}",
+                    position.Id, exchangeName, side, result.Error);
+                RaiseRollbackFailureAlert(position, userId, exchangeName, side, result.Error ?? "close returned failure");
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "ReconciliationDrift rollback close succeeded for position #{Id} on {Exchange} {Side}",
+                    position.Id, exchangeName, side);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "ReconciliationDrift rollback close threw for position #{Id} on {Exchange} {Side} — manual unwind required",
+                position.Id, exchangeName, side);
+            RaiseRollbackFailureAlert(position, userId, exchangeName, side, ex.Message);
+        }
+    }
+
+    private void RaiseRollbackFailureAlert(
+        ArbitragePosition position, string userId, string exchangeName, Side side, string detail)
+    {
+        _uow.Alerts.Add(new Alert
+        {
+            UserId = userId,
+            ArbitragePositionId = position.Id,
+            Type = AlertType.LegFailed,
+            Severity = AlertSeverity.Critical,
+            Message = $"MANUAL UNWIND REQUIRED: Position #{position.Id} ({position.Asset?.Symbol ?? "?"}) — " +
+                      $"ReconciliationDrift rollback close failed on {exchangeName} {side}. " +
+                      $"Detail: {TruncateError(detail)}. Row persisted as Failed+ReconciliationDrift.",
+        });
     }
 
     public async Task ClosePositionAsync(string userId, ArbitragePosition position, CloseReason reason, CancellationToken ct = default)
