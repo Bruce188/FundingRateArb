@@ -215,3 +215,101 @@ public class BotConfigRepositoryCachingTests : IDisposable
         _context.Dispose();
     }
 }
+
+public class BotConfigRepositoryOrderingTests
+{
+    private static (AppDbContext context, IMemoryCache cache, BotConfigRepository repository) CreateFixture()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+            .Options;
+
+        var context = new AppDbContext(options);
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var repository = new BotConfigRepository(context, cache);
+        return (context, cache, repository);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task GetActiveAsync_MultipleRows_ReturnsLowestIdDeterministically(int _)
+    {
+        var (context, cache, repository) = CreateFixture();
+        try
+        {
+            context.BotConfigurations.AddRange(
+                new BotConfiguration { IsEnabled = true, TotalCapitalUsdc = 100m, UpdatedByUserId = "admin" },
+                new BotConfiguration { IsEnabled = true, TotalCapitalUsdc = 200m, UpdatedByUserId = "admin" }
+            );
+            await context.SaveChangesAsync();
+
+            var allIds = context.BotConfigurations.Select(c => c.Id).OrderBy(id => id).ToList();
+            var lowestId = allIds.First();
+
+            var result = await repository.GetActiveAsync();
+
+            result.Should().NotBeNull();
+            result!.Id.Should().Be(lowestId);
+        }
+        finally
+        {
+            cache.Dispose();
+            context.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task GetActiveTrackedAsync_MultipleRows_ReturnsLowestIdDeterministically()
+    {
+        var (context, cache, repository) = CreateFixture();
+        try
+        {
+            context.BotConfigurations.AddRange(
+                new BotConfiguration { IsEnabled = true, TotalCapitalUsdc = 100m, UpdatedByUserId = "admin" },
+                new BotConfiguration { IsEnabled = true, TotalCapitalUsdc = 200m, UpdatedByUserId = "admin" }
+            );
+            await context.SaveChangesAsync();
+
+            var lowestId = context.BotConfigurations.Select(c => c.Id).OrderBy(id => id).First();
+
+            var result = await repository.GetActiveTrackedAsync();
+
+            result.Should().NotBeNull();
+            result!.Id.Should().Be(lowestId);
+            context.Entry(result).State.Should().NotBe(EntityState.Detached);
+        }
+        finally
+        {
+            cache.Dispose();
+            context.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task GetActiveAsync_SingleRow_StillReturnsThatRow()
+    {
+        var (context, cache, repository) = CreateFixture();
+        try
+        {
+            context.BotConfigurations.Add(new BotConfiguration
+            {
+                IsEnabled = true,
+                TotalCapitalUsdc = 500m,
+                UpdatedByUserId = "admin"
+            });
+            await context.SaveChangesAsync();
+
+            var result = await repository.GetActiveAsync();
+
+            result.Should().NotBeNull();
+            result!.TotalCapitalUsdc.Should().Be(500m);
+        }
+        finally
+        {
+            cache.Dispose();
+            context.Dispose();
+        }
+    }
+}
