@@ -186,7 +186,20 @@
         }
     }
 
-    start().catch(function (err) {
-        console.error("SignalR start failed:", err);
-    });
+    // Defer the handshake to after DOMContentLoaded so the SignalR negotiate request
+    // does not block initial HTML paint. The indicator already shows "Connecting..." via
+    // the server-rendered badge; it transitions to "live" inside start() on success and
+    // via onreconnected on reconnect. Fallback polling behavior is unaffected.
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", function () {
+            start().catch(function (err) {
+                console.warn("SignalR start failed:", err);
+            });
+        });
+    } else {
+        // DOMContentLoaded already fired (e.g. script loaded async/defer)
+        start().catch(function (err) {
+            console.warn("SignalR start failed:", err);
+        });
+    }
 })();

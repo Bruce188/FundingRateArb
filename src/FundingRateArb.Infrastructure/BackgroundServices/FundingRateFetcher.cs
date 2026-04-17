@@ -4,6 +4,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Common.Services;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Hubs;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Hubs;
@@ -37,6 +38,8 @@ public class FundingRateFetcher : BackgroundService
     private readonly IHubContext<DashboardHub, IDashboardClient> _hubContext;
     private readonly ILogger<FundingRateFetcher> _logger;
     private bool _hasSignaled;
+    // One-shot flag: prewarm the SignalEngine opportunity cache after the first successful fetch.
+    private bool _hasPrewarmed;
 
     public FundingRateFetcher(
         IServiceScopeFactory scopeFactory,
@@ -59,6 +62,7 @@ public class FundingRateFetcher : BackgroundService
         {
             await FetchAllAsync(ct);
             SignalReadyOnce();
+            await PrewarmSignalEngineOnceAsync(ct);
         }
         catch (Exception ex)
         {
@@ -461,6 +465,35 @@ public class FundingRateFetcher : BackgroundService
         _hasSignaled = true;
         _readinessSignal.SignalReady();
         _logger.LogInformation("Funding rate readiness signal fired — BotOrchestrator may proceed");
+    }
+
+    /// <summary>
+    /// Invokes <see cref="ISignalEngine.EvaluateAllAsync"/> once per process lifetime to prime
+    /// the opportunity cache immediately after the first successful funding-rate fetch.
+    /// The prewarm ensures that the first dashboard request finds leverage-tier metrics already
+    /// populated, eliminating the cold-start latency on initial page load.
+    /// Any exception is caught and logged as a warning — the prewarm must never abort startup.
+    /// </summary>
+    private async Task PrewarmSignalEngineOnceAsync(CancellationToken ct)
+    {
+        if (_hasPrewarmed)
+        {
+            return;
+        }
+
+        _hasPrewarmed = true;
+
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var signalEngine = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
+            await signalEngine.EvaluateAllAsync(ct);
+            _logger.LogDebug("SignalEngine opportunity cache pre-warmed after first funding-rate fetch");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SignalEngine prewarm failed; continuing startup");
+        }
     }
 
     /// <summary>

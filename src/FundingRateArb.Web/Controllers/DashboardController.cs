@@ -113,13 +113,11 @@ public class DashboardController : Controller
                 // concurrent waiters depend on — 500-ing the whole group. Use None,
                 // matching the anonymous-path factory convention at lines 67-70.
                 var computed = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
-                // Cold-start path: leverage tiers aren't loaded yet so all leverage-derived
-                // metrics (Lev, ROC APR, APR, BE Cyc) are null. Shorten the TTL so the next
-                // request recomputes quickly once LeverageTierRefresher has populated the cache.
-                var hasLeverageMetrics = computed.Opportunities.Any(o => o.EffectiveLeverage != null);
-                entry.AbsoluteExpirationRelativeToNow = hasLeverageMetrics
-                    ? TimeSpan.FromSeconds(5)
-                    : TimeSpan.FromSeconds(1);
+                // FundingRateFetcher pre-warms the opportunity cache after its first successful
+                // fetch, so by the time the first dashboard request arrives, leverage tiers are
+                // already loaded. Use a unified 5 s TTL on every path — the cold-start 1 s
+                // shortcut is no longer needed.
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
                 return computed;
             });
 
