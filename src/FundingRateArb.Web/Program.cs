@@ -98,17 +98,17 @@ try
             .MinimumLevel.Override("Binance.Net", LogEventLevel.Error)
             .MinimumLevel.Override("CryptoExchange.Net", LogEventLevel.Error)
             // Suppress the high-volume "DateTime value of null" Warning emitted by the
-            // CryptoExchange source-generated JSON resolver. MinimumLevel.Override only
-            // matches "CryptoExchange.Net"; the resolver logs under the bare "CryptoExchange"
-            // SourceContext and bypasses that rule. Exact-string match so SDK upgrades that
-            // reword the message resurface the noise for re-review.
+            // CryptoExchange source-generated JSON resolver. The filter covers all descendant
+            // SourceContexts (e.g. CryptoExchange.Net.SocketClient, Binance.Net.Clients.*)
+            // and uses Contains so minor SDK rephrasing of the message is still caught.
             .Filter.ByExcluding(le =>
                 le.Level == LogEventLevel.Warning &&
                 le.Properties.TryGetValue("SourceContext", out var scValue) &&
                 scValue is ScalarValue scScalar &&
                 scScalar.Value is string scStr &&
-                scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) &&
-                le.MessageTemplate.Text == "DateTime value of null, but property is not nullable. Resolver: BinanceSourceGenerationContext")
+                (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
+                 scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
+                le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
             .Enrich.FromLogContext()
             .Enrich.WithMachineName()
             .Enrich.WithThreadId()
