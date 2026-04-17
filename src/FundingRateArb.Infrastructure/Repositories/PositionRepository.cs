@@ -277,6 +277,19 @@ public class PositionRepository : IPositionRepository
             .ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(TimeSpan olderThan, CancellationToken ct)
+    {
+        var cutoff = DateTime.UtcNow - olderThan;
+        return await _context.ArbitragePositions
+            .Include(p => p.Asset)
+            .Include(p => p.LongExchange)
+            .Include(p => p.ShortExchange)
+            .Where(p => p.Status == PositionStatus.Opening
+                     && p.OpenConfirmedAt == null
+                     && p.OpenedAt < cutoff)
+            .ToListAsync(ct);
+    }
+
     public void Add(ArbitragePosition position) =>
         _context.ArbitragePositions.Add(position);
 

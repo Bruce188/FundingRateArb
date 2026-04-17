@@ -90,6 +90,13 @@ public class ArbitragePosition
     /// </summary>
     public DateTime? ConfirmedAtUtc { get; set; }
 
+    /// <summary>
+    /// UTC timestamp when the both-leg confirmation window completed successfully.
+    /// Null for rows still in pending-confirm (Opening) state or for rows that failed
+    /// the confirmation window and were marked Failed with ReconciliationDrift.
+    /// </summary>
+    public DateTime? OpenConfirmedAt { get; set; }
+
     public DateTime? ClosedAt { get; set; }
 
     [MaxLength(500)]
