@@ -46,6 +46,20 @@ public class LeverageTierRefresher : BackgroundService
         _refreshInterval = refreshInterval;
     }
 
+    /// <summary>
+    /// Returns true when the exception represents an authentication or credential failure.
+    /// Mirrors the classifier used by BotOrchestrator (PR #181) without taking a dependency
+    /// on CircuitBreakerManager internals.
+    /// </summary>
+    private static bool IsAuthError(Exception ex)
+    {
+        var msg = ex.Message;
+        return msg.Contains("Invalid API-key", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("-2015", StringComparison.Ordinal)
+            || msg.Contains("Unauthorized", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("credentials not provided", StringComparison.OrdinalIgnoreCase);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         // Give funding rate fetcher time to seed the database on first run
@@ -70,7 +84,7 @@ public class LeverageTierRefresher : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Leverage tier refresh cycle failed — retrying at next interval");
+                _logger.LogWarning(ex, "Leverage tier refresh cycle aborted: {Reason}", ex.Message);
             }
 
             try
@@ -108,7 +122,16 @@ public class LeverageTierRefresher : BackgroundService
 
         // Shared connectors are managed by DI — no disposal here.
         var connectorCache = new Dictionary<string, IExchangeConnector>(StringComparer.OrdinalIgnoreCase);
-        var successCount = 0;
+
+        // Accumulates the first failure reason per exchange for per-cycle Warning emission.
+        var perExchangeFailures = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Track all exchanges seen so we can compute SuccessCount / TotalCount.
+        var allExchanges = pairs
+            .Select(p => p.ExchangeName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var totalExchanges = allExchanges.Count;
 
         foreach (var (exchangeName, symbol) in pairs)
         {
@@ -133,7 +156,6 @@ public class LeverageTierRefresher : BackgroundService
             try
             {
                 await lifecycle.EnsureTiersCachedAsync(connector, symbol, ct);
-                successCount++;
             }
             catch (OperationCanceledException)
             {
@@ -144,11 +166,30 @@ public class LeverageTierRefresher : BackgroundService
                 _logger.LogDebug(
                     "Tier refresh failed for {Exchange}/{Symbol}: {Error}",
                     exchangeName, symbol, ex.Message);
+
+                var reason = ex.GetType().Name + ": " + ex.Message;
+                if (IsAuthError(ex))
+                {
+                    reason = "AUTH: " + reason;
+                }
+
+                // TryAdd ensures only the first failure per exchange is recorded per cycle.
+                perExchangeFailures.TryAdd(exchangeName, reason);
             }
         }
 
+        // Emit one Warning per failed exchange — never per (exchange, symbol).
+        foreach (var (name, reason) in perExchangeFailures)
+        {
+            _logger.LogWarning(
+                "Leverage tier refresh failed for {Exchange}: {Reason}",
+                name, reason);
+        }
+
+        var successCount = totalExchanges - perExchangeFailures.Count;
+
         _logger.LogInformation(
-            "Leverage tier refresh complete: {Success}/{Total} pairs cached",
-            successCount, pairs.Count);
+            "Leverage tier refresh cycle completed with {SuccessCount}/{TotalCount} exchanges",
+            successCount, totalExchanges);
     }
 }
