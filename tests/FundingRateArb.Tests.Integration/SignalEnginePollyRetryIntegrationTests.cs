@@ -71,7 +71,12 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
             result1.DatabaseAvailable.Should().BeFalse();
         }
 
-        // Second call — should succeed
+        // Allow the degraded-result short TTL (500 ms) to elapse so the cache self-heals.
+        // SignalEngine caches degraded results with a 500 ms TTL to avoid hammering the
+        // failing dependency, while still recovering quickly once it is restored.
+        await Task.Delay(TimeSpan.FromMilliseconds(600));
+
+        // Second call — should succeed after TTL expiry
         using (var scope2 = factory.Services.CreateScope())
         {
             var engine2 = scope2.ServiceProvider.GetRequiredService<ISignalEngine>();

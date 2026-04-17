@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using FundingRateArb.Application.Common;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
@@ -17,7 +18,16 @@ public class SignalEngine : ISignalEngine
     // The 1 s cold-start TTL has been removed; the prewarm (FundingRateFetcher Task 1.2) ensures
     // tiers are loaded before the first dashboard request arrives.
     internal const string OpportunityCacheKey = "se:opportunities:v1";
-    internal static readonly TimeSpan OpportunityCacheTtl = TimeSpan.FromSeconds(5);
+    // Steady-state TTL for healthy results. Degraded results use a shorter TTL
+    // (DegradedOpportunityCacheTtl) so the cache self-heals quickly once the failing
+    // dependency recovers, without hammering it on every request during the outage.
+    private static readonly TimeSpan OpportunityCacheTtl = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DegradedOpportunityCacheTtl = TimeSpan.FromMilliseconds(500);
+
+    // Per-key stampede protection: serialises the first-hit compute path so that N concurrent
+    // callers on a cache miss share a single evaluation rather than all racing to recompute.
+    // SemaphoreSlim is correct here — this is a single-instance deployment.
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _cacheKeyLocks = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IMarketDataCache _cache;
@@ -77,8 +87,7 @@ public class SignalEngine : ISignalEngine
 
     public async Task<OpportunityResultDto> GetOpportunitiesWithDiagnosticsAsync(CancellationToken ct = default)
     {
-        // Serve from the shared opportunity cache when available (unified 5 s TTL — no cold-start
-        // shortcut; FundingRateFetcher pre-warms the cache after the first successful fetch).
+        // Fast path: serve from cache without acquiring the semaphore.
         if (_opportunityCache is not null
             && _opportunityCache.TryGetValue(OpportunityCacheKey, out OpportunityResultDto? cached)
             && cached is not null)
@@ -86,6 +95,35 @@ public class SignalEngine : ISignalEngine
             return cached;
         }
 
+        // Stampede protection: per-key SemaphoreSlim(1,1) ensures only one caller computes
+        // while concurrent first-hit callers queue. After acquiring, re-check the cache —
+        // a waiter may find the result already populated by the winning compute.
+        if (_opportunityCache is not null)
+        {
+            var sem = _cacheKeyLocks.GetOrAdd(OpportunityCacheKey, _ => new SemaphoreSlim(1, 1));
+            await sem.WaitAsync(ct);
+            try
+            {
+                // Double-check after acquiring: previous waiter may have populated the cache.
+                if (_opportunityCache.TryGetValue(OpportunityCacheKey, out cached) && cached is not null)
+                {
+                    return cached;
+                }
+
+                return await ComputeAndCacheAsync(ct);
+            }
+            finally
+            {
+                sem.Release();
+            }
+        }
+
+        // No cache configured — compute directly.
+        return await ComputeAndCacheAsync(ct);
+    }
+
+    private async Task<OpportunityResultDto> ComputeAndCacheAsync(CancellationToken ct)
+    {
         var cycleStopwatch = System.Diagnostics.Stopwatch.StartNew();
         BotConfiguration config;
         List<FundingRateSnapshot> latestRates;
@@ -102,7 +140,7 @@ public class SignalEngine : ISignalEngine
             // can show a user-visible warning.
             _logger?.LogWarning(ex,
                 "SignalEngine detected database unavailable; returning degraded result");
-            return new OpportunityResultDto
+            var degradedResult = new OpportunityResultDto
             {
                 IsSuccess = false,
                 DatabaseAvailable = false,
@@ -112,6 +150,11 @@ public class SignalEngine : ISignalEngine
                 AllNetPositive = [],
                 Diagnostics = null,
             };
+            // Cache the degraded result with a short TTL so the cache self-heals quickly
+            // once the failing dependency recovers, without hammering it on every request.
+            _opportunityCache?.Set(OpportunityCacheKey, degradedResult,
+                new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = DegradedOpportunityCacheTtl });
+            return degradedResult;
         }
 
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
@@ -547,9 +590,10 @@ public class SignalEngine : ISignalEngine
             Diagnostics = diagnostics
         };
 
-        // Store in shared opportunity cache so the next call within the TTL window
-        // returns immediately without re-evaluating the full funding-rate tree.
-        _opportunityCache?.Set(OpportunityCacheKey, result, OpportunityCacheTtl);
+        // Store in shared opportunity cache with the steady-state 5 s TTL so the next
+        // call within the window returns immediately without re-evaluating the full tree.
+        _opportunityCache?.Set(OpportunityCacheKey, result,
+            new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = OpportunityCacheTtl });
 
         return result;
     }

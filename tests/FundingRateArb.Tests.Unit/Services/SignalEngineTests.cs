@@ -9,6 +9,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 using Moq;
 
 namespace FundingRateArb.Tests.Unit.Services;
@@ -3259,5 +3260,181 @@ public class SignalEngineTests
             f => f.GetLatestPerExchangePerAssetAsync(),
             Times.Exactly(2),
             "after cache expiry, EvaluateAllAsync must re-evaluate from the DB");
+    }
+
+    // ── F1/F3/F9: Stampede protection + degraded TTL + steady-state TTL ──────
+
+    /// <summary>
+    /// F1 — stampede guard: N concurrent first-hit callers against an empty cache must
+    /// result in exactly one underlying evaluation. All concurrent callers must still
+    /// receive the computed result.
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_ConcurrentFirstHit_EvaluatesOnce()
+    {
+        // Arrange: real MemoryCache + call counter to track compute invocations.
+        using var memCache = new MemoryCache(new MemoryCacheOptions());
+        int evalCount = 0;
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(() =>
+            {
+                Interlocked.Increment(ref evalCount);
+                return new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m };
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            });
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, opportunityCache: memCache);
+
+        // Act: fire 20 concurrent requests — all hit an empty cache simultaneously.
+        const int N = 20;
+        var tasks = Enumerable.Range(0, N)
+            .Select(_ => sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None))
+            .ToArray();
+
+        var results = await Task.WhenAll(tasks);
+
+        // Assert: underlying evaluator invoked exactly once despite N concurrent callers.
+        evalCount.Should().Be(1,
+            "stampede protection must serialise concurrent first-hit callers into a single compute");
+
+        // All callers must receive a valid (non-null) result.
+        results.Should().AllSatisfy(r => r.Should().NotBeNull());
+    }
+
+    /// <summary>
+    /// F3 — degraded-result short TTL: when the underlying compute throws a catchable
+    /// exception, the degraded result must be cached with ~500 ms TTL so the cache
+    /// self-heals quickly without hammering the failing dependency.
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_DatabaseUnavailable_CachesWithShortTtl()
+    {
+        // Arrange: spy MemoryCache that captures MemoryCacheEntryOptions on Set.
+        var spyCache = new SpyMemoryCache();
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ThrowsAsync(new DatabaseUnavailableException("db down"));
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, opportunityCache: spyCache);
+
+        // Act
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: degraded result returned
+        result.DatabaseAvailable.Should().BeFalse();
+        result.IsSuccess.Should().BeFalse();
+
+        // Assert: cached with the short ~500 ms TTL, not the steady-state 5 s TTL.
+        spyCache.LastSetOptions.Should().NotBeNull("degraded result must be cached");
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow.Should().NotBeNull();
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow!.Value
+            .Should().BeLessOrEqualTo(TimeSpan.FromMilliseconds(600),
+                "degraded TTL must be ~500 ms to allow quick self-healing");
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow!.Value
+            .Should().BeGreaterOrEqualTo(TimeSpan.FromMilliseconds(400),
+                "degraded TTL must be approximately 500 ms");
+    }
+
+    /// <summary>
+    /// Regression guard (F9 / steady-state TTL): a healthy compute must still cache the
+    /// result with the 5 s steady-state TTL, not the degraded 500 ms TTL.
+    /// </summary>
+    [Fact]
+    public async Task GetOpportunitiesWithDiagnostics_HealthyCompute_CachesWithSteadyStateTtl()
+    {
+        // Arrange: spy MemoryCache that captures MemoryCacheEntryOptions on Set.
+        var spyCache = new SpyMemoryCache();
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            });
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, opportunityCache: spyCache);
+
+        // Act
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: success path
+        result.IsSuccess.Should().BeTrue();
+
+        // Assert: cached with the 5 s steady-state TTL.
+        spyCache.LastSetOptions.Should().NotBeNull("healthy result must be cached");
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow.Should().NotBeNull();
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow!.Value
+            .Should().BeGreaterOrEqualTo(TimeSpan.FromSeconds(4),
+                "steady-state TTL must be ~5 s — not the 500 ms degraded TTL");
+        spyCache.LastSetOptions!.AbsoluteExpirationRelativeToNow!.Value
+            .Should().BeLessOrEqualTo(TimeSpan.FromSeconds(6),
+                "steady-state TTL must be ~5 s");
+    }
+
+    /// <summary>
+    /// Test spy that wraps <see cref="MemoryCache"/> and captures the
+    /// <see cref="MemoryCacheEntryOptions"/> from the most recent <c>Set</c> call.
+    /// </summary>
+    private sealed class SpyMemoryCache : IMemoryCache
+    {
+        private readonly MemoryCache _inner = new(new MemoryCacheOptions());
+
+        public MemoryCacheEntryOptions? LastSetOptions { get; private set; }
+
+        public ICacheEntry CreateEntry(object key)
+        {
+            var entry = _inner.CreateEntry(key);
+            return new SpyCacheEntry(entry, opts => LastSetOptions = opts);
+        }
+
+        public void Remove(object key) => _inner.Remove(key);
+
+        public bool TryGetValue(object key, out object? value) => _inner.TryGetValue(key, out value);
+
+        public void Dispose() => _inner.Dispose();
+
+        private sealed class SpyCacheEntry : ICacheEntry
+        {
+            private readonly ICacheEntry _inner;
+            private readonly Action<MemoryCacheEntryOptions> _capture;
+
+            public SpyCacheEntry(ICacheEntry inner, Action<MemoryCacheEntryOptions> capture)
+            {
+                _inner = inner;
+                _capture = capture;
+            }
+
+            public object Key => _inner.Key;
+            public object? Value { get => _inner.Value; set => _inner.Value = value; }
+            public DateTimeOffset? AbsoluteExpiration { get => _inner.AbsoluteExpiration; set => _inner.AbsoluteExpiration = value; }
+            public TimeSpan? AbsoluteExpirationRelativeToNow
+            {
+                get => _inner.AbsoluteExpirationRelativeToNow;
+                set
+                {
+                    _inner.AbsoluteExpirationRelativeToNow = value;
+                    _capture(new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = value,
+                        SlidingExpiration = _inner.SlidingExpiration,
+                        Priority = _inner.Priority,
+                    });
+                }
+            }
+            public TimeSpan? SlidingExpiration { get => _inner.SlidingExpiration; set => _inner.SlidingExpiration = value; }
+            public IList<IChangeToken> ExpirationTokens => _inner.ExpirationTokens;
+            public IList<PostEvictionCallbackRegistration> PostEvictionCallbacks => _inner.PostEvictionCallbacks;
+            public CacheItemPriority Priority { get => _inner.Priority; set => _inner.Priority = value; }
+            public long? Size { get => _inner.Size; set => _inner.Size = value; }
+            public void Dispose() => _inner.Dispose();
+        }
     }
 }

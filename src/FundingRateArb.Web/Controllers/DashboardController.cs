@@ -112,13 +112,12 @@ public class DashboardController : Controller
                 // one client disconnect tear down the in-flight computation that all
                 // concurrent waiters depend on — 500-ing the whole group. Use None,
                 // matching the anonymous-path factory convention at lines 67-70.
-                var computed = await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
-                // FundingRateFetcher pre-warms the opportunity cache after its first successful
-                // fetch, so by the time the first dashboard request arrives, leverage tiers are
-                // already loaded. Use a unified 5 s TTL on every path — the cold-start 1 s
-                // shortcut is no longer needed.
+                //
+                // TTL is owned by SignalEngine — the controller cache here is a thin
+                // passthrough. The controller-level TTL mirrors the engine's so stale results
+                // are never served beyond the engine's own expiry.
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
-                return computed;
+                return await _signalEngine.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
             });
 
             // B1: short-circuit immediately when the SignalEngine already detected a

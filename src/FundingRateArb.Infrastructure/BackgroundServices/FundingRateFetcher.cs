@@ -490,6 +490,11 @@ public class FundingRateFetcher : BackgroundService
             await signalEngine.EvaluateAllAsync(ct);
             _logger.LogDebug("SignalEngine opportunity cache pre-warmed after first funding-rate fetch");
         }
+        catch (OperationCanceledException)
+        {
+            // Graceful shutdown during prewarm — expected, not a fault.
+            _logger.LogDebug("SignalEngine prewarm cancelled during shutdown; continuing");
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "SignalEngine prewarm failed; continuing startup");
