@@ -10,6 +10,7 @@ using FundingRateArb.Infrastructure.Services;
 using HyperLiquid.Net.Interfaces.Clients;
 using HyperLiquid.Net.Interfaces.Clients.FuturesApi;
 using HyperLiquid.Net.Objects.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -425,5 +426,208 @@ public class ExchangeSupportedSymbolsCacheTests
         result.Contains("btc").Should().BeTrue("HashSet should use OrdinalIgnoreCase");
         result.Contains("BTC").Should().BeTrue("HashSet should contain the original casing");
         result.Contains("Btc").Should().BeTrue("HashSet should match any casing");
+    }
+
+    // ── B2: Aster cache miss returns symbols ─────────────────────────────────────
+
+    [Fact]
+    public async Task GetSupportedSymbolsAsync_Aster_CacheMiss_ReturnsSymbols()
+    {
+        var (asterMock, asterExchangeData) = BuildAsterMock(AsterSuccess("SOL-USD", "AVAX-USD"));
+        var sut = BuildSut(asterClient: asterMock);
+
+        var result = await sut.GetSupportedSymbolsAsync("Aster");
+
+        result.Should().BeEquivalentTo(new[] { "SOL-USD", "AVAX-USD" });
+        asterExchangeData.Verify(
+            e => e.GetExchangeInfoAsync(It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Aster exchange data should have been fetched exactly once");
+    }
+
+    // ── B3: Lighter HTTP error returns empty set (no throw) ──────────────────────
+
+    [Fact]
+    public async Task GetSupportedSymbolsAsync_Lighter_HttpError_ReturnsEmptySet()
+    {
+        var httpFactory = BuildHttpFactory("{}", HttpStatusCode.InternalServerError);
+        var sut = BuildSut(httpFactory: httpFactory);
+
+        var act = async () => await sut.GetSupportedSymbolsAsync("Lighter");
+
+        await act.Should().NotThrowAsync("HTTP errors must not propagate out of the cache");
+        var result = await sut.GetSupportedSymbolsAsync("Lighter");
+        result.Should().BeEmpty("no symbols should be returned when the endpoint errors");
+    }
+
+    // ── B4a: RefreshAsync updates all three exchanges ────────────────────────────
+
+    [Fact]
+    public async Task RefreshAsync_UpdatesAllExchanges()
+    {
+        var (hlMock, hlExchangeData) = BuildHyperliquidMock(HlSuccess("BTC"));
+        var (asterMock, asterExchangeData) = BuildAsterMock(AsterSuccess("SOL-USD"));
+        var lighterHandler = new StaticHttpMessageHandler(LighterJson("ETH"));
+        var lighterHttpClient = new HttpClient(lighterHandler) { BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/") };
+        var httpFactoryMock = new Mock<IHttpClientFactory>();
+        httpFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(lighterHttpClient);
+
+        var sut = BuildSut(hlClient: hlMock, asterClient: asterMock, httpFactory: httpFactoryMock.Object);
+
+        // Prime the cache first (one call each)
+        await sut.GetSupportedSymbolsAsync("Hyperliquid");
+        await sut.GetSupportedSymbolsAsync("Aster");
+        await sut.GetSupportedSymbolsAsync("Lighter");
+
+        // Advance time past TTL so RefreshAsync will actually re-fetch
+        sut.TimeProvider = () => DateTime.UtcNow.AddMinutes(35);
+
+        // RefreshAsync should update all three
+        await sut.RefreshAsync();
+
+        // Verify each exchange mock was called twice (once on prime, once on refresh)
+        hlExchangeData.Verify(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        asterExchangeData.Verify(e => e.GetExchangeInfoAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        lighterHandler.CallCount.Should().Be(2, "Lighter HTTP endpoint should have been called twice");
+
+        // Subsequent GetSupportedSymbolsAsync within TTL must NOT trigger a new fetch
+        sut.TimeProvider = () => DateTime.UtcNow.AddMinutes(35); // within TTL of the refresh
+        await sut.GetSupportedSymbolsAsync("Hyperliquid");
+        await sut.GetSupportedSymbolsAsync("Aster");
+        await sut.GetSupportedSymbolsAsync("Lighter");
+
+        hlExchangeData.Verify(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()), Times.Exactly(2),
+            "no additional fetch should occur within TTL after refresh");
+        asterExchangeData.Verify(e => e.GetExchangeInfoAsync(It.IsAny<CancellationToken>()), Times.Exactly(2),
+            "no additional fetch should occur within TTL after refresh");
+        lighterHandler.CallCount.Should().Be(2, "no additional HTTP call should occur within TTL after refresh");
+    }
+
+    // ── B4b: RefreshAsync partial failure continues remaining exchanges ───────────
+
+    [Fact]
+    public async Task RefreshAsync_PartialFailure_ContinuesOtherExchanges()
+    {
+        // Aster throws during refresh
+        var asterExchangeData = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        asterExchangeData
+            .Setup(e => e.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Aster unavailable"));
+        var asterFuturesApi = new Mock<IAsterRestClientFuturesApi>();
+        asterFuturesApi.Setup(f => f.ExchangeData).Returns(asterExchangeData.Object);
+        var asterMock = new Mock<IAsterRestClient>();
+        asterMock.Setup(c => c.FuturesApi).Returns(asterFuturesApi.Object);
+
+        var (hlMock, hlExchangeData) = BuildHyperliquidMock(HlSuccess("BTC"));
+        var lighterHandler = new StaticHttpMessageHandler(LighterJson("ETH"));
+        var lighterHttpClient = new HttpClient(lighterHandler) { BaseAddress = new Uri("https://mainnet.zklighter.elliot.ai/api/v1/") };
+        var httpFactoryMock = new Mock<IHttpClientFactory>();
+        httpFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(lighterHttpClient);
+
+        var sut = BuildSut(hlClient: hlMock, asterClient: asterMock, httpFactory: httpFactoryMock.Object);
+
+        // RefreshAsync must not throw even if one exchange fails
+        var act = async () => await sut.RefreshAsync();
+        await act.Should().NotThrowAsync("a single exchange failure must not abort the whole refresh");
+
+        // Hyperliquid and Lighter should still have been called
+        hlExchangeData.Verify(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()), Times.Once);
+        lighterHandler.CallCount.Should().Be(1, "Lighter should still be refreshed even when Aster fails");
+    }
+
+    // ── NB4: Lighter null order-book body returns empty set ──────────────────────
+
+    [Fact]
+    public async Task GetSupportedSymbolsAsync_Lighter_NullOrderBookDetails_ReturnsEmptySet()
+    {
+        // 200 OK with empty JSON object — order_book_details key is absent
+        var httpFactory = BuildHttpFactory("{}");
+        var sut = BuildSut(httpFactory: httpFactory);
+
+        var result = await sut.GetSupportedSymbolsAsync("Lighter");
+
+        result.Should().BeEmpty("absent order_book_details should produce an empty set");
+    }
+
+    // ── NB5: Unknown exchange name returns empty set ──────────────────────────────
+
+    [Fact]
+    public async Task GetSupportedSymbolsAsync_UnknownExchange_ReturnsEmptySet()
+    {
+        var sut = BuildSut();
+
+        var result = await sut.GetSupportedSymbolsAsync("bitmex");
+
+        result.Should().BeEmpty("an unrecognised exchange name should return an empty set");
+    }
+
+    // ── NB1 assertion: last-known-good log includes structured age property ───────
+
+    [Fact]
+    public async Task GetSupportedSymbolsAsync_LastKnownGood_LogIncludesCacheAge()
+    {
+        var fixedNow = DateTime.UtcNow;
+        var callCount = 0;
+        var (hlMock, hlExchangeData) = BuildHyperliquidMock(HlSuccess("BTC", "ETH"));
+        hlExchangeData
+            .Setup(e => e.GetExchangeInfoAndTickersAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => ++callCount == 1 ? HlSuccess("BTC", "ETH") : HlFailure());
+
+        // Capture log messages using the inline capturing logger (avoids It.IsAnyType Callback issue)
+        var logEntries = new List<(LogLevel Level, string Message)>();
+        var capturingLogger = new CacheCapturingLogger(logEntries);
+
+        var asterMock = new Mock<IAsterRestClient>();
+        var asterExchangeData = new Mock<IAsterRestClientFuturesApiExchangeData>();
+        asterExchangeData.Setup(e => e.GetExchangeInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(AsterSuccess());
+        var asterFuturesApi = new Mock<IAsterRestClientFuturesApi>();
+        asterFuturesApi.Setup(f => f.ExchangeData).Returns(asterExchangeData.Object);
+        asterMock.Setup(c => c.FuturesApi).Returns(asterFuturesApi.Object);
+
+        var sut = new ExchangeSupportedSymbolsCache(
+            hlMock.Object, asterMock.Object,
+            BuildHttpFactory(LighterJson()),
+            capturingLogger);
+        sut.TimeProvider = () => fixedNow;
+
+        // Prime the cache
+        await sut.GetSupportedSymbolsAsync("Hyperliquid");
+
+        // Advance past TTL so next call triggers a re-fetch which will fail
+        sut.TimeProvider = () => fixedNow.AddMinutes(31);
+        await sut.GetSupportedSymbolsAsync("Hyperliquid");
+
+        // There should be a Warning log containing "last-known-good" and "age"
+        var lastKnownGoodEntry = logEntries
+            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains("last-known-good"))
+            .ToList();
+
+        lastKnownGoodEntry.Should().NotBeEmpty("a last-known-good warning must be logged when upstream fails");
+        lastKnownGoodEntry[0].Message.Should().Contain("age",
+            "the log message must include the 'Age' structured property template");
+    }
+}
+
+// ── Inline capturing logger used by NB1 test only ────────────────────────────
+// file-scoped so it does not conflict with other test files.
+file sealed class CacheCapturingLogger : ILogger<ExchangeSupportedSymbolsCache>
+{
+    private readonly List<(LogLevel Level, string Message)> _entries;
+
+    public CacheCapturingLogger(List<(LogLevel Level, string Message)> entries)
+        => _entries = entries;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        _entries.Add((logLevel, formatter(state, exception)));
     }
 }

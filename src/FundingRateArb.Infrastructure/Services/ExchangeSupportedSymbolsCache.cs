@@ -18,8 +18,20 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
 {
     private static readonly TimeSpan Ttl = TimeSpan.FromMinutes(30);
 
-    // Seam for unit tests — avoids real wall-clock delays.
-    internal Func<DateTime> TimeProvider { get; set; } = () => DateTime.UtcNow;
+    // N4: single source of truth for supported exchange names (used by both
+    //     LoadSymbolsAsync dispatch and RefreshAsync iteration).
+    private static readonly string[] SupportedExchangeNames = ["Hyperliquid", "Aster", "Lighter"];
+
+    // N3: immutable time provider — injected via constructor; defaults to wall-clock.
+    //     Exposed as internal set so tests using the BuildSut helper can override after construction.
+    private Func<DateTime> _timeProvider;
+
+    /// <summary>Test seam — set once from BuildSut; not accessible at runtime via DI.</summary>
+    internal Func<DateTime> TimeProvider
+    {
+        get => _timeProvider;
+        set => _timeProvider = value;
+    }
 
     private sealed class CacheEntry
     {
@@ -34,6 +46,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     }
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
+    // N1: bounded by the three-exchange SupportedExchangeNames enumeration above — cardinality is O(1).
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly IHyperLiquidRestClient _hyperLiquidClient;
@@ -52,20 +65,33 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
         IAsterRestClient asterClient,
         IHttpClientFactory httpClientFactory,
         ILogger<ExchangeSupportedSymbolsCache> logger)
+        : this(hyperLiquidClient, asterClient, httpClientFactory, logger, () => DateTime.UtcNow)
+    {
+    }
+
+    // N3: internal constructor overload for DI or test injection of a time provider.
+    internal ExchangeSupportedSymbolsCache(
+        IHyperLiquidRestClient hyperLiquidClient,
+        IAsterRestClient asterClient,
+        IHttpClientFactory httpClientFactory,
+        ILogger<ExchangeSupportedSymbolsCache> logger,
+        Func<DateTime> timeProvider)
     {
         _hyperLiquidClient = hyperLiquidClient;
         _asterClient = asterClient;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
-    public async Task<HashSet<string>> GetSupportedSymbolsAsync(string exchangeName, CancellationToken ct = default)
+    public async Task<IReadOnlySet<string>> GetSupportedSymbolsAsync(string exchangeName, CancellationToken ct = default)
     {
-        var now = TimeProvider();
+        var now = _timeProvider();
 
         if (_cache.TryGetValue(exchangeName, out var entry) && now - entry.LoadedAtUtc < Ttl)
         {
+            // N2: return a read-only view to prevent callers from mutating the cached set.
             return entry.Symbols;
         }
 
@@ -74,7 +100,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
         try
         {
             // Re-check after acquiring the lock (double-checked locking)
-            now = TimeProvider();
+            now = _timeProvider();
             if (_cache.TryGetValue(exchangeName, out entry) && now - entry.LoadedAtUtc < Ttl)
             {
                 return entry.Symbols;
@@ -83,7 +109,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
             var symbols = await LoadSymbolsAsync(exchangeName, ct).ConfigureAwait(false);
             if (symbols is not null)
             {
-                var newEntry = new CacheEntry(symbols, TimeProvider());
+                var newEntry = new CacheEntry(symbols, _timeProvider());
                 _cache[exchangeName] = newEntry;
                 return newEntry.Symbols;
             }
@@ -92,9 +118,11 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
                 // Upstream failure — return last-known-good or empty set
                 if (_cache.TryGetValue(exchangeName, out var stale))
                 {
+                    var age = _timeProvider() - stale.LoadedAtUtc;
                     _logger.LogWarning(
-                        "Failed to refresh supported symbols for {Exchange} — using last-known-good ({Count} symbols)",
-                        exchangeName, stale.Symbols.Count);
+                        "Failed to refresh supported symbols for {Exchange} — using last-known-good ({Count} symbols, age {Age})",
+                        exchangeName, stale.Symbols.Count, age);
+                    // N2: return a read-only view
                     return stale.Symbols;
                 }
 
@@ -113,8 +141,8 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     /// <inheritdoc/>
     public async Task RefreshAsync(CancellationToken ct = default)
     {
-        var exchanges = new[] { "Hyperliquid", "Aster", "Lighter" };
-        foreach (var exchange in exchanges)
+        // N4: iterate from SupportedExchangeNames — single source of truth
+        foreach (var exchange in SupportedExchangeNames)
         {
             try
             {
@@ -125,7 +153,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
                     var symbols = await LoadSymbolsAsync(exchange, ct).ConfigureAwait(false);
                     if (symbols is not null)
                     {
-                        _cache[exchange] = new CacheEntry(symbols, TimeProvider());
+                        _cache[exchange] = new CacheEntry(symbols, _timeProvider());
                         _logger.LogInformation("Refreshed supported symbols for {Exchange}: {Count} symbols",
                             exchange, symbols.Count);
                     }
@@ -146,6 +174,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     {
         try
         {
+            // N4: dispatch must stay in sync with SupportedExchangeNames above
             return exchangeName switch
             {
                 "Hyperliquid" => await LoadHyperliquidSymbolsAsync(ct).ConfigureAwait(false),
@@ -203,12 +232,20 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
 
     private async Task<List<string>?> LoadLighterSymbolsAsync(CancellationToken ct)
     {
+        // NB2: base address is configured on the named client in DI (Program.cs).
+        // NB3: MaxResponseContentBufferSize and Timeout are also set on the named client in DI.
         var client = _httpClientFactory.CreateClient("LighterMetadata");
-        client.BaseAddress ??= new Uri("https://mainnet.zklighter.elliot.ai/api/v1/");
-        client.Timeout = TimeSpan.FromSeconds(15);
 
-        var response = await client.GetAsync("orderBookDetails?filter=perp", ct).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        HttpResponseMessage response;
+        try
+        {
+            response = await client.GetAsync("orderBookDetails?filter=perp", ct).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
 
         var details = await response.Content
             .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct)

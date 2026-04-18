@@ -56,21 +56,32 @@ public class MarketDataStreamManager : BackgroundService
                     List<string> filtered;
                     if (supported.Count > 0)
                     {
-                        filtered = symbols.Where(s => supported.Contains(s)).ToList();
-                        var skipped = symbols.Where(s => !supported.Contains(s)).ToList();
-                        if (skipped.Count > 0)
+                        // NB8: single-pass partition — one HashSet.Contains call per element.
+                        var filteredList = new List<string>(symbols.Count);
+                        var skippedList = new List<string>();
+                        foreach (var s in symbols)
+                        {
+                            if (supported.Contains(s))
+                                filteredList.Add(s);
+                            else
+                                skippedList.Add(s);
+                        }
+                        filtered = filteredList;
+                        if (skippedList.Count > 0)
                         {
                             _logger.LogInformation(
                                 "WebSocket stream {Exchange}: {FilteredCount}/{TotalCount} symbols supported, skipped {SkippedCount}: {Skipped}",
-                                stream.ExchangeName, filtered.Count, symbols.Count, skipped.Count,
-                                skipped.Count <= 20
-                                    ? string.Join(", ", skipped)
-                                    : string.Join(", ", skipped.Take(20)) + $" (+{skipped.Count - 20} more)");
+                                stream.ExchangeName, filtered.Count, symbols.Count, skippedList.Count,
+                                skippedList.Count <= 20
+                                    ? string.Join(", ", skippedList)
+                                    : string.Join(", ", skippedList.Take(20)) + $" (+{skippedList.Count - 20} more)");
                         }
                     }
                     else
                     {
-                        filtered = symbols;
+                        // B1: use .ToList() so each stream gets an independent list instance,
+                        // preventing shared-reference mutation across parallel stream lambdas.
+                        filtered = symbols.ToList();
                         _logger.LogWarning(
                             "No supported symbols loaded for {Exchange} — passing full list as fallback",
                             stream.ExchangeName);

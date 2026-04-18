@@ -12,7 +12,7 @@ public interface IExchangeSupportedSymbolsCache
     /// On the first call (or after TTL expiry) the metadata endpoint is queried.
     /// On upstream failure the last-known-good set is returned; empty set if never loaded.
     /// </summary>
-    Task<HashSet<string>> GetSupportedSymbolsAsync(string exchangeName, CancellationToken ct = default);
+    Task<IReadOnlySet<string>> GetSupportedSymbolsAsync(string exchangeName, CancellationToken ct = default);
 
     /// <summary>
     /// Force-refreshes the symbol set for all known exchanges.
