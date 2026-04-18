@@ -22,11 +22,12 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     //     LoadSymbolsAsync dispatch and RefreshAsync iteration).
     private static readonly string[] SupportedExchangeNames = ["Hyperliquid", "Aster", "Lighter"];
 
-    // N3: immutable time provider — injected via constructor; defaults to wall-clock.
-    //     Exposed as internal set so tests using the BuildSut helper can override after construction.
+    // N3: time provider — injected via constructor; defaults to wall-clock.
+    //     nit4: the setter is intentionally internal (test-only mutable via InternalsVisibleTo).
+    //     Production code never reassigns it; only test helpers use the setter after construction.
     private Func<DateTime> _timeProvider;
 
-    /// <summary>Test seam — set once from BuildSut; not accessible at runtime via DI.</summary>
+    /// <summary>Test seam — mutable via InternalsVisibleTo; not accessible at runtime via DI.</summary>
     internal Func<DateTime> TimeProvider
     {
         get => _timeProvider;
@@ -35,7 +36,8 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
 
     private sealed class CacheEntry
     {
-        public HashSet<string> Symbols { get; }
+        // nit7: typed as IReadOnlySet so the immutability is structural within the assembly.
+        public IReadOnlySet<string> Symbols { get; }
         public DateTime LoadedAtUtc { get; }
 
         public CacheEntry(IEnumerable<string> symbols, DateTime loadedAtUtc)
@@ -46,7 +48,8 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     }
 
     private readonly ConcurrentDictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
-    // N1: bounded by the three-exchange SupportedExchangeNames enumeration above — cardinality is O(1).
+    // N1/NB1: pre-populated from SupportedExchangeNames in the constructor so cardinality is
+    //         strictly bounded to three entries — unknown caller names short-circuit via TryGetValue.
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly IHyperLiquidRestClient _hyperLiquidClient;
@@ -82,6 +85,10 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _timeProvider = timeProvider;
+
+        // NB1: pre-populate so the lock dictionary is bounded to three known exchanges.
+        foreach (var name in SupportedExchangeNames)
+            _locks[name] = new SemaphoreSlim(1, 1);
     }
 
     /// <inheritdoc/>
@@ -95,7 +102,12 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
             return entry.Symbols;
         }
 
-        var semaphore = _locks.GetOrAdd(exchangeName, _ => new SemaphoreSlim(1, 1));
+        // NB1: _locks is pre-populated in the constructor; unknown names return empty immediately
+        //      without allocating a new SemaphoreSlim.
+        if (!_locks.TryGetValue(exchangeName, out var semaphore))
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
         await semaphore.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -109,7 +121,9 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
             var symbols = await LoadSymbolsAsync(exchangeName, ct).ConfigureAwait(false);
             if (symbols is not null)
             {
-                var newEntry = new CacheEntry(symbols, _timeProvider());
+                // nit9: capture now once after the fetch completes to avoid double-call drift.
+                var loadedAt = _timeProvider();
+                var newEntry = new CacheEntry(symbols, loadedAt);
                 _cache[exchangeName] = newEntry;
                 return newEntry.Symbols;
             }
@@ -118,6 +132,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
                 // Upstream failure — return last-known-good or empty set
                 if (_cache.TryGetValue(exchangeName, out var stale))
                 {
+                    // nit9: single call to _timeProvider() for age computation.
                     var age = _timeProvider() - stale.LoadedAtUtc;
                     _logger.LogWarning(
                         "Failed to refresh supported symbols for {Exchange} — using last-known-good ({Count} symbols, age {Age})",
@@ -153,6 +168,7 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
                     var symbols = await LoadSymbolsAsync(exchange, ct).ConfigureAwait(false);
                     if (symbols is not null)
                     {
+                        // nit9: single _timeProvider() call after fetch completes.
                         _cache[exchange] = new CacheEntry(symbols, _timeProvider());
                         _logger.LogInformation("Refreshed supported symbols for {Exchange}: {Count} symbols",
                             exchange, symbols.Count);
@@ -236,10 +252,13 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
         // NB3: MaxResponseContentBufferSize and Timeout are also set on the named client in DI.
         var client = _httpClientFactory.CreateClient("LighterMetadata");
 
-        HttpResponseMessage response;
+        // NB3: deterministic disposal of the response message via `using`.
+        // NB2: catch HttpRequestException (HTTP failure), JsonException (malformed body),
+        //      and TaskCanceledException where it is NOT from the caller token (request timeout)
+        //      so all three propagate to the last-known-good fallback rather than throwing.
+        using var response = await client.GetAsync("orderBookDetails?filter=perp", ct).ConfigureAwait(false);
         try
         {
-            response = await client.GetAsync("orderBookDetails?filter=perp", ct).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
         }
         catch (HttpRequestException)
@@ -247,18 +266,31 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
             return null;
         }
 
-        var details = await response.Content
-            .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct)
-            .ConfigureAwait(false);
+        try
+        {
+            var details = await response.Content
+                .ReadFromJsonAsync<LighterOrderBookDetailsResponse>(JsonOptions, ct)
+                .ConfigureAwait(false);
 
-        if (details?.OrderBookDetails is null)
+            if (details?.OrderBookDetails is null)
+            {
+                return null;
+            }
+
+            return details.OrderBookDetails
+                .Select(m => m.Symbol)
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .ToList();
+        }
+        catch (JsonException)
         {
             return null;
         }
-
-        return details.OrderBookDetails
-            .Select(m => m.Symbol)
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .ToList();
+        catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            // Request timeout (not caller cancellation) — treat as upstream failure.
+            _logger.LogWarning(ex, "Lighter metadata request timed out");
+            return null;
+        }
     }
 }

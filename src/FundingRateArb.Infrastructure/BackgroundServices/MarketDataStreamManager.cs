@@ -69,12 +69,15 @@ public class MarketDataStreamManager : BackgroundService
                         filtered = filteredList;
                         if (skippedList.Count > 0)
                         {
-                            _logger.LogInformation(
+                            // nit8: avoid Take(20) iterator — use string.Join overload with index+count.
+                        var displayCount = Math.Min(skippedList.Count, 20);
+                        var skippedDisplay = skippedList.Count <= 20
+                            ? string.Join(", ", skippedList)
+                            : string.Join(", ", skippedList, 0, displayCount) + $" (+{skippedList.Count - 20} more)";
+                        _logger.LogInformation(
                                 "WebSocket stream {Exchange}: {FilteredCount}/{TotalCount} symbols supported, skipped {SkippedCount}: {Skipped}",
                                 stream.ExchangeName, filtered.Count, symbols.Count, skippedList.Count,
-                                skippedList.Count <= 20
-                                    ? string.Join(", ", skippedList)
-                                    : string.Join(", ", skippedList.Take(20)) + $" (+{skippedList.Count - 20} more)");
+                                skippedDisplay);
                         }
                     }
                     else
@@ -87,11 +90,13 @@ public class MarketDataStreamManager : BackgroundService
                             stream.ExchangeName);
                     }
 
-                    await stream.StartAsync(filtered, ct);
+                    // NB11: subscribe handlers BEFORE StartAsync so events emitted synchronously
+                    //       during or immediately after StartAsync are not dropped.
                     stream.OnRateUpdate += rate => OnRateReceived(rate);
                     stream.OnDisconnected += (exchange, reason) =>
                         _logger.LogWarning("WebSocket disconnected: {Exchange} — {Reason}", exchange, reason);
 
+                    await stream.StartAsync(filtered, ct);
                     _logger.LogInformation("WebSocket stream started: {Exchange}", stream.ExchangeName);
                 }
                 catch (Exception ex)
