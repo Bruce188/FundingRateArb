@@ -466,6 +466,36 @@ public class CircuitBreakerManagerTests
         _sut.GetConsecutiveLosses("user1").Should().Be(2);
     }
 
+    // ── Per-exchange unavailability ───────────────────────────────────────────
+
+    [Fact]
+    public void MarkUnavailable_ThenIsUnavailable_ReturnsTrue()
+    {
+        _sut.MarkUnavailable("Binance");
+
+        _sut.IsUnavailable("Binance").Should().BeTrue();
+    }
+
+    [Fact]
+    public void ClearUnavailable_Resets()
+    {
+        _sut.MarkUnavailable("Hyperliquid");
+        _sut.IsUnavailable("Hyperliquid").Should().BeTrue();
+
+        _sut.ClearUnavailable("Hyperliquid");
+
+        _sut.IsUnavailable("Hyperliquid").Should().BeFalse();
+    }
+
+    [Fact]
+    public void MarkUnavailable_IsIdempotent()
+    {
+        _sut.MarkUnavailable("Lighter");
+        _sut.MarkUnavailable("Lighter"); // second call must not throw
+
+        _sut.IsUnavailable("Lighter").Should().BeTrue();
+    }
+
     // ── PnlTarget cooldown ────────────────────────────────────────────────────
 
     [Fact]

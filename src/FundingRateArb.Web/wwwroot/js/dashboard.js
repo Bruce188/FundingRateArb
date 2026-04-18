@@ -777,6 +777,18 @@
                 span.className = b.availableUsdc > 0 ? "text-success" : "text-muted";
                 span.textContent = b.exchangeName + ": $" + b.availableUsdc.toFixed(2);
             }
+            // Unavailable badge supersedes Stale — never render both simultaneously
+            if (b.isUnavailable) {
+                var unavailBadge = document.createElement("span");
+                unavailBadge.className = "badge bg-danger ms-1";
+                unavailBadge.textContent = "Unavailable";
+                span.appendChild(unavailBadge);
+            } else if (b.isStale) {
+                var staleBadge = document.createElement("span");
+                staleBadge.className = "badge bg-warning text-dark ms-1";
+                staleBadge.textContent = "Stale";
+                span.appendChild(staleBadge);
+            }
             container.appendChild(span);
         });
 

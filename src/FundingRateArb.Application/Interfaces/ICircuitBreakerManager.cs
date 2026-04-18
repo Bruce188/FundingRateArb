@@ -35,4 +35,9 @@ public interface ICircuitBreakerManager
     (DateOnly Date, int Count) GetDailyRotationCount(string userId);
     void SetDailyRotationCount(string userId, DateOnly date, int count);
     int GetConsecutiveLosses(string userId);
+
+    // Per-exchange unavailability (orthogonal to open/half-open/closed circuit breaker)
+    void MarkUnavailable(string exchange);
+    bool IsUnavailable(string exchange);
+    void ClearUnavailable(string exchange);
 }

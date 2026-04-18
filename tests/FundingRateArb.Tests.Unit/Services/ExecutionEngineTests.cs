@@ -4410,6 +4410,95 @@ public class ExecutionEngineTests
             "missing-from-snapshot is treated as available (not unavailable)");
     }
 
+    [Fact]
+    public async Task OpenPosition_ShortLegUnavailable_RejectsTrade()
+    {
+        // Arrange: short exchange (Lighter) is marked unavailable; long is fine
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = 1000m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new() { ExchangeId = 1, ExchangeName = "Hyperliquid", AvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow },
+                new() { ExchangeId = 2, ExchangeName = "Lighter", AvailableUsdc = 0m, IsUnavailable = true, FetchedAt = DateTime.UtcNow },
+            }
+        };
+
+        var engine = CreateEngineWithBalance(snapshot);
+
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        success.Should().BeFalse("short-leg unavailable must reject the trade");
+        error.Should().Contain("unavailable");
+        error.Should().Contain("Lighter");
+    }
+
+    /// <summary>
+    /// Parameterized theory: balance availability combinations and expected trade outcome.
+    /// longUnavail / shortUnavail / longStale / shortStale → shouldReject.
+    /// </summary>
+    [Theory]
+    [InlineData(false, false, false, false, false, "both available → opens")]
+    [InlineData(true,  false, false, false, true,  "long unavailable → rejected")]
+    [InlineData(false, true,  false, false, true,  "short unavailable → rejected")]
+    [InlineData(true,  true,  false, false, true,  "both unavailable → rejected")]
+    [InlineData(false, false, true,  false, false, "long stale only → proceeds")]
+    [InlineData(false, false, false, true,  false, "short stale only → proceeds")]
+    [InlineData(false, false, true,  true,  false, "both stale → proceeds")]
+    public async Task OpenPosition_AvailabilityMatrix(
+        bool longUnavail, bool shortUnavail,
+        bool longStale, bool shortStale,
+        bool shouldReject, string scenario)
+    {
+        var snapshot = new BalanceSnapshotDto
+        {
+            TotalAvailableUsdc = (longUnavail || shortUnavail) ? 0m : 2000m,
+            FetchedAt = DateTime.UtcNow,
+            Balances = new List<ExchangeBalanceDto>
+            {
+                new()
+                {
+                    ExchangeId = 1, ExchangeName = "Hyperliquid",
+                    AvailableUsdc = longUnavail ? 0m : 1000m,
+                    IsUnavailable = longUnavail, IsStale = longStale,
+                    FetchedAt = DateTime.UtcNow,
+                },
+                new()
+                {
+                    ExchangeId = 2, ExchangeName = "Lighter",
+                    AvailableUsdc = shortUnavail ? 0m : 1000m,
+                    IsUnavailable = shortUnavail, IsStale = shortStale,
+                    FetchedAt = DateTime.UtcNow,
+                },
+            }
+        };
+
+        // For non-rejecting scenarios, make the order placement succeed
+        if (!shouldReject)
+        {
+            _mockLongConnector
+                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessOrder());
+            _mockShortConnector
+                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync(SuccessOrder());
+        }
+
+        var engine = CreateEngineWithBalance(snapshot);
+        var (success, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
+
+        if (shouldReject)
+        {
+            success.Should().BeFalse(scenario);
+            error.Should().Contain("unavailable", scenario);
+        }
+        else
+        {
+            error.Should().NotContain("unavailable", scenario);
+        }
+    }
+
     // ── Both-leg confirmation window (ReconciliationDrift) ──────────────────────
 
     /// <summary>

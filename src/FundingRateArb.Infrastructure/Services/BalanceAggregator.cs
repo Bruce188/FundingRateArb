@@ -1,5 +1,6 @@
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -13,22 +14,65 @@ public class BalanceAggregator : IBalanceAggregator
     internal static TimeSpan GetAuthErrorBackoff(int consecutiveFailures) =>
         TimeSpan.FromMinutes(Math.Min(5 * Math.Pow(2, Math.Max(0, consecutiveFailures - 1)), 60));
 
+    /// <summary>
+    /// Known credential-error message fragments — walked across InnerException chain up to 5 hops.
+    /// Mirrors the classifier used by LeverageTierRefresher (PR #211).
+    /// </summary>
+    private static readonly (string Fragment, StringComparison Comparison)[] _knownCredentialErrors =
+    {
+        ("Invalid API-key",          StringComparison.OrdinalIgnoreCase),
+        ("-2015",                     StringComparison.Ordinal),
+        ("Unauthorized",             StringComparison.OrdinalIgnoreCase),
+        ("credentials not provided", StringComparison.OrdinalIgnoreCase),
+    };
+
     private readonly IUserSettingsService _userSettings;
     private readonly IExchangeConnectorFactory _connectorFactory;
     private readonly IMemoryCache _cache;
+    private readonly ICircuitBreakerManager _circuitBreaker;
     private readonly ILogger<BalanceAggregator> _logger;
 
     public BalanceAggregator(
         IUserSettingsService userSettings,
         IExchangeConnectorFactory connectorFactory,
         IMemoryCache cache,
+        ICircuitBreakerManager circuitBreaker,
         ILogger<BalanceAggregator> logger)
     {
         _userSettings = userSettings;
         _connectorFactory = connectorFactory;
         _cache = cache;
+        _circuitBreaker = circuitBreaker;
         _logger = logger;
     }
+
+    /// <summary>
+    /// Returns true when the exception (or any exception in its InnerException chain, up to
+    /// 5 hops) represents an authentication or credential failure.
+    /// </summary>
+    private static bool IsCredentialError(Exception ex)
+    {
+        var current = ex;
+        for (var hop = 0; hop < 5 && current is not null; hop++, current = current.InnerException)
+        {
+            var msg = current.Message;
+            foreach (var (fragment, comparison) in _knownCredentialErrors)
+            {
+                if (msg.Contains(fragment, comparison))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true when a persisted error message (from a previous fetch cycle) indicates
+    /// a credential failure. Used to gate the auth-error backoff skip at the top of the
+    /// per-credential loop, where only the stored string is available (not the original exception).
+    /// </summary>
+    private static bool IsAuthError(string? sanitizedMessage) =>
+        sanitizedMessage is not null
+        && sanitizedMessage.Contains("API key invalid", StringComparison.OrdinalIgnoreCase);
 
     public async Task<BalanceSnapshotDto> GetBalanceSnapshotAsync(string userId, CancellationToken ct = default)
     {
@@ -145,17 +189,21 @@ public class BalanceAggregator : IBalanceAggregator
                 // Write last-known-good cache for transient error fallback
                 _cache.Set($"balance-lkg:{userId}:{exchangeId}", (Value: balance, FetchedAt: now), TimeSpan.FromHours(1));
 
+                // Clear transient unavailability flag on successful fetch
+                _circuitBreaker.ClearUnavailable(exchangeName);
+
                 // Clear credential error on success
                 await _userSettings.UpdateCredentialErrorAsync(userId, exchangeId, null, ct);
             }
             catch (Exception ex)
             {
-                var sanitized = SanitizeErrorMessage(ex, exchangeName);
-
-                if (IsAuthError(sanitized))
+                if (IsCredentialError(ex))
                 {
-                    // Credential error: mark exchange unavailable, disable trading
-                    _logger.LogWarning("{Exchange} credentials invalid for user {UserId}, trading disabled for this exchange", exchangeName, userId);
+                    // Credential error (auth failure): loud-fail, mark exchange unavailable, disable trading.
+                    // Log sanitized literal — do not log raw exception message which may contain credential material.
+                    _logger.LogWarning("AUTH: credential rejected for {Exchange}, user {UserId} — trading disabled for this exchange",
+                        exchangeName, userId);
+                    var sanitized = SanitizeErrorMessage(ex, exchangeName);
                     balances.Add(new ExchangeBalanceDto
                     {
                         ExchangeId = exchangeId,
@@ -171,13 +219,16 @@ public class BalanceAggregator : IBalanceAggregator
                 }
                 else
                 {
-                    // Transient error: fall back to last-known-good balance
+                    // Transient error (network/5xx/unknown): mark exchange unavailable via circuit breaker,
+                    // then fall back to last-known-good balance.
+                    _circuitBreaker.MarkUnavailable(exchangeName);
+                    _logger.LogWarning(ex, "{ExceptionType} balance fetch error for {Exchange}, user {UserId}",
+                        ex.GetBaseException().GetType().Name, exchangeName, userId);
+
                     var lkgKey = $"balance-lkg:{userId}:{exchangeId}";
                     if (_cache.TryGetValue<(decimal Value, DateTime FetchedAt)>(lkgKey, out var lkg))
                     {
                         var isStale = now - lkg.FetchedAt > TimeSpan.FromMinutes(10);
-                        _logger.LogWarning(ex, "Transient balance fetch error for {Exchange}, user {UserId} — using last-known-good",
-                            exchangeName, userId);
                         balances.Add(new ExchangeBalanceDto
                         {
                             ExchangeId = exchangeId,
@@ -190,8 +241,7 @@ public class BalanceAggregator : IBalanceAggregator
                     }
                     else
                     {
-                        _logger.LogWarning(ex, "Transient balance fetch error for {Exchange}, user {UserId} — no cached balance available",
-                            exchangeName, userId);
+                        var sanitized = SanitizeErrorMessage(ex, exchangeName);
                         balances.Add(new ExchangeBalanceDto
                         {
                             ExchangeId = exchangeId,
@@ -232,7 +282,4 @@ public class BalanceAggregator : IBalanceAggregator
         _ => $"{exchangeName}: balance fetch failed",
     };
 
-    private static bool IsAuthError(string? sanitizedMessage) =>
-        sanitizedMessage is not null
-        && sanitizedMessage.Contains("API key invalid", StringComparison.OrdinalIgnoreCase);
 }

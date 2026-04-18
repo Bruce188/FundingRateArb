@@ -1,6 +1,7 @@
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Services;
@@ -15,6 +16,7 @@ public class BalanceAggregatorTests
     private readonly Mock<IUserSettingsService> _mockUserSettings = new();
     private readonly Mock<IExchangeConnectorFactory> _mockConnectorFactory = new();
     private readonly IMemoryCache _cache = new MemoryCache(new MemoryCacheOptions());
+    private readonly Mock<ICircuitBreakerManager> _mockCircuitBreaker = new();
     private readonly Mock<ILogger<BalanceAggregator>> _mockLogger = new();
     private readonly BalanceAggregator _sut;
 
@@ -24,6 +26,7 @@ public class BalanceAggregatorTests
             _mockUserSettings.Object,
             _mockConnectorFactory.Object,
             _cache,
+            _mockCircuitBreaker.Object,
             _mockLogger.Object);
     }
 
@@ -692,7 +695,7 @@ public class BalanceAggregatorTests
         // Arrange — use a fresh BalanceAggregator with its own cache to control LKG population
         const string userId = "user-lkg-fallback";
         var freshCache = new MemoryCache(new MemoryCacheOptions());
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, _mockLogger.Object);
 
         var creds = new List<UserExchangeCredential>
         {
@@ -780,7 +783,7 @@ public class BalanceAggregatorTests
         // Arrange — use a fresh cache and pre-populate LKG with old timestamp
         const string userId = "user-stale-lkg";
         var freshCache = new MemoryCache(new MemoryCacheOptions());
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, _mockLogger.Object);
 
         var creds = new List<UserExchangeCredential>
         {
@@ -857,7 +860,7 @@ public class BalanceAggregatorTests
         // Arrange — three exchanges: healthy (50m), stale fallback (30m), unavailable (auth error)
         const string userId = "user-mixed-total";
         var freshCache = new MemoryCache(new MemoryCacheOptions());
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockLogger.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, _mockLogger.Object);
 
         var creds = new List<UserExchangeCredential>
         {
@@ -1014,7 +1017,7 @@ public class BalanceAggregatorTests
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
 
         var freshCache = new MemoryCache(new MemoryCacheOptions());
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, loggerMock.Object);
 
         // Act
         var result = await sut.GetBalanceSnapshotAsync("user1");
@@ -1078,7 +1081,7 @@ public class BalanceAggregatorTests
                 It.IsAny<Exception?>(),
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
 
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, loggerMock.Object);
 
         // First call — MissingMnemonic warning should be logged
         await sut.GetBalanceSnapshotAsync("user1");
@@ -1133,7 +1136,7 @@ public class BalanceAggregatorTests
                 It.IsAny<Func<It.IsAnyType, Exception?, string>>()))
             .Callback(() => warnCount++);
 
-        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, loggerMock.Object);
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, loggerMock.Object);
 
         // First call — warning logged
         await sut.GetBalanceSnapshotAsync("user1");
@@ -1143,6 +1146,193 @@ public class BalanceAggregatorTests
         await sut.GetBalanceSnapshotAsync("user1");
 
         warnCount.Should().Be(1, "same reason within 15 min must be suppressed on second call");
+    }
+
+    // ── Task 3.1: CircuitBreaker integration + credential depth + log message tests ──────────────
+
+    [Fact]
+    public async Task TransientError_Calls_MarkUnavailable_OnCircuitBreaker()
+    {
+        // Arrange
+        const string userId = "user-mark-unavail";
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Binance" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Connection refused"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: transient error must call MarkUnavailable on the circuit breaker
+        _mockCircuitBreaker.Verify(cb => cb.MarkUnavailable("Binance"), Times.Once);
+    }
+
+    [Fact]
+    public async Task SuccessfulFetch_Calls_ClearUnavailable_OnCircuitBreaker()
+    {
+        // Arrange
+        const string userId = "user-clear-unavail";
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Hyperliquid" }, EncryptedWalletAddress = "w" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, "w", (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(200m);
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "w", null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: successful fetch must call ClearUnavailable on the circuit breaker
+        _mockCircuitBreaker.Verify(cb => cb.ClearUnavailable("Hyperliquid"), Times.Once);
+    }
+
+    [Fact]
+    public async Task CredentialError_AtInnerExceptionDepth2_StillClassifiedAsCredential()
+    {
+        // Arrange — wrap a credential-error exception 2 levels deep
+        const string userId = "user-cred-depth2";
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Binance" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        // Depth-2 credential error: outer → wrapper → auth failure message
+        var inner = new InvalidOperationException("Invalid API-key, IP, or permissions for action");
+        var outer = new Exception("Exchange error", inner);
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(outer);
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Binance", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        // Act
+        var result = await _sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: depth-2 credential error must be classified as credential (not transient)
+        result.Balances.Should().HaveCount(1);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        // MarkUnavailable must NOT be called — credential path does not use circuit breaker
+        _mockCircuitBreaker.Verify(cb => cb.MarkUnavailable(It.IsAny<string>()), Times.Never,
+            "credential errors must not call MarkUnavailable — they use the auth-error backoff instead");
+    }
+
+    [Fact]
+    public async Task CredentialError_LogContains_AuthLiteralMessage()
+    {
+        // Arrange
+        const string userId = "user-cred-log";
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Aster" }, EncryptedApiKey = "k" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(("key", "secret", (string?)null, (string?)null, (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Invalid API-key, IP, or permissions for action"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Aster", "key", "secret", null, null, null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        var captured = new List<string>();
+        var loggerMock = new Mock<ILogger<BalanceAggregator>>(MockBehavior.Loose);
+        loggerMock
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => CaptureMsg(captured, state.ToString()!)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
+
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, loggerMock.Object);
+
+        // Act
+        await sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: log must contain the sanitized auth literal (no raw exception text)
+        captured.Should().Contain(m => m.Contains("AUTH: credential rejected"),
+            "credential error log must use the sanitized literal 'AUTH: credential rejected'");
+    }
+
+    [Fact]
+    public async Task TransientError_LogContains_BaseExceptionTypeName()
+    {
+        // Arrange
+        const string userId = "user-transient-log";
+        var creds = new List<UserExchangeCredential>
+        {
+            new() { Id = 1, ExchangeId = 1, Exchange = new Exchange { Id = 1, Name = "Lighter" }, EncryptedPrivateKey = "pk" },
+        };
+
+        _mockUserSettings.Setup(u => u.GetActiveCredentialsAsync(userId)).ReturnsAsync(creds);
+        _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
+            .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
+
+        var mockConnector = new Mock<IExchangeConnector>();
+        mockConnector
+            .Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("timeout"));
+
+        _mockConnectorFactory
+            .Setup(f => f.CreateForUserAsync("Lighter", null, null, null, "pk", null, null, It.IsAny<string?>()))
+            .ReturnsAsync(mockConnector.Object);
+
+        var captured = new List<string>();
+        var loggerMock = new Mock<ILogger<BalanceAggregator>>(MockBehavior.Loose);
+        loggerMock
+            .Setup(l => l.Log(
+                It.IsAny<LogLevel>(),
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => CaptureMsg(captured, state.ToString()!)),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()));
+
+        var freshCache = new MemoryCache(new MemoryCacheOptions());
+        var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, loggerMock.Object);
+
+        // Act
+        await sut.GetBalanceSnapshotAsync(userId);
+
+        // Assert: transient log must contain GetBaseException().GetType().Name of thrown exception
+        var expectedTypeName = new HttpRequestException("timeout").GetBaseException().GetType().Name;
+        captured.Should().Contain(m => m.Contains(expectedTypeName),
+            "transient error log must include GetBaseException().GetType().Name (e.g. HttpRequestException)");
     }
 
     private static bool CaptureMsg(List<string> list, string message)

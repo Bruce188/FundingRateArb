@@ -26,6 +26,11 @@ public class CircuitBreakerManager : ICircuitBreakerManager
     private const int AssetCooldownThreshold = 3;
     private static readonly TimeSpan AssetCooldownDuration = TimeSpan.FromMinutes(10);
 
+    // Per-exchange unavailability — orthogonal to open/half-open/closed breaker state.
+    // Keyed by lowercase exchange name; set by BalanceAggregator on transient fetch failure,
+    // cleared on successful fetch.
+    private readonly ConcurrentDictionary<string, bool> _unavailableExchanges = new(StringComparer.OrdinalIgnoreCase);
+
     // Per-opportunity cooldown after rotation — prevents flip-flopping
     private readonly ConcurrentDictionary<string, DateTime> _rotationCooldowns = new();
     internal static readonly TimeSpan RotationCooldownDuration = TimeSpan.FromMinutes(5);
@@ -317,5 +322,30 @@ public class CircuitBreakerManager : ICircuitBreakerManager
     public int GetConsecutiveLosses(string userId)
     {
         return _userConsecutiveLosses.GetValueOrDefault(userId, 0);
+    }
+
+    /// <summary>
+    /// Marks an exchange as unavailable due to a transient fetch failure.
+    /// Idempotent — re-marking an already-unavailable exchange is a no-op.
+    /// Orthogonal to the open/half-open/closed circuit breaker state.
+    /// </summary>
+    public void MarkUnavailable(string exchange)
+    {
+        _unavailableExchanges.TryAdd(exchange, true);
+    }
+
+    /// <summary>Returns true when the exchange has been marked unavailable.</summary>
+    public bool IsUnavailable(string exchange)
+    {
+        return _unavailableExchanges.ContainsKey(exchange);
+    }
+
+    /// <summary>
+    /// Clears the unavailable flag for an exchange after a successful fetch.
+    /// No-op if the exchange was not marked unavailable.
+    /// </summary>
+    public void ClearUnavailable(string exchange)
+    {
+        _unavailableExchanges.TryRemove(exchange, out _);
     }
 }

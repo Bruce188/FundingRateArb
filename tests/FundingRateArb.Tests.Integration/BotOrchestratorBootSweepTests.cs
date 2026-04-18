@@ -288,6 +288,9 @@ public class BotOrchestratorBootSweepTests
         public (DateOnly Date, int Count) GetDailyRotationCount(string userId) => (DateOnly.MinValue, 0);
         public void SetDailyRotationCount(string userId, DateOnly date, int count) { }
         public int GetConsecutiveLosses(string userId) => 0;
+        public void MarkUnavailable(string exchange) { }
+        public bool IsUnavailable(string exchange) => false;
+        public void ClearUnavailable(string exchange) { }
     }
 
     private sealed class NullOpportunityFilter : IOpportunityFilter
