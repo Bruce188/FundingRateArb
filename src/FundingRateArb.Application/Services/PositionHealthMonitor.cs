@@ -115,6 +115,28 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 _logger.LogWarning(
                     "Position #{Id} has CloseReason=ReconciliationDrift but Status={Status} — skipping PnL aggregation",
                     pos.Id, pos.Status);
+
+                // N10: Invariant check — ReconciliationDrift rows should never have close legs set.
+                // LongLegClosed or ShortLegClosed being true indicates state corruption (a leg was
+                // closed after the position was marked ReconciliationDrift, or the flag was set erroneously).
+                if (pos.LongLegClosed || pos.ShortLegClosed)
+                {
+                    _logger.LogWarning(
+                        "State corruption: position #{Id} has CloseReason=ReconciliationDrift " +
+                        "but LongLegClosed={Long}, ShortLegClosed={Short} — invariant violated",
+                        pos.Id, pos.LongLegClosed, pos.ShortLegClosed);
+                    _uow.Alerts.Add(new Alert
+                    {
+                        UserId = pos.UserId,
+                        ArbitragePositionId = pos.Id,
+                        Type = AlertType.LegFailed,
+                        Severity = AlertSeverity.Warning,
+                        Message = $"State corruption: position #{pos.Id} has CloseReason=ReconciliationDrift " +
+                                  $"but LongLegClosed={pos.LongLegClosed}, ShortLegClosed={pos.ShortLegClosed}. " +
+                                  "This violates the invariant that ReconciliationDrift rows have no close legs. Verify manually.",
+                    });
+                }
+
                 continue;
             }
 

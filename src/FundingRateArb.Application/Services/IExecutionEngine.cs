@@ -40,4 +40,14 @@ public interface IExecutionEngine
     /// </summary>
     Task<Dictionary<int, PositionExistsResult>> CheckPositionsExistOnExchangesBatchAsync(
         IReadOnlyList<ArbitragePosition> positions, CancellationToken ct = default);
+
+    /// <summary>
+    /// Runs the both-leg confirmation window for a position that was left in <c>Opening</c>
+    /// state (e.g. after an app restart). If both legs confirm, the position is promoted to
+    /// <c>Open</c> with <c>OpenConfirmedAt</c> stamped. If either leg is explicitly not-open,
+    /// the position is rolled back to <c>Failed+ReconciliationDrift</c>. Indeterminate (null)
+    /// results are treated the same as in the normal open flow (proceeds to Open with a Warning
+    /// alert). Connectors are disposed before returning.
+    /// </summary>
+    Task ConfirmOrRollbackAsync(string userId, ArbitragePosition position, int timeoutSeconds, CancellationToken ct = default);
 }

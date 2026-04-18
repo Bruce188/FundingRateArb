@@ -12,15 +12,22 @@ namespace FundingRateArb.Application.Services;
 public class ExecutionEngine : IExecutionEngine
 {
     private const decimal MaxSingleOrderUsdc = 10_000m;
+    private const int RollbackInFlightWarnThreshold = 1_000;
 
     private readonly ConcurrentDictionary<(string Asset, int MaxLeverage), byte> _leverageWarned = new();
 
     /// <summary>
-    /// Position IDs for which a ReconciliationDrift rollback is in progress.
-    /// Guards against concurrent watchers issuing a double ClosePositionAsync on the same position.
-    /// Keys are removed after the rollback completes (success or failure).
+    /// In-flight rollback tasks keyed by idempotency key "{userId}-{positionId}-{attemptN}".
+    /// Guards against concurrent callers issuing duplicate ClosePositionAsync calls for the same
+    /// position. Duplicate callers await the winner's Task rather than returning immediately.
+    /// Keys are removed in the winner's finally block after the rollback completes (success or fault).
+    /// In-process dedup only — does not survive process restarts. Unbounded growth is capped by
+    /// a size-warning log; normal TTL is the rollback duration (seconds).
     /// </summary>
-    private readonly ConcurrentDictionary<int, byte> _rollbackInFlight = new();
+    private readonly ConcurrentDictionary<string, Task<bool>> _rollbackInFlight = new();
+
+    /// <summary>Tracks per-position attempt count to construct scoped idempotency keys.</summary>
+    private readonly ConcurrentDictionary<int, int> _positionAttemptCount = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IConnectorLifecycleManager _connectorLifecycle;
@@ -838,8 +845,6 @@ public class ExecutionEngine : IExecutionEngine
                     position, opp.AssetSymbol,
                     longConnector, shortConnector,
                     opp.LongExchangeName, opp.ShortExchangeName,
-                    firstResult: longResult, secondResult: shortResult,
-                    isSequential: useSequential,
                     userId, config.OpenConfirmTimeoutSeconds, ct);
 
                 if (!confirmed)
@@ -925,12 +930,13 @@ public class ExecutionEngine : IExecutionEngine
     }
 
     /// <summary>
-    /// Polls both exchange connectors until both legs confirm open, or the timeout elapses.
-    /// On success: sets <see cref="ArbitragePosition.OpenConfirmedAt"/> and returns true.
-    /// On timeout / one-leg failure: atomically rolls back the confirmed leg via
-    /// <see cref="IExchangeConnector.ClosePositionAsync"/>, persists Failed+ReconciliationDrift,
-    /// and returns false. If the rollback itself throws, the position is still persisted as
-    /// Failed+ReconciliationDrift and a Critical alert is raised for manual unwind.
+    /// Polls both exchange connectors concurrently until both legs confirm open, or the timeout
+    /// elapses. On success: returns true (caller sets OpenConfirmedAt). On timeout with at least
+    /// one leg explicitly not-open or indeterminate after the full window: rolls back the
+    /// confirmed leg(s) via <see cref="IExchangeConnector.ClosePositionAsync"/> using a
+    /// non-cancellable token, persists Failed+ReconciliationDrift, and returns false. If the
+    /// rollback throws, the position is still persisted and a Critical alert is raised for manual
+    /// unwind. Duplicate concurrent callers for the same position await the winner's rollback task.
     /// </summary>
     private async Task<bool> AwaitBothLegConfirmationAsync(
         ArbitragePosition position,
@@ -939,26 +945,25 @@ public class ExecutionEngine : IExecutionEngine
         IExchangeConnector shortConnector,
         string longExchangeName,
         string shortExchangeName,
-        OrderResultDto firstResult,
-        OrderResultDto secondResult,
-        bool isSequential,
         string userId,
         int timeoutSeconds,
         CancellationToken ct)
     {
+        // Guard: caller's CT must not be fired before we begin (defensive check).
+        ct.ThrowIfCancellationRequested();
+
         using var confirmCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        confirmCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        var effectiveTimeout = Math.Max(5, timeoutSeconds);
+        confirmCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeout));
         var confirmToken = confirmCts.Token;
 
         bool longConfirmed = false;
         bool shortConfirmed = false;
         // Track whether either leg returned an explicit false (not-open), as opposed to null (unknown).
-        // When both legs return null throughout the window, the confirmation result is genuinely
-        // indeterminate — we proceed rather than rolling back a position that may well be live.
         bool longExplicitlyNotOpen = false;
         bool shortExplicitlyNotOpen = false;
 
-        // Poll both legs at 2-second intervals until both confirm or timeout fires.
+        // Poll both legs concurrently at 2-second intervals until both confirm or timeout fires.
         const int pollIntervalMs = 2_000;
         while (!longConfirmed || !shortConfirmed)
         {
@@ -969,32 +974,34 @@ public class ExecutionEngine : IExecutionEngine
 
             try
             {
-                if (!longConfirmed)
+                // Issue both checks concurrently, skipping already-confirmed legs.
+                var longTask = longConfirmed
+                    ? Task.FromResult<bool?>(true)
+                    : longConnector.HasOpenPositionAsync(assetSymbol, Side.Long, confirmToken);
+                var shortTask = shortConfirmed
+                    ? Task.FromResult<bool?>(true)
+                    : shortConnector.HasOpenPositionAsync(assetSymbol, Side.Short, confirmToken);
+
+                await Task.WhenAll(longTask, shortTask);
+
+                var longResult = await longTask;
+                if (longResult == true)
                 {
-                    var result = await longConnector.HasOpenPositionAsync(assetSymbol, Side.Long, confirmToken);
-                    if (result == true)
-                    {
-                        longConfirmed = true;
-                    }
-                    else if (result == false)
-                    {
-                        longExplicitlyNotOpen = true;
-                    }
-                    // null → unknown, keep polling
+                    longConfirmed = true;
+                }
+                else if (longResult == false)
+                {
+                    longExplicitlyNotOpen = true;
                 }
 
-                if (!shortConfirmed)
+                var shortResult = await shortTask;
+                if (shortResult == true)
                 {
-                    var result = await shortConnector.HasOpenPositionAsync(assetSymbol, Side.Short, confirmToken);
-                    if (result == true)
-                    {
-                        shortConfirmed = true;
-                    }
-                    else if (result == false)
-                    {
-                        shortExplicitlyNotOpen = true;
-                    }
-                    // null → unknown, keep polling
+                    shortConfirmed = true;
+                }
+                else if (shortResult == false)
+                {
+                    shortExplicitlyNotOpen = true;
                 }
 
                 if (longConfirmed && shortConfirmed)
@@ -1011,67 +1018,124 @@ public class ExecutionEngine : IExecutionEngine
             }
             catch (OperationCanceledException)
             {
-                // Caller's CancellationToken fired — propagate.
+                // Caller's CancellationToken fired — propagate (do not rollback here; caller decides).
                 throw;
             }
         }
 
-        // Rollback only when at least one leg explicitly reported not-open (false).
-        // If the window timed out but no leg returned false (all null = indeterminate or already
-        // confirmed), proceed to Open to avoid rolling back a potentially live position when
-        // the exchange API is temporarily unavailable or does not support HasOpenPositionAsync.
+        // B2: If the window timed out with neither leg returning an explicit false, check for
+        // indeterminate state. Rollback only when at least one leg explicitly returned false.
+        // For connectors that do not implement HasOpenPositionAsync (always return null), proceed
+        // to Open with a warning — the boot sweep and PositionHealthMonitor provide defense-in-depth.
         if (!longExplicitlyNotOpen && !shortExplicitlyNotOpen)
         {
             if (!longConfirmed || !shortConfirmed)
             {
+                // B2: One-or-both legs indeterminate — raise an Alert so ops can verify.
+                // Do NOT stamp OpenConfirmedAt; let the caller decide. The caller will set it
+                // only when this method returns true, so indeterminate rows remain detectable
+                // by the boot sweep (OpenConfirmedAt == null while Status == Opening).
                 _logger.LogWarning(
-                    "Both-leg confirmation window timed out for position #{Id} ({Asset}) with indeterminate results. " +
-                    "Proceeding to Open — ops should verify manually.",
-                    position.Id, assetSymbol);
+                    "Both-leg confirmation window timed out for position #{Id} ({Asset}) with indeterminate results " +
+                    "(longConfirmed={Long}, shortConfirmed={Short}). Proceeding to Open — ops should verify manually.",
+                    position.Id, assetSymbol, longConfirmed, shortConfirmed);
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = userId,
+                    ArbitragePositionId = position.Id,
+                    Type = AlertType.LegFailed,
+                    Severity = AlertSeverity.Warning,
+                    Message = $"Position #{position.Id} ({assetSymbol}): both-leg confirmation window timed out with indeterminate results. " +
+                              $"longConfirmed={longConfirmed}, shortConfirmed={shortConfirmed}. Promoted to Open — verify manually.",
+                });
             }
+
             return true;
         }
 
-        // Idempotency guard: only one rollback per position, even if two concurrent callers
-        // reach this point (possible under concurrent watcher patterns).
-        if (!_rollbackInFlight.TryAdd(position.Id, 0))
+        // Build scoped idempotency key: {userId}-{positionId}-{attemptN}
+        // attemptN tracks how many rollback CYCLES have been issued for this position.
+        // Concurrent callers in the SAME cycle share the same in-flight Task via the key.
+        // The counter is incremented only when a new rollback winner is registered (not per-caller).
+        var attemptN = _positionAttemptCount.GetOrAdd(position.Id, 1);
+        var idempotencyKey = $"{userId}-{position.Id}-{attemptN}";
+
+        // Size-safety warning (N4): alert ops if the in-flight dict is growing unexpectedly.
+        if (_rollbackInFlight.Count >= RollbackInFlightWarnThreshold)
         {
-            // Another caller has the rollback in flight; wait briefly then check the outcome.
             _logger.LogWarning(
-                "Rollback for position #{Id} already in flight — skipping duplicate", position.Id);
-            return false;
+                "RollbackInFlight dictionary has reached {Count} entries — possible leak or runaway concurrent callers",
+                _rollbackInFlight.Count);
+        }
+
+        // B6: Idempotency guard — if a rollback for this key is already in flight, await it.
+        // This handles concurrent callers arriving while the first caller is mid-rollback.
+        if (_rollbackInFlight.TryGetValue(idempotencyKey, out var existingTask))
+        {
+            _logger.LogWarning(
+                "Rollback for position #{Id} (key={Key}) already in flight — awaiting winner's result",
+                position.Id, idempotencyKey);
+            return await existingTask;
         }
 
         _logger.LogWarning(
             "Both-leg confirmation timed out for position #{Id} ({Asset}) — longConfirmed={Long}, shortConfirmed={Short}. Rolling back.",
             position.Id, assetSymbol, longConfirmed, shortConfirmed);
 
+        // Winner: register rollback task so duplicate callers can await it.
+        var rollbackTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_rollbackInFlight.TryAdd(idempotencyKey, rollbackTcs.Task))
+        {
+            // Lost a tight race to register — await the winner's task.
+            if (_rollbackInFlight.TryGetValue(idempotencyKey, out var raceTask))
+            {
+                return await raceTask;
+            }
+
+            // Winner already finished and removed the key — fall through to proceed.
+        }
+
+        bool rollbackResult;
         try
         {
-            // Roll back the confirmed leg(s) only.
+            // B1: Roll back with a non-cancellable token — rollback must complete even if caller cancels.
             if (longConfirmed)
             {
-                await RollbackLegAsync(longConnector, assetSymbol, Side.Long, longExchangeName, position, userId, ct);
+                await RollbackLegAsync(longConnector, assetSymbol, Side.Long, longExchangeName, position, userId, CancellationToken.None);
             }
 
             if (shortConfirmed)
             {
-                await RollbackLegAsync(shortConnector, assetSymbol, Side.Short, shortExchangeName, position, userId, ct);
+                await RollbackLegAsync(shortConnector, assetSymbol, Side.Short, shortExchangeName, position, userId, CancellationToken.None);
             }
+
+            // B1/NT3: Persist Failed+ReconciliationDrift with a non-cancellable token so the
+            // persist (and any alerts added by RollbackLegAsync) cannot be dropped by caller cancel.
+            position.Status = PositionStatus.Failed;
+            position.CloseReason = CloseReason.ReconciliationDrift;
+            position.ClosedAt = DateTime.UtcNow;
+            _uow.Positions.Update(position);
+            await _uow.SaveAsync(CancellationToken.None);
+
+            rollbackResult = false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogCritical(ex,
+                "Unexpected exception during rollback for position #{Id} — position state may be inconsistent",
+                position.Id);
+            rollbackTcs.TrySetException(ex);
+            throw;
         }
         finally
         {
-            _rollbackInFlight.TryRemove(position.Id, out _);
+            _rollbackInFlight.TryRemove(idempotencyKey, out _);
+            // Increment attempt counter for the next rollback cycle on this position.
+            _positionAttemptCount.AddOrUpdate(position.Id, 2, (_, v) => v + 1);
         }
 
-        // Persist Failed + ReconciliationDrift regardless of rollback outcome.
-        position.Status = PositionStatus.Failed;
-        position.CloseReason = CloseReason.ReconciliationDrift;
-        position.ClosedAt = DateTime.UtcNow;
-        _uow.Positions.Update(position);
-        await _uow.SaveAsync(ct);
-
-        return false;
+        rollbackTcs.TrySetResult(rollbackResult);
+        return rollbackResult;
     }
 
     /// <summary>
@@ -1297,5 +1361,67 @@ public class ExecutionEngine : IExecutionEngine
         }
 
         return results;
+    }
+
+    /// <inheritdoc />
+    public async Task ConfirmOrRollbackAsync(
+        string userId, ArbitragePosition position, int timeoutSeconds, CancellationToken ct = default)
+    {
+        var longExchangeName = position.LongExchange?.Name
+            ?? throw new InvalidOperationException($"Position #{position.Id} has no LongExchange navigation property loaded.");
+        var shortExchangeName = position.ShortExchange?.Name
+            ?? throw new InvalidOperationException($"Position #{position.Id} has no ShortExchange navigation property loaded.");
+        var assetSymbol = position.Asset?.Symbol
+            ?? throw new InvalidOperationException($"Position #{position.Id} has no Asset navigation property loaded.");
+
+        var (longConnector, shortConnector, credError) =
+            await _connectorLifecycle.CreateUserConnectorsAsync(userId, longExchangeName, shortExchangeName);
+        if (credError is not null)
+        {
+            _logger.LogWarning(
+                "ConfirmOrRollbackAsync: cannot resolve connectors for position #{Id} ({Asset}) — {Error}. Skipping.",
+                position.Id, assetSymbol, credError);
+            return;
+        }
+
+        try
+        {
+            var confirmed = await AwaitBothLegConfirmationAsync(
+                position, assetSymbol,
+                longConnector, shortConnector,
+                longExchangeName, shortExchangeName,
+                userId, timeoutSeconds, ct);
+
+            if (confirmed)
+            {
+                position.Status = PositionStatus.Open;
+                position.OpenConfirmedAt = DateTime.UtcNow;
+                position.ConfirmedAtUtc = DateTime.UtcNow;
+                _uow.Positions.Update(position);
+                await _uow.SaveAsync(CancellationToken.None);
+                _logger.LogInformation(
+                    "Boot sweep: position #{Id} ({Asset}) promoted to Open after confirmation.",
+                    position.Id, assetSymbol);
+            }
+            // If not confirmed, AwaitBothLegConfirmationAsync has already persisted Failed+ReconciliationDrift.
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning(
+                "Boot sweep: confirmation window cancelled for position #{Id} ({Asset}). Position remains Opening.",
+                position.Id, assetSymbol);
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Boot sweep: unexpected error during confirm-or-rollback for position #{Id} ({Asset}). Position state may require manual review.",
+                position.Id, assetSymbol);
+        }
+        finally
+        {
+            await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
+            await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
+        }
     }
 }

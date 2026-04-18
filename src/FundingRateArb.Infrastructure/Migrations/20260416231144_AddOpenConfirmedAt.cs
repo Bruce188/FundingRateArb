@@ -30,7 +30,7 @@ public partial class AddOpenConfirmedAt : Migration
             table: "BotConfigurations",
             type: "int",
             nullable: false,
-            defaultValue: 0);
+            defaultValue: 30);
 
         migrationBuilder.AddColumn<decimal>(
             name: "PnlTargetUnifiedTolerance",
@@ -44,11 +44,24 @@ public partial class AddOpenConfirmedAt : Migration
             table: "ArbitragePositions",
             type: "datetime2",
             nullable: true);
+
+        // Composite index to support the boot-time pending-confirm sweep without a full scan.
+        // Filters on Status=Opening (int 0) and OpenConfirmedAt IS NULL for efficient lookup.
+        // Note: this migration also absorbs prior unmigrated model-snapshot drift for
+        // LighterSlippageFloorPct, LighterSlippageMaxPct, and PnlTargetUnifiedTolerance.
+        migrationBuilder.CreateIndex(
+            name: "IX_ArbitragePositions_Status_OpenConfirmedAt",
+            table: "ArbitragePositions",
+            columns: ["Status", "OpenConfirmedAt"]);
     }
 
     /// <inheritdoc />
     protected override void Down(MigrationBuilder migrationBuilder)
     {
+        migrationBuilder.DropIndex(
+            name: "IX_ArbitragePositions_Status_OpenConfirmedAt",
+            table: "ArbitragePositions");
+
         migrationBuilder.DropColumn(
             name: "LighterSlippageFloorPct",
             table: "BotConfigurations");

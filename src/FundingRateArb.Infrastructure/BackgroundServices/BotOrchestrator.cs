@@ -74,6 +74,17 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
             _logger.LogWarning(ex, "Startup reconciliation failed — continuing with normal cycle");
         }
 
+        // Boot sweep: resolve any positions stuck in Opening state (e.g. after process restart).
+        // Runs once at startup, before the first normal cycle. Uses a 2-minute overall budget.
+        try
+        {
+            await RunBootSweepAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Boot sweep failed — orphaned Opening positions may require manual review");
+        }
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
 
         while (!ct.IsCancellationRequested)
@@ -126,6 +137,97 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
     public void RecordCloseResult(decimal realizedPnl, string? userId = null)
         => _circuitBreaker.RecordCloseResult(realizedPnl, userId);
+
+    /// <summary>
+    /// Boot sweep: resolves positions stuck in <c>Opening</c> state after a process restart.
+    /// Iterates all bot-enabled users, queries <c>GetPendingConfirmAsync</c> per user, and
+    /// feeds each result to <c>IExecutionEngine.ConfirmOrRollbackAsync</c>. Uses the active
+    /// <c>OpenConfirmTimeoutSeconds</c> from global config. Wrapped in a 2-minute overall budget.
+    /// </summary>
+    internal async Task RunBootSweepAsync(CancellationToken ct)
+    {
+        using var sweepScope = _scopeFactory.CreateScope();
+        var uow = sweepScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+        var executionEngine = sweepScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+        var globalConfig = await uow.BotConfig.GetActiveAsync();
+        var enabledUserIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+
+        if (enabledUserIds.Count == 0)
+        {
+            _logger.LogDebug("Boot sweep: no enabled users — skipping.");
+            return;
+        }
+
+        var olderThan = TimeSpan.Zero; // all Opening positions, not just stale ones
+        var totalFound = 0;
+
+        using var sweepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        sweepCts.CancelAfter(TimeSpan.FromMinutes(2));
+        var sweepToken = sweepCts.Token;
+
+        foreach (var userId in enabledUserIds)
+        {
+            if (sweepToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                var pending = await uow.Positions.GetPendingConfirmAsync(userId, olderThan, sweepToken);
+                if (pending.Count == 0)
+                {
+                    continue;
+                }
+
+                totalFound += pending.Count;
+                _logger.LogInformation(
+                    "Boot sweep: {Count} pending Opening position(s) found for user {UserId}. Running confirm-or-rollback.",
+                    pending.Count, userId);
+
+                foreach (var position in pending)
+                {
+                    if (sweepToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    try
+                    {
+                        await executionEngine.ConfirmOrRollbackAsync(
+                            userId, position, globalConfig.OpenConfirmTimeoutSeconds, sweepToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Boot sweep: confirm-or-rollback failed for position #{Id} (user {UserId}). Continuing.",
+                            position.Id, userId);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Boot sweep: failed to query or resolve positions for user {UserId}. Continuing.", userId);
+            }
+        }
+
+        if (totalFound > 0)
+        {
+            _logger.LogInformation("Boot sweep: processed {Count} pending position(s) across all users.", totalFound);
+        }
+        else
+        {
+            _logger.LogDebug("Boot sweep: no orphaned Opening positions found.");
+        }
+    }
 
     /// <summary>
     /// One bot cycle: health-monitor ALL open positions, then iterate enabled users.

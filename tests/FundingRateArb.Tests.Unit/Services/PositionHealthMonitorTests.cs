@@ -4193,4 +4193,39 @@ public class PositionHealthMonitorTests
         result.ComputedPnl.Should().NotContainKey(driftPos.Id,
             "the ReconciliationDrift position must be excluded from PnL aggregation");
     }
+
+    /// <summary>
+    /// A ReconciliationDrift position with any close leg set (LongLegClosed or ShortLegClosed)
+    /// violates the invariant that drift rows have no closed legs. The monitor must raise
+    /// a Warning alert to surface the state corruption in the admin UI.
+    /// </summary>
+    [Fact]
+    public async Task ReconciliationDriftWithCloseLegs_RaisesAlert()
+    {
+        // Arrange — drift row with a close leg set (invariant violation)
+        var driftPos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m, marginUsdc: 100m);
+        driftPos.CloseReason = CloseReason.ReconciliationDrift;
+        driftPos.LongLegClosed = true; // invariant violation: drift rows must not have closed legs
+
+        Alert? capturedAlert = null;
+        _mockAlerts.Setup(a => a.Add(It.IsAny<Alert>()))
+            .Callback<Alert>(a => capturedAlert = a);
+
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([driftPos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 3100m, shortMark: 2900m);
+
+        // Act
+        await _sut.CheckAndActAsync();
+
+        // Assert — a Warning alert must have been raised for the invariant violation
+        _mockAlerts.Verify(
+            a => a.Add(It.Is<Alert>(al =>
+                al.Type == AlertType.LegFailed &&
+                al.Severity == AlertSeverity.Warning &&
+                al.ArbitragePositionId == driftPos.Id &&
+                al.Message != null && al.Message.Contains("ReconciliationDrift"))),
+            Times.Once,
+            "a Warning alert must be raised when a ReconciliationDrift row has non-null close legs");
+    }
 }

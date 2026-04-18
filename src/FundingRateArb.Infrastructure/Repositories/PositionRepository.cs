@@ -277,16 +277,21 @@ public class PositionRepository : IPositionRepository
             .ToListAsync(ct);
     }
 
-    public async Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(TimeSpan olderThan, CancellationToken ct)
+    public async Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(
+        string userId, TimeSpan olderThan, CancellationToken ct, int maxResults = 100)
     {
         var cutoff = DateTime.UtcNow - olderThan;
         return await _context.ArbitragePositions
+            .AsNoTracking()
             .Include(p => p.Asset)
             .Include(p => p.LongExchange)
             .Include(p => p.ShortExchange)
-            .Where(p => p.Status == PositionStatus.Opening
+            .Where(p => p.UserId == userId
+                     && p.Status == PositionStatus.Opening
                      && p.OpenConfirmedAt == null
                      && p.OpenedAt < cutoff)
+            .OrderBy(p => p.OpenedAt)
+            .Take(maxResults)
             .ToListAsync(ct);
     }
 

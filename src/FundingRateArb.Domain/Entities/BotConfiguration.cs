@@ -169,9 +169,25 @@ public class BotConfiguration : IValidatableObject
     /// Seconds to wait for both-leg confirmation after the sequential open flow completes.
     /// If either leg has not confirmed within this window, the confirmed leg is rolled back
     /// via ClosePositionAsync and the position is marked Failed with ReconciliationDrift.
+    /// Values &lt;= 0 are rejected; the effective range is [5, 300] as enforced by <see cref="RangeAttribute"/>.
     /// </summary>
     [Range(5, 300)]
-    public int OpenConfirmTimeoutSeconds { get; set; } = 30;
+    public int OpenConfirmTimeoutSeconds
+    {
+        get => _openConfirmTimeoutSeconds;
+        set
+        {
+            if (value <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(OpenConfirmTimeoutSeconds),
+                    value, "OpenConfirmTimeoutSeconds must be greater than zero.");
+            }
+
+            _openConfirmTimeoutSeconds = value;
+        }
+    }
+
+    private int _openConfirmTimeoutSeconds = 30;
 
     /// <summary>Alert when price divergence exceeds this multiple of entry spread cost. Default 2.0.</summary>
     [Range(0.5, 10.0)]

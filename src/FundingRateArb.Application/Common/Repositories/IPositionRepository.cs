@@ -52,11 +52,16 @@ public interface IPositionRepository
     Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
 
     /// <summary>
-    /// Returns Opening positions whose OpenConfirmedAt is null and CreatedAt is older than
-    /// <paramref name="olderThan"/>. Used by the boot-time last-resort sweep in BotOrchestrator
-    /// to detect positions that exited the both-leg confirmation window without being resolved.
+    /// Returns Opening positions for <paramref name="userId"/> whose OpenConfirmedAt is null
+    /// and OpenedAt is older than <paramref name="olderThan"/>. Used by the boot-time sweep in
+    /// BotOrchestrator to detect positions that exited the both-leg confirmation window without
+    /// being resolved. Results are ordered by OpenedAt ascending (oldest first) and bounded by
+    /// <paramref name="maxResults"/> to prevent unbounded materialization on degraded databases.
+    /// Returned entities are not tracked — callers that need to persist changes must re-fetch
+    /// via <see cref="GetByIdAsync"/> or use a tracked query.
     /// </summary>
-    Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(TimeSpan olderThan, CancellationToken ct);
+    Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(
+        string userId, TimeSpan olderThan, CancellationToken ct, int maxResults = 100);
 
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);

@@ -233,6 +233,10 @@ public class StartupReconciliationIntegrationTests
         public Task<Dictionary<int, PositionExistsResult>> CheckPositionsExistOnExchangesBatchAsync(
             IReadOnlyList<ArbitragePosition> positions, CancellationToken ct = default)
             => Task.FromResult(new Dictionary<int, PositionExistsResult>());
+
+        public Task ConfirmOrRollbackAsync(string userId, ArbitragePosition position,
+            int timeoutSeconds, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     /// <summary>Stub for Open position test: batch returns BothMissing for the seeded position.</summary>
@@ -267,6 +271,10 @@ public class StartupReconciliationIntegrationTests
             }
             return Task.FromResult(result);
         }
+
+        public Task ConfirmOrRollbackAsync(string userId, ArbitragePosition position,
+            int timeoutSeconds, CancellationToken ct = default)
+            => Task.CompletedTask;
     }
 
     private sealed class StubMarketDataStream : IMarketDataStream

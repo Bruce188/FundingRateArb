@@ -592,5 +592,88 @@ public class PositionRepositoryTests : IDisposable
         results.Count.Should().BeLessOrEqualTo(PositionRepository.MaxGroupResults);
     }
 
+    // ── GetPendingConfirmAsync integration tests ──
+
+    [Fact]
+    public async Task GetPendingConfirmAsync_ReturnsOnlyMatchingUserPositions()
+    {
+        // Arrange — 2 pending-confirm rows for user1, 1 for user2
+        var user1PendingA = BuildPosition(_user1.Id, PositionStatus.Opening);
+        user1PendingA.OpenedAt = DateTime.UtcNow.AddMinutes(-10);
+        user1PendingA.OpenConfirmedAt = null;
+
+        var user1PendingB = BuildPosition(_user1.Id, PositionStatus.Opening);
+        user1PendingB.OpenedAt = DateTime.UtcNow.AddMinutes(-5);
+        user1PendingB.OpenConfirmedAt = null;
+
+        var user2Pending = BuildPosition(_user2.Id, PositionStatus.Opening);
+        user2Pending.OpenedAt = DateTime.UtcNow.AddMinutes(-8);
+        user2Pending.OpenConfirmedAt = null;
+
+        _fixture.UnitOfWork.Positions.Add(user1PendingA);
+        _fixture.UnitOfWork.Positions.Add(user1PendingB);
+        _fixture.UnitOfWork.Positions.Add(user2Pending);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — query user1 only, olderThan 1 minute
+        var results = await _fixture.UnitOfWork.Positions.GetPendingConfirmAsync(
+            _user1.Id, TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        // Assert — only user1's 2 positions are returned
+        results.Should().HaveCount(2);
+        results.Should().OnlyContain(p => p.UserId == _user1.Id);
+    }
+
+    [Fact]
+    public async Task GetPendingConfirmAsync_HonorsMaxResults()
+    {
+        // Arrange — 5 pending-confirm rows for user1
+        for (var i = 1; i <= 5; i++)
+        {
+            var pos = BuildPosition(_user1.Id, PositionStatus.Opening);
+            pos.OpenedAt = DateTime.UtcNow.AddMinutes(-(10 + i));
+            pos.OpenConfirmedAt = null;
+            _fixture.UnitOfWork.Positions.Add(pos);
+        }
+
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — cap at 3
+        var results = await _fixture.UnitOfWork.Positions.GetPendingConfirmAsync(
+            _user1.Id, TimeSpan.FromMinutes(1), CancellationToken.None, maxResults: 3);
+
+        // Assert
+        results.Should().HaveCount(3, "maxResults=3 must cap the result set");
+    }
+
+    [Fact]
+    public async Task GetPendingConfirmAsync_ReturnsNoTrackedEntities()
+    {
+        // Arrange
+        var pos = BuildPosition(_user1.Id, PositionStatus.Opening);
+        pos.OpenedAt = DateTime.UtcNow.AddMinutes(-10);
+        pos.OpenConfirmedAt = null;
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var results = await _fixture.UnitOfWork.Positions.GetPendingConfirmAsync(
+            _user1.Id, TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        results.Should().HaveCount(1);
+
+        // Mutate the entity and try to save — should NOT persist (AsNoTracking)
+        var returned = results[0];
+        returned.Notes = "mutated-via-no-tracking";
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Re-fetch to confirm the mutation was not persisted
+        var refetched = await _fixture.UnitOfWork.Positions.GetByIdAsync(returned.Id);
+        refetched.Should().NotBeNull();
+        refetched!.Notes.Should().NotBe("mutated-via-no-tracking",
+            "AsNoTracking entities must not be change-tracked");
+    }
+
     public void Dispose() => _fixture.Dispose();
 }
