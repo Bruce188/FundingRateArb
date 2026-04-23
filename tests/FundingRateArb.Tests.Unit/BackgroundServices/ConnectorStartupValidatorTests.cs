@@ -201,8 +201,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             u => u.GetUsersWithCredentialsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
 
-        // review-v236: N1 — warm-up must not record any delay when the token is pre-cancelled
-        delay.Recorded.Should().BeEmpty("warm-up must not record a duration when the token is pre-cancelled");
+        // review-v237: NB-1 — this verifies the RecordingDelay test-double contract (ct.ThrowIfCancellationRequested
+        // runs before _recorded.Enqueue), NOT a SUT invariant. The SUT invariant is already covered by the
+        // Times.Never assertion above — production's Task.Delay never records anything.
+        delay.Recorded.Should().BeEmpty("RecordingDelay.Func checks cancellation before recording: no duration should be enqueued when the token is pre-cancelled");
     }
 
     [Fact]
@@ -431,10 +433,12 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         warnings[0].Message.Should().Contain(SentinelMnemonic,
             "warning must include MissingField ({Field}) — assertion is falsifiable because sentinel IS in MissingField");
 
-        // No unexpected log entries (Error, Critical) — only the expected Warning
+        // review-v237: NB-4 — the SUT also emits one LogDebug entry ("validating dYdX credentials for {Count} user(s)")
+        // which is intentionally tolerated. The assertion below pins the Error/Critical absence; a separate
+        // Debug entry is expected and does not indicate a test gap. The full log shape: 1 Debug + 1 Warning.
         capturedLog.Should().NotContain(
             e => e.Level == LogLevel.Error || e.Level == LogLevel.Critical,
-            "a credential failure must not produce an error log — only a warning");
+            "a credential failure must not produce an Error or Critical log — expected entries are one Debug (user-count) and one Warning (credential-failure)");
     }
 
     [Fact]
@@ -582,14 +586,11 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             "the swallowed iteration exception must be logged via LogError");
     }
 
-    // review-v236: B3 — pin the cooperative-cancellation exit path (stoppingToken.IsCancellationRequested
-    // in the per-user foreach). Block user-first's throttle delay, call StopAsync to cancel the
-    // stopping token, then release the delay. After the throttle delay returns (via OCE), the
-    // outer catch(OCE){throw;} propagates out — the test confirms no spurious notification and
-    // that user-second was not validated via the cooperative break.
-    // Note: the OCE from the throttle delay causes the outer catch to rethrow; user-second's
-    // IsCancellationRequested check would fire if the SUT used a simple check path rather than
-    // throwing OCE from the delay. This test pins the overall cooperative-cancel invariant.
+    // review-v237: NB-2 — pins the empty-user-list path: when GetUsersWithCredentialsAsync returns an empty
+    // list the iteration-level foreach body is skipped entirely, no ValidateDydxAsync or PushNotificationAsync
+    // calls occur, and the iteration-interval delay still fires (confirming the full iteration loop runs).
+    // A regression that skipped the user fetch or bypassed the empty-list path would cause this test to
+    // either hang (missing the WaitForIterationAsync signal) or fail the Times.Never assertions.
     [Fact]
     public async Task ExecuteAsync_EmptyUserList_CompletesIterationWithoutValidationOrNotification()
     {

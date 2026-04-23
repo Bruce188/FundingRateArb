@@ -1,9 +1,11 @@
 // review-v230: NB4 — ValidateDydxAsync does not emit log entries on failure or exception branches.
+// review-v237: NB-3 — added System.Collections.Concurrent for ConcurrentQueue<string> in CapturingLogger<T>.
 // Logging of validation outcomes is the caller's (ConnectorStartupValidator's) responsibility.
 // This "no-log contract" is documented in the XML-doc remarks on ValidateDydxAsync in production.
 // The capturedLogMessages.Should().BeEmpty(...) assertions in this file pin that invariant;
 // a future maintainer adding a LogDebug trace to ValidateDydxAsync will see these tests fail,
 // which is intentional — it signals that the contract is being changed, not silently broken.
+using System.Collections.Concurrent;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
@@ -370,7 +372,10 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, SentinelMnemonic, null, null));
 
-        var capturedLogMessages = new List<string>();
+        // review-v237: NB-3 — ConcurrentQueue<string> matches the pattern used in ConnectorStartupValidatorTests;
+        // the factory is always invoked synchronously from the test thread today, but ConcurrentQueue
+        // eliminates the latent risk if a future test exercises a concurrent logging path.
+        var capturedLogMessages = new ConcurrentQueue<string>();
         var capturingLogger = new CapturingLogger<ExchangeConnectorFactory>(capturedLogMessages);
 
         var failureResult = new DydxCredentialCheckResult
@@ -424,7 +429,8 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, SentinelMnemonic, null, null));
 
-        var capturedLogMessages = new List<string>();
+        // review-v237: NB-3 — ConcurrentQueue<string> for symmetry with ConnectorStartupValidatorTests.
+        var capturedLogMessages = new ConcurrentQueue<string>();
         var capturingLogger = new CapturingLogger<ExchangeConnectorFactory>(capturedLogMessages);
 
         // review-v236: NB-2 — BuildSut(configure:, logger:) stays on the single DI path.
@@ -453,11 +459,18 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
 
     // ── Test double ──────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Captures formatted log message strings for assertion in no-log-contract tests.
+    /// review-v237: NB-3 — uses <see cref="System.Collections.Concurrent.ConcurrentQueue{T}"/> for
+    /// thread-safety symmetry with the equivalent logger in ConnectorStartupValidatorTests.
+    /// The factory is currently invoked synchronously from the test thread, so no corruption
+    /// is observable today; ConcurrentQueue eliminates the latent risk for future async paths.
+    /// </summary>
     private sealed class CapturingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
     {
-        private readonly List<string> _messages;
+        private readonly ConcurrentQueue<string> _messages;
 
-        public CapturingLogger(List<string> messages) => _messages = messages;
+        public CapturingLogger(ConcurrentQueue<string> messages) => _messages = messages;
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
@@ -469,7 +482,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            _messages.Add(formatter(state, exception));
+            _messages.Enqueue(formatter(state, exception));
         }
     }
 }
