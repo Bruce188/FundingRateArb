@@ -25,24 +25,26 @@ public class DatabaseSpaceHealthProbe : IDatabaseSpaceHealthProbe
             const string sql = """
                 SELECT TOP 1
                   CASE
-                    WHEN size = 0 OR max_size = -1 THEN CAST(0.0 AS float)
+                    WHEN max_size = -1 OR max_size = 0 THEN CAST(0.0 AS float)
                     ELSE CAST(FILEPROPERTY(name, 'SpaceUsed') AS float) * 8192.0
-                         / NULLIF(CAST(size AS float) * 8192.0, 0)
+                         / NULLIF(CAST(max_size AS float) * 8192.0, 0)
                   END
                 FROM sys.database_files
                 WHERE type_desc = 'ROWS'
                 ORDER BY file_id
                 """;
 
-            var results = await _db.Database
+            return await _db.Database
                 .SqlQueryRaw<double>(sql)
-                .ToListAsync(cancellationToken);
-
-            return results.Count > 0 ? results[0] : 0.0;
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "DatabaseSpaceHealthProbe failed to query sys.database_files; returning 0.0");
+            _logger.LogError(ex, "Database space probe failed: {Message}", ex.Message);
             return 0.0;
         }
     }

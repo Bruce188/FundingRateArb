@@ -20,20 +20,17 @@ public class SnapshotRetentionService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly ILogger<SnapshotRetentionService> _logger;
-    private readonly IDatabaseSpaceHealthProbe _spaceProbe;
 
     private DateTimeOffset _lastForceOverrideUtc = DateTimeOffset.MinValue;
 
     public SnapshotRetentionService(
         IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
-        ILogger<SnapshotRetentionService> logger,
-        IDatabaseSpaceHealthProbe spaceProbe)
+        ILogger<SnapshotRetentionService> logger)
     {
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _logger = logger;
-        _spaceProbe = spaceProbe;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -82,31 +79,59 @@ public class SnapshotRetentionService : BackgroundService
             "SnapshotRetentionService cycle starting at {Timestamp}, cutoff {CutoffDate}",
             DateTimeOffset.UtcNow, cutoff);
 
-        // Force-override: at most once per 24 h when storage > 80%
-        var force = false;
-        if (DateTimeOffset.UtcNow - _lastForceOverrideUtc >= TimeSpan.FromHours(24))
-        {
-            try
-            {
-                var ratio = await _spaceProbe.GetUsedSpaceRatioAsync(ct);
-                if (ratio > 0.80)
-                {
-                    force = true;
-                    _lastForceOverrideUtc = DateTimeOffset.UtcNow;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Space probe failed; skipping force override.");
-            }
-        }
-
         try
         {
             using var scope = _scopeFactory.CreateScope();
-            var repository = scope.ServiceProvider.GetRequiredService<IFundingRateRepository>();
+            var repo = scope.ServiceProvider.GetRequiredService<IFundingRateRepository>();
+            // Singleton BackgroundService must not capture Scoped services directly —
+            // resolve IDatabaseSpaceHealthProbe per iteration via the scope to honour its Scoped lifetime.
+            var probe = scope.ServiceProvider.GetRequiredService<IDatabaseSpaceHealthProbe>();
 
-            var purgedCount = await repository.PurgeOlderThanAsync(cutoff, force, ct);
+            // Force-override: at most once per 24 h when storage > 80%
+            var force = false;
+            if (DateTimeOffset.UtcNow - _lastForceOverrideUtc >= TimeSpan.FromHours(24))
+            {
+                // Skip the probe entirely when there are no suppressed purges to recover.
+                if (repo.GetSuppressedPurgeCount() > 0)
+                {
+                    try
+                    {
+                        var ratio = await probe.GetUsedSpaceRatioAsync(ct);
+                        if (ratio > 0.80)
+                        {
+                            force = true;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Space probe failed; skipping force override.");
+                    }
+                }
+            }
+
+            int purgedCount;
+            if (force)
+            {
+                purgedCount = await repo.PurgeOlderThanAsync(cutoff, true, ct);
+                // Update the throttle clock only after a successful forced purge —
+                // an exception on the forced path must leave the clock untouched so
+                // the next cadence opportunity is not blocked.
+                _lastForceOverrideUtc = DateTimeOffset.UtcNow;
+            }
+            else
+            {
+                purgedCount = await repo.PurgeOlderThanAsync(cutoff, false, ct);
+
+                // Emit audit log when an aligned-cadence purge is suppressed by the cooldown.
+                var suppressedCount = repo.GetSuppressedPurgeCount();
+                if (suppressedCount > 0 && purgedCount == 0)
+                {
+                    var nextAttempt = DateTimeOffset.UtcNow + TimeSpan.FromMinutes(15);
+                    _logger.LogInformation(
+                        "Snapshot retention purge suppressed: {SuppressedPurgeCount} pending, next attempt at {NextAttempt}",
+                        suppressedCount, nextAttempt);
+                }
+            }
 
             _logger.LogInformation(
                 "SnapshotRetentionService purged {Count} snapshots older than {CutoffDate}",

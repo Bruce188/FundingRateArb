@@ -215,6 +215,79 @@ public class FundingRateRepositoryTests
             "counter must be reset to 0 after a successful forced purge");
     }
 
+    // ── N3: bypass-success cooldown cleared, not re-armed ────────────────────
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_BypassCooldown_Success_ClearsCooldown_NotRearms()
+    {
+        // Arrange: pre-set cooldown to future, suppressedCount > 0 (needed for bypassCooldown=true)
+        var succeedingContext = CreateSucceedingContext(5);
+        var repository = new FundingRateRepository(succeedingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        // Prime: active cooldown + suppressed count > 0
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None); // increments suppressed count
+        repository.SuppressedPurgeCount.Should().Be(1, "pre-condition: one suppressed call");
+        repository.PurgeRetryCooldownUntil.Should().NotBeNull("pre-condition: cooldown is active");
+
+        // Act: bypass (force=true, suppressedCount=1 > 0) → purge succeeds
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: true, ct: CancellationToken.None);
+
+        // Assert: cooldown is cleared (null), NOT re-armed to a future time
+        result.Should().Be(5, "forced purge must execute");
+        repository.PurgeRetryCooldownUntil.Should().BeNull(
+            "bypass success must clear the cooldown, not re-arm it");
+
+        // Assert: a subsequent non-bypass call is not blocked
+        var followUp = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: false, ct: CancellationToken.None);
+        followUp.Should().Be(5, "after bypass success, non-bypass call must not be blocked by cooldown");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_BypassCooldown_ThrowsRetryLimit_ArmsCooldown()
+    {
+        // Arrange: force path throws RetryLimitExceededException → 15-min cooldown must still be armed
+        var retryEx = new RetryLimitExceededException("retry limit exceeded", new Exception("inner"));
+        var throwingContext = CreateThrowingContext(retryEx);
+        var repository = new FundingRateRepository(throwingContext, new MemoryCache(new MemoryCacheOptions()));
+
+        // Prime suppressedCount > 0 by setting cooldown and doing a suppressed call
+        repository.PurgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(10);
+        await repository.PurgeOlderThanAsync(DateTime.UtcNow, ct: CancellationToken.None);
+        repository.SuppressedPurgeCount.Should().Be(1, "pre-condition: one suppressed call");
+
+        // Act: bypass force call that throws RetryLimitExceededException
+        var act = async () => await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: true, ct: CancellationToken.None);
+        await act.Should().ThrowAsync<RetryLimitExceededException>(
+            "RetryLimitExceededException must propagate from force path");
+
+        // Assert: 15-min cooldown is armed (safety net preserved)
+        repository.PurgeRetryCooldownUntil.Should().NotBeNull(
+            "RetryLimitExceededException on force path must arm the 15-min cooldown");
+        repository.PurgeRetryCooldownUntil!.Value.Should().BeCloseTo(
+            DateTimeOffset.UtcNow.AddMinutes(15), TimeSpan.FromSeconds(5),
+            "cooldown must be set to approximately 15 minutes from now");
+    }
+
+    [Fact]
+    public async Task PurgeOlderThanAsync_NonBypass_Success_PreservesBehavior()
+    {
+        // Arrange: no cooldown active, suppressedCount = 0 → normal non-bypass path
+        const int expectedDeleted = 7;
+        var context = CreateSucceedingContext(expectedDeleted);
+        var repository = new FundingRateRepository(context, new MemoryCache(new MemoryCacheOptions()));
+
+        // Act
+        var result = await repository.PurgeOlderThanAsync(DateTime.UtcNow, force: false, ct: CancellationToken.None);
+
+        // Assert: purge runs, no cooldown armed, suppressed count unchanged
+        result.Should().Be(expectedDeleted, "non-bypass success must return the delete count");
+        repository.PurgeRetryCooldownUntil.Should().BeNull(
+            "non-bypass success must not arm a cooldown");
+        repository.SuppressedPurgeCount.Should().Be(0,
+            "non-bypass success must not modify the suppressed count");
+    }
+
     [Fact]
     public async Task GetSuppressedPurgeCount_ReturnsCurrentCounter()
     {
