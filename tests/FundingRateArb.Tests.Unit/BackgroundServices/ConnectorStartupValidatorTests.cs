@@ -61,6 +61,8 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly int _blockAtIteration;
         private int _iterationCount;
+        // review-v238: N2 — backing field avoids allocating a new delegate on every property read.
+        private readonly Func<TimeSpan, CancellationToken, Task> _func;
 
         /// <param name="blockAtIteration">
         /// After this many full iterations have been recorded, the next iteration-interval
@@ -69,7 +71,39 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         /// cancels the token and <c>ExecuteAsync</c> exits via OCE.
         /// Default = 1 (block after the first iteration).
         /// </param>
-        public RecordingDelay(int blockAtIteration = 1) => _blockAtIteration = blockAtIteration;
+        public RecordingDelay(int blockAtIteration = 1)
+        {
+            _blockAtIteration = blockAtIteration;
+            _func = async (duration, ct) =>
+            {
+                ct.ThrowIfCancellationRequested();
+                _recorded.Enqueue(duration);
+
+                // review-v236: N5 — keyed on the named constant (not a bare literal) to avoid
+                // silently re-gating if a future site happens to use the same 30-minute span.
+                if (duration == ConnectorStartupValidator.PerUserThrottle)
+                {
+                    // review-v236: NB-3 — signal from inside Func so the throttle delay is
+                    // structurally guaranteed to have been attempted before the test calls StopAsync.
+                    _throttleReached.TrySetResult();
+                }
+
+                if (duration == ConnectorStartupValidator.IterationInterval)
+                {
+                    var n = Interlocked.Increment(ref _iterationCount);
+                    if (n >= _blockAtIteration)
+                    {
+                        // Signal the test that iteration N is complete and we are about to block
+                        var tcs = _iterationReady.GetOrAdd(n,
+                            _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                        tcs.TrySetResult();
+
+                        // Block until stoppingToken is cancelled (i.e. StopAsync is called)
+                        await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                    }
+                }
+            };
+        }
 
         /// <summary>All delay durations recorded so far, in call order.</summary>
         public IReadOnlyCollection<TimeSpan> Recorded => _recorded;
@@ -109,36 +143,12 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         ///   signals the awaitable and then blocks on <c>Task.Delay(Infinite, ct)</c>.
         ///   Prior iterations return immediately; subsequent ones (if any) also block.
         /// </summary>
-        public Func<TimeSpan, CancellationToken, Task> Func =>
-            async (duration, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                _recorded.Enqueue(duration);
-
-                // review-v236: N5 — keyed on the named constant (not a bare literal) to avoid
-                // silently re-gating if a future site happens to use the same 30-minute span.
-                if (duration == ConnectorStartupValidator.PerUserThrottle)
-                {
-                    // review-v236: NB-3 — signal from inside Func so the throttle delay is
-                    // structurally guaranteed to have been attempted before the test calls StopAsync.
-                    _throttleReached.TrySetResult();
-                }
-
-                if (duration == ConnectorStartupValidator.IterationInterval)
-                {
-                    var n = Interlocked.Increment(ref _iterationCount);
-                    if (n >= _blockAtIteration)
-                    {
-                        // Signal the test that iteration N is complete and we are about to block
-                        var tcs = _iterationReady.GetOrAdd(n,
-                            _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
-                        tcs.TrySetResult();
-
-                        // Block until stoppingToken is cancelled (i.e. StopAsync is called)
-                        await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-                    }
-                }
-            };
+        /// <remarks>
+        /// review-v238: N2 — backed by a readonly field to avoid allocating a new delegate on each
+        /// property read. Call-sites read <c>Func</c> once in <c>BuildSut</c>; the field ensures
+        /// two reads of the same property return the same delegate identity.
+        /// </remarks>
+        public Func<TimeSpan, CancellationToken, Task> Func => _func;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -197,14 +207,12 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         await sut.StopAsync(CancellationToken.None);
 
         // Assert — warm-up was cancelled; no user fetch occurred
+        // review-v238: NB-1 — Times.Never is sufficient SUT coverage; the BeEmpty assertion was
+        // removed because it only tested a RecordingDelay test-double ordering contract, not a SUT
+        // invariant, and would fail spuriously if the double's internal ordering were changed.
         userSettings.Verify(
             u => u.GetUsersWithCredentialsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
-
-        // review-v237: NB-1 — this verifies the RecordingDelay test-double contract (ct.ThrowIfCancellationRequested
-        // runs before _recorded.Enqueue), NOT a SUT invariant. The SUT invariant is already covered by the
-        // Times.Never assertion above — production's Task.Delay never records anything.
-        delay.Recorded.Should().BeEmpty("RecordingDelay.Func checks cancellation before recording: no duration should be enqueued when the token is pre-cancelled");
     }
 
     [Fact]
@@ -279,9 +287,11 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         }
 
         // Assert — PerUserThrottle recorded exactly once per user in iteration 1
-        var throttleDelays = delay.Recorded.Count(d => d == ConnectorStartupValidator.PerUserThrottle);
-        throttleDelays.Should().Be(userIds.Count,
-            "a PerUserThrottle delay should follow each ValidateDydxAsync call");
+        // review-v238: N3 — HaveCount on filtered enumerable produces a better failure diagnostic
+        // than a raw Count(predicate) inside a FluentAssertions chain.
+        delay.Recorded.Where(d => d == ConnectorStartupValidator.PerUserThrottle)
+            .Should().HaveCount(userIds.Count,
+                "a PerUserThrottle delay should follow each ValidateDydxAsync call");
     }
 
     [Fact]
@@ -426,16 +436,23 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         // Assert — exactly one Warning log entry containing both {Reason} and {Field}
         // (review-v236: B2 — non-vacuous: sentinel in MissingField means the assertion
         // would fail if {Field} were dropped from the log template).
-        var warnings = capturedLog.Where(e => e.Level == LogLevel.Warning).ToList();
-        warnings.Should().ContainSingle("exactly one credential-failure warning should be logged");
-        warnings[0].Message.Should().Contain("MissingMnemonic",
-            "warning must include the failure reason");
-        warnings[0].Message.Should().Contain(SentinelMnemonic,
-            "warning must include MissingField ({Field}) — assertion is falsifiable because sentinel IS in MissingField");
+        // review-v238: N7 — ContainSingle on the filtered enumerable (no ToList) is the idiomatic
+        // FluentAssertions form; avoids the List allocation and allows .Which for chaining.
+        // review-v238: N1 — because-clauses name the orthogonal log slots: {Reason} and {Field}.
+        capturedLog.Where(e => e.Level == LogLevel.Warning)
+            .Should().ContainSingle("exactly one credential-failure warning should be logged")
+            .Which.Message.Should().Contain("MissingMnemonic",
+                "{Reason} must render to 'MissingMnemonic'");
+        capturedLog.Where(e => e.Level == LogLevel.Warning)
+            .Should().ContainSingle()
+            .Which.Message.Should().Contain(SentinelMnemonic,
+                "{Field} must render to the sentinel — assertion is falsifiable because sentinel IS in MissingField");
 
-        // review-v237: NB-4 — the SUT also emits one LogDebug entry ("validating dYdX credentials for {Count} user(s)")
-        // which is intentionally tolerated. The assertion below pins the Error/Critical absence; a separate
-        // Debug entry is expected and does not indicate a test gap. The full log shape: 1 Debug + 1 Warning.
+        // review-v237: NB-4 — full log shape: 1 Debug (user-count) + 1 Warning (credential-failure).
+        // review-v238: N4 — assert the Debug entry explicitly so the comment matches what the test enforces.
+        capturedLog.Where(e => e.Level == LogLevel.Debug)
+            .Should().ContainSingle(e => e.Message.Contains("user"),
+                "the SUT emits one Debug entry per iteration listing the user count");
         capturedLog.Should().NotContain(
             e => e.Level == LogLevel.Error || e.Level == LogLevel.Critical,
             "a credential failure must not produce an Error or Critical log — expected entries are one Debug (user-count) and one Warning (credential-failure)");
@@ -601,7 +618,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string>());
+            .ReturnsAsync(new List<string>(0)); // review-v238: N6 — explicit 0-capacity avoids default-capacity growth path
 
         var factory = new Mock<IExchangeConnectorFactory>();
         var notifier = new Mock<ISignalRNotifier>();
@@ -679,6 +696,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             "iteration-interval delay must be recorded at the end of each full iteration");
 
         // Order: warm-up first, then iteration body (throttle), then iteration-interval
+        // review-v238: N5 — assert uniqueness before using IndexOf so a regression that fires
+        // WarmUpDelay twice would fail here rather than silently pass the ordering check.
+        recorded.Count(d => d == ConnectorStartupValidator.WarmUpDelay).Should().Be(1,
+            "warm-up delay must occur exactly once");
         var warmUpIdx = recorded.IndexOf(ConnectorStartupValidator.WarmUpDelay);
         var iterationIdx = recorded.IndexOf(ConnectorStartupValidator.IterationInterval);
         warmUpIdx.Should().BeLessThan(iterationIdx,
