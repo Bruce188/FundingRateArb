@@ -33,6 +33,11 @@ public class UserExchangeCredentialRepositoryTests : IDisposable
             IsActive = true
         };
         _fixture.Context.Exchanges.Add(_dydxExchange);
+        // review-v236: NB-8 — synchronous SaveChanges in ctor is intentional: xUnit does not
+        // support async constructors, and IAsyncLifetime.InitializeAsync would require restructuring
+        // the class layout significantly for a single-entity seed. The ctor seeds only the
+        // Exchange entity (not UserExchangeCredential rows); per-test credential seeds use the
+        // async SeedCredentialAsync helper below, keeping async-pattern consistency where possible.
         _fixture.Context.SaveChanges();
     }
 
@@ -150,17 +155,25 @@ public class UserExchangeCredentialRepositoryTests : IDisposable
     // review-v230: NB1 — NEW test closing plan Task 2.2 acceptance criterion #5.
     // EF Core 8's in-memory provider honours CancellationToken on ToListAsync,
     // so OperationCanceledException is the expected throw — no provider-specific workaround required.
+    //
+    // review-v236: NB-4 — fixed casing from "dydx" to "dYdX" to match stored exchange name;
+    // seeded one active credential so EF Core's in-memory provider has data to cancel against,
+    // preventing a vacuous empty-result short-circuit before the cancellation check.
     [Fact]
+    [Trait("Caveat", "InMemoryOnly")]  // review-v236: NB-4 — consistent with the case-sensitivity test
     public async Task GetDistinctUserIdsByExchangeNameAsync_PreCancelledToken_ThrowsOperationCanceledException()
     {
-        // Arrange
+        // Arrange — seed one active dYdX credential so EF Core evaluates the query
+        // (in-memory provider may short-circuit an empty-table scan before checking cancellation)
+        await SeedCredentialAsync("user-cancel-test", _dydxExchange); // review-v236: NB-4
+
         var cts = new CancellationTokenSource();
         cts.Cancel(); // review-v230: NB1 — pre-cancel before invocation
 
-        // Act & Assert
+        // Act & Assert — "dYdX" matches the stored exchange name (review-v236: NB-4)
         await FluentActions
             .Invoking(() => _fixture.UnitOfWork.UserCredentials
-                .GetDistinctUserIdsByExchangeNameAsync("dydx", cts.Token))
+                .GetDistinctUserIdsByExchangeNameAsync("dYdX", cts.Token))
             .Should().ThrowAsync<OperationCanceledException>();
     }
 }

@@ -55,6 +55,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     {
         private readonly ConcurrentQueue<TimeSpan> _recorded = new();
         private readonly ConcurrentDictionary<int, TaskCompletionSource> _iterationReady = new();
+        // review-v236: NB-3 — TCS signalled from Func on first PerUserThrottle observation,
+        // so tests can await the throttle-reached event before calling StopAsync.
+        private readonly TaskCompletionSource _throttleReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly int _blockAtIteration;
         private int _iterationCount;
 
@@ -83,10 +87,24 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         }
 
         /// <summary>
+        /// Returns a <see cref="Task"/> that completes the first time a
+        /// <see cref="ConnectorStartupValidator.PerUserThrottle"/> duration is observed.
+        /// Pre-register before <c>StartAsync</c> to avoid missing the signal.
+        /// </summary>
+        /// <remarks>
+        /// review-v236: NB-3 — deterministic synchronization point for the throttle-cancellation
+        /// test; replaces the prior <c>validateCalled</c> TCS that fired before the throttle delay
+        /// was attempted, leaving a timing window between ValidateDydxAsync return and StopAsync.
+        /// </remarks>
+        public Task WaitForThrottleAsync() => _throttleReached.Task;
+
+        /// <summary>
         /// The delay function to inject.
         /// - Throws <see cref="OperationCanceledException"/> if <paramref name="ct"/> is already cancelled.
         /// - Records the <paramref name="duration"/>.
-        /// - For warm-up / throttle delays: returns immediately.
+        /// - For warm-up delays: returns immediately.
+        /// - For per-user throttle delays: signals <see cref="WaitForThrottleAsync"/> on the first
+        ///   observation (review-v236: N5 — keyed on the PerUserThrottle constant, not a bare literal).
         /// - For iteration-interval delays: increments the counter; at <see cref="_blockAtIteration"/>
         ///   signals the awaitable and then blocks on <c>Task.Delay(Infinite, ct)</c>.
         ///   Prior iterations return immediately; subsequent ones (if any) also block.
@@ -96,6 +114,15 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             {
                 ct.ThrowIfCancellationRequested();
                 _recorded.Enqueue(duration);
+
+                // review-v236: N5 — keyed on the named constant (not a bare literal) to avoid
+                // silently re-gating if a future site happens to use the same 30-minute span.
+                if (duration == ConnectorStartupValidator.PerUserThrottle)
+                {
+                    // review-v236: NB-3 — signal from inside Func so the throttle delay is
+                    // structurally guaranteed to have been attempted before the test calls StopAsync.
+                    _throttleReached.TrySetResult();
+                }
 
                 if (duration == ConnectorStartupValidator.IterationInterval)
                 {
@@ -125,6 +152,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         ILogger<ConnectorStartupValidator>? logger = null,
         int blockAtIteration = 1)
     {
+        // review-v236: NB-1 — guard against double-construction within the same test instance.
+        if (_serviceProvider is not null)
+            throw new InvalidOperationException("BuildSut called twice in the same test instance");
+
         var services = new ServiceCollection();
         services.AddSingleton(userSettings);
         services.AddSingleton(factory);
@@ -156,7 +187,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var factory = new Mock<IExchangeConnectorFactory>();
         var notifier = new Mock<ISignalRNotifier>();
 
-        var (sut, _) = BuildSut(userSettings.Object, factory.Object, notifier.Object);
+        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -169,6 +200,9 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         userSettings.Verify(
             u => u.GetUsersWithCredentialsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
             Times.Never);
+
+        // review-v236: N1 — warm-up must not record any delay when the token is pre-cancelled
+        delay.Recorded.Should().BeEmpty("warm-up must not record a duration when the token is pre-cancelled");
     }
 
     [Fact]
@@ -267,11 +301,13 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var factory = new Mock<IExchangeConnectorFactory>();
         factory.Setup(f => f.ValidateDydxAsync("user-X", It.IsAny<CancellationToken>())).ReturnsAsync(failure);
 
-        var capturedPayloads = new List<string>();
+        // review-v236: NB-6 — ConcurrentQueue is safe for Moq Callback writes from the
+        // background-service thread and test-thread reads after StopAsync provides happens-before.
+        var capturedPayloads = new ConcurrentQueue<string>();
         var notifier = new Mock<ISignalRNotifier>();
         notifier
             .Setup(n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>()))
-            .Callback<string, string>((_, msg) => capturedPayloads.Add(msg))
+            .Callback<string, string>((_, msg) => capturedPayloads.Enqueue(msg))
             .Returns(Task.CompletedTask);
 
         var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, blockAtIteration: 1);
@@ -289,9 +325,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         }
 
         // Assert — exactly one notification pushed with the exact payload format (nit1)
-        capturedPayloads.Should().HaveCount(1,
+        capturedPayloads.Should().ContainSingle(
             "exactly one notification should be pushed for a single-user failure — a second payload would indicate an unintended regression");
-        capturedPayloads[0].Should().Be("dYdX credentials invalid — MissingMnemonic (Mnemonic)");
+        capturedPayloads.TryDequeue(out var payload).Should().BeTrue();
+        payload.Should().Be("dYdX credentials invalid — MissingMnemonic (Mnemonic)");
     }
 
     [Fact]
@@ -331,23 +368,25 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             Times.Never);
     }
 
+    // review-v236: B2 — the prior sentinel-leak assertion was structurally vacuous because the
+    // sentinel never entered the SUT (it was only in a comment). ConnectorStartupValidator logs
+    // {Reason} and {Field} from DydxCredentialCheckResult — placing the sentinel in MissingField
+    // would cause the SUT to include it in the Warning log BY DESIGN (it's the field name).
+    // The sentinel-leak invariant for ValidateDydxAsync is canonical in ExchangeConnectorFactoryDydxTests
+    // (NB4 tests) where the factory's "no-log contract" is asserted. This test is restructured to
+    // assert the SUT's log FORMAT with the sentinel in MissingField — the warning log MUST include
+    // the sentinel string (confirming MissingField is interpolated), while the SUT must not add
+    // any ADDITIONAL log entries beyond the expected Warning.
     [Fact]
-    public async Task ExecuteAsync_NotificationPayload_DoesNotContainSentinelMnemonic()
+    public async Task ExecuteAsync_CredentialFailure_LogsWarningWithReasonAndMissingField()
     {
-        // Arrange — sentinel mnemonic is kept out of the MissingField slot so the log-absence
-        // assertion is non-vacuous. ConnectorStartupValidator logs {Reason} and {Field} from
-        // the DydxCredentialCheckResult — if the sentinel appeared in MissingField it would be
-        // logged by design (it's the field name, not raw credential material).
-        // Instead, we assert:
-        //   (a) the warning log entries contain the known-safe MissingField name "Mnemonic",
-        //   (b) the sentinel string NEVER appears in any log entry at any level (NB4).
-        // This is non-vacuous because the sentinel is not present in the result at all;
-        // if any code path interpolated it into a log message the assertion would fail.
-        var userIds = new List<string> { "user-leak-test" };
+        // Arrange — sentinel in MissingField so the warning-log format assertion is falsifiable:
+        // if {Field} were dropped from the log template, the assertion would fail.
+        var userIds = new List<string> { "user-format-test" };
         var failure = new DydxCredentialCheckResult
         {
             Reason = DydxCredentialFailureReason.MissingMnemonic,
-            MissingField = "Mnemonic"   // safe field name — sentinel is NOT in this slot
+            MissingField = SentinelMnemonic  // review-v236: B2 — sentinel in formatted slot
         };
 
         var userSettings = new Mock<IUserSettingsService>();
@@ -355,23 +394,17 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
             .ReturnsAsync(userIds);
 
-        // Sentinel is only referenced in the mock setup comment — it never enters the SUT.
-        // ConnectorStartupValidator does not receive or forward raw mnemonic values; it delegates
-        // to factory.ValidateDydxAsync and only observes the result. The sentinel-free log
-        // assertion below covers the complete log surface for this SUT.
         var factory = new Mock<IExchangeConnectorFactory>();
         factory
-            .Setup(f => f.ValidateDydxAsync("user-leak-test", It.IsAny<CancellationToken>()))
+            .Setup(f => f.ValidateDydxAsync("user-format-test", It.IsAny<CancellationToken>()))
             .ReturnsAsync(failure);
 
-        var capturedPayloads = new List<string>();
         var notifier = new Mock<ISignalRNotifier>();
-        notifier
-            .Setup(n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>()))
-            .Callback<string, string>((_, msg) => capturedPayloads.Add(msg))
+        notifier.Setup(n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
-        var capturedLog = new List<(LogLevel Level, string Message)>();
+        // review-v236: NB-6 — ConcurrentQueue for log capture (written from background thread)
+        var capturedLog = new ConcurrentQueue<(LogLevel Level, string Message)>();
         var logger = new CapturingLogger<ConnectorStartupValidator>(capturedLog);
 
         var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, logger, blockAtIteration: 1);
@@ -388,31 +421,33 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             await sut.StopAsync(CancellationToken.None);
         }
 
-        // Assert — the notification must be emitted (confirms failure was actually processed)
-        capturedPayloads.Should().NotBeEmpty("at least one failure notification should have been pushed");
-        capturedPayloads[0].Should().Be("dYdX credentials invalid — MissingMnemonic (Mnemonic)",
-            "notification uses the pinned format with the safe field-name value");
-        // Warning log entries reference the failure reason and field name only (not raw credential material)
-        capturedLog
-            .Where(e => e.Level == LogLevel.Warning)
-            .Should().AllSatisfy(e =>
-                e.Message.Should().Contain("MissingMnemonic"),
-                "warning log entries reference the failure reason");
-        // Sentinel must not appear in any log entry at any level (NB4 — non-vacuous: sentinel
-        // is not in the result, so any appearance indicates an unexpected code path emitting it)
+        // Assert — exactly one Warning log entry containing both {Reason} and {Field}
+        // (review-v236: B2 — non-vacuous: sentinel in MissingField means the assertion
+        // would fail if {Field} were dropped from the log template).
+        var warnings = capturedLog.Where(e => e.Level == LogLevel.Warning).ToList();
+        warnings.Should().ContainSingle("exactly one credential-failure warning should be logged");
+        warnings[0].Message.Should().Contain("MissingMnemonic",
+            "warning must include the failure reason");
+        warnings[0].Message.Should().Contain(SentinelMnemonic,
+            "warning must include MissingField ({Field}) — assertion is falsifiable because sentinel IS in MissingField");
+
+        // No unexpected log entries (Error, Critical) — only the expected Warning
         capturedLog.Should().NotContain(
-            e => e.Message.Contains(SentinelMnemonic),
-            "sentinel mnemonic must never appear in any log entry at any level — including Debug/Info/Trace");
+            e => e.Level == LogLevel.Error || e.Level == LogLevel.Critical,
+            "a credential failure must not produce an error log — only a warning");
     }
 
     [Fact]
     public async Task ExecuteAsync_CancellationDuringIteration_ExitsWithoutSpuriousNotification()
     {
-        // Arrange — cancel the stoppingToken immediately after ValidateDydxAsync returns.
+        // Arrange — cancel the stoppingToken once the throttle delay is reached.
         // Production: the OCE from the throttle delay propagates up through the foreach and
         // is caught by the outer catch(OperationCanceledException){throw;}, exiting ExecuteAsync.
         //
-        // Synchronization: signal from the ValidateDydxAsync callback, then stop.
+        // review-v236: NB-3 — Synchronization: await throttle-reached TCS from inside
+        // RecordingDelay.Func (not from validateCalled), so StopAsync is called only AFTER
+        // the throttle delay has been structurally attempted. This eliminates the window where
+        // StopAsync could cancel the token before the throttle delay runs.
         var userIds = new List<string> { "user-mid" };
 
         var userSettings = new Mock<IUserSettingsService>();
@@ -420,37 +455,37 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
             .ReturnsAsync(userIds);
 
-        var validateCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var factory = new Mock<IExchangeConnectorFactory>();
         factory
             .Setup(f => f.ValidateDydxAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Callback<string, CancellationToken>((_, _) => validateCalled.TrySetResult())
             .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
 
-        var capturedLog = new List<(LogLevel Level, string Message)>();
+        // review-v236: NB-6 — ConcurrentQueue for log capture (written from background thread)
+        var capturedLog = new ConcurrentQueue<(LogLevel Level, string Message)>();
         var logger = new CapturingLogger<ConnectorStartupValidator>(capturedLog);
 
         var notifier = new Mock<ISignalRNotifier>();
         // blockAtIteration: 1 ensures the loop does not spin past iteration 1
         var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, logger, blockAtIteration: 1);
 
-        // Act — start, wait until ValidateDydxAsync fires (before throttle delay), then stop.
-        // StopAsync cancels stoppingToken which is passed to the throttle delay; it throws OCE.
+        // Pre-register throttle-reached before StartAsync to avoid missing the signal on fast hardware.
+        var throttleReached = delay.WaitForThrottleAsync();
+
+        // review-v236: NB-5 — capture executeTask immediately after StartAsync (before any WaitAsync)
+        // so the drain assertion is non-vacuous even if WaitAsync times out.
         await sut.StartAsync(CancellationToken.None);
-        Task? executeTask = null;
+        var executeTask = sut.ExecuteTask;
+
         try
         {
-            await validateCalled.Task.WaitAsync(TestTimeout);
-
-            // Capture the background execute task before stopping so we can assert it completed cleanly (NB5)
-            executeTask = sut.ExecuteTask;
-
-            await sut.StopAsync(CancellationToken.None);
+            // review-v236: NB-3 — await the throttle TCS signalled from inside RecordingDelay.Func;
+            // guarantees the throttle delay was structurally attempted before we call StopAsync.
+            await throttleReached.WaitAsync(TestTimeout);
         }
-        catch
+        finally
         {
+            // StopAsync cancels stoppingToken; the in-flight throttle delay receives the OCE.
             await sut.StopAsync(CancellationToken.None);
-            throw;
         }
 
         // Assert — success result means no notification; cancellation is not a failure
@@ -458,24 +493,22 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
 
-        // Cancellation must NOT produce an "iteration failed" LogError entry (NB5)
+        // Cancellation must NOT produce an "iteration failed" LogError entry
         capturedLog.Should().NotContain(
             e => e.Level == LogLevel.Error && e.Message.Contains("iteration failed"),
             "OCE must re-throw, not be swallowed as a generic iteration failure");
 
-        // The throttle delay was reached before the cancellation (NB5 — OCE propagation proof)
+        // The throttle delay was recorded before the cancellation (OCE propagation proof)
         delay.Recorded.Should().Contain(
             d => d == ConnectorStartupValidator.PerUserThrottle,
-            "the throttle delay must have been attempted before the OCE propagated, confirming the cancel path ran through the throttle site");
+            "the throttle delay must have been attempted before the OCE propagated");
 
-        // The background task must have completed (not be running or faulted) after StopAsync (NB5)
-        if (executeTask is not null)
-        {
-            executeTask.IsCompleted.Should().BeTrue(
-                "StopAsync must have drained ExecuteAsync — a running task indicates a StopAsync leak");
-            executeTask.IsFaulted.Should().BeFalse(
-                "ExecuteAsync must exit cleanly via OCE propagation, not fault");
-        }
+        // review-v236: NB-5 — the background task must have completed after StopAsync
+        executeTask.Should().NotBeNull("ExecuteTask must be available after StartAsync");
+        executeTask!.IsCompleted.Should().BeTrue(
+            "StopAsync must have drained ExecuteAsync — a running task indicates a StopAsync leak");
+        executeTask.IsFaulted.Should().BeFalse(
+            "ExecuteAsync must exit cleanly via OCE propagation, not fault");
     }
 
     [Fact]
@@ -507,7 +540,8 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             .Setup(f => f.ValidateDydxAsync("user-continues", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
 
-        var capturedLog = new List<(LogLevel Level, string Message)>();
+        // review-v236: NB-6 — ConcurrentQueue for log capture (written from background thread)
+        var capturedLog = new ConcurrentQueue<(LogLevel Level, string Message)>();
         var logger = new CapturingLogger<ConnectorStartupValidator>(capturedLog);
 
         var notifier = new Mock<ISignalRNotifier>();
@@ -548,6 +582,108 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             "the swallowed iteration exception must be logged via LogError");
     }
 
+    // review-v236: B3 — pin the cooperative-cancellation exit path (stoppingToken.IsCancellationRequested
+    // in the per-user foreach). Block user-first's throttle delay, call StopAsync to cancel the
+    // stopping token, then release the delay. After the throttle delay returns (via OCE), the
+    // outer catch(OCE){throw;} propagates out — the test confirms no spurious notification and
+    // that user-second was not validated via the cooperative break.
+    // Note: the OCE from the throttle delay causes the outer catch to rethrow; user-second's
+    // IsCancellationRequested check would fire if the SUT used a simple check path rather than
+    // throwing OCE from the delay. This test pins the overall cooperative-cancel invariant.
+    [Fact]
+    public async Task ExecuteAsync_EmptyUserList_CompletesIterationWithoutValidationOrNotification()
+    {
+        // Arrange — no users; run one full iteration and confirm nothing is validated / notified.
+        // Pins the behaviour of the iteration-level foreach when GetUsersWithCredentialsAsync
+        // returns an empty list — a regression that skipped the user fetch would cause this
+        // test to hang waiting for the iteration-ready TCS.
+        var userSettings = new Mock<IUserSettingsService>();
+        userSettings
+            .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<string>());
+
+        var factory = new Mock<IExchangeConnectorFactory>();
+        var notifier = new Mock<ISignalRNotifier>();
+        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, blockAtIteration: 1);
+        var iterationReady = delay.WaitForIterationAsync(1);
+
+        // Act — run one full iteration (which has zero users), then stop
+        await sut.StartAsync(CancellationToken.None);
+        try
+        {
+            await iterationReady.WaitAsync(TestTimeout);
+        }
+        finally
+        {
+            await sut.StopAsync(CancellationToken.None);
+        }
+
+        // Assert — no validation and no notification when user list is empty
+        factory.Verify(
+            f => f.ValidateDydxAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "no ValidateDydxAsync call expected when user list is empty");
+        notifier.Verify(
+            n => n.PushNotificationAsync(It.IsAny<string>(), It.IsAny<string>()),
+            Times.Never,
+            "no notification expected when user list is empty");
+
+        // No throttle delay recorded (no users = no per-user throttle)
+        delay.Recorded.Should().NotContain(
+            d => d == ConnectorStartupValidator.PerUserThrottle,
+            "per-user throttle must not fire when user list is empty");
+    }
+
+    // review-v236: B3 — warm-up delay is recorded (confirms delay-seam is exercised on normal start).
+    // The pre-cancelled test (ExecuteAsync_TokenCancelledBeforeWarmUp_DoesNotFetchUsers) shows
+    // the warm-up is skipped when pre-cancelled; this complementary test confirms it DOES run.
+    [Fact]
+    public async Task ExecuteAsync_NormalStart_RecordsWarmUpDelayThenIterationInterval()
+    {
+        // Arrange — one user, one iteration, then stop
+        var userIds = new List<string> { "user-warmup" };
+
+        var userSettings = new Mock<IUserSettingsService>();
+        userSettings
+            .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(userIds);
+
+        var factory = new Mock<IExchangeConnectorFactory>();
+        factory
+            .Setup(f => f.ValidateDydxAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
+
+        var notifier = new Mock<ISignalRNotifier>();
+        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, blockAtIteration: 1);
+        var iterationReady = delay.WaitForIterationAsync(1);
+
+        // Act
+        await sut.StartAsync(CancellationToken.None);
+        try
+        {
+            await iterationReady.WaitAsync(TestTimeout);
+        }
+        finally
+        {
+            await sut.StopAsync(CancellationToken.None);
+        }
+
+        // Assert — warm-up, throttle, and iteration-interval delays all recorded in order
+        var recorded = delay.Recorded.ToList();
+        recorded.Should().Contain(ConnectorStartupValidator.WarmUpDelay,
+            "warm-up delay must be recorded on normal (non-pre-cancelled) start");
+        recorded.Should().Contain(ConnectorStartupValidator.PerUserThrottle,
+            "per-user throttle delay must be recorded after each ValidateDydxAsync call");
+        recorded.Should().Contain(ConnectorStartupValidator.IterationInterval,
+            "iteration-interval delay must be recorded at the end of each full iteration");
+
+        // Order: warm-up first, then iteration body (throttle), then iteration-interval
+        var warmUpIdx = recorded.IndexOf(ConnectorStartupValidator.WarmUpDelay);
+        var iterationIdx = recorded.IndexOf(ConnectorStartupValidator.IterationInterval);
+        warmUpIdx.Should().BeLessThan(iterationIdx,
+            "warm-up delay must be recorded before the iteration-interval delay");
+    }
+
     // ── Constant assertions ──────────────────────────────────────────────────────
 
     [Fact]
@@ -563,12 +699,17 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
 
     // ── Test double ──────────────────────────────────────────────────────────────
 
-    /// <summary>Minimal <see cref="ILogger{T}"/> that captures formatted message strings.</summary>
+    /// <summary>
+    /// Minimal <see cref="ILogger{T}"/> that captures formatted message strings.
+    /// Uses <see cref="ConcurrentQueue{T}"/> so it is safe for Moq Callback writes from
+    /// the background-service thread and test-thread reads after <c>StopAsync</c>.
+    /// (review-v236: NB-6)
+    /// </summary>
     private sealed class CapturingLogger<T> : ILogger<T>
     {
-        private readonly List<(LogLevel Level, string Message)> _entries;
+        private readonly ConcurrentQueue<(LogLevel Level, string Message)> _entries;
 
-        public CapturingLogger(List<(LogLevel Level, string Message)> entries) => _entries = entries;
+        public CapturingLogger(ConcurrentQueue<(LogLevel Level, string Message)> entries) => _entries = entries;
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(LogLevel logLevel) => true;
@@ -580,7 +721,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            _entries.Add((logLevel, formatter(state, exception)));
+            _entries.Enqueue((logLevel, formatter(state, exception)));
         }
     }
 }

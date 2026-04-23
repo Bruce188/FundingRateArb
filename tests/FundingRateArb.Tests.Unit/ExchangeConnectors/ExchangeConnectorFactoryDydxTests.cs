@@ -12,6 +12,7 @@ using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -24,7 +25,7 @@ namespace FundingRateArb.Tests.Unit.ExchangeConnectors;
 /// </summary>
 public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
 {
-    private const string SentinelMnemonic = "SENTINEL-MNEMONIC-WORDS-AAA-BBB";
+    private const string SentinelMnemonic = "SENTINEL-MNEMONIC-WORDS-AAA-BBB"; // NOT A SECRET — leak-canary for log-hygiene tests (review-v236: N6)
     private const string UserId = "test-user-123";
 
     private ServiceProvider? _serviceProvider;
@@ -50,14 +51,29 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
     /// review-v230: NB9 — optional configurator for advanced mock setup (e.g., SetupSequence).
     /// Called after the mock is constructed; use this to express any setup that cannot be
     /// expressed via a single <paramref name="dydxFactoryResult"/>. When this is supplied,
-    /// <paramref name="dydxFactoryResult"/> must be <c>null</c>.
+    /// <paramref name="dydxFactoryResult"/> must be <c>null</c> (review-v236: N4 — enforced).
+    /// </param>
+    /// <param name="logger">
+    /// review-v236: NB-2 — optional logger; defaults to <see cref="NullLogger{T}.Instance"/>.
+    /// Sentinel-log tests pass a <see cref="CapturingLogger{T}"/> here to remain on the single
+    /// DI construction path rather than constructing a second inline <see cref="ServiceProvider"/>.
     /// </param>
     private (ExchangeConnectorFactory Factory, Mock<IDydxConnectorFactory> DydxFactory)
         BuildSut(
             Mock<IUserSettingsService> userSettings,
             DydxCredentialCheckResult? dydxFactoryResult = null,
-            Action<Mock<IDydxConnectorFactory>>? configure = null)
+            Action<Mock<IDydxConnectorFactory>>? configure = null,
+            ILogger<ExchangeConnectorFactory>? logger = null)
     {
+        // review-v236: NB-1 — guard against double-construction within the same test instance.
+        if (_serviceProvider is not null)
+            throw new InvalidOperationException("BuildSut called twice in the same test instance");
+
+        // review-v236: N4 — enforce documented mutual exclusivity between dydxFactoryResult and configure.
+        if (dydxFactoryResult is not null && configure is not null)
+            throw new ArgumentException(
+                "dydxFactoryResult and configure are mutually exclusive — use configure for advanced setups");
+
         var dydxFactory = new Mock<IDydxConnectorFactory>();
 
         if (dydxFactoryResult is not null)
@@ -80,7 +96,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
 
         var factory = new ExchangeConnectorFactory(
             _serviceProvider,
-            NullLogger<ExchangeConnectorFactory>.Instance,
+            logger ?? NullLogger<ExchangeConnectorFactory>.Instance,
             dydxFactory.Object);
 
         return (factory, dydxFactory);
@@ -162,6 +178,13 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
                 It.IsAny<CancellationToken>()),
             Times.Never,
             "factory must NOT be called when no dYdX credential is found in a non-empty list");
+
+        // review-v236: N3 — assert the failure was written to the cache (consistent with the
+        // empty-list path which also asserts the cache write after MissingMnemonic short-circuit).
+        sut.TryGetLastDydxFailure(UserId, out var cached).Should().BeTrue(
+            "MissingMnemonic short-circuit must write the failure result to the cache");
+        cached.Reason.Should().Be(DydxCredentialFailureReason.MissingMnemonic,
+            "cached result must reflect the MissingMnemonic short-circuit");
     }
 
     // review-v230: NB5 — NEW test for the never-validated-user cache-miss path.
@@ -176,11 +199,14 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var (sut, _) = BuildSut(userSettings);
 
         // Act — no prior ValidateDydxAsync invocation for "unknown-user-id"
-        var returned = sut.TryGetLastDydxFailure("unknown-user-id", out _);
+        var returned = sut.TryGetLastDydxFailure("unknown-user-id", out var miss);
 
         // Assert — cache miss: returns false for an unknown user
         returned.Should().BeFalse(
             "TryGetLastDydxFailure must return false for a user ID never passed to ValidateDydxAsync");
+        // review-v236: N2 — assert the discarded out-param is the default struct value
+        miss.Should().Be(default(DydxCredentialCheckResult),
+            "the out-param must be the default struct when TryGetLastDydxFailure returns false");
     }
 
     [Fact]
@@ -332,6 +358,9 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         // a warning/error log on the failure path (potentially including credential material)
         // would be caught immediately rather than requiring a separate sentinel-leak scan.
         // The contract is documented in an XML-doc <remarks> on ValidateDydxAsync in production.
+        //
+        // review-v236: NB-2 — migrated from inline DI construction to BuildSut(logger:) to
+        // eliminate the second ServiceProvider construction path (NB9 compliance).
         var cred = MakeCredential("dYdX");
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -342,24 +371,25 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
             .Returns((null, null, null, SentinelMnemonic, null, null));
 
         var capturedLogMessages = new List<string>();
-        var dydxFactory = new Mock<IDydxConnectorFactory>();
-        dydxFactory
-            .Setup(f => f.ValidateSignedAsync(
-                SentinelMnemonic,
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new DydxCredentialCheckResult
-            {
-                Reason = DydxCredentialFailureReason.InvalidMnemonic,
-                MissingField = "Mnemonic"
-            });
-
-        var services = new ServiceCollection();
-        services.AddSingleton(userSettings.Object);
-        _serviceProvider = services.BuildServiceProvider();
-
         var capturingLogger = new CapturingLogger<ExchangeConnectorFactory>(capturedLogMessages);
-        var sut = new ExchangeConnectorFactory(_serviceProvider, capturingLogger, dydxFactory.Object);
+
+        var failureResult = new DydxCredentialCheckResult
+        {
+            Reason = DydxCredentialFailureReason.InvalidMnemonic,
+            MissingField = "Mnemonic"
+        };
+
+        // review-v236: NB-2 — use BuildSut(configure:, logger:) to stay on the single DI path.
+        // configure sets up ValidateSignedAsync for the sentinel key; logger captures any emission.
+        var (sut, _) = BuildSut(
+            userSettings,
+            configure: m => m
+                .Setup(f => f.ValidateSignedAsync(
+                    SentinelMnemonic,
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(failureResult),
+            logger: capturingLogger);
 
         // Act
         await sut.ValidateDydxAsync(UserId, CancellationToken.None);
@@ -382,6 +412,9 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         // If the factory ever added a catch/log before re-throwing, this test would fail,
         // alerting the developer that credential material from the exception message could leak.
         // The contract is documented in an XML-doc <remarks> on ValidateDydxAsync in production.
+        //
+        // review-v236: NB-2 — migrated from inline DI construction to BuildSut(configure:, logger:)
+        // to eliminate the second ServiceProvider construction path (NB9 compliance).
         var cred = MakeCredential("dYdX");
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -392,20 +425,18 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
             .Returns((null, null, null, SentinelMnemonic, null, null));
 
         var capturedLogMessages = new List<string>();
-        var dydxFactory = new Mock<IDydxConnectorFactory>();
-        dydxFactory
-            .Setup(f => f.ValidateSignedAsync(
-                SentinelMnemonic,
-                It.IsAny<string?>(),
-                It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException($"network error (not credential: {SentinelMnemonic})"));
-
-        var services = new ServiceCollection();
-        services.AddSingleton(userSettings.Object);
-        _serviceProvider = services.BuildServiceProvider();
-
         var capturingLogger = new CapturingLogger<ExchangeConnectorFactory>(capturedLogMessages);
-        var sut = new ExchangeConnectorFactory(_serviceProvider, capturingLogger, dydxFactory.Object);
+
+        // review-v236: NB-2 — BuildSut(configure:, logger:) stays on the single DI path.
+        var (sut, _) = BuildSut(
+            userSettings,
+            configure: m => m
+                .Setup(f => f.ValidateSignedAsync(
+                    SentinelMnemonic,
+                    It.IsAny<string?>(),
+                    It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new InvalidOperationException($"network error (not credential: {SentinelMnemonic})")),
+            logger: capturingLogger);
 
         // Act — the factory propagates the exception without catching or logging it
         var act = async () => await sut.ValidateDydxAsync(UserId, CancellationToken.None);
