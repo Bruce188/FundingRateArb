@@ -167,7 +167,7 @@ public class UserExchangeCredentialRepositoryTests : IDisposable
         // (in-memory provider may short-circuit an empty-table scan before checking cancellation)
         await SeedCredentialAsync("user-cancel-test", _dydxExchange); // review-v236: NB-4
 
-        var cts = new CancellationTokenSource();
+        using var cts = new CancellationTokenSource(); // review-v239: N3 — dispose IDisposable CTS
         cts.Cancel(); // review-v230: NB1 — pre-cancel before invocation
 
         // Act & Assert — "dYdX" matches the stored exchange name (review-v236: NB-4)

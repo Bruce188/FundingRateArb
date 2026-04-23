@@ -239,19 +239,89 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
 
         // Act — wait until iteration 1 is complete and blocking, then stop
         await sut.StartAsync(CancellationToken.None);
-        ConnectorStartupValidator? sutRef = sut;
+        // review-v239: N1 — removed unused sutRef alias; sut is non-null from BuildSut
         try
         {
             await iterationReady.WaitAsync(TestTimeout);
         }
         finally
         {
-            await sutRef.StopAsync(CancellationToken.None);
+            await sut.StopAsync(CancellationToken.None);
         }
 
         // Assert — each user ID validated exactly once within the first iteration
         factory.Verify(f => f.ValidateDydxAsync("user-A", It.IsAny<CancellationToken>()), Times.Once);
         factory.Verify(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    // review-v239: NB-1 — exercises the stoppingToken.IsCancellationRequested early-exit branch
+    // inside the per-user foreach (lines 61–64 of ConnectorStartupValidator.cs). The existing
+    // cancellation test fires the OCE from the throttle delay (after user-A's throttle completes);
+    // this test cancels the token inside user-A's ValidateDydxAsync callback, between validate
+    // returning and the per-user throttle starting.
+    // A regression that removed the IsCancellationRequested guard would be caught here because
+    // the OCE from the throttle (still present as the fallback) would still prevent user-B,
+    // but the throttle-count assertion pins the pre-throttle exit path.
+    [Fact]
+    public async Task ExecuteAsync_CancellationBetweenUsers_StoppingTokenGuardPreventsUserB()
+    {
+        // Arrange — two users; cancellation fires inside user-A's ValidateDydxAsync callback,
+        // between validate returning and the per-user throttle delay starting.
+        var userIds = new List<string> { "user-A", "user-B" };
+        using var cts = new CancellationTokenSource();
+        // TCS signalled when user-A's callback fires, so the test can await it before asserting
+        var userACalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var userSettings = new Mock<IUserSettingsService>();
+        userSettings
+            .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(userIds);
+
+        var factory = new Mock<IExchangeConnectorFactory>();
+        factory
+            .Setup(f => f.ValidateDydxAsync("user-A", It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                // Cancel the stoppingToken — fires between ValidateDydxAsync returning and
+                // the next _delayAsync(PerUserThrottle, …) call (review-v239: NB-1 target path).
+                cts.Cancel();
+                userACalled.TrySetResult();
+                return Task.FromResult(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
+            });
+        factory
+            .Setup(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
+
+        var notifier = new Mock<ISignalRNotifier>();
+        // blockAtIteration: 2 is not reached — cancellation exits before the iteration-interval delay
+        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, blockAtIteration: 1);
+
+        // Pre-register before StartAsync to avoid missing the signal on fast hardware
+        var userATask = userACalled.Task;
+
+        // Act — start, await the user-A callback signal, then drain via StopAsync
+        await sut.StartAsync(cts.Token);
+        try
+        {
+            await userATask.WaitAsync(TestTimeout);
+        }
+        finally
+        {
+            await sut.StopAsync(CancellationToken.None);
+        }
+
+        // Assert — only user-A was validated; stoppingToken cancellation prevents user-B
+        // (OCE from throttle delay throws before the loop reaches user-B's IsCancellationRequested check)
+        factory.Verify(f => f.ValidateDydxAsync("user-A", It.IsAny<CancellationToken>()), Times.Once,
+            "user-A must be validated before cancellation fires");
+        factory.Verify(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()), Times.Never,
+            "user-B must be skipped — token is cancelled before user-B's throttle or IsCancellationRequested check");
+
+        // The per-user throttle for user-A throws OCE immediately (token already cancelled
+        // when _delayAsync(PerUserThrottle, …) is entered), so zero throttle delays are recorded.
+        // review-v239: NB-1 — pins the pre-throttle-start cancellation exit path.
+        delay.Recorded.Count(d => d == ConnectorStartupValidator.PerUserThrottle).Should().Be(0,
+            "throttle delay must throw OCE before recording because the token is cancelled inside ValidateDydxAsync");
     }
 
     [Fact]
@@ -439,14 +509,14 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         // review-v238: N7 — ContainSingle on the filtered enumerable (no ToList) is the idiomatic
         // FluentAssertions form; avoids the List allocation and allows .Which for chaining.
         // review-v238: N1 — because-clauses name the orthogonal log slots: {Reason} and {Field}.
-        capturedLog.Where(e => e.Level == LogLevel.Warning)
-            .Should().ContainSingle("exactly one credential-failure warning should be logged")
-            .Which.Message.Should().Contain("MissingMnemonic",
-                "{Reason} must render to 'MissingMnemonic'");
-        capturedLog.Where(e => e.Level == LogLevel.Warning)
-            .Should().ContainSingle()
-            .Which.Message.Should().Contain(SentinelMnemonic,
-                "{Field} must render to the sentinel — assertion is falsifiable because sentinel IS in MissingField");
+        // review-v239: NB-2 — capture the single filtered entry once and chain both Contain calls;
+        // the prior pattern filtered twice, making the second ContainSingle redundant.
+        var warning = capturedLog.Where(e => e.Level == LogLevel.Warning)
+            .Should().ContainSingle("exactly one credential-failure warning should be logged").Which;
+        warning.Message.Should().Contain("MissingMnemonic",
+            "{Reason} must render to 'MissingMnemonic'");
+        warning.Message.Should().Contain(SentinelMnemonic,
+            "{Field} must render to the sentinel — assertion is falsifiable because sentinel IS in MissingField");
 
         // review-v237: NB-4 — full log shape: 1 Debug (user-count) + 1 Warning (credential-failure).
         // review-v238: N4 — assert the Debug entry explicitly so the comment matches what the test enforces.
@@ -618,7 +688,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string>(0)); // review-v238: N6 — explicit 0-capacity avoids default-capacity growth path
+            .ReturnsAsync(new List<string>()); // review-v239: N2 — empty list, zero initial allocation (interface returns List<string>)
 
         var factory = new Mock<IExchangeConnectorFactory>();
         var notifier = new Mock<ISignalRNotifier>();
@@ -704,6 +774,13 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var iterationIdx = recorded.IndexOf(ConnectorStartupValidator.IterationInterval);
         warmUpIdx.Should().BeLessThan(iterationIdx,
             "warm-up delay must be recorded before the iteration-interval delay");
+
+        // review-v239: N4 — assert PerUserThrottle precedes IterationInterval; a regression that
+        // moved the per-user throttle after the iteration-interval delay would not be caught
+        // by the existing warm-up ordering check alone.
+        var throttleIdx = recorded.IndexOf(ConnectorStartupValidator.PerUserThrottle);
+        throttleIdx.Should().BeLessThan(iterationIdx,
+            "per-user throttle delay must precede the iteration-interval delay");
     }
 
     // ── Constant assertions ──────────────────────────────────────────────────────

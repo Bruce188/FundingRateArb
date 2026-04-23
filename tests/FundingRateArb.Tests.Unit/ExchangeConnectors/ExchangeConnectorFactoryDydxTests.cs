@@ -449,9 +449,13 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         await act.Should().ThrowAsync<InvalidOperationException>();
 
         // Assert — no log entries emitted (NB4 "no-log contract").
+        // review-v239: NB-3 — this assertion is trivially true given the current implementation:
+        // ValidateDydxAsync has no try/catch, so there is no code path that could emit a log
+        // entry before the exception propagates. Its purpose is to fail fast if a future maintainer
+        // adds a catch/log before re-throw — which would risk emitting credential material from
+        // ex.Message into the log stream. Keep as a forward-looking contract pin, not a live assertion.
         // The caller (ConnectorStartupValidator) is responsible for catching and logging
-        // iteration-level exceptions. If the factory logged here, credential material in the
-        // exception message could leak into the log stream before the caller's handler.
+        // iteration-level exceptions.
         capturedLogMessages.Should().BeEmpty(
             "ValidateDydxAsync propagates exceptions without logging — any catch/log here risks " +
             "emitting credential material from the exception message");
