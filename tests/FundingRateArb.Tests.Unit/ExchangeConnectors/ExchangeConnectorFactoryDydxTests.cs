@@ -128,7 +128,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential>()); // empty list
+            .ReturnsAsync([]); // review-v240: N2 — collection expression (empty)
 
         var (sut, dydxFactory) = BuildSut(userSettings);
 
@@ -162,7 +162,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { MakeCredential("Binance") });
+            .ReturnsAsync((List<UserExchangeCredential>) [MakeCredential("Binance")]); // review-v240: N2
 
         var (sut, dydxFactory) = BuildSut(userSettings);
 
@@ -219,7 +219,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
         userSettings
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, "decrypted-mnemonic", null, null));
@@ -247,7 +247,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
 
         // Return a known tuple from DecryptCredential to confirm the right credential is passed
         var expectedPrivateKey = "decrypted-mnemonic-key";
@@ -278,7 +278,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
         userSettings
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, "some-key", null, null));
@@ -308,7 +308,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
         userSettings
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, "mnemonic-key", null, null));
@@ -367,7 +367,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
         userSettings
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, SentinelMnemonic, null, null));
@@ -424,7 +424,7 @@ public class ExchangeConnectorFactoryDydxTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetActiveCredentialsAsync(UserId))
-            .ReturnsAsync(new List<UserExchangeCredential> { cred });
+            .ReturnsAsync((List<UserExchangeCredential>) [cred]); // review-v240: N2
         userSettings
             .Setup(u => u.DecryptCredential(cred))
             .Returns((null, null, null, SentinelMnemonic, null, null));

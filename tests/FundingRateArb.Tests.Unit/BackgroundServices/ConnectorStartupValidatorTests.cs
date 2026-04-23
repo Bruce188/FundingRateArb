@@ -59,6 +59,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         // so tests can await the throttle-reached event before calling StopAsync.
         private readonly TaskCompletionSource _throttleReached =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // review-v240: NB-1 — optional gate that blocks the background thread inside the throttle
+        // seam until the test releases it; used to guarantee the token is cancelled before the
+        // background thread re-enters the foreach and hits the IsCancellationRequested guard.
+        private TaskCompletionSource? _throttleGate;
         private readonly int _blockAtIteration;
         private int _iterationCount;
         // review-v238: N2 — backing field avoids allocating a new delegate on every property read.
@@ -86,6 +90,11 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
                     // review-v236: NB-3 — signal from inside Func so the throttle delay is
                     // structurally guaranteed to have been attempted before the test calls StopAsync.
                     _throttleReached.TrySetResult();
+                    // review-v240: NB-1 — if a gate TCS is registered, block here until the test
+                    // releases it (after cancelling the token); this guarantees the token is
+                    // already cancelled before the background thread re-enters the foreach.
+                    if (_throttleGate is { } gate)
+                        await gate.Task;
                 }
 
                 if (duration == ConnectorStartupValidator.IterationInterval)
@@ -131,6 +140,26 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         /// was attempted, leaving a timing window between ValidateDydxAsync return and StopAsync.
         /// </remarks>
         public Task WaitForThrottleAsync() => _throttleReached.Task;
+
+        /// <summary>
+        /// Registers a gate that blocks the background thread inside the per-user throttle seam
+        /// until the returned <see cref="TaskCompletionSource"/> is set by the test.
+        /// Call before <c>StartAsync</c>. When the background thread reaches the
+        /// <see cref="ConnectorStartupValidator.PerUserThrottle"/> delay, it signals
+        /// <see cref="WaitForThrottleAsync"/> and then awaits this gate before returning.
+        /// The test cancels the token and then sets the gate — guaranteeing the token is
+        /// already cancelled before the background thread re-enters the foreach body.
+        /// </summary>
+        /// <remarks>
+        /// review-v240: NB-1 — deterministic synchronization for the IsCancellationRequested guard
+        /// test; ensures the stoppingToken is cancelled before execution re-enters the foreach.
+        /// </remarks>
+        public TaskCompletionSource RegisterThrottleGate()
+        {
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _throttleGate = gate;
+            return gate;
+        }
 
         /// <summary>
         /// The delay function to inject.
@@ -197,7 +226,8 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var factory = new Mock<IExchangeConnectorFactory>();
         var notifier = new Mock<ISignalRNotifier>();
 
-        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object);
+        // review-v240: N4 — delay is unused in this test; discard with _.
+        var (sut, _) = BuildSut(userSettings.Object, factory.Object, notifier.Object);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -219,7 +249,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     public async Task ExecuteAsync_TwoDistinctUsers_EachValidatedExactlyOnce()
     {
         // Arrange — two users, no failures; run exactly one full iteration then stop
-        var userIds = new List<string> { "user-A", "user-B" };
+        List<string> userIds = ["user-A", "user-B"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -254,23 +284,33 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         factory.Verify(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    // review-v239: NB-1 — exercises the stoppingToken.IsCancellationRequested early-exit branch
-    // inside the per-user foreach (lines 61–64 of ConnectorStartupValidator.cs). The existing
-    // cancellation test fires the OCE from the throttle delay (after user-A's throttle completes);
-    // this test cancels the token inside user-A's ValidateDydxAsync callback, between validate
-    // returning and the per-user throttle starting.
-    // A regression that removed the IsCancellationRequested guard would be caught here because
-    // the OCE from the throttle (still present as the fallback) would still prevent user-B,
-    // but the throttle-count assertion pins the pre-throttle exit path.
+    // review-v240: NB-1 / N3 — exercises the stoppingToken.IsCancellationRequested early-exit
+    // branch inside the per-user foreach (lines 61–64 of ConnectorStartupValidator.cs).
+    //
+    // The synchronization protocol here SPECIFICALLY targets the guard branch:
+    //   1. user-A's ValidateDydxAsync succeeds; the throttle delay fires normally.
+    //   2. Inside the throttle seam, the gate TCS blocks the background thread AFTER signalling
+    //      WaitForThrottleAsync; stoppingToken is NOT yet cancelled at this point.
+    //   3. The test thread: awaits WaitForThrottleAsync → calls StopAsync (cancels stoppingToken
+    //      synchronously as its first step) → releases the gate.
+    //   4. The background thread resumes from the gate, returns from the throttle delay, and
+    //      re-enters the foreach body for user-B. The IsCancellationRequested check at line 61
+    //      evaluates TRUE and breaks — user-B is never validated.
+    //
+    // A regression that removed the production lines 61–64 would allow user-B's
+    // ValidateDydxAsync to be called, which would observe a cancelled token and throw OCE —
+    // but that would land in the outer catch (which re-throws OCE), exiting the loop anyway.
+    // The Times.Never assertion on user-B's ValidateDydxAsync pins that the IsCancellationRequested
+    // guard is the exit path (not an OCE from inside user-B's ValidateDydxAsync). The throttle
+    // count assertion confirms that user-A's throttle completed normally before cancellation.
+    // review-v240: NB-1 — this test now structurally exercises the IsCancellationRequested guard.
     [Fact]
     public async Task ExecuteAsync_CancellationBetweenUsers_StoppingTokenGuardPreventsUserB()
     {
-        // Arrange — two users; cancellation fires inside user-A's ValidateDydxAsync callback,
-        // between validate returning and the per-user throttle delay starting.
-        var userIds = new List<string> { "user-A", "user-B" };
-        using var cts = new CancellationTokenSource();
-        // TCS signalled when user-A's callback fires, so the test can await it before asserting
-        var userACalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Arrange — two users; cancellation fires after user-A's throttle delay completes,
+        // so the background thread re-enters the foreach body and hits the
+        // IsCancellationRequested guard before calling ValidateDydxAsync for user-B.
+        List<string> userIds = ["user-A", "user-B"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -280,55 +320,57 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var factory = new Mock<IExchangeConnectorFactory>();
         factory
             .Setup(f => f.ValidateDydxAsync("user-A", It.IsAny<CancellationToken>()))
-            .Returns(() =>
-            {
-                // Cancel the stoppingToken — fires between ValidateDydxAsync returning and
-                // the next _delayAsync(PerUserThrottle, …) call (review-v239: NB-1 target path).
-                cts.Cancel();
-                userACalled.TrySetResult();
-                return Task.FromResult(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
-            });
+            .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
         factory
             .Setup(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
 
         var notifier = new Mock<ISignalRNotifier>();
-        // blockAtIteration: 2 is not reached — cancellation exits before the iteration-interval delay
-        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object, blockAtIteration: 1);
+        var (sut, delay) = BuildSut(userSettings.Object, factory.Object, notifier.Object);
 
-        // Pre-register before StartAsync to avoid missing the signal on fast hardware
-        var userATask = userACalled.Task;
+        // review-v240: NB-1 — pre-register the throttle gate before StartAsync.
+        // The gate blocks the background thread INSIDE user-A's throttle seam (after signalling
+        // WaitForThrottleAsync but before returning), giving the test thread a guaranteed window
+        // to cancel the token before the foreach re-evaluates IsCancellationRequested.
+        var throttleGate = delay.RegisterThrottleGate();
+        var throttleReached = delay.WaitForThrottleAsync();
 
-        // Act — start, await the user-A callback signal, then drain via StopAsync
-        await sut.StartAsync(cts.Token);
-        try
-        {
-            await userATask.WaitAsync(TestTimeout);
-        }
-        finally
-        {
-            await sut.StopAsync(CancellationToken.None);
-        }
+        // Act — start; await the throttle signal; initiate StopAsync (which cancels stoppingToken
+        // synchronously before awaiting the execute task); release the gate; drain.
+        await sut.StartAsync(CancellationToken.None);
+        await throttleReached.WaitAsync(TestTimeout);
 
-        // Assert — only user-A was validated; stoppingToken cancellation prevents user-B
-        // (OCE from throttle delay throws before the loop reaches user-B's IsCancellationRequested check)
+        // StopAsync cancels _stoppingCts synchronously as its first step — the background thread
+        // is still blocked on the gate at this point, so stoppingToken is cancelled before
+        // the gate is released. The returned Task is not yet completed (it awaits ExecuteAsync).
+        var stopTask = sut.StopAsync(CancellationToken.None);
+
+        // Release the gate — background thread resumes with stoppingToken already cancelled.
+        // It returns from the throttle Func, re-enters the foreach, and hits
+        // IsCancellationRequested == true → break (user-B is never validated).
+        throttleGate.TrySetResult();
+
+        // Drain: await ExecuteAsync completion.
+        await stopTask;
+
+        // Assert — user-A validated; user-B skipped via the IsCancellationRequested guard.
         factory.Verify(f => f.ValidateDydxAsync("user-A", It.IsAny<CancellationToken>()), Times.Once,
             "user-A must be validated before cancellation fires");
         factory.Verify(f => f.ValidateDydxAsync("user-B", It.IsAny<CancellationToken>()), Times.Never,
-            "user-B must be skipped — token is cancelled before user-B's throttle or IsCancellationRequested check");
+            "user-B must be skipped — IsCancellationRequested guard breaks the foreach before user-B");
 
-        // The per-user throttle for user-A throws OCE immediately (token already cancelled
-        // when _delayAsync(PerUserThrottle, …) is entered), so zero throttle delays are recorded.
-        // review-v239: NB-1 — pins the pre-throttle-start cancellation exit path.
-        delay.Recorded.Count(d => d == ConnectorStartupValidator.PerUserThrottle).Should().Be(0,
-            "throttle delay must throw OCE before recording because the token is cancelled inside ValidateDydxAsync");
+        // review-v240: NB-2 — .Where(...).Should().HaveCount is the consistent form used throughout.
+        // One throttle delay recorded for user-A (it completed normally before cancellation).
+        delay.Recorded.Where(d => d == ConnectorStartupValidator.PerUserThrottle)
+            .Should().HaveCount(1,
+                "user-A's throttle delay must have been recorded before cancellation preempted user-B");
     }
 
     [Fact]
     public async Task ExecuteAsync_TwoDistinctUsers_ThrottleDelayOccursBetweenEachUser()
     {
         // Arrange — two users; assert PerUserThrottle delay occurs once per user per iteration (NB4)
-        var userIds = new List<string> { "user-A", "user-B" };
+        List<string> userIds = ["user-A", "user-B"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -368,7 +410,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     public async Task ExecuteAsync_CredentialFailure_PushesSignalRNotificationWithExactPayload()
     {
         // Arrange — one user, validation returns MissingMnemonic; run exactly one iteration
-        var userIds = new List<string> { "user-X" };
+        List<string> userIds = ["user-X"]; // review-v240: N2
         var failure = new DydxCredentialCheckResult
         {
             Reason = DydxCredentialFailureReason.MissingMnemonic,
@@ -417,7 +459,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     public async Task ExecuteAsync_CredentialSuccess_DoesNotPushSignalRNotification()
     {
         // Arrange — one user, validation succeeds; run exactly one iteration
-        var userIds = new List<string> { "user-ok" };
+        List<string> userIds = ["user-ok"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -464,7 +506,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     {
         // Arrange — sentinel in MissingField so the warning-log format assertion is falsifiable:
         // if {Field} were dropped from the log template, the assertion would fail.
-        var userIds = new List<string> { "user-format-test" };
+        List<string> userIds = ["user-format-test"]; // review-v240: N2
         var failure = new DydxCredentialCheckResult
         {
             Reason = DydxCredentialFailureReason.MissingMnemonic,
@@ -539,7 +581,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         // RecordingDelay.Func (not from validateCalled), so StopAsync is called only AFTER
         // the throttle delay has been structurally attempted. This eliminates the window where
         // StopAsync could cancel the token before the throttle delay runs.
-        var userIds = new List<string> { "user-mid" };
+        List<string> userIds = ["user-mid"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -609,7 +651,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         // (production outer try/catch wraps the entire foreach body).
         // Second iteration: both users processed normally.
         // Block at iteration 2 so StopAsync fires after iteration 2 completes.
-        var userIds = new List<string> { "user-throws", "user-continues" };
+        List<string> userIds = ["user-throws", "user-continues"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
@@ -688,7 +730,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
             .Setup(u => u.GetUsersWithCredentialsAsync("dYdX", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new List<string>()); // review-v239: N2 — empty list, zero initial allocation (interface returns List<string>)
+            .ReturnsAsync([]); // review-v240: N1 — collection expression; compiler-infers List<string> to satisfy ReturnsAsync overload
 
         var factory = new Mock<IExchangeConnectorFactory>();
         var notifier = new Mock<ISignalRNotifier>();
@@ -729,7 +771,7 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     public async Task ExecuteAsync_NormalStart_RecordsWarmUpDelayThenIterationInterval()
     {
         // Arrange — one user, one iteration, then stop
-        var userIds = new List<string> { "user-warmup" };
+        List<string> userIds = ["user-warmup"]; // review-v240: N2
 
         var userSettings = new Mock<IUserSettingsService>();
         userSettings
