@@ -150,7 +150,9 @@ public class FundingRateRepository : IFundingRateRepository
             if (bypassCooldown)
             {
                 Interlocked.Exchange(ref _suppressedPurgeCount, 0);
-                _purgeRetryCooldownUntil = DateTimeOffset.UtcNow.AddMinutes(15);
+                // Bypass success clears any pending cooldown — the forced invocation is consumed,
+                // so the next aligned-cadence caller must not be blocked by a new cooldown.
+                _purgeRetryCooldownUntil = null;
             }
 
             return result;

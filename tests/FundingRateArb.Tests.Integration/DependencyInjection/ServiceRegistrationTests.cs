@@ -1,4 +1,5 @@
 using FundingRateArb.Application.Common.Repositories;
+using FundingRateArb.Application.Common.Services;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
@@ -53,6 +54,15 @@ public class ServiceRegistrationTests : IClassFixture<ServiceRegistrationTests.S
         var repo = scope.ServiceProvider.GetRequiredService<IFundingRateRepository>();
 
         Assert.NotNull(repo);
+    }
+
+    [Fact]
+    public void IDatabaseSpaceHealthProbe_IsRegisteredAsScoped()
+    {
+        var descriptor = _factory.CapturedServices
+            .Single(d => d.ServiceType == typeof(IDatabaseSpaceHealthProbe));
+
+        Assert.Equal(ServiceLifetime.Scoped, descriptor.Lifetime);
     }
 
     public class ServiceRegistrationFactory : WebApplicationFactory<Program>
