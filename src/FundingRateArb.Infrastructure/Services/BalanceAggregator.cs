@@ -18,7 +18,7 @@ public class BalanceAggregator : IBalanceAggregator
     /// Known credential-error message fragments — walked across InnerException chain up to 5 hops.
     /// Mirrors the classifier used by LeverageTierRefresher (PR #211).
     /// </summary>
-    private static readonly (string Fragment, StringComparison Comparison)[] _knownCredentialErrors =
+    private static readonly (string Fragment, StringComparison Comparison)[] KnownCredentialErrors =
     {
         ("Invalid API-key",          StringComparison.OrdinalIgnoreCase),
         ("-2015",                     StringComparison.Ordinal),
@@ -56,10 +56,12 @@ public class BalanceAggregator : IBalanceAggregator
         for (var hop = 0; hop < 5 && current is not null; hop++, current = current.InnerException)
         {
             var msg = current.Message;
-            foreach (var (fragment, comparison) in _knownCredentialErrors)
+            foreach (var (fragment, comparison) in KnownCredentialErrors)
             {
                 if (msg.Contains(fragment, comparison))
+                {
                     return true;
+                }
             }
         }
         return false;

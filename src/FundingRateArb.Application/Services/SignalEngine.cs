@@ -27,7 +27,7 @@ public class SignalEngine : ISignalEngine
     // Per-key stampede protection: serialises the first-hit compute path so that N concurrent
     // callers on a cache miss share a single evaluation rather than all racing to recompute.
     // SemaphoreSlim is correct here — this is a single-instance deployment.
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _cacheKeyLocks = new();
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> CacheKeyLocks = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IMarketDataCache _cache;
@@ -100,7 +100,7 @@ public class SignalEngine : ISignalEngine
         // a waiter may find the result already populated by the winning compute.
         if (_opportunityCache is not null)
         {
-            var sem = _cacheKeyLocks.GetOrAdd(OpportunityCacheKey, _ => new SemaphoreSlim(1, 1));
+            var sem = CacheKeyLocks.GetOrAdd(OpportunityCacheKey, _ => new SemaphoreSlim(1, 1));
             await sem.WaitAsync(ct);
             try
             {

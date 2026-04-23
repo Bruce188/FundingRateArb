@@ -4440,12 +4440,12 @@ public class ExecutionEngineTests
     /// </summary>
     [Theory]
     [InlineData(false, false, false, false, false, "both available → opens")]
-    [InlineData(true,  false, false, false, true,  "long unavailable → rejected")]
-    [InlineData(false, true,  false, false, true,  "short unavailable → rejected")]
-    [InlineData(true,  true,  false, false, true,  "both unavailable → rejected")]
-    [InlineData(false, false, true,  false, false, "long stale only → proceeds")]
-    [InlineData(false, false, false, true,  false, "short stale only → proceeds")]
-    [InlineData(false, false, true,  true,  false, "both stale → proceeds")]
+    [InlineData(true, false, false, false, true, "long unavailable → rejected")]
+    [InlineData(false, true, false, false, true, "short unavailable → rejected")]
+    [InlineData(true, true, false, false, true, "both unavailable → rejected")]
+    [InlineData(false, false, true, false, false, "long stale only → proceeds")]
+    [InlineData(false, false, false, true, false, "short stale only → proceeds")]
+    [InlineData(false, false, true, true, false, "both stale → proceeds")]
     public async Task OpenPosition_AvailabilityMatrix(
         bool longUnavail, bool shortUnavail,
         bool longStale, bool shortStale,

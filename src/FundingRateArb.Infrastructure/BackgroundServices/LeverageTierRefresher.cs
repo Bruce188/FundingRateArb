@@ -35,7 +35,7 @@ public class LeverageTierRefresher : BackgroundService
     /// is a linear substring scan (Contains) — a HashSet's hash/equality semantics would
     /// provide no benefit. Declared static readonly so the allocation occurs once per process.
     /// </summary>
-    private static readonly (string Fragment, StringComparison Comparison)[] _knownCredentialErrors =
+    private static readonly (string Fragment, StringComparison Comparison)[] KnownCredentialErrors =
     {
         ("Invalid API-key",          StringComparison.OrdinalIgnoreCase),
         ("-2015",                     StringComparison.Ordinal),
@@ -83,10 +83,12 @@ public class LeverageTierRefresher : BackgroundService
         for (var hop = 0; hop < 5 && current is not null; hop++, current = current.InnerException)
         {
             var msg = current.Message;
-            foreach (var (fragment, comparison) in _knownCredentialErrors)
+            foreach (var (fragment, comparison) in KnownCredentialErrors)
             {
                 if (msg.Contains(fragment, comparison))
+                {
                     return true;
+                }
             }
         }
         return false;
@@ -266,8 +268,14 @@ public class LeverageTierRefresher : BackgroundService
         int successCount = 0, skippedCount = 0;
         foreach (var o in outcomes.Values)
         {
-            if (o == RefreshOutcome.Success) successCount++;
-            else if (o == RefreshOutcome.ConnectorUnavailable) skippedCount++;
+            if (o == RefreshOutcome.Success)
+            {
+                successCount++;
+            }
+            else if (o == RefreshOutcome.ConnectorUnavailable)
+            {
+                skippedCount++;
+            }
         }
 
         _logger.LogInformation(

@@ -328,7 +328,9 @@ public class LeverageTierRefresherTests
             Func<TState, Exception?, string> formatter)
         {
             if (!IsEnabled(logLevel))
+            {
                 return;
+            }
 
             var formatted = formatter(state, exception);
 
@@ -658,7 +660,10 @@ public class LeverageTierRefresherTests
             {
                 callCount++;
                 if (callCount == 1)
+                {
                     throw new InvalidOperationException("database unavailable");
+                }
+
                 secondCallReached.TrySetResult(true);
                 return new List<FundingRateSnapshot>();
             });
@@ -847,7 +852,10 @@ public class LeverageTierRefresherTests
     {
         Exception ex = new InvalidOperationException(message);
         for (var i = 0; i < depth; i++)
+        {
             ex = new Exception("wrapper", ex);
+        }
+
         return ex;
     }
 
