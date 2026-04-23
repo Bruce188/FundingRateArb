@@ -1,8 +1,8 @@
+using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.Common.Services;
-using FundingRateArb.Infrastructure.Data;
-using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Infrastructure.Data;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;

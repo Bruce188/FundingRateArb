@@ -3292,8 +3292,8 @@ public class SignalEngineTests
         var sut = new SignalEngine(_mockUow.Object, _mockCache.Object, opportunityCache: memCache);
 
         // Act: fire 20 concurrent requests — all hit an empty cache simultaneously.
-        const int N = 20;
-        var tasks = Enumerable.Range(0, N)
+        const int callers = 20;
+        var tasks = Enumerable.Range(0, callers)
             .Select(_ => sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None))
             .ToArray();
 
