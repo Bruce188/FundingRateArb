@@ -14,22 +14,29 @@ namespace FundingRateArb.Infrastructure.BackgroundServices;
 /// </summary>
 public class ConnectorStartupValidator : BackgroundService
 {
+    internal static readonly TimeSpan IterationInterval = TimeSpan.FromMinutes(30);
+    internal static readonly TimeSpan WarmUpDelay = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan PerUserThrottle = TimeSpan.FromMilliseconds(500);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<ConnectorStartupValidator> _logger;
+    private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
 
     public ConnectorStartupValidator(
         IServiceScopeFactory scopeFactory,
-        ILogger<ConnectorStartupValidator> logger)
+        ILogger<ConnectorStartupValidator> logger,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
     {
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _delayAsync = delayAsync ?? Task.Delay;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+            await _delayAsync(WarmUpDelay, stoppingToken);
         }
         catch (OperationCanceledException)
         {
@@ -68,7 +75,7 @@ public class ConnectorStartupValidator : BackgroundService
                             $"dYdX credentials invalid — {r.Reason} ({r.MissingField})");
                     }
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(500), stoppingToken);
+                    await _delayAsync(PerUserThrottle, stoppingToken);
                 }
             }
             catch (OperationCanceledException)
@@ -82,7 +89,7 @@ public class ConnectorStartupValidator : BackgroundService
 
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(30), stoppingToken);
+                await _delayAsync(IterationInterval, stoppingToken);
             }
             catch (OperationCanceledException)
             {

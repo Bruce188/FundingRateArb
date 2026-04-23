@@ -154,6 +154,11 @@ public class ExchangeConnectorFactory : IExchangeConnectorFactory
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Does not log. Caller is responsible for iteration diagnostics (e.g. logging the validation
+    /// outcome and pushing notifications). This "no-log contract" is pinned by tests —
+    /// adding logging here without updating the contract is a breaking change.
+    /// </remarks>
     public async Task<DydxCredentialCheckResult> ValidateDydxAsync(string userId, CancellationToken ct)
     {
         var userSettings = _serviceProvider.GetRequiredService<IUserSettingsService>();
