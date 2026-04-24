@@ -67,6 +67,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             _state.NegativeFundingCycles.Clear();
             _state.PriceFetchFailures.Clear();
             _state.ZeroPriceCheckCounts.Clear();
+            _state.PrevLiquidationDistance.Clear();
 
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
@@ -406,11 +407,23 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                 var effectiveEarlyWarningPct = Math.Max(
                     config.LiquidationEarlyWarningPct, config.LiquidationWarningPct);
 
-                if (minLiquidationDistance.HasValue && minLiquidationDistance.Value < effectiveEarlyWarningPct)
+                // Crossing-only refire: emit MarginWarning only on a downward crossing of the
+                // early-warning threshold, or on the first observation of a new position that is
+                // already below it. A position that stays below threshold across many cycles
+                // produces exactly one alert — avoiding the alert-spam that cooldown-based refire
+                // causes for slowly-degrading positions. recentAlerts still protects against
+                // duplicate emits from a same-cycle loop or a crash-and-resume within the dedup
+                // window (much shorter than the previous 4h cooldown).
+                if (minLiquidationDistance.HasValue)
                 {
-                    var hasRecentLiqAlert = recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning));
+                    var currentDist = minLiquidationDistance.Value;
+                    var hasPrior = _state.PrevLiquidationDistance.TryGetValue(pos.Id, out var prevDist);
+                    var below = currentDist < effectiveEarlyWarningPct;
+                    var crossedDownward = hasPrior && prevDist >= effectiveEarlyWarningPct && below;
+                    var firstObsBelow = !hasPrior && below;
 
-                    if (!hasRecentLiqAlert)
+                    if ((crossedDownward || firstObsBelow)
+                        && !recentAlerts.ContainsKey((pos.Id, AlertType.MarginWarning)))
                     {
                         _uow.Alerts.Add(new Alert
                         {
@@ -420,9 +433,14 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                             Severity = AlertSeverity.Warning,
                             Message = $"Liquidation warning: {assetSymbol} " +
                                       $"{longExchangeName}/{shortExchangeName} " +
-                                      $"distance={minLiquidationDistance.Value:P1} (threshold={effectiveEarlyWarningPct:P1})",
+                                      $"distance={currentDist:P1} (threshold={effectiveEarlyWarningPct:P1})",
                         });
                     }
+
+                    // Persist current distance so the next cycle can detect upward or downward
+                    // crossings. Recorded unconditionally (including above-threshold values) so an
+                    // upward cross followed by a later downward cross re-arms the alert.
+                    _state.PrevLiquidationDistance[pos.Id] = currentDist;
                 }
 
                 // Margin utilization alerts — reuse the margin state fetched above.
@@ -480,6 +498,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             if (!openIds.Contains(key))
             {
                 _state.NegativeFundingCycles.TryRemove(key, out _);
+            }
+        }
+        foreach (var key in _state.PrevLiquidationDistance.Keys)
+        {
+            if (!openIds.Contains(key))
+            {
+                _state.PrevLiquidationDistance.TryRemove(key, out _);
             }
         }
 
