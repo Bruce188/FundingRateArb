@@ -234,23 +234,37 @@ public class MarketDataStreamManagerTests
         List<string>? hlReceivedSymbols = null;
         List<string>? lighterReceivedSymbols = null;
 
+        // N5: deterministic signaling — no Task.Delay
+        var hlStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lighterStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var hlStream = new Mock<IMarketDataStream>();
         hlStream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
         hlStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => hlReceivedSymbols = syms.ToList())
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                hlReceivedSymbols = syms.ToList();
+                hlStarted.TrySetResult(true);
+            })
             .Returns(Task.CompletedTask);
 
         var lighterStream = new Mock<IMarketDataStream>();
         lighterStream.Setup(s => s.ExchangeName).Returns("Lighter");
         lighterStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => lighterReceivedSymbols = syms.ToList())
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                lighterReceivedSymbols = syms.ToList();
+                lighterStarted.TrySetResult(true);
+            })
             .Returns(Task.CompletedTask);
 
         var sut = CreateSut(cacheMock.Object, hlStream.Object, lighterStream.Object);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         await sut.StartAsync(cts.Token);
-        await Task.Delay(200);
+        await Task.WhenAll(
+            hlStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
+            lighterStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
         await sut.StopAsync(CancellationToken.None);
 
         hlReceivedSymbols.Should().NotBeNull();
@@ -272,17 +286,23 @@ public class MarketDataStreamManagerTests
             .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
         List<string>? receivedSymbols = null;
+        // N5: deterministic signaling — no Task.Delay
+        var streamStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stream = new Mock<IMarketDataStream>();
         stream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
         stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
-            .Callback<IEnumerable<string>, CancellationToken>((syms, _) => receivedSymbols = syms.ToList())
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                receivedSymbols = syms.ToList();
+                streamStarted.TrySetResult(true);
+            })
             .Returns(Task.CompletedTask);
 
         var sut = CreateSut(cacheMock.Object, stream.Object);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         await sut.StartAsync(cts.Token);
-        await Task.Delay(200);
+        await streamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await sut.StopAsync(CancellationToken.None);
 
         receivedSymbols.Should().NotBeNull();
@@ -307,9 +327,12 @@ public class MarketDataStreamManagerTests
             .Setup(c => c.GetSupportedSymbolsAsync("TestExchange", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new HashSet<string>(["BTC", "ETH"], StringComparer.OrdinalIgnoreCase));
 
+        // N5: deterministic signaling — no Task.Delay
+        var streamStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var stream = new Mock<IMarketDataStream>();
         stream.Setup(s => s.ExchangeName).Returns("TestExchange");
         stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback(() => streamStarted.TrySetResult(true))
             .Returns(Task.CompletedTask);
 
         var mockLogger = new Mock<ILogger<MarketDataStreamManager>>();
@@ -323,7 +346,7 @@ public class MarketDataStreamManagerTests
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await sut.StartAsync(cts.Token);
-        await Task.Delay(200);
+        await streamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await sut.StopAsync(CancellationToken.None);
 
         // Verify that an Information-level log was emitted about skipped symbols
@@ -335,5 +358,246 @@ public class MarketDataStreamManagerTests
                 It.IsAny<Exception?>(),
                 (Func<It.IsAnyType, Exception?, string>)It.IsAny<object>()),
             Times.Once);
+    }
+
+    // ── NB6: cache throws for one exchange but other streams still start ─────────
+
+    [Fact]
+    public async Task ExecuteAsync_CacheThrows_OtherStreamsStillStart()
+    {
+        // GetSupportedSymbolsAsync throws for Hyperliquid, succeeds for Lighter
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync("Hyperliquid", It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Cache unavailable for Hyperliquid"));
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync("Lighter", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(ActiveAssets.Select(a => a.Symbol), StringComparer.OrdinalIgnoreCase));
+
+        var lighterStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var hlStream = new Mock<IMarketDataStream>();
+        hlStream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
+        hlStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var lighterStream = new Mock<IMarketDataStream>();
+        lighterStream.Setup(s => s.ExchangeName).Returns("Lighter");
+        lighterStream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback(() => lighterStarted.TrySetResult(true))
+            .Returns(Task.CompletedTask);
+
+        // NB8: use a mock logger to verify the error-log branch fires for Hyperliquid.
+        var mockLogger = new Mock<ILogger<MarketDataStreamManager>>();
+        var sut = new MarketDataStreamManager(
+            [hlStream.Object, lighterStream.Object],
+            _mockScopeFactory.Object,
+            _mockHubContext.Object,
+            cacheMock.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        // Starting the service must not throw — exception is caught per-stream
+        var act = () => sut.StartAsync(cts.Token);
+        await act.Should().NotThrowAsync("a cache exception for one exchange must not crash the service");
+
+        // Lighter stream should still have started
+        await lighterStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        lighterStream.Verify(
+            s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Once,
+            "Lighter StartAsync must be invoked despite Hyperliquid cache throwing");
+
+        // Hyperliquid stream must NOT have been started (cache threw before reaching StartAsync)
+        hlStream.Verify(
+            s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "Hyperliquid StartAsync must not be invoked when its cache lookup throws");
+
+        // NB8: verify LogError was called once with a message referencing Hyperliquid.
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Hyperliquid")),
+                It.IsAny<Exception?>(),
+                (Func<It.IsAnyType, Exception?, string>)It.IsAny<object>()),
+            Times.Once,
+            "a LogError containing 'Hyperliquid' must be emitted when the cache throws for that exchange");
+
+        await sut.StopAsync(CancellationToken.None);
+    }
+
+    // ── NB7: empty intersection — observed behavior locked in ────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_EmptyIntersection_BehaviorLockedIn()
+    {
+        // DB symbols do NOT intersect the cache's supported set.
+        // DB: FOO-USD; cache: BAR-USD only.
+        // Current production behavior: the intersection is empty, so filtered list is empty;
+        // StartAsync IS called with an empty list (the cache is non-empty, so the empty
+        // intersection is passed through rather than falling back to the full list).
+        // This test locks that contract in so a future change is explicit.
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(["BAR-USD"], StringComparer.OrdinalIgnoreCase));
+
+        _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(
+        [
+            new Asset { Id = 1, Symbol = "FOO-USD", IsActive = true },
+        ]);
+
+        List<string>? receivedSymbols = null;
+        var streamStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stream = new Mock<IMarketDataStream>();
+        stream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
+        stream.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                receivedSymbols = syms.ToList();
+                streamStarted.TrySetResult(true);
+            })
+            .Returns(Task.CompletedTask);
+
+        // NB9: inject a logger mock to verify the skip-log fires with the correct count.
+        var mockLogger = new Mock<ILogger<MarketDataStreamManager>>();
+        var sut = new MarketDataStreamManager(
+            [stream.Object],
+            _mockScopeFactory.Object,
+            _mockHubContext.Object,
+            cacheMock.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        await streamStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sut.StopAsync(CancellationToken.None);
+
+        // Contract: when cache is non-empty but intersection is empty, StartAsync is called
+        // with an empty list (not skipped). To change this behavior, update this assertion.
+        stream.Verify(
+            s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Once,
+            "StartAsync must be invoked even when the intersection is empty");
+        receivedSymbols.Should().NotBeNull();
+        receivedSymbols.Should().BeEmpty(
+            "empty intersection with a non-empty cache produces an empty symbol list — StartAsync still runs");
+
+        // NB9: all DB symbols are skipped (FOO-USD not in cache), so skip-log must fire once
+        //      and its message must reference the skipped count (1 == DB symbol count).
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Information,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("symbols supported, skipped")),
+                It.IsAny<Exception?>(),
+                (Func<It.IsAnyType, Exception?, string>)It.IsAny<object>()),
+            Times.Once,
+            "skip-log must fire exactly once when all DB symbols are filtered out");
+    }
+
+    // ── NB10: B1 fix regression — two streams with empty cache share no list reference ─
+
+    [Fact]
+    public async Task ExecuteAsync_CacheEmpty_TwoStreams_DoNotShareListReference()
+    {
+        // Empty cache — both streams get the full-list fallback (B1: .ToList() each time).
+        var cacheMock = new Mock<IExchangeSupportedSymbolsCache>();
+        cacheMock
+            .Setup(c => c.GetSupportedSymbolsAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+        List<string>? receivedA = null;
+        List<string>? receivedB = null;
+
+        var aStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var streamA = new Mock<IMarketDataStream>();
+        streamA.Setup(s => s.ExchangeName).Returns("ExchangeA");
+        streamA.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                receivedA = syms.ToList();
+                aStarted.TrySetResult(true);
+            })
+            .Returns(Task.CompletedTask);
+
+        var streamB = new Mock<IMarketDataStream>();
+        streamB.Setup(s => s.ExchangeName).Returns("ExchangeB");
+        streamB.Setup(s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<string>, CancellationToken>((syms, _) =>
+            {
+                receivedB = syms.ToList();
+                bStarted.TrySetResult(true);
+            })
+            .Returns(Task.CompletedTask);
+
+        var sut = CreateSut(cacheMock.Object, streamA.Object, streamB.Object);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await sut.StartAsync(cts.Token);
+        await Task.WhenAll(
+            aStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
+            bStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+        await sut.StopAsync(CancellationToken.None);
+
+        receivedA.Should().NotBeNull();
+        receivedB.Should().NotBeNull();
+
+        // NB10: B1 fix guarantees each stream received an independent list — not the same reference.
+        receivedA.Should().NotBeSameAs(receivedB,
+            "each stream must receive an independent list instance so mutating one does not affect the other");
+
+        // Both lists should contain the same symbols (the full active-assets fallback).
+        receivedA.Should().BeEquivalentTo(receivedB,
+            "both streams get the same symbols, just in independent list instances");
+    }
+
+    // ── nit6: no active assets → no streams started ──────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_NoActiveAssets_NoStreamsStarted()
+    {
+        // Override the default active-assets setup to return an empty list.
+        _mockAssets.Setup(a => a.GetActiveAsync()).ReturnsAsync(new List<Asset>());
+
+        var stream = new Mock<IMarketDataStream>();
+        stream.Setup(s => s.ExchangeName).Returns("Hyperliquid");
+
+        var mockLogger = new Mock<ILogger<MarketDataStreamManager>>();
+        var sut = new MarketDataStreamManager(
+            [stream.Object],
+            _mockScopeFactory.Object,
+            _mockHubContext.Object,
+            _mockSymbolsCache.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await sut.StartAsync(cts.Token);
+        // Give ExecuteAsync time to run the early-exit path
+        await Task.Delay(200);
+        await sut.StopAsync(CancellationToken.None);
+
+        // No stream should have been started
+        stream.Verify(
+            s => s.StartAsync(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()),
+            Times.Never,
+            "StartAsync must not be called when there are no active assets");
+
+        // A warning must be logged about no active assets
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("No active assets")),
+                It.IsAny<Exception?>(),
+                (Func<It.IsAnyType, Exception?, string>)It.IsAny<object>()),
+            Times.Once,
+            "a warning must be logged when no active assets are found");
     }
 }

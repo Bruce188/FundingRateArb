@@ -572,6 +572,16 @@ try
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<AsterMarketDataStream>());
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<HyperliquidMarketDataStream>());
     builder.Services.AddSingleton<IMarketDataStream>(sp => sp.GetRequiredService<LighterMarketDataStream>());
+    // NB2/NB3: named HttpClient for Lighter metadata endpoint — base address, buffer size, and
+    // timeout configured here so LoadLighterSymbolsAsync does not need to hard-code any of them.
+    builder.Services.AddHttpClient("LighterMetadata", (sp, client) =>
+    {
+        var metadataBaseUrl = builder.Configuration["Exchanges:Lighter:MetadataBaseUrl"]
+            ?? "https://mainnet.zklighter.elliot.ai/api/v1/";
+        client.BaseAddress = new Uri(metadataBaseUrl);
+        client.MaxResponseContentBufferSize = 5 * 1024 * 1024;
+        client.Timeout = TimeSpan.FromSeconds(15);
+    });
     builder.Services.AddSingleton<ExchangeSupportedSymbolsCache>();
     builder.Services.AddSingleton<IExchangeSupportedSymbolsCache>(sp => sp.GetRequiredService<ExchangeSupportedSymbolsCache>());
 
