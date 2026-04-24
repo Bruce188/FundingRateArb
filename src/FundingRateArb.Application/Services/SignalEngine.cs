@@ -389,11 +389,18 @@ public class SignalEngine : ISignalEngine
                             dto.EffectiveLeverage = effectiveLev;
                             dto.ReturnOnCapitalPerHour = net * effectiveLev;
                             dto.AprOnCapital = dto.ReturnOnCapitalPerHour.Value * 24m * 365m * 100m;
-                            // BreakEvenCycles: total entry cost / (net yield per cycle * leverage)
-                            var entrySpreadCost = (longFee + shortFee);
+                            // BreakEvenCycles per Appendix B:
+                            //   cycles = totalEntryCost / (netPerCycle * leverage)
+                            // totalEntryCost already includes round-trip fees + slippage buffer.
+                            // A full arbitrage cycle completes only when BOTH legs have settled,
+                            // so cycle length = max of the two leg intervals (1h floor guards
+                            // against unseeded test exchanges).
+                            var cycleHours = Math.Max(
+                                Math.Max(1, longR.Exchange.FundingIntervalHours),
+                                Math.Max(1, shortR.Exchange.FundingIntervalHours));
                             if (net > 0)
                             {
-                                dto.BreakEvenCycles = entrySpreadCost / (net * effectiveLev);
+                                dto.BreakEvenCycles = totalEntryCost / (net * effectiveLev * cycleHours);
                             }
                         }
                     }
