@@ -108,6 +108,10 @@ try
                 scScalar.Value is string scStr &&
                 (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
                  scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
+                // review-v216: N-1 — the CryptoExchange source-generated SDK emits this as a
+                // literal template with no structured placeholders ({@x}), so the equality
+                // semantics of Contains are stable; any future parameterized rephrasing would
+                // silently stop matching — the check is intentional and tied to that contract.
                 le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
             .Enrich.FromLogContext()
             .Enrich.WithMachineName()
