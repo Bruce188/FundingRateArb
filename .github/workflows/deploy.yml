@@ -67,9 +67,14 @@ jobs:
             echo "::error::No TRX produced"
             exit "$TEST_EXIT"
           fi
-          FAILED=$(grep -oE 'outcome="Failed"' "$TRX" | wc -l)
-          PASSED=$(grep -oE 'outcome="Passed"' "$TRX" | wc -l)
-          echo "TRX summary: $PASSED passed, $FAILED failed (host exit $TEST_EXIT)"
+          # Use Counters element (authoritative) rather than grepping outcome="Failed",
+          # because the TRX's top-level ResultSummary is marked outcome="Failed" whenever
+          # the host aborts — even if every individual UnitTestResult passed.
+          FAILED=$(grep -oE '<Counters[^>]*\sfailed="[0-9]+"' "$TRX" | grep -oE 'failed="[0-9]+"' | grep -oE '[0-9]+' | head -1)
+          PASSED=$(grep -oE '<Counters[^>]*\spassed="[0-9]+"' "$TRX" | grep -oE 'passed="[0-9]+"' | grep -oE '[0-9]+' | head -1)
+          FAILED=${FAILED:-0}
+          PASSED=${PASSED:-0}
+          echo "TRX Counters: $PASSED passed, $FAILED failed (host exit $TEST_EXIT)"
           if [ "$TEST_EXIT" -ne 0 ] && [ "$FAILED" -eq 0 ] && [ "$PASSED" -gt 0 ]; then
             echo "::warning::Unit test host crashed post-teardown; all tests passed in TRX. Accepting."
             exit 0
