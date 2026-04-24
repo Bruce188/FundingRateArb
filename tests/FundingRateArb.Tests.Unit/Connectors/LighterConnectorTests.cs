@@ -379,6 +379,49 @@ public class LighterConnectorTests
         btc.Volume24hUsd.Should().Be(50000000.00m);
     }
 
+    /// <summary>
+    /// Lighter settles funding hourly (FundingIntervalHours = 1).
+    /// The API already returns a per-hour rate, so RawRate and RatePerHour
+    /// must be identical — no division by 8 (or any other factor) is correct.
+    /// </summary>
+    [Fact]
+    public async Task GetFundingRates_NativeIntervalIsOneHour_RawRateEqualsRatePerHour()
+    {
+        // Arrange — use a nonzero rate to make the inequality detectable
+        const decimal nativeRate = 0.0001m;
+        var json = $$"""
+            {
+                "code": 200,
+                "funding_rates": [
+                    {
+                        "market_id": 0,
+                        "exchange": "lighter",
+                        "symbol": "ETH",
+                        "rate": {{nativeRate}}
+                    }
+                ]
+            }
+            """;
+
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("funding-rates", json);
+            h.AddRoute("exchangeStats", ExchangeStatsJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
+        });
+
+        // Act
+        var rates = await sut.GetFundingRatesAsync();
+
+        // Assert — Lighter is per-hour native: RawRate == RatePerHour (no 8h conversion)
+        rates.Should().HaveCount(1);
+        var snapshot = rates[0];
+        snapshot.RawRate.Should().Be(nativeRate,
+            "Lighter publishes hourly rates; RawRate must equal the value returned by the API");
+        snapshot.RatePerHour.Should().Be(snapshot.RawRate,
+            "Lighter funding interval is 1 h — RatePerHour must equal RawRate (no division needed)");
+    }
+
     [Fact]
     public async Task GetFundingRates_FiltersOutNonLighterExchanges()
     {
