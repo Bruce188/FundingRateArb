@@ -97,4 +97,67 @@ public class FundingRateNormalizationTests
         FundingRateNormalization.ToEightHourRate(rate)
             .Should().Be(rate * FundingRateNormalization.ReferenceIntervalHours);
     }
+
+    // ── New overloads: ToReferenceIntervalRate ────────────────────────────────
+
+    [Fact]
+    public void ToReferenceIntervalRate_PerHour_Multiplies_By_Eight()
+    {
+        // ToReferenceIntervalRate(decimal ratePerHour) must return ratePerHour * ReferenceIntervalHours (8).
+        var ratePerHour = 0.0001m;
+        var result = FundingRateNormalization.ToReferenceIntervalRate(ratePerHour);
+        result.Should().Be(ratePerHour * FundingRateNormalization.ReferenceIntervalHours,
+            "a 1h-native rate scaled to the 8h reference interval is multiplied by 8");
+    }
+
+    [Fact]
+    public void ToReferenceIntervalRate_RawWithHourlyInterval_EqualsRawTimesEight()
+    {
+        // intervalHours == 1 → rawRate * 8 / 1 = rawRate * 8
+        var rawRate = 0.0001m;
+        var result = FundingRateNormalization.ToReferenceIntervalRate(rawRate, 1);
+        result.Should().Be(rawRate * FundingRateNormalization.ReferenceIntervalHours,
+            "a 1h-native raw rate scaled to the 8h reference returns rawRate * 8");
+    }
+
+    [Fact]
+    public void ToReferenceIntervalRate_RawWithEightHourInterval_IsIdentity()
+    {
+        // intervalHours == ReferenceIntervalHours → rawRate unchanged
+        var rawRate = 0.0008m;
+        var result = FundingRateNormalization.ToReferenceIntervalRate(rawRate, FundingRateNormalization.ReferenceIntervalHours);
+        result.Should().Be(rawRate,
+            "an 8h-native raw rate is already at the reference interval and must be returned unchanged");
+    }
+
+    [Fact]
+    public void ToReferenceIntervalRate_RawWithFourHourInterval_ReturnsRawTimesTwo()
+    {
+        // intervalHours == 4 → rawRate * 8 / 4 = rawRate * 2
+        var rawRate = 0.0004m;
+        var result = FundingRateNormalization.ToReferenceIntervalRate(rawRate, 4);
+        result.Should().Be(rawRate * 2,
+            "a 4h-native raw rate scaled to the 8h reference is multiplied by 2");
+    }
+
+    [Fact]
+    public void ToReferenceIntervalRate_RawWithZeroInterval_ReturnsRaw()
+    {
+        // intervalHours <= 0 → guard returns rawRate unchanged (prevents divide-by-zero)
+        var rawRate = 0.0008m;
+        var result = FundingRateNormalization.ToReferenceIntervalRate(rawRate, 0);
+        result.Should().Be(rawRate,
+            "a zero interval is an invalid input; the guard must return the raw rate unchanged");
+    }
+
+    [Fact]
+    public void ToEightHourRate_MatchesToReferenceIntervalRate()
+    {
+        // ToEightHourRate must delegate to ToReferenceIntervalRate so both return identical results.
+        var ratePerHour = 0.0001m;
+        var viaLegacy = FundingRateNormalization.ToEightHourRate(ratePerHour);
+        var viaNew = FundingRateNormalization.ToReferenceIntervalRate(ratePerHour);
+        viaLegacy.Should().Be(viaNew,
+            "ToEightHourRate is a back-compat wrapper and must produce the same result as ToReferenceIntervalRate(ratePerHour)");
+    }
 }

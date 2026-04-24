@@ -21,13 +21,44 @@ public static class FundingRateNormalization
     public const int HoursPerYear = 24 * 365;
 
     /// <summary>
+    /// Converts a per-hour funding rate to the equivalent rate at the reference interval (8h).
+    /// Use this only when comparing rates across exchanges with different native intervals —
+    /// never for PnL accounting.
+    /// </summary>
+    public static decimal ToReferenceIntervalRate(decimal ratePerHour)
+    {
+        return ratePerHour * ReferenceIntervalHours;
+    }
+
+    /// <summary>
+    /// Converts a raw per-interval funding rate to the equivalent rate at the reference
+    /// interval (8h). When <paramref name="intervalHours"/> is zero, negative, or already
+    /// equal to <see cref="ReferenceIntervalHours"/>, the raw rate is returned unchanged.
+    /// </summary>
+    /// <param name="rawRate">The exchange-reported rate for one funding interval.</param>
+    /// <param name="intervalHours">The exchange's funding interval in hours.</param>
+    public static decimal ToReferenceIntervalRate(decimal rawRate, int intervalHours)
+    {
+        if (intervalHours <= 0 || intervalHours == ReferenceIntervalHours)
+        {
+            return rawRate;
+        }
+
+        return rawRate * ReferenceIntervalHours / intervalHours;
+    }
+
+    /// <summary>
     /// Converts a per-hour funding rate to the equivalent 8-hour rate.
     /// Use this only when comparing rates across exchanges with different native intervals —
     /// never for PnL accounting.
     /// </summary>
+    /// <remarks>
+    /// Retained for back-compat. Delegates to <see cref="ToReferenceIntervalRate(decimal)"/>
+    /// as the single source of truth.
+    /// </remarks>
     public static decimal ToEightHourRate(decimal ratePerHour)
     {
-        return ratePerHour * ReferenceIntervalHours;
+        return ToReferenceIntervalRate(ratePerHour);
     }
 
     /// <summary>
