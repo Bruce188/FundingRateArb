@@ -20,7 +20,7 @@ public class ArbitrageOpportunityDtoReferenceIntervalTests
 
         property.Should().NotBeNull(
             "ArbitrageOpportunityDto must expose LongRateReferenceInterval for display/ranking");
-        property!.PropertyType.Should().Be(typeof(decimal),
+        property!.PropertyType.Should().Be<decimal>(
             "LongRateReferenceInterval must be a non-nullable decimal");
     }
 
@@ -31,7 +31,7 @@ public class ArbitrageOpportunityDtoReferenceIntervalTests
 
         property.Should().NotBeNull(
             "ArbitrageOpportunityDto must expose ShortRateReferenceInterval for display/ranking");
-        property!.PropertyType.Should().Be(typeof(decimal),
+        property!.PropertyType.Should().Be<decimal>(
             "ShortRateReferenceInterval must be a non-nullable decimal");
     }
 
@@ -42,7 +42,7 @@ public class ArbitrageOpportunityDtoReferenceIntervalTests
 
         property.Should().NotBeNull(
             "ArbitrageOpportunityDto must expose SpreadReferenceInterval for display/ranking");
-        property!.PropertyType.Should().Be(typeof(decimal),
+        property!.PropertyType.Should().Be<decimal>(
             "SpreadReferenceInterval must be a non-nullable decimal");
     }
 
@@ -53,7 +53,7 @@ public class ArbitrageOpportunityDtoReferenceIntervalTests
 
         property.Should().NotBeNull(
             "ArbitrageOpportunityDto must expose ReferenceIntervalHours so consumers know what interval was used");
-        property!.PropertyType.Should().Be(typeof(int),
+        property!.PropertyType.Should().Be<int>(
             "ReferenceIntervalHours must be a non-nullable int representing hours (typically 8)");
     }
 
