@@ -88,8 +88,12 @@ jobs:
           # applied in the Unit tests step above. Used here to distinguish "host crashed
           # before coverage was written" (accept) from "coverage genuinely low" (fail).
           TRX=$(find tests/FundingRateArb.Tests.Unit/TestResults -name unit.trx 2>/dev/null | head -1)
-          TRX_FAILED=$(grep -oE '<Counters[^>]*\sfailed="[0-9]+"' "$TRX" 2>/dev/null | grep -oE '[0-9]+' | head -1)
-          TRX_PASSED=$(grep -oE '<Counters[^>]*\spassed="[0-9]+"' "$TRX" 2>/dev/null | grep -oE '[0-9]+' | head -1)
+          # The outer grep matches the full <Counters ... failed="N"> substring; that
+          # substring also contains earlier numeric attributes (total, executed, passed),
+          # so the inner grep must re-anchor on failed="N"/passed="N" before extracting
+          # the digits. Without the middle grep we'd pick up `total`'s value by accident.
+          TRX_FAILED=$(grep -oE '<Counters[^>]*\sfailed="[0-9]+"' "$TRX" 2>/dev/null | grep -oE 'failed="[0-9]+"' | grep -oE '[0-9]+' | head -1)
+          TRX_PASSED=$(grep -oE '<Counters[^>]*\spassed="[0-9]+"' "$TRX" 2>/dev/null | grep -oE 'passed="[0-9]+"' | grep -oE '[0-9]+' | head -1)
           TRX_FAILED=${TRX_FAILED:-0}
           TRX_PASSED=${TRX_PASSED:-0}
           HOST_CRASH_BUT_TESTS_PASSED=$([ "$TRX_FAILED" -eq 0 ] && [ "$TRX_PASSED" -gt 0 ] && echo 1 || echo 0)
