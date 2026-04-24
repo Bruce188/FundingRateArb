@@ -683,6 +683,13 @@ try
         }
         await DbSeeder.SeedAsync(scope.ServiceProvider);
     }
+    else if (builder.Configuration.GetValue<bool>("Seed:ForceAdminPasswordReset") &&
+             !string.IsNullOrWhiteSpace(builder.Configuration["Seed:AdminPassword"]))
+    {
+        using var scope = app.Services.CreateScope();
+        await DbSeeder.SeedAsync(scope.ServiceProvider);
+        Log.Information("ForceAdminPasswordReset executed");
+    }
     else
     {
         Log.Information("Skipping automatic migrations in {Environment} environment", app.Environment.EnvironmentName);
