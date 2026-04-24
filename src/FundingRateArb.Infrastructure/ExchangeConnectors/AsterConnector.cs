@@ -89,10 +89,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
     /// <remarks>
     /// Calls <c>UsdFuturesApi.ExchangeData.GetMarkPricesAsync</c> which returns the current
     /// mark price, index price and 8-hour funding rate for every symbol.
-    /// Aster uses 8-hour funding intervals — rates are divided by 8 to normalise to per-hour.
+    /// Aster uses 8-hour funding intervals by default — rates are divided by 8 to normalise to per-hour.
     /// The original (undivided) value is preserved in <see cref="FundingRateDto.RawRate"/>.
     /// NextFundingTime from the API is carried through as NextSettlementUtc for settlement-aware accumulation.
     /// Symbol names are normalised: "ETHUSDT" → "ETH".
+    /// Per-symbol funding interval is detected via <c>GetFundingInfoAsync</c>; when available the
+    /// detected interval drives the per-hour normalisation and is surfaced via
+    /// <see cref="FundingRateDto.DetectedFundingIntervalHours"/>. On any funding-info failure the
+    /// connector falls back to the 8-hour default so a transient outage never crashes the fetch.
     /// </remarks>
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
@@ -106,6 +110,14 @@ public class AsterConnector : IExchangeConnector, IDisposable
             async token => _useV3Api
                 ? await _restClient.FuturesV3Api.ExchangeData.GetTickersAsync(token)
                 : await _restClient.FuturesApi.ExchangeData.GetTickersAsync(token), ct).AsTask();
+        // fundingInfoTask runs concurrently but is NOT in Task.WhenAll to prevent
+        // its timeout from crashing the entire fetch. Consumed separately below.
+        var fundingInfoTask = pipeline.ExecuteAsync(
+            async token => _useV3Api
+                ? await _restClient.FuturesV3Api.ExchangeData.GetFundingInfoAsync(token)
+                : await _restClient.FuturesApi.ExchangeData.GetFundingInfoAsync(token), ct)
+            .AsTask()
+            .WaitAsync(TimeSpan.FromSeconds(5), ct);
 
         await Task.WhenAll(markPricesTask, tickersTask);
 
@@ -118,20 +130,44 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
 
         var volumeBySymbol = tickers.Success && tickers.Data is not null
-            ? tickers.Data.ToDictionary(t => t.Symbol, t => t.QuoteVolume)
+            ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
             : new Dictionary<string, decimal>();
 
+        // Build funding interval lookup from the dedicated funding info endpoint
+        Dictionary<string, int> intervalBySymbol;
+        try
+        {
+            var fundingInfo = await fundingInfoTask;
+            intervalBySymbol = fundingInfo.Success && fundingInfo.Data is not null
+                ? fundingInfo.Data
+                    .Where(fi => (fi.FundingIntervalHours ?? 0) > 0)
+                    .DistinctBy(fi => fi.Symbol)
+                    .ToDictionary(fi => fi.Symbol, fi => fi.FundingIntervalHours!.Value)
+                : new Dictionary<string, int>();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch Aster funding info; falling back to default intervals");
+            intervalBySymbol = new Dictionary<string, int>();
+        }
+
         return markPrices.Data!
-            .Select(mp => new FundingRateDto
+            .Select(mp =>
             {
-                ExchangeName = ExchangeName,
-                Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
-                RawRate = mp.FundingRate ?? 0m,
-                RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, 8),
-                MarkPrice = mp.MarkPrice,
-                IndexPrice = mp.IndexPrice,
-                Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
-                NextSettlementUtc = mp.NextFundingTime,
+                var intervalHours = intervalBySymbol.GetValueOrDefault(mp.Symbol, 8);
+                return new FundingRateDto
+                {
+                    ExchangeName = ExchangeName,
+                    Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
+                    RawRate = mp.FundingRate ?? 0m,
+                    RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, intervalHours),
+                    MarkPrice = mp.MarkPrice,
+                    IndexPrice = mp.IndexPrice,
+                    Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                    NextSettlementUtc = mp.NextFundingTime,
+                    DetectedFundingIntervalHours = intervalBySymbol.TryGetValue(mp.Symbol, out var detected) ? detected : null,
+                };
             })
             .ToList();
     }
