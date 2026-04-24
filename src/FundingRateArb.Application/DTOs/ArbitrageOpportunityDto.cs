@@ -51,4 +51,16 @@ public class ArbitrageOpportunityDto
     /// during opportunity ranking and surfaced on the dashboard as a visual badge.
     /// </summary>
     public bool IsCoinGlassHot { get; set; }
+
+    /// <summary>Long-leg rate projected to the reference interval (default 8h). Display/ranking only — never PnL.</summary>
+    public decimal LongRateReferenceInterval { get; set; }
+
+    /// <summary>Short-leg rate projected to the reference interval (default 8h). Display/ranking only.</summary>
+    public decimal ShortRateReferenceInterval { get; set; }
+
+    /// <summary>Spread between the two legs at the reference interval. Display/ranking only.</summary>
+    public decimal SpreadReferenceInterval { get; set; }
+
+    /// <summary>The reference interval in hours used for the *ReferenceInterval fields (typically 8).</summary>
+    public int ReferenceIntervalHours { get; set; }
 }
