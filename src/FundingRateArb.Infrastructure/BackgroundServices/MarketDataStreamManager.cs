@@ -62,22 +62,26 @@ public class MarketDataStreamManager : BackgroundService
                         foreach (var s in symbols)
                         {
                             if (supported.Contains(s))
+                            {
                                 filteredList.Add(s);
+                            }
                             else
+                            {
                                 skippedList.Add(s);
+                            }
                         }
                         filtered = filteredList;
                         if (skippedList.Count > 0)
                         {
                             // nit8: avoid Take(20) iterator — use string.Join overload with index+count.
-                        var displayCount = Math.Min(skippedList.Count, 20);
-                        var skippedDisplay = skippedList.Count <= 20
-                            ? string.Join(", ", skippedList)
-                            : string.Join(", ", skippedList, 0, displayCount) + $" (+{skippedList.Count - 20} more)";
-                        _logger.LogInformation(
-                                "WebSocket stream {Exchange}: {FilteredCount}/{TotalCount} symbols supported, skipped {SkippedCount}: {Skipped}",
-                                stream.ExchangeName, filtered.Count, symbols.Count, skippedList.Count,
-                                skippedDisplay);
+                            var displayCount = Math.Min(skippedList.Count, 20);
+                            var skippedDisplay = skippedList.Count <= 20
+                                ? string.Join(", ", skippedList)
+                                : string.Join(", ", skippedList, 0, displayCount) + $" (+{skippedList.Count - 20} more)";
+                            _logger.LogInformation(
+                                    "WebSocket stream {Exchange}: {FilteredCount}/{TotalCount} symbols supported, skipped {SkippedCount}: {Skipped}",
+                                    stream.ExchangeName, filtered.Count, symbols.Count, skippedList.Count,
+                                    skippedDisplay);
                         }
                     }
                     else

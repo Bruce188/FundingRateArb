@@ -88,7 +88,9 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
 
         // NB1: pre-populate so the lock dictionary is bounded to three known exchanges.
         foreach (var name in SupportedExchangeNames)
+        {
             _locks[name] = new SemaphoreSlim(1, 1);
+        }
     }
 
     /// <inheritdoc/>
