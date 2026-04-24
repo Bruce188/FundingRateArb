@@ -373,6 +373,10 @@ public class SignalEngine : ISignalEngine
                         IsCoinGlassHot = hotSymbols is not null
                             && !string.IsNullOrEmpty(symbol)
                             && hotSymbols.Contains(symbol),
+                        LongRateReferenceInterval = FundingRateNormalization.ToReferenceIntervalRate(longR.RatePerHour),
+                        ShortRateReferenceInterval = FundingRateNormalization.ToReferenceIntervalRate(shortR.RatePerHour),
+                        SpreadReferenceInterval = FundingRateNormalization.ToReferenceIntervalRate(diff),
+                        ReferenceIntervalHours = FundingRateNormalization.ReferenceIntervalHours,
                     };
 
                     // Compute leverage-adjusted metrics when tier data is available

@@ -701,7 +701,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 ExchangeName = ExchangeName,
                 Symbol = r.Symbol,
                 RawRate = r.Rate,
-                RatePerHour = r.Rate / 8m,
+                RatePerHour = r.Rate, // Lighter settles hourly — native rate is already per-hour
                 Volume24hUsd = volumeBySymbol.GetValueOrDefault(r.Symbol, 0m),
                 MarkPrice = indexPriceBySymbol.GetValueOrDefault(r.Symbol, 0m),
                 NextSettlementUtc = nextSettlement,

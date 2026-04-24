@@ -53,4 +53,20 @@ public class YieldCalculator : IYieldCalculator
 
         return feeRateTotal / netRatePerHour;
     }
+
+    /// <summary>
+    /// Calculates the total funding accrued over a window using RawRate-based arithmetic.
+    /// Formula: rawRate * (windowHours / nativeIntervalHours)
+    /// Uses RawRate per Appendix B — per-hour projection is display-only.
+    /// </summary>
+    public decimal AccruedFunding(decimal rawRate, int nativeIntervalHours, decimal windowHours)
+    {
+        if (nativeIntervalHours <= 0 || windowHours <= 0m)
+        {
+            return 0m;
+        }
+
+        var cycles = windowHours / nativeIntervalHours;
+        return rawRate * cycles;
+    }
 }
