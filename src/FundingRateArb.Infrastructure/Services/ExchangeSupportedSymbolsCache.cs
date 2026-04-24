@@ -37,6 +37,12 @@ public sealed class ExchangeSupportedSymbolsCache : IExchangeSupportedSymbolsCac
     private sealed class CacheEntry
     {
         // nit7: typed as IReadOnlySet so the immutability is structural within the assembly.
+        // CA1859 would prefer the concrete HashSet<string> for dispatch speed, but that exposes
+        // Add/Remove/Clear and breaks the structural immutability the cache read path relies on.
+        [System.Diagnostics.CodeAnalysis.SuppressMessage(
+            "Performance",
+            "CA1859:Use concrete types when possible for improved performance",
+            Justification = "IReadOnlySet is intentional — concrete HashSet would expose mutation to callers.")]
         public IReadOnlySet<string> Symbols { get; }
         public DateTime LoadedAtUtc { get; }
 
