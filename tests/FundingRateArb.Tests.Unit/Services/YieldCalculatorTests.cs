@@ -202,11 +202,11 @@ public class YieldCalculatorTests
     }
 
     [Theory]
-    [InlineData(0.0008, 8,  24, 0.0024)]  // Binance 8h:      3 cycles
-    [InlineData(0.0001, 1,  24, 0.0024)]  // Hyperliquid 1h: 24 cycles
-    [InlineData(0.0001, 4,   8, 0.0002)]  // 4h interval:     2 cycles → 0.0001 × 2
-    [InlineData(0.0003, 8,   8, 0.0003)]  // single cycle
-    [InlineData(0.0005, 1,   0, 0.0000)]  // zero window
+    [InlineData(0.0008, 8, 24, 0.0024)]  // Binance 8h:      3 cycles
+    [InlineData(0.0001, 1, 24, 0.0024)]  // Hyperliquid 1h: 24 cycles
+    [InlineData(0.0001, 4, 8, 0.0002)]  // 4h interval:     2 cycles → 0.0001 × 2
+    [InlineData(0.0003, 8, 8, 0.0003)]  // single cycle
+    [InlineData(0.0005, 1, 0, 0.0000)]  // zero window
     public void AccruedFunding_UsesRawRateTimesNativeCycles(
         decimal rawRate, int nativeIntervalHours, decimal windowHours, decimal expected)
     {

@@ -62,7 +62,9 @@ public class YieldCalculator : IYieldCalculator
     public decimal AccruedFunding(decimal rawRate, int nativeIntervalHours, decimal windowHours)
     {
         if (nativeIntervalHours <= 0 || windowHours <= 0m)
+        {
             return 0m;
+        }
 
         var cycles = windowHours / nativeIntervalHours;
         return rawRate * cycles;
