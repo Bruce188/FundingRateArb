@@ -1261,9 +1261,10 @@ public class SignalEngineTests
         // feePerHour = (0.0007 + 0) / 24 = 0.00002917
         // net ~ 0.0009 - 0.00002917 = 0.0008708/hr
         // effectiveLeverage = min(5, 50, 20) = 5
-        // BreakEvenCycles = entrySpreadCost / (net * leverage)
-        //   entrySpreadCost = longFee + shortFee = 0.0007 + 0
-        //   BreakEvenCycles = 0.0007 / (0.0008708 * 5) ~ 0.1608
+        // BreakEvenCycles = totalEntryCost / (net * leverage * cycleHours)
+        //   totalEntryCost = longFee + shortFee + SlippageBuffer = 0.0007 + 0 + 0 = 0.0007
+        //   cycleHours = max(1, 1) = 1 (both legs default to 1h in MakeRate)
+        //   BreakEvenCycles = 0.0007 / (0.0008708 * 5 * 1) ~ 0.1608
         var rates = new List<FundingRateSnapshot>
         {
             MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
@@ -1391,7 +1392,7 @@ public class SignalEngineTests
         var opp = result[0];
         opp.EffectiveLeverage.Should().Be(3);
         opp.BreakEvenCycles.Should().BeGreaterThan(0, "break-even cycles should be positive");
-        // BreakEvenCycles = entrySpreadCost / (net * effectiveLev)
+        // BreakEvenCycles = totalEntryCost / (net * effectiveLev * cycleHours)
         // The exact value depends on the fee computation in SignalEngine
         opp.ReturnOnCapitalPerHour.Should().NotBeNull();
         opp.AprOnCapital.Should().NotBeNull();
@@ -1447,6 +1448,58 @@ public class SignalEngineTests
         mockTierProvider.Verify(
             t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), 0m),
             Times.AtLeastOnce);
+    }
+
+    [Fact]
+    public async Task GetOpportunities_BreakEvenCycles_ScalesByMaxLegIntervalHours()
+    {
+        // Arrange: one leg at 1h interval, other leg at 8h interval. Appendix B cycle
+        // length = max(1, 8) = 8h, so BreakEvenCycles should be 1/8 of the per-hour
+        // value the old formula produced.
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(10);
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object, tierProvider: mockTierProvider.Object);
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
+        });
+
+        // Two rate snapshots, second exchange explicitly at 8h interval.
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = DateTime.UtcNow,
+                Exchange = new Exchange { Id = 2, Name = "Aster", FundingIntervalHours = 8 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Act
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: cycleHours=8 divides the old per-hour value by 8. Previously the
+        // hourly-interval case produced ~0.16; with an 8h leg the cycle-scaled value
+        // must land below 0.1 to prove the conversion is wired.
+        result.Should().NotBeEmpty();
+        var opp = result[0];
+        opp.BreakEvenCycles.Should().NotBeNull().And.BeGreaterThan(0).And.BeLessThan(0.1m,
+            "cycle conversion with an 8h leg must scale down vs the 1h+1h case");
     }
 
     // ── Per-exchange funding accuracy tests ────────────────────────────────
