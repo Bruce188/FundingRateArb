@@ -3432,6 +3432,56 @@ public class SignalEngineTests
                 "steady-state TTL must be ~5 s");
     }
 
+    [Fact]
+    public async Task GetOpportunities_ReferenceIntervalFields_ArePopulatedCorrectly()
+    {
+        // Engine assigns longR=lower rate, shortR=higher rate.
+        // Rates: ExchangeA=0.0001, ExchangeB=-0.0001 → longR=ExchangeB(-0.0001), shortR=ExchangeA(0.0001)
+        // diff = shortR - longR = 0.0001 - (-0.0001) = 0.0002
+        // LongRateReferenceInterval = -0.0001 * 8 = -0.0008
+        // ShortRateReferenceInterval = 0.0001 * 8 = 0.0008
+        // SpreadReferenceInterval = 0.0002 * 8 = 0.0016
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "ExchangeA", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "ExchangeB", 1, "ETH", -0.0001m, takerFeeRate: 0m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCountGreaterThan(0, "spread of 0.0002/hr with zero fees and zero threshold yields an opportunity");
+        var opp = result.First();
+        opp.LongRateReferenceInterval.Should().Be(-0.0001m * 8, "long leg has the lower rate (-0.0001), scaled by 8");
+        opp.ShortRateReferenceInterval.Should().Be(0.0001m * 8, "short leg has the higher rate (0.0001), scaled by 8");
+        opp.SpreadReferenceInterval.Should().Be(0.0002m * 8, "spread = shortRate - longRate = 0.0002, scaled by 8");
+        opp.ReferenceIntervalHours.Should().Be(8, "reference interval constant is 8 hours");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_SpreadPerHour_IsUnchangedByReferenceIntervalFields()
+    {
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "ExchangeA", 1, "ETH", 0.0001m, takerFeeRate: 0m),
+            MakeRate(2, "ExchangeB", 1, "ETH", 0.0010m, takerFeeRate: 0m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0003m });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        result[0].SpreadPerHour.Should().Be(0.0009m, "SpreadPerHour must remain the raw per-hour spread");
+    }
+
     /// <summary>
     /// Test spy that wraps <see cref="MemoryCache"/> and captures the
     /// <see cref="MemoryCacheEntryOptions"/> from the most recent <c>Set</c> call.
