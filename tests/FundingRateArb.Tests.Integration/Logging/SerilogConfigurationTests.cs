@@ -51,8 +51,10 @@ public class SerilogConfigurationTests
                 le.Properties.TryGetValue("SourceContext", out var scValue) &&
                 scValue is ScalarValue scScalar &&
                 scScalar.Value is string scStr &&
-                (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
-                 scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
+                ((scStr.Equals("CryptoExchange", StringComparison.Ordinal) ||
+                  scStr.StartsWith("CryptoExchange.", StringComparison.Ordinal)) ||
+                 (scStr.Equals("Binance.Net", StringComparison.Ordinal) ||
+                  scStr.StartsWith("Binance.Net.", StringComparison.Ordinal))) &&
                 le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
             .WriteTo.Sink(sink)
             .CreateLogger();
@@ -193,8 +195,10 @@ public class SerilogConfigurationTests
                 le.Properties.TryGetValue("SourceContext", out var scValue) &&
                 scValue is ScalarValue scScalar &&
                 scScalar.Value is string scStr &&
-                (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
-                 scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
+                ((scStr.Equals("CryptoExchange", StringComparison.Ordinal) ||
+                  scStr.StartsWith("CryptoExchange.", StringComparison.Ordinal)) ||
+                 (scStr.Equals("Binance.Net", StringComparison.Ordinal) ||
+                  scStr.StartsWith("Binance.Net.", StringComparison.Ordinal))) &&
                 le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
             .WriteTo.Sink(outerSink)
             .WriteTo.Logger(sub => sub.WriteTo.Sink(innerSink))

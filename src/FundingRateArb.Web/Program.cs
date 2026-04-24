@@ -106,8 +106,10 @@ try
                 le.Properties.TryGetValue("SourceContext", out var scValue) &&
                 scValue is ScalarValue scScalar &&
                 scScalar.Value is string scStr &&
-                (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
-                 scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
+                ((scStr.Equals("CryptoExchange", StringComparison.Ordinal) ||
+                  scStr.StartsWith("CryptoExchange.", StringComparison.Ordinal)) ||
+                 (scStr.Equals("Binance.Net", StringComparison.Ordinal) ||
+                  scStr.StartsWith("Binance.Net.", StringComparison.Ordinal))) &&
                 // review-v216: N-1 — the CryptoExchange source-generated SDK emits this as a
                 // literal template with no structured placeholders ({@x}), so the equality
                 // semantics of Contains are stable; any future parameterized rephrasing would
