@@ -1020,6 +1020,70 @@ public class PositionHealthMonitorTests
             "alert message must reference the new 75% early-warning threshold in the P1-formatted output");
     }
 
+    [Fact]
+    public async Task CheckAndAct_LiquidationWarning_CrossingOnlyRefire()
+    {
+        // Crossing-only refire: MarginWarning fires on a downward crossing of the early-warning
+        // threshold (or on the first observation of a position already below), stays silent while
+        // the position remains below threshold, and re-arms after the distance recovers above it.
+        // This replaces the prior cooldown-based refire that spammed alerts every 4h on slowly-
+        // degrading positions.
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.95m,
+            MaxHoldTimeHours = 72,
+            LiquidationWarningPct = 0.20m,
+            LiquidationEarlyWarningPct = 0.75m,
+        });
+
+        var capturedAlerts = new List<Alert>();
+        _mockAlerts.Setup(a => a.Add(It.IsAny<Alert>()))
+            .Callback<Alert>(a => capturedAlerts.Add(a));
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3000m, marginUsdc: 10_000m);
+        pos.Leverage = 10; // long liq ≈ 2700; normalised range = 300
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        int LiqAlertCount() => capturedAlerts.Count(a => a.Type == AlertType.MarginWarning);
+
+        // Cycle 1: long mark drops to 2830 → distance = (2830-2700)/300 ≈ 0.433 < 0.75
+        //          First observation of this position below threshold → alert #1 fires.
+        SetupMarkPrices(longMark: 2830m, shortMark: 3000m);
+        await _sut.CheckAndActAsync();
+        LiqAlertCount().Should().Be(1,
+            "first observation below early-warning threshold must emit exactly one MarginWarning");
+
+        // Cycle 2: distance drops further (0.333) — still below threshold, no upward cross.
+        //          Crossing-only refire: no duplicate alert.
+        SetupMarkPrices(longMark: 2800m, shortMark: 3000m);
+        await _sut.CheckAndActAsync();
+        LiqAlertCount().Should().Be(1,
+            "stable-below-threshold must not re-emit — proves the old cooldown-based spam is gone");
+
+        // Cycle 3: partial recovery (distance 0.667) but still below threshold → no refire.
+        SetupMarkPrices(longMark: 2900m, shortMark: 3000m);
+        await _sut.CheckAndActAsync();
+        LiqAlertCount().Should().Be(1,
+            "improving-but-still-below must not re-emit");
+
+        // Cycle 4: distance recovers above threshold (0.833 ≥ 0.75).
+        //          No MarginWarning on the upward crossing itself.
+        SetupMarkPrices(longMark: 2950m, shortMark: 3000m);
+        await _sut.CheckAndActAsync();
+        LiqAlertCount().Should().Be(1,
+            "upward crossing is a recovery event, not an alert trigger");
+
+        // Cycle 5: price drops back below threshold (distance 0.333). prev=0.833 (above) →
+        //          crossedDownward=true → alert #2 fires: crossing-only refire is armed again.
+        SetupMarkPrices(longMark: 2800m, shortMark: 3000m);
+        await _sut.CheckAndActAsync();
+        LiqAlertCount().Should().Be(2,
+            "downward re-cross after recovery must emit a fresh alert (re-armed)");
+    }
+
     // ── F15: StopLoss priority over PnlTarget ────────────────────
 
     [Fact]
