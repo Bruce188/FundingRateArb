@@ -94,7 +94,9 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
                     // releases it (after cancelling the token); this guarantees the token is
                     // already cancelled before the background thread re-enters the foreach.
                     if (_throttleGate is { } gate)
+                    {
                         await gate.Task;
+                    }
                 }
 
                 if (duration == ConnectorStartupValidator.IterationInterval)
@@ -193,7 +195,9 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     {
         // review-v236: NB-1 — guard against double-construction within the same test instance.
         if (_serviceProvider is not null)
+        {
             throw new InvalidOperationException("BuildSut called twice in the same test instance");
+        }
 
         var services = new ServiceCollection();
         services.AddSingleton(userSettings);
@@ -213,7 +217,9 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         if (_serviceProvider is not null)
+        {
             await _serviceProvider.DisposeAsync();
+        }
     }
 
     // ── Tests ────────────────────────────────────────────────────────────────────
@@ -666,7 +672,10 @@ public class ConnectorStartupValidatorTests : IAsyncDisposable
             {
                 throwCount++;
                 if (throwCount == 1)
+                {
                     throw new InvalidOperationException("simulated transient failure on iteration 1");
+                }
+
                 return Task.FromResult(new DydxCredentialCheckResult { Reason = DydxCredentialFailureReason.None });
             });
         factory
