@@ -2295,4 +2295,85 @@ public class AsterConnectorTests
             Times.Never,
             "V1 mode must not call FuturesV3Api.ExchangeData.GetExchangeInfoAsync for constraints");
     }
+
+    // ── Variable funding-interval detection ────────────────────────────────────
+
+    private static WebCallResult<AsterFundingInfo[]> SuccessFundingInfo(AsterFundingInfo[] data)
+        => new WebCallResult<AsterFundingInfo[]>(
+            HttpStatusCode.OK, null, null, null, null, null, null, null, null,
+            null, null, ResultDataSource.Server, data, null);
+
+    private static AsterFundingInfo MakeFundingInfo(string symbol, int intervalHours)
+        => new AsterFundingInfo
+        {
+            Symbol = symbol,
+            FundingIntervalHours = intervalHours,
+        };
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WithFundingInfo_PropagatesDetectedIntervalPerSymbol()
+    {
+        // Two symbols with divergent funding intervals: BTCUSDT=8h, ETHUSDT=4h.
+        // The connector must surface DetectedFundingIntervalHours per symbol and
+        // divide the raw 8h/4h rate by the matching interval to produce RatePerHour.
+        var prices = new[]
+        {
+            MakeMarkPrice("BTCUSDT", 65000m, 64980m, fundingRate: 0.0008m),
+            MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([
+                MakeFundingInfo("BTCUSDT", 8),
+                MakeFundingInfo("ETHUSDT", 4),
+            ]));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var btc = rates.Single(r => r.Symbol == "BTC");
+        btc.DetectedFundingIntervalHours.Should().Be(8);
+        btc.RatePerHour.Should().Be(0.0008m / 8m,
+            "BTCUSDT reports 8h interval — RatePerHour should divide the raw 8h rate by 8");
+
+        var eth = rates.Single(r => r.Symbol == "ETH");
+        eth.DetectedFundingIntervalHours.Should().Be(4);
+        eth.RatePerHour.Should().Be(0.0004m / 4m,
+            "ETHUSDT reports 4h interval — RatePerHour should divide the raw 4h rate by 4");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WhenFundingInfoFails_FallsBackToEightHour()
+    {
+        // Mirrors the Binance resilience contract: a funding-info outage must not
+        // crash the fetch. The connector should still return rates with
+        // DetectedFundingIntervalHours=null and the 8h default divisor.
+        var prices = new[]
+        {
+            MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m),
+            MakeMarkPrice("BTCUSDT", 65000m, 64980m, fundingRate: 0.0008m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("funding info endpoint offline"));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(2);
+        rates.Should().AllSatisfy(r => r.DetectedFundingIntervalHours.Should().BeNull(
+            "funding info failed — interval should not be reported"));
+
+        var eth = rates.Single(r => r.Symbol == "ETH");
+        eth.RatePerHour.Should().Be(0.00005m, "ETH should fall back to the 8h divisor (0.0004 / 8)");
+
+        var btc = rates.Single(r => r.Symbol == "BTC");
+        btc.RatePerHour.Should().Be(0.0001m, "BTC should fall back to the 8h divisor (0.0008 / 8)");
+    }
 }

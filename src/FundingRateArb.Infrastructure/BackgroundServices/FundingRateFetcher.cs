@@ -20,6 +20,12 @@ public class FundingRateFetcher : BackgroundService
     // M-FR3: Named constant instead of magic number
     private const int FetchIntervalSeconds = 60;
 
+    // Exchanges that report per-symbol funding interval via a polling endpoint and
+    // therefore participate in the reconciliation pass below. Hyperliquid, Lighter,
+    // and dYdX do not expose a fixed interval and are intentionally excluded.
+    private static readonly HashSet<string> DetectionCapableExchanges =
+        new(StringComparer.OrdinalIgnoreCase) { "Binance", "Aster" };
+
     // H-FR1: Track last purge time to run hourly purge without a separate timer
     private DateTime _lastPurgeUtc = DateTime.MinValue;
 
@@ -150,41 +156,55 @@ public class FundingRateFetcher : BackgroundService
         var exchangeMap = exchanges.ToDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var assetMap = assets.ToDictionary(a => a.Symbol, StringComparer.OrdinalIgnoreCase);
 
-        // Detect Binance funding interval changes using modal (most common) value
+        // Detect funding interval changes per detection-capable exchange using modal (most common) value
         var validIntervals = new HashSet<int> { 4, 8 };
-        if (exchangeMap.TryGetValue("Binance", out var binanceExchange))
-        {
-            // N3: Early-out when no Binance rates have DetectedFundingIntervalHours
-            var binanceRatesWithInterval = allRates
-                .Where(r => r.ExchangeName == "Binance" && r.DetectedFundingIntervalHours.HasValue)
-                .ToList();
+        var ratesWithInterval = allRates
+            .Where(r => r.DetectedFundingIntervalHours.HasValue
+                && DetectionCapableExchanges.Contains(r.ExchangeName))
+            .ToList();
 
-            if (binanceRatesWithInterval.Count > 0)
+        // N3: Early-out when no detection-capable rates carry a DetectedFundingIntervalHours
+        if (ratesWithInterval.Count > 0)
+        {
+            var cachePendingInvalidation = false;
+            foreach (var group in ratesWithInterval.GroupBy(r => r.ExchangeName))
             {
-                var detectedInterval = binanceRatesWithInterval
+                if (!exchangeMap.TryGetValue(group.Key, out var exchangeRow))
+                {
+                    continue;
+                }
+
+                var detectedInterval = group
                     .GroupBy(r => r.DetectedFundingIntervalHours!.Value)
                     .OrderByDescending(g => g.Count())
                     .Select(g => g.Key)
                     .First();
 
-                if (validIntervals.Contains(detectedInterval)
-                    && detectedInterval != binanceExchange.FundingIntervalHours)
+                if (!validIntervals.Contains(detectedInterval)
+                    || detectedInterval == exchangeRow.FundingIntervalHours)
                 {
-                    // NB6: Confirm change against tracked entity to prevent stale-cache no-op updates
-                    var tracked = await uow.Exchanges.GetByNameAsync("Binance");
-                    if (tracked is not null && tracked.FundingIntervalHours != detectedInterval)
-                    {
-                        _logger.LogWarning(
-                            "Binance funding interval changed from {Old}h to {New}h — updating exchange entity",
-                            tracked.FundingIntervalHours, detectedInterval);
-
-                        tracked.FundingIntervalHours = detectedInterval;
-                        uow.Exchanges.Update(tracked);
-                        await uow.SaveAsync(ct);
-                        // N2: InvalidateCache after save so consumers see persisted data
-                        uow.Exchanges.InvalidateCache();
-                    }
+                    continue;
                 }
+
+                // NB6: Confirm change against tracked entity to prevent stale-cache no-op updates
+                var tracked = await uow.Exchanges.GetByNameAsync(group.Key);
+                if (tracked is not null && tracked.FundingIntervalHours != detectedInterval)
+                {
+                    _logger.LogWarning(
+                        "{Exchange} funding interval changed from {Old}h to {New}h — updating exchange entity",
+                        group.Key, tracked.FundingIntervalHours, detectedInterval);
+
+                    tracked.FundingIntervalHours = detectedInterval;
+                    uow.Exchanges.Update(tracked);
+                    cachePendingInvalidation = true;
+                }
+            }
+
+            if (cachePendingInvalidation)
+            {
+                await uow.SaveAsync(ct);
+                // N2: InvalidateCache after save so consumers see persisted data
+                uow.Exchanges.InvalidateCache();
             }
         }
 

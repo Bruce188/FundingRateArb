@@ -1549,4 +1549,93 @@ public class FundingRateFetcherTests
 
         return sut;
     }
+
+    // ── Multi-exchange interval reconciliation ────────────────────────────────
+
+    [Fact]
+    public async Task Reconcile_UpdatesBothBinanceAndAster_WhenBatchCarriesDivergentIntervals()
+    {
+        // Arrange: both detection-capable exchanges start at 8h. The batch carries
+        // a Binance majority vote of 4h and an Aster majority vote of 4h; neither
+        // must cross-pollinate the other's tracked entity (independent reconciliation).
+        var binanceExchange = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var asterExchange = new Exchange
+        {
+            Id = 3,
+            Name = "Aster",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var trackedBinance = new Exchange
+        {
+            Id = 4,
+            Name = "Binance",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+        var trackedAster = new Exchange
+        {
+            Id = 3,
+            Name = "Aster",
+            IsActive = true,
+            FundingIntervalHours = 8,
+            FundingSettlementType = FundingSettlementType.Periodic,
+        };
+
+        var exchanges = new List<Exchange>
+        {
+            new Exchange { Id = 1, Name = "Hyperliquid", IsActive = true },
+            new Exchange { Id = 2, Name = "Lighter",     IsActive = true },
+            asterExchange,
+            binanceExchange,
+        };
+        _mockExchanges.Setup(e => e.GetActiveAsync()).ReturnsAsync(exchanges);
+        _mockExchanges.Setup(e => e.GetByNameAsync("Binance")).ReturnsAsync(trackedBinance);
+        _mockExchanges.Setup(e => e.GetByNameAsync("Aster")).ReturnsAsync(trackedAster);
+
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new() { ExchangeName = "Binance", Symbol = "ETH", DetectedFundingIntervalHours = 4, RatePerHour = 0.0001m, RawRate = 0.0004m, MarkPrice = 3000m },
+                new() { ExchangeName = "Binance", Symbol = "BTC", DetectedFundingIntervalHours = 4, RatePerHour = 0.0001m, RawRate = 0.0004m, MarkPrice = 60000m },
+            });
+
+        // Aster returns a majority vote of 4h — must persist to Aster entity only.
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<FundingRateDto>
+            {
+                new() { ExchangeName = "Aster", Symbol = "ETH", DetectedFundingIntervalHours = 4, RatePerHour = 0.0001m, RawRate = 0.0004m, MarkPrice = 3000m },
+                new() { ExchangeName = "Aster", Symbol = "BTC", DetectedFundingIntervalHours = 4, RatePerHour = 0.0001m, RawRate = 0.0004m, MarkPrice = 60000m },
+            });
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        // Act
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: both tracked entities updated to their own exchange's majority vote
+        trackedBinance.FundingIntervalHours.Should().Be(4,
+            "Binance majority vote is 4h and must be persisted to the Binance tracked entity");
+        trackedAster.FundingIntervalHours.Should().Be(4,
+            "Aster majority vote is 4h and must be persisted to the Aster tracked entity (not cross-pollinated from Binance)");
+
+        _mockExchanges.Verify(e => e.Update(trackedBinance), Times.Once);
+        _mockExchanges.Verify(e => e.Update(trackedAster), Times.Once);
+        _mockExchanges.Verify(e => e.InvalidateCache(), Times.AtLeastOnce);
+    }
 }
