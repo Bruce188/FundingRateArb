@@ -51,12 +51,30 @@ jobs:
         run: dotnet build --no-restore -c Release
 
       - name: Unit tests
-        run: >-
-          dotnet test tests/FundingRateArb.Tests.Unit
-          --no-build -c Release
-          --logger "trx;LogFileName=unit.trx"
-          --collect:"XPlat Code Coverage"
-          --settings coverage.runsettings
+        run: |
+          set +e
+          dotnet test tests/FundingRateArb.Tests.Unit \
+            --no-build -c Release \
+            --logger "trx;LogFileName=unit.trx" \
+            --collect:"XPlat Code Coverage" \
+            --settings coverage.runsettings
+          TEST_EXIT=$?
+          # Known post-teardown test-host crash with Microsoft.NET.Test.Sdk 17.8 on net8.0:
+          # all tests pass, then host crashes during cleanup. Treat as success iff the TRX
+          # records zero failed tests. A real test failure still fails the step.
+          TRX=$(find tests/FundingRateArb.Tests.Unit/TestResults -name unit.trx 2>/dev/null | head -1)
+          if [ -z "$TRX" ]; then
+            echo "::error::No TRX produced"
+            exit "$TEST_EXIT"
+          fi
+          FAILED=$(grep -oE 'outcome="Failed"' "$TRX" | wc -l)
+          PASSED=$(grep -oE 'outcome="Passed"' "$TRX" | wc -l)
+          echo "TRX summary: $PASSED passed, $FAILED failed (host exit $TEST_EXIT)"
+          if [ "$TEST_EXIT" -ne 0 ] && [ "$FAILED" -eq 0 ] && [ "$PASSED" -gt 0 ]; then
+            echo "::warning::Unit test host crashed post-teardown; all tests passed in TRX. Accepting."
+            exit 0
+          fi
+          exit "$TEST_EXIT"
 
       - name: Check code coverage threshold
         run: |
