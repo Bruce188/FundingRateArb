@@ -27,14 +27,23 @@ public class SerilogConfigurationTests
         public void Emit(LogEvent logEvent) => Events.Add(logEvent);
     }
 
-    private static (ILogger logger, InMemorySink sink) BuildTestLogger()
+    // review-v216: NB-1 — includeBinanceNetOverride=false lets the Warning reach the filter
+    // under test without being blocked first by MinimumLevel.Override("Binance.Net", Error).
+    private static (ILogger logger, InMemorySink sink) BuildTestLogger(
+        bool includeBinanceNetOverride = true)
     {
         var sink = new InMemorySink();
 
-        var logger = new LoggerConfiguration()
-            .MinimumLevel.Debug()
+        var config = new LoggerConfiguration()
+            .MinimumLevel.Debug();
+
+        if (includeBinanceNetOverride)
+        {
             // Mirror PR #184: Binance.Net minimum level raised to Error.
-            .MinimumLevel.Override("Binance.Net", LogEventLevel.Error)
+            config = config.MinimumLevel.Override("Binance.Net", LogEventLevel.Error);
+        }
+
+        var logger = config
             // Mirror the hardened filter from Task 1.1: covers descendant SourceContexts
             // for both CryptoExchange and Binance.Net, and uses Contains for message matching.
             .Filter.ByExcluding(le =>
@@ -127,24 +136,9 @@ public class SerilogConfigurationTests
     [Fact]
     public void Filter_DropsBinanceNetDescendantSourceContext_WithMessageVariant()
     {
-        var (logger, sink) = BuildTestLogger();
-
-        // Use MinimumLevel.Debug so the Warning is not blocked by the Binance.Net
-        // minimum-level override before reaching the Filter.ByExcluding predicate.
-        // Build a separate logger without the MinimumLevel.Override for this case.
-        var sinkVariant = new InMemorySink();
-        var loggerVariant = new LoggerConfiguration()
-            .MinimumLevel.Debug()
-            .Filter.ByExcluding(le =>
-                le.Level == LogEventLevel.Warning &&
-                le.Properties.TryGetValue("SourceContext", out var scValue) &&
-                scValue is ScalarValue scScalar &&
-                scScalar.Value is string scStr &&
-                (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
-                 scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
-                le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
-            .WriteTo.Sink(sinkVariant)
-            .CreateLogger();
+        // review-v216: NB-1 — omit MinimumLevel.Override("Binance.Net", Error) so the Warning
+        // is not blocked before reaching Filter.ByExcluding; the shared predicate is exercised.
+        var (loggerVariant, sinkVariant) = BuildTestLogger(includeBinanceNetOverride: false);
 
         loggerVariant
             .ForContext("SourceContext",
@@ -183,14 +177,14 @@ public class SerilogConfigurationTests
     }
 
     [Fact]
-    public void Filter_IsAppliedOnOuterLoggerConfiguration_NoSubLoggerIsolation()
+    public void Filter_SuppressesBeforeSubLogger_OnOuterLoggerConfiguration()
     {
-        // Regression guard: attach two in-memory sinks directly to the outer LoggerConfiguration
-        // (simulating WriteTo.Console + WriteTo.ApplicationInsights both on the outer lc).
-        // Both must observe zero events when the matching Warning is emitted — the filter on
-        // the outer config is inherited by all sinks, not bypassed by sub-logger wrapping.
-        var sink1 = new InMemorySink();
-        var sink2 = new InMemorySink();
+        // review-v216: NB-2 — exercise the real sub-logger isolation risk: Serilog's
+        // WriteTo.Logger(sub => ...) nests a sub-pipeline under the outer config.
+        // Filters on the outer config run before events reach the sub-logger branch, so
+        // the targeted Warning must be absent from BOTH the outer sink and the inner sink.
+        var outerSink = new InMemorySink();
+        var innerSink = new InMemorySink();
 
         var logger = new LoggerConfiguration()
             .MinimumLevel.Debug()
@@ -202,17 +196,17 @@ public class SerilogConfigurationTests
                 (scStr.StartsWith("CryptoExchange", StringComparison.Ordinal) ||
                  scStr.StartsWith("Binance.Net", StringComparison.Ordinal)) &&
                 le.MessageTemplate.Text.Contains("DateTime value of null", StringComparison.Ordinal))
-            .WriteTo.Sink(sink1)   // simulates Console
-            .WriteTo.Sink(sink2)   // simulates ApplicationInsights
+            .WriteTo.Sink(outerSink)
+            .WriteTo.Logger(sub => sub.WriteTo.Sink(innerSink))
             .CreateLogger();
 
         logger
             .ForContext("SourceContext", "CryptoExchange.Net.SocketClient")
             .Warning(TargetMessage);
 
-        sink1.Events.Should().BeEmpty(
-            "first outer-config sink (Console simulation) must not receive the filtered Warning");
-        sink2.Events.Should().BeEmpty(
-            "second outer-config sink (ApplicationInsights simulation) must not receive the filtered Warning");
+        outerSink.Events.Should().BeEmpty(
+            "the outer-config filter must suppress the targeted Warning before it reaches the outer sink");
+        innerSink.Events.Should().BeEmpty(
+            "the outer-config filter must also suppress before the sub-logger branch; the inner sink must receive nothing");
     }
 }
