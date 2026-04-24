@@ -122,16 +122,26 @@ public class AsterConnector : IExchangeConnector, IDisposable
         await Task.WhenAll(markPricesTask, tickersTask);
 
         var markPrices = await markPricesTask;
-        var tickers = await tickersTask;
 
         if (!markPrices.Success)
         {
             throw new InvalidOperationException(markPrices.Error?.Message ?? "Unknown error");
         }
 
-        var volumeBySymbol = tickers.Success && tickers.Data is not null
-            ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
-            : new Dictionary<string, decimal>();
+        Dictionary<string, decimal> volumeBySymbol;
+        try
+        {
+            var tickers = await tickersTask;
+            volumeBySymbol = tickers.Success && tickers.Data is not null
+                ? tickers.Data.DistinctBy(t => t.Symbol).ToDictionary(t => t.Symbol, t => t.QuoteVolume)
+                : new Dictionary<string, decimal>();
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to fetch Aster tickers; falling back to empty volume map");
+            volumeBySymbol = new Dictionary<string, decimal>();
+        }
 
         // Build funding interval lookup from the dedicated funding info endpoint
         Dictionary<string, int> intervalBySymbol;

@@ -23,7 +23,8 @@ public class FundingRateFetcher : BackgroundService
     // Exchanges that report per-symbol funding interval via a polling endpoint and
     // therefore participate in the reconciliation pass below. Hyperliquid, Lighter,
     // and dYdX do not expose a fixed interval and are intentionally excluded.
-    private static readonly string[] DetectionCapableExchanges = { "Binance", "Aster" };
+    private static readonly HashSet<string> DetectionCapableExchanges =
+        new(StringComparer.OrdinalIgnoreCase) { "Binance", "Aster" };
 
     // H-FR1: Track last purge time to run hourly purge without a separate timer
     private DateTime _lastPurgeUtc = DateTime.MinValue;

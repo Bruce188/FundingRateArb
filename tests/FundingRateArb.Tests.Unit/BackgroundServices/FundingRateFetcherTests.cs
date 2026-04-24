@@ -1556,8 +1556,8 @@ public class FundingRateFetcherTests
     public async Task Reconcile_UpdatesBothBinanceAndAster_WhenBatchCarriesDivergentIntervals()
     {
         // Arrange: both detection-capable exchanges start at 8h. The batch carries
-        // a Binance majority vote of 4h and an Aster majority vote of 1h (neither
-        // should cross-pollinate the other's tracked entity).
+        // a Binance majority vote of 4h and an Aster majority vote of 4h; neither
+        // must cross-pollinate the other's tracked entity (independent reconciliation).
         var binanceExchange = new Exchange
         {
             Id = 4,
@@ -1611,9 +1611,7 @@ public class FundingRateFetcherTests
                 new() { ExchangeName = "Binance", Symbol = "BTC", DetectedFundingIntervalHours = 4, RatePerHour = 0.0001m, RawRate = 0.0004m, MarkPrice = 60000m },
             });
 
-        // Aster connector returns rates with DetectedFundingIntervalHours=1 (majority vote).
-        // Note: 1 is not in the validIntervals set {4, 8}, so it will be rejected.
-        // Use 4h to produce a meaningful majority-vote assertion for Aster.
+        // Aster returns a majority vote of 4h — must persist to Aster entity only.
         _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<FundingRateDto>
             {
