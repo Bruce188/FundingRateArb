@@ -194,6 +194,20 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
                     try
                     {
+                        // Zero-fill short-circuit: neither leg was ever filled — no exchange exposure,
+                        // no rollback required. Mark Failed and persist without touching any fee fields.
+                        var longFilled = position.LongFilledQuantity ?? 0m;
+                        var shortFilled = position.ShortFilledQuantity ?? 0m;
+                        if (longFilled == 0m && shortFilled == 0m)
+                        {
+                            _logger.LogInformation(
+                                "Boot sweep: position #{Id} (user {UserId}) timed out with zero fill on both legs — marking Failed.",
+                                position.Id, userId);
+                            position.Status = PositionStatus.Failed;
+                            await uow.SaveAsync(sweepToken);
+                            continue;
+                        }
+
                         await executionEngine.ConfirmOrRollbackAsync(
                             userId, position, globalConfig.OpenConfirmTimeoutSeconds, sweepToken);
                     }
