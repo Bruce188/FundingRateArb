@@ -54,4 +54,17 @@ public class BotConfigurationTests
         config.OpenConfirmTimeoutSeconds.Should().Be(value,
             "positive values must be accepted and stored as-is");
     }
+
+    [Fact]
+    public void BotConfiguration_NewInstance_HasExpectedDivergenceMonitoringDefaults()
+    {
+        var config = new BotConfiguration();
+
+        config.DivergenceAlertConfirmationCycles.Should().Be(1,
+            "default must be 1 to preserve existing test behavior (debounce is a no-op at N=1)");
+        config.RotationDivergenceHorizonHours.Should().Be(2.0m,
+            "default horizon of 2h is the configured production value");
+        config.PreferCloseOnDivergenceNarrowing.Should().BeTrue(
+            "soft close preference should be on by default");
+    }
 }

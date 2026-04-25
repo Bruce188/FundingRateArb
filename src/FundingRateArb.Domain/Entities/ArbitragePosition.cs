@@ -36,6 +36,9 @@ public class ArbitragePosition
     /// <summary>Current cross-exchange price divergence percentage, updated each health check.</summary>
     public decimal? CurrentDivergencePct { get; set; }
 
+    /// <summary>Previous cycle's cross-exchange price divergence percentage. Null on first cycle.</summary>
+    public decimal? PrevDivergencePct { get; set; }
+
     /// <summary>Total funding payments reported by the exchange for this position.</summary>
     public decimal? ExchangeReportedFunding { get; set; }
 

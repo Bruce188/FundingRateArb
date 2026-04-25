@@ -194,6 +194,26 @@ public class BotConfiguration : IValidatableObject
     public decimal DivergenceAlertMultiplier { get; set; } = 2.0m;
 
     /// <summary>
+    /// Number of consecutive cycles the divergence must exceed the alert threshold before an alert fires.
+    /// Default 1 preserves existing behavior (immediate alert). Set to 3+ in production for debounce.
+    /// </summary>
+    [Range(1, 20)]
+    public int DivergenceAlertConfirmationCycles { get; set; } = 1;
+
+    /// <summary>
+    /// Horizon in hours over which a new rotation opportunity must outperform the divergence exit cost.
+    /// Suppresses rotation when divergence exit cost exceeds net yield advantage over this window.
+    /// </summary>
+    [Range(0.25, 24.0)]
+    public decimal RotationDivergenceHorizonHours { get; set; } = 2.0m;
+
+    /// <summary>
+    /// When true, SpreadCollapsed close bypasses MinHoldTimeHours when divergence is narrowing.
+    /// Enables a soft-close preference that exits positions recovering from price divergence.
+    /// </summary>
+    public bool PreferCloseOnDivergenceNarrowing { get; set; } = true;
+
+    /// <summary>
     /// When true (default), DivergenceCritical close only fires when the position is past
     /// its MinHoldTimeHours AND the liquidation distance has fallen below
     /// LiquidationEarlyWarningPct. Set to false to revert to the pre-fix behavior where

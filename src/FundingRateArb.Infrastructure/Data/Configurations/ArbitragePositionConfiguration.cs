@@ -31,6 +31,7 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
         builder.Property(p => p.ExchangeReportedPnl).HasColumnType("decimal(18,4)");
         builder.Property(p => p.PnlDivergence).HasColumnType("decimal(18,4)");
         builder.Property(p => p.CurrentDivergencePct).HasColumnType("decimal(18,4)");
+        builder.Property(p => p.PrevDivergencePct).HasColumnType("decimal(8,4)");
         builder.Property(p => p.ExchangeReportedFunding).HasColumnType("decimal(18,4)");
         builder.Property(p => p.LongLegClosed).HasDefaultValue(false);
         builder.Property(p => p.ShortLegClosed).HasDefaultValue(false);
