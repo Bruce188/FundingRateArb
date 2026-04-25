@@ -2042,4 +2042,251 @@ public class BotOrchestratorTests
         _circuitBreaker.DailyRotationCounts[TestUserId].Date.Should().Be(today);
         _circuitBreaker.DailyRotationCounts[TestUserId].Count.Should().Be(1);
     }
+
+    // ── Funding deviation proximity gate tests ──────────────────────────────
+
+    private static BotConfiguration MakeTradingConfig() => new()
+    {
+        IsEnabled = true,
+        OperatingState = BotOperatingState.Armed,
+        MaxConcurrentPositions = 5,
+        AllocationStrategy = AllocationStrategy.Concentrated,
+        AllocationTopN = 3,
+        TotalCapitalUsdc = 1000m,
+        MaxCapitalPerPosition = 0.5m,
+        VolumeFraction = 0.001m,
+        UpdatedByUserId = TestUserId,
+    };
+
+    [Fact]
+    public async Task ExecuteUserCycle_AsterCandidate_WithinDeviationWindow_SkipsOpen()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(MakeTradingConfig());
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = MakeOpp(1, "ETH");
+        opp.MaxLegFundingDeviationSeconds = 15;
+        opp.EarliestLegNextSettlementUtc = DateTime.UtcNow.AddSeconds(8);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(),
+                It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        IEnumerable<OpportunitySnapshot>? savedSnapshots = null;
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<OpportunitySnapshot>, CancellationToken>((s, _) => savedSnapshots = s.ToList())
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Open must not be called — candidate is within deviation window
+        _mockExecutionEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(),
+                It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        // Snapshot must carry "funding_deviation_window" skip reason
+        savedSnapshots.Should().NotBeNull();
+        var snapshot = savedSnapshots!.Single();
+        snapshot.SkipReason.Should().Be("funding_deviation_window");
+        snapshot.WasOpened.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ExecuteUserCycle_AsterCandidate_AfterDeviationWindow_OpensNormally()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(MakeTradingConfig());
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        var opp = MakeOpp(1, "ETH");
+        opp.MaxLegFundingDeviationSeconds = 15;
+        opp.EarliestLegNextSettlementUtc = DateTime.UtcNow.AddSeconds(120); // well past window
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(),
+                It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(),
+                It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Settlement is 120s away, window is only 15s → gate does NOT trigger
+        _mockExecutionEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(),
+                It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteUserCycle_NonAsterCandidate_DeviationZero_NeverGated()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(MakeTradingConfig());
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        // MaxLegFundingDeviationSeconds = null (both-zero → populator returns null)
+        var opp = MakeOpp(1, "ETH");
+        opp.MaxLegFundingDeviationSeconds = null;
+        opp.EarliestLegNextSettlementUtc = DateTime.UtcNow.AddSeconds(2); // would gate if deviation were non-zero
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(),
+                It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(),
+                It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // deviation is 0/null → gate never fires
+        _mockExecutionEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(),
+                It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteUserCycle_AsterCandidate_NoSettlementTimestamp_OpensNormally()
+    {
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(MakeTradingConfig());
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([]);
+
+        // MaxLegFundingDeviationSeconds set but EarliestLegNextSettlementUtc is null → gate requires both
+        var opp = MakeOpp(1, "ETH");
+        opp.MaxLegFundingDeviationSeconds = 15;
+        opp.EarliestLegNextSettlementUtc = null;
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [opp] });
+        _mockPositionSizer.Setup(s => s.CalculateBatchSizesAsync(
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(), It.IsAny<AllocationStrategy>(),
+                It.IsAny<string>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([100m]);
+
+        _mockExecutionEngine.Setup(e => e.OpenPositionAsync(
+                It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(), It.IsAny<decimal>(),
+                It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((true, (string?)null));
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // No settlement timestamp → gate cannot fire, open proceeds normally
+        _mockExecutionEngine.Verify(
+            e => e.OpenPositionAsync(It.IsAny<string>(), It.IsAny<ArbitrageOpportunityDto>(),
+                It.IsAny<decimal>(), It.IsAny<UserConfiguration?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task ExecuteUserCycle_RotationCandidate_WithinDeviationWindow_DoesNotClose()
+    {
+        // Need exactly max-positions filled so the rotation branch fires
+        _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(TestUserId))
+            .ReturnsAsync(new UserConfiguration
+            {
+                UserId = TestUserId,
+                IsEnabled = true,
+                MaxConcurrentPositions = 1,
+                TotalCapitalUsdc = 1000m,
+                MaxCapitalPerPosition = 0.5m,
+                OpenThreshold = 0.0001m,
+                DailyDrawdownPausePct = 0.05m,
+                ConsecutiveLossPause = 3,
+                AllocationStrategy = AllocationStrategy.Concentrated,
+                AllocationTopN = 3,
+                RotationThresholdPerHour = 0.0003m,
+                MinHoldBeforeRotationMinutes = 0,
+                MaxRotationsPerDay = 5,
+            });
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(MakeTradingConfig());
+
+        var existingPosition = new ArbitragePosition
+        {
+            Id = 10,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.0001m,
+            EntrySpreadPerHour = 0.0002m,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            Status = PositionStatus.Open,
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([existingPosition]);
+
+        // Replacement opportunity is within the deviation window
+        var replacementOpp = MakeOpp(2, "BTC", longExId: 1, shortExId: 3);
+        replacementOpp.MaxLegFundingDeviationSeconds = 15;
+        replacementOpp.EarliestLegNextSettlementUtc = DateTime.UtcNow.AddSeconds(5);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [replacementOpp] });
+
+        var recommendation = new RotationRecommendationDto(
+            PositionId: 10,
+            PositionAsset: "ETH",
+            CurrentSpreadPerHour: 0.0001m,
+            ReplacementAssetId: 2,
+            ReplacementAsset: "BTC",
+            ReplacementLongExchange: "ExA",
+            ReplacementLongExchangeId: 1,
+            ReplacementShortExchange: "ExB",
+            ReplacementShortExchangeId: 3,
+            ReplacementNetYieldPerHour: 0.0005m,
+            ImprovementPerHour: 0.0004m);
+
+        _mockRotationEvaluator.Setup(r => r.Evaluate(
+                It.IsAny<IReadOnlyList<ArbitragePosition>>(),
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<UserConfiguration>(),
+                It.IsAny<BotConfiguration>()))
+            .Returns(recommendation);
+
+        _mockSnapshotRepo.Setup(r => r.AddRangeAsync(It.IsAny<IEnumerable<OpportunitySnapshot>>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _mockSnapshotRepo.Setup(r => r.PurgeOlderThanAsync(It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Rotation close must not fire — replacement is within deviation window
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(),
+                CloseReason.Rotation, It.IsAny<CancellationToken>()),
+            Times.Never);
+
+        // Rotation cooldown must be set (prevents immediate retry)
+        var cooldownKey = $"{TestUserId}:{recommendation.ReplacementAssetId}:{recommendation.ReplacementLongExchangeId}:{recommendation.ReplacementShortExchangeId}";
+        _circuitBreaker.RotationCooldowns.Should().ContainKey(cooldownKey,
+            "cooldown must be set so the gated rotation is not retried immediately");
+    }
 }

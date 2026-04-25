@@ -19,6 +19,7 @@ public sealed class SkipReasonTracker
     public HashSet<string> AssetDisabledKeys { get; } = new();
     public HashSet<string> CircuitBrokenKeys { get; } = new();
     public HashSet<string> NotSelectedKeys { get; } = new();
+    public HashSet<string> FundingDeviationWindowKeys { get; } = new();
 
     // Per-user below-threshold tracking (cleared before each user iteration)
     public int BelowThresholdCount { get; set; }
@@ -31,6 +32,7 @@ public sealed class SkipReasonTracker
         AssetDisabledKeys.Clear();
         CircuitBrokenKeys.Clear();
         NotSelectedKeys.Clear();
+        FundingDeviationWindowKeys.Clear();
         BelowThresholdCount = 0;
         BestBelowThresholdYield = decimal.MinValue;
     }
