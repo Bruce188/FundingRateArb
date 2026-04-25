@@ -304,6 +304,7 @@ public class FundingRateFetcherTests
             MarkPrice = 2999m,
             IndexPrice = 2998m,
             Volume24hUsd = 5_000_000m,
+            DetectedFundingIntervalHours = 8,
         };
         _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([rate]);
@@ -326,6 +327,7 @@ public class FundingRateFetcherTests
         saved.RatePerHour.Should().Be(0.0004m);
         saved.MarkPrice.Should().Be(2999m);
         saved.Volume24hUsd.Should().Be(5_000_000m);
+        saved.DetectedFundingIntervalHours.Should().Be(8);
     }
 
     // ── FetchAll_IgnoresUnknownSymbols ─────────────────────────────────────────
@@ -1637,5 +1639,83 @@ public class FundingRateFetcherTests
         _mockExchanges.Verify(e => e.Update(trackedBinance), Times.Once);
         _mockExchanges.Verify(e => e.Update(trackedAster), Times.Once);
         _mockExchanges.Verify(e => e.InvalidateCache(), Times.AtLeastOnce);
+    }
+
+    // ── DetectedFundingIntervalHours persistence ──────────────────────────────
+
+    [Fact]
+    public async Task FetchAll_PreservesDetectedIntervalNull_WhenConnectorDidNotDetectIt()
+    {
+        var rate = new FundingRateDto
+        {
+            ExchangeName = "Hyperliquid",
+            Symbol = "ETH",
+            RatePerHour = 0.0005m,
+            RawRate = 0.0005m,
+            MarkPrice = 3000m,
+            DetectedFundingIntervalHours = null,
+        };
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([rate]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        List<FundingRateSnapshot>? savedList = null;
+        _mockFundingRates.Setup(f => f.AddRange(It.IsAny<IEnumerable<FundingRateSnapshot>>()))
+            .Callback<IEnumerable<FundingRateSnapshot>>(s => savedList = s.ToList());
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        savedList.Should().NotBeNull();
+        savedList.Should().HaveCount(1);
+        savedList![0].DetectedFundingIntervalHours.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task FetchAll_PreservesDetectedFourHourInterval_FromBinanceSource()
+    {
+        var binanceExchange = new Exchange { Id = 4, Name = "Binance", IsActive = true };
+        _mockExchanges.Setup(e => e.GetActiveAsync())
+            .ReturnsAsync(new List<Exchange>
+            {
+                new Exchange { Id = 1, Name = "Hyperliquid", IsActive = true },
+                new Exchange { Id = 2, Name = "Lighter",     IsActive = true },
+                new Exchange { Id = 3, Name = "Aster",        IsActive = true },
+                binanceExchange,
+            });
+
+        var rate = new FundingRateDto
+        {
+            ExchangeName = "Binance",
+            Symbol = "BTC",
+            RatePerHour = 0.0001m,
+            RawRate = 0.0004m,
+            MarkPrice = 60000m,
+            DetectedFundingIntervalHours = 4,
+        };
+
+        var mockBinance = new Mock<IExchangeConnector>();
+        mockBinance.Setup(c => c.ExchangeName).Returns("Binance");
+        mockBinance.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([rate]);
+
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockLighter.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+
+        _mockFactory.Setup(f => f.GetAllConnectors())
+            .Returns([_mockHyperliquid.Object, _mockLighter.Object, _mockAster.Object, mockBinance.Object]);
+
+        List<FundingRateSnapshot>? savedList = null;
+        _mockFundingRates.Setup(f => f.AddRange(It.IsAny<IEnumerable<FundingRateSnapshot>>()))
+            .Callback<IEnumerable<FundingRateSnapshot>>(s => savedList = s.ToList());
+
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        savedList.Should().NotBeNull();
+        savedList.Should().HaveCount(1);
+        savedList![0].DetectedFundingIntervalHours.Should().Be(4);
     }
 }

@@ -15,6 +15,7 @@ public class FundingRateSnapshotConfiguration : IEntityTypeConfiguration<Funding
         builder.Property(f => f.MarkPrice).HasColumnType("decimal(18,4)");
         builder.Property(f => f.IndexPrice).HasColumnType("decimal(18,4)");
         builder.Property(f => f.Volume24hUsd).HasColumnType("decimal(18,2)");
+        builder.Property(f => f.DetectedFundingIntervalHours);
 
         builder.HasOne(f => f.Exchange)
             .WithMany(e => e.FundingRateSnapshots)
