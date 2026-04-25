@@ -399,18 +399,27 @@ public class SignalEngine : ISignalEngine
                         var effectiveLev = Math.Min(config.DefaultLeverage, Math.Min(config.MaxLeverageCap, tierMax));
                         if (effectiveLev > 0 && effectiveLev < int.MaxValue)
                         {
-                            dto.EffectiveLeverage = effectiveLev;
-                            dto.ReturnOnCapitalPerHour = net * effectiveLev;
-                            dto.AprOnCapital = dto.ReturnOnCapitalPerHour.Value * 24m * 365m * 100m;
-                            // BreakEvenCycles per Appendix B:
-                            //   cycles = totalEntryCost / (netPerCycle * leverage)
-                            // totalEntryCost already includes round-trip fees + slippage buffer.
-                            // A full arbitrage cycle completes only when BOTH legs have settled,
-                            // so cycle length = max of the two leg intervals (1h floor guards
-                            // against unseeded test exchanges).
+                            // Appendix B per-cycle formulation:
+                            //   cycleHours = max of the two leg intervals (1h floor guards
+                            //                against unseeded test exchanges).
+                            //   ReturnOnCapitalPerCycle = net × effectiveLev × cycleHours
+                            //   cyclesPerYear           = (24 / cycleHours) × 365
+                            //   AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle × cyclesPerYear
+                            //     which is mathematically equivalent to net × effectiveLev × 24 × 365
                             var cycleHours = Math.Max(
                                 Math.Max(1, longR.Exchange.FundingIntervalHours),
                                 Math.Max(1, shortR.Exchange.FundingIntervalHours));
+                            var cyclesPerYear = (24m / cycleHours) * 365m;
+                            dto.EffectiveLeverage         = effectiveLev;
+                            dto.ReturnOnCapitalPerCycle   = net * effectiveLev * cycleHours;
+                            dto.AnnualizedReturnOnCapital = dto.ReturnOnCapitalPerCycle.Value * cyclesPerYear;
+                            dto.CyclesPerYear             = (int)cyclesPerYear;
+                            // Back-compat fields — preserved for dashboard.js:713 and other callers
+                            dto.ReturnOnCapitalPerHour    = net * effectiveLev;
+                            dto.AprOnCapital              = dto.AnnualizedReturnOnCapital.Value * 100m;
+                            // BreakEvenCycles per Appendix B:
+                            //   cycles = totalEntryCost / (netPerCycle * leverage)
+                            // totalEntryCost already includes round-trip fees + slippage buffer.
                             if (net > 0)
                             {
                                 dto.BreakEvenCycles = totalEntryCost / (net * effectiveLev * cycleHours);

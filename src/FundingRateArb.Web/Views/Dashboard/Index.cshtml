@@ -448,7 +448,16 @@
                                             }
                                         </td>
                                         <td class="small">
-                                            @if (opp.AprOnCapital.HasValue)
+                                            @if (opp.ReturnOnCapitalPerCycle.HasValue && opp.AprOnCapital.HasValue)
+                                            {
+                                                var rocClass = opp.AprOnCapital.Value > 100m ? "text-success fw-bold"
+                                                    : opp.AprOnCapital.Value > 50m ? "text-warning fw-bold" : "";
+                                                <div class="d-flex flex-column">
+                                                    <span class="badge bg-primary">@(opp.ReturnOnCapitalPerCycle.Value.ToString("P2"))</span>
+                                                    <small class="text-muted @rocClass">@(opp.AprOnCapital.Value.ToString("F1"))% APR</small>
+                                                </div>
+                                            }
+                                            else if (opp.AprOnCapital.HasValue)
                                             {
                                                 var rocClass = opp.AprOnCapital.Value > 100m ? "text-success fw-bold"
                                                     : opp.AprOnCapital.Value > 50m ? "text-warning fw-bold" : "";

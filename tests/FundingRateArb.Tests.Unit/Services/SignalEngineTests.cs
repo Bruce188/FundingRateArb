@@ -37,7 +37,8 @@ public class SignalEngineTests
         decimal markPrice = 3000m,
         decimal volume = 1_000_000m,
         decimal? takerFeeRate = null,
-        DateTime? recordedAt = null) =>
+        DateTime? recordedAt = null,
+        int fundingIntervalHours = 1) =>
         new FundingRateSnapshot
         {
             ExchangeId = exchangeId,
@@ -46,7 +47,7 @@ public class SignalEngineTests
             MarkPrice = markPrice,
             Volume24hUsd = volume,
             RecordedAt = recordedAt ?? DateTime.UtcNow,
-            Exchange = new Exchange { Id = exchangeId, Name = exchangeName, TakerFeeRate = takerFeeRate },
+            Exchange = new Exchange { Id = exchangeId, Name = exchangeName, TakerFeeRate = takerFeeRate, FundingIntervalHours = fundingIntervalHours },
             Asset = new Asset { Id = assetId, Symbol = symbol },
         };
 
@@ -3897,5 +3898,167 @@ public class SignalEngineTests
             public long? Size { get => _inner.Size; set => _inner.Size = value; }
             public void Dispose() => _inner.Dispose();
         }
+    }
+
+    // ── Per-cycle leverage-adjusted return fields ─────────────────────────────
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_OneHourInterval_PopulatesCyclesPerYear8760()
+    {
+        // Both legs default to FundingIntervalHours=1 via MakeRate.
+        // cycleHours = max(1, 1) = 1
+        // cyclesPerYear = (24/1) * 365 = 8760
+        // ReturnOnCapitalPerCycle = net * lev * 1
+        // AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle * 8760
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(int.MaxValue); // no tier constraint
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
+            DefaultLeverage = 5, MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        // Both legs at 1h interval (MakeRate default)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, fundingIntervalHours: 1),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, fundingIntervalHours: 1),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        opp.CyclesPerYear.Should().Be(8760);
+        opp.EffectiveLeverage.Should().Be(5);
+
+        // net = spread - fees (both default fee rates)
+        var net = opp.NetYieldPerHour;
+        opp.ReturnOnCapitalPerCycle.Should().BeApproximately(net * 5 * 1m, 0.0000001m,
+            "ReturnOnCapitalPerCycle = net * leverage * cycleHours (cycleHours=1)");
+        opp.AnnualizedReturnOnCapital.Should().BeApproximately(
+            opp.ReturnOnCapitalPerCycle!.Value * 8760m, 0.0000001m,
+            "AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle * CyclesPerYear");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_EightHourInterval_PopulatesCyclesPerYear1095()
+    {
+        // Both legs at FundingIntervalHours=8.
+        // cycleHours = max(8, 8) = 8
+        // cyclesPerYear = (24/8) * 365 = 1095
+        // ReturnOnCapitalPerCycle = net * lev * 8
+        // AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle * 1095
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(int.MaxValue);
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
+            DefaultLeverage = 5, MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m, fundingIntervalHours: 8),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m, fundingIntervalHours: 8),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        opp.CyclesPerYear.Should().Be(1095);
+        opp.EffectiveLeverage.Should().Be(5);
+
+        var net = opp.NetYieldPerHour;
+        opp.ReturnOnCapitalPerCycle.Should().BeApproximately(net * 5 * 8m, 0.0000001m,
+            "ReturnOnCapitalPerCycle = net * leverage * cycleHours (cycleHours=8)");
+        opp.AnnualizedReturnOnCapital.Should().BeApproximately(
+            opp.ReturnOnCapitalPerCycle!.Value * 1095m, 0.0000001m,
+            "AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle * CyclesPerYear");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WithoutTierProvider_LeavesAllNewLeverageFieldsNull()
+    {
+        // Default _sut has no tier provider — all leverage-related fields must be null.
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m });
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        // Legacy fields
+        opp.EffectiveLeverage.Should().BeNull();
+        opp.ReturnOnCapitalPerHour.Should().BeNull();
+        opp.AprOnCapital.Should().BeNull();
+        opp.BreakEvenCycles.Should().BeNull();
+        // New per-cycle fields
+        opp.ReturnOnCapitalPerCycle.Should().BeNull("no tier provider → ReturnOnCapitalPerCycle must be null");
+        opp.AnnualizedReturnOnCapital.Should().BeNull("no tier provider → AnnualizedReturnOnCapital must be null");
+        opp.CyclesPerYear.Should().BeNull("no tier provider → CyclesPerYear must be null");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_WithTierProvider_BackCompatRegression_AnnualizedReturnOnCapitalTimes100EqualsAprOnCapital()
+    {
+        // Back-compat: AprOnCapital must always equal AnnualizedReturnOnCapital * 100 (within decimal tolerance).
+        var mockTierProvider = new Mock<ILeverageTierProvider>();
+        mockTierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Returns(int.MaxValue);
+
+        var sutWithTiers = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            predictionService: null, tierProvider: mockTierProvider.Object);
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
+            DefaultLeverage = 5, MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var result = await sutWithTiers.GetOpportunitiesAsync(CancellationToken.None);
+
+        result.Should().HaveCount(1);
+        var opp = result[0];
+        opp.AnnualizedReturnOnCapital.Should().NotBeNull();
+        opp.AprOnCapital.Should().NotBeNull();
+        opp.AprOnCapital!.Value.Should().BeApproximately(
+            opp.AnnualizedReturnOnCapital!.Value * 100m, 0.0000001m,
+            "AprOnCapital must equal AnnualizedReturnOnCapital * 100 (back-compat invariant)");
     }
 }
