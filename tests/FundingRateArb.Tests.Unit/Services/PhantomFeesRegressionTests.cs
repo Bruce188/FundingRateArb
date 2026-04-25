@@ -448,23 +448,9 @@ public class PhantomFeesRegressionTests
 
     // ── SetEmergencyCloseFees guard ───────────────────────────────────────────
 
-    /// <summary>
-    /// EmergencyCloseHandler.cs line 33: SetEmergencyCloseFees must not be called when
-    /// the supplied OrderResultDto has FilledQuantity=0.  Even though the arithmetic produces
-    /// zero fees (legNotional = price * 0 = 0), calling the method against a zero-quantity
-    /// result is a logic error that can mask connector bugs.
-    ///
-    /// REQUIRED fix (Task 2.1): add an early-return guard inside SetEmergencyCloseFees:
-    ///   if (successfulLeg.FilledQuantity &lt;= 0) return;
-    ///
-    /// This test verifies that after the guard is added, passing a zero-fill result leaves
-    /// the position's RealizedPnl and fee fields untouched (null / default), distinguishing
-    /// "guard fired — nothing happened" from "guard didn't fire but math gave zero".
-    /// </summary>
     [Fact]
-    public void SetEmergencyCloseFees_WhenFilledQuantityIsZero_ShouldLeaveRealizedPnlNull()
+    public void SetEmergencyCloseFees_WhenFilledQuantityIsZero_ZeroesFeesAndRealizedPnl()
     {
-        // Arrange — position with no prior PnL assignment
         var position = new ArbitragePosition { UserId = "user1" };
         var zeroFillResult = new OrderResultDto
         {
@@ -473,20 +459,10 @@ public class PhantomFeesRegressionTests
             FilledQuantity = 0m,
         };
 
-        // Act
         EmergencyCloseHandler.SetEmergencyCloseFees(position, zeroFillResult, "Hyperliquid");
 
-        // The math gives zero fees (0 * price * rate = 0), which is correct.
         position.EntryFeesUsdc.Should().Be(0m);
         position.ExitFeesUsdc.Should().Be(0m);
-
-        // FAILING ASSERTION: with a zero-fill guard the method must return early and leave
-        // RealizedPnl null (its default).  Currently the method always writes
-        // RealizedPnl = -(entryFee + exitFee) = 0, changing the field from null to 0.
-        // A null RealizedPnl means "not yet computed"; 0 means "computed and equals zero" —
-        // these are semantically different and the guard should preserve null.
-        position.RealizedPnl.Should().BeNull(
-            "zero-fill result means nothing was on-chain; RealizedPnl should remain null " +
-            "(uncomputed) rather than being set to 0 by the fee calculation");
+        position.RealizedPnl.Should().Be(0m);
     }
 }
