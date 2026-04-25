@@ -27,12 +27,27 @@ public class EmergencyCloseHandler : IEmergencyCloseHandler
     }
 
     /// <summary>
-    /// Sets EntryFeesUsdc and RealizedPnl on an emergency-closed position based on the
-    /// fees incurred from the one leg that did open and was subsequently closed.
+    /// Sets EntryFeesUsdc, ExitFeesUsdc, and RealizedPnl on an emergency-closed position based on the
+    /// leg that filled. When <c>successfulLeg.FilledQuantity &lt;= 0</c> the method clears all three
+    /// fields to zero (no trade occurred) and returns early.
     /// </summary>
-    internal static void SetEmergencyCloseFees(
+    public void SetEmergencyCloseFees(
         ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
     {
+        if (successfulLeg.FilledQuantity < 0m)
+        {
+            _logger.LogError(
+                "SetEmergencyCloseFees called with negative FilledQuantity={Qty} on position #{Id} ({Exchange}) — coercing to zero. Likely connector parsing bug.",
+                successfulLeg.FilledQuantity, position.Id, exchangeName);
+        }
+        if (successfulLeg.FilledQuantity <= 0m)
+        {
+            position.EntryFeesUsdc = 0m;
+            position.ExitFeesUsdc = 0m;
+            position.RealizedPnl = 0m;
+            return;
+        }
+
         var legNotional = successfulLeg.FilledPrice * successfulLeg.FilledQuantity;
         var feeRate = ExchangeFeeConstants.GetTakerFeeRate(exchangeName);
         var entryFee = legNotional * feeRate;

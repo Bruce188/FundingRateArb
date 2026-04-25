@@ -137,6 +137,7 @@ public class DashboardController : Controller
             List<int>? enabledExchangeIds = null;
             List<ArbitragePosition>? openPositions = null;
             List<Alert>? unreadAlerts = null;
+            decimal totalRealizedPnl = 0m;
 
             await Task.WhenAll(
                 Task.Run(async () =>
@@ -170,6 +171,17 @@ public class DashboardController : Controller
                     using var scope = _scopeFactory.CreateScope();
                     var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
                     unreadAlerts = await uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    // Aggregation pushed to SQL — excludes IsPhantomFeeBackfill rows, no row materialization.
+                    totalRealizedPnl = await uow.Positions.SumRealizedPnlExcludingPhantomAsync(
+                        userId!,
+                        PositionStatus.Closed,
+                        PositionStatus.EmergencyClosed,
+                        PositionStatus.Liquidated);
                 }, ct)
             );
 
@@ -286,6 +298,7 @@ public class DashboardController : Controller
                 OpeningPositionCount = openingCount,
                 NeedsAttentionCount = needsAttentionCount,
                 TotalPnl = totalPnl,
+                TotalRealizedPnl = totalRealizedPnl,
                 BestSpread = bestSpread,
                 TotalUnreadAlerts = unreadAlerts!.Count,
                 OpenPositions = positionSummaries,

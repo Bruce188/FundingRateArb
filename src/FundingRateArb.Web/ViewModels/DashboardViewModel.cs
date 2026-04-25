@@ -11,6 +11,10 @@ public class DashboardViewModel
     public int OpeningPositionCount { get; set; }
     public int NeedsAttentionCount { get; set; }
     public decimal TotalPnl { get; set; }
+
+    /// <summary>Realized PnL total across all closed positions, excluding phantom-fee backfill rows.</summary>
+    public decimal TotalRealizedPnl { get; set; }
+
     public decimal BestSpread { get; set; }
     public int TotalUnreadAlerts { get; set; }
     public List<PositionSummaryDto> OpenPositions { get; set; } = [];

@@ -52,6 +52,13 @@ public interface IPositionRepository
     Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
 
     /// <summary>
+    /// Computes the sum of <c>RealizedPnl</c> for closed positions matching the given statuses,
+    /// excluding rows where <c>IsPhantomFeeBackfill == true</c>. Pushes the aggregation to SQL
+    /// (no row materialization) so large position histories do not cause memory pressure.
+    /// </summary>
+    Task<decimal> SumRealizedPnlExcludingPhantomAsync(string userId, params PositionStatus[] statuses);
+
+    /// <summary>
     /// Returns Opening positions for <paramref name="userId"/> whose OpenConfirmedAt is null
     /// and OpenedAt is older than <paramref name="olderThan"/>. Used by the boot-time sweep in
     /// BotOrchestrator to detect positions that exited the both-leg confirmation window without

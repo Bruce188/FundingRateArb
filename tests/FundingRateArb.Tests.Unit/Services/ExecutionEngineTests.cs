@@ -462,7 +462,7 @@ public class ExecutionEngineTests
     }
 
     [Fact]
-    public async Task OpenPosition_BothLegsZeroFill_MarksEmergencyClosed_NoEmergencyCloseCalled()
+    public async Task OpenPosition_BothLegsZeroFill_MarksFailed_NoEmergencyCloseCalled()
     {
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
@@ -480,8 +480,10 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("zero quantity");
         savedPos.Should().NotBeNull();
-        savedPos!.Status.Should().Be(PositionStatus.EmergencyClosed);
-        savedPos.CloseReason.Should().Be(CloseReason.EmergencyLegFailed);
+        savedPos!.Status.Should().Be(PositionStatus.Failed,
+            "both legs filled zero — no position was ever live on-chain, EmergencyClosed is reserved for genuinely-filled positions");
+        savedPos.CloseReason.Should().Be(CloseReason.None,
+            "when both fills are zero no leg actually failed — EmergencyLegFailed would be misleading");
         savedPos.EntryFeesUsdc.Should().Be(0m,
             "both legs filled zero — no surviving leg to record fees against");
         savedPos.ExitFeesUsdc.Should().Be(0m);
@@ -494,12 +496,12 @@ public class ExecutionEngineTests
             Times.Never,
             "both legs filled zero quantity — nothing to emergency-close on short");
         _mockPositions.Verify(
-            p => p.Update(It.Is<ArbitragePosition>(pos => pos.Status == PositionStatus.EmergencyClosed)),
+            p => p.Update(It.Is<ArbitragePosition>(pos => pos.Status == PositionStatus.Failed)),
             Times.Once);
         _mockUow.Verify(
             u => u.SaveAsync(It.IsAny<CancellationToken>()),
             Times.Exactly(2),
-            "Opening persist + EmergencyClosed persist");
+            "Opening persist + Failed persist");
     }
 
     [Fact]

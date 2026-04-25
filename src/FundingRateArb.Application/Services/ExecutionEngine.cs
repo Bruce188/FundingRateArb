@@ -477,7 +477,7 @@ public class ExecutionEngine : IExecutionEngine
                             position.ClosedAt = DateTime.UtcNow;
                             if (!neverExisted)
                             {
-                                EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                                _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                             }
                             _uow.Positions.Update(position);
                             _uow.Alerts.Add(new Alert
@@ -518,11 +518,22 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
                         opp.AssetSymbol, secondExchangeName);
                     var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    position.Status = (neverExisted || firstResult.FilledQuantity <= 0m)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        if (firstIsLong)
+                        {
+                            position.LongFilledQuantity = firstResult.FilledQuantity;
+                        }
+                        else
+                        {
+                            position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        }
+
+                        _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -548,11 +559,22 @@ public class ExecutionEngine : IExecutionEngine
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
                         opp.AssetSymbol, secondExchangeName, secondErrorMsg);
                     var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    position.Status = (neverExisted || firstResult.FilledQuantity <= 0m)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        if (firstIsLong)
+                        {
+                            position.LongFilledQuantity = firstResult.FilledQuantity;
+                        }
+                        else
+                        {
+                            position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        }
+
+                        _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -610,7 +632,8 @@ public class ExecutionEngine : IExecutionEngine
                         var neverExistedLong = await _emergencyClose.TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
+                            position.LongFilledQuantity = longTask.Result.FilledQuantity;
+                            _emergencyClose.SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
                             allNeverExisted = false;
                         }
                     }
@@ -619,12 +642,18 @@ public class ExecutionEngine : IExecutionEngine
                         var neverExistedShort = await _emergencyClose.TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                         if (!neverExistedShort)
                         {
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
+                            position.ShortFilledQuantity = shortTask.Result.FilledQuantity;
+                            _emergencyClose.SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
                             allNeverExisted = false;
                         }
                     }
 
-                    position.Status = allNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    var concurrentExBothEffectivelyZero =
+                        (position.LongFilledQuantity ?? 0m) <= 0m &&
+                        (position.ShortFilledQuantity ?? 0m) <= 0m;
+                    position.Status = (allNeverExisted || concurrentExBothEffectivelyZero)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";
@@ -652,7 +681,8 @@ public class ExecutionEngine : IExecutionEngine
                         var neverExistedLong = await _emergencyClose.TryEmergencyCloseWithRetryAsync(longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                         if (!neverExistedLong)
                         {
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                            position.LongFilledQuantity = longResult.FilledQuantity;
+                            _emergencyClose.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
@@ -661,7 +691,8 @@ public class ExecutionEngine : IExecutionEngine
                         var neverExistedShort = await _emergencyClose.TryEmergencyCloseWithRetryAsync(shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                         if (!neverExistedShort)
                         {
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                            position.ShortFilledQuantity = shortResult.FilledQuantity;
+                            _emergencyClose.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
@@ -671,7 +702,15 @@ public class ExecutionEngine : IExecutionEngine
                         concurrentNeverExisted = true;
                     }
 
-                    position.Status = concurrentNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    // When both effective fill quantities are zero, no position was ever live on-chain.
+                    // Use Failed regardless of whether emergency-close fired — EmergencyClosed is
+                    // reserved for positions where at least one leg had a real fill.
+                    var bothEffectivelyZero =
+                        (position.LongFilledQuantity ?? 0m) <= 0m &&
+                        (position.ShortFilledQuantity ?? 0m) <= 0m;
+                    position.Status = (concurrentNeverExisted || bothEffectivelyZero)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
 
@@ -723,7 +762,7 @@ public class ExecutionEngine : IExecutionEngine
                         longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                     if (!neverExistedLong)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                     }
                 }
                 else if (shortQty > 0m && longQty <= 0m)
@@ -732,12 +771,14 @@ public class ExecutionEngine : IExecutionEngine
                         shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                     if (!neverExistedShort)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                     }
                 }
 
-                position.Status = PositionStatus.EmergencyClosed;
-                position.CloseReason = CloseReason.EmergencyLegFailed;
+                position.Status = (longQty > 0m || shortQty > 0m) ? PositionStatus.EmergencyClosed : PositionStatus.Failed;
+                position.CloseReason = (longQty > 0m || shortQty > 0m)
+                    ? CloseReason.EmergencyLegFailed
+                    : CloseReason.None;
                 position.ClosedAt = DateTime.UtcNow;
                 _uow.Positions.Update(position);
                 _uow.Alerts.Add(new Alert

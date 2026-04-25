@@ -1,4 +1,5 @@
 using FundingRateArb.Domain.Enums;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace FundingRateArb.Application.DTOs;
 
@@ -43,6 +44,10 @@ public class PositionSummaryDto
     public DateTime? ConfirmedAtUtc { get; set; }
     public DateTime? ClosedAt { get; set; }
     public bool IsDryRun { get; set; }
+
+    /// <summary>True when this row represents a synthetic phantom-fee correction entry and should be excluded from PnL aggregates.</summary>
+    [BindNever]
+    public bool IsPhantomFeeBackfill { get; set; }
 
     /// <summary>Highest urgency level across all active warning conditions.</summary>
     public WarningLevel WarningLevel { get; set; } = WarningLevel.None;

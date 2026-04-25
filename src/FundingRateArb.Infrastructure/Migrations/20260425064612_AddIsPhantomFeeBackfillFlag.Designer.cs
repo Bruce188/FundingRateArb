@@ -4,6 +4,7 @@ using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260425064612_AddIsPhantomFeeBackfillFlag")]
+    partial class AddIsPhantomFeeBackfillFlag
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -300,13 +303,10 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.HasIndex("Status");
 
+                    b.HasIndex("UserId");
+
                     b.HasIndex("Status", "OpenConfirmedAt")
                         .HasDatabaseName("IX_ArbitragePositions_Status_OpenConfirmedAt");
-
-                    b.HasIndex("UserId", "Status")
-                        .HasDatabaseName("IX_ArbitragePositions_UserId_Status");
-
-                    SqlServerIndexBuilderExtensions.IncludeProperties(b.HasIndex("UserId", "Status"), new[] { "RealizedPnl", "IsPhantomFeeBackfill" });
 
                     b.ToTable("ArbitragePositions");
                 });

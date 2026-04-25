@@ -146,7 +146,7 @@ public class EmergencyCloseHandlerTests
         };
 
         // Act
-        EmergencyCloseHandler.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
+        _sut.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
 
         // Assert — Hyperliquid taker fee is 0.00045 (0.045%)
         var notional = 3000m * 0.1m; // 300
@@ -169,7 +169,7 @@ public class EmergencyCloseHandlerTests
         };
 
         // Act
-        EmergencyCloseHandler.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
+        _sut.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
 
         // Assert — all fee fields are 0 and RealizedPnl is 0
         position.EntryFeesUsdc.Should().Be(0m);
@@ -190,7 +190,7 @@ public class EmergencyCloseHandlerTests
         };
 
         // Act
-        EmergencyCloseHandler.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
+        _sut.SetEmergencyCloseFees(position, legResult, "Hyperliquid");
 
         // Assert — RealizedPnl = -(entry + exit)
         position.RealizedPnl.Should().Be(-(position.EntryFeesUsdc + position.ExitFeesUsdc));

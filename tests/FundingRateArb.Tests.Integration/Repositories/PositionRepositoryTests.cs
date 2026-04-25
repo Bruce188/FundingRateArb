@@ -675,5 +675,82 @@ public class PositionRepositoryTests : IDisposable
             "AsNoTracking entities must not be change-tracked");
     }
 
+    [Fact]
+    public async Task SumRealizedPnlExcludingPhantomAsync_ExcludesPhantomBackfillRows()
+    {
+        // Arrange: two normal closed rows (100 + 50 = 150) and one phantom row (200)
+        var userId = _user1.Id;
+
+        var normal1 = BuildPosition(userId, PositionStatus.Closed);
+        normal1.RealizedPnl = 100m;
+        normal1.IsPhantomFeeBackfill = false;
+
+        var normal2 = BuildPosition(userId, PositionStatus.Closed);
+        normal2.RealizedPnl = 50m;
+        normal2.IsPhantomFeeBackfill = false;
+
+        var phantom = BuildPosition(userId, PositionStatus.EmergencyClosed);
+        phantom.RealizedPnl = 200m;
+        phantom.IsPhantomFeeBackfill = true;
+
+        _fixture.UnitOfWork.Positions.Add(normal1);
+        _fixture.UnitOfWork.Positions.Add(normal2);
+        _fixture.UnitOfWork.Positions.Add(phantom);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var sum = await _fixture.UnitOfWork.Positions.SumRealizedPnlExcludingPhantomAsync(
+            userId,
+            PositionStatus.Closed,
+            PositionStatus.EmergencyClosed,
+            PositionStatus.Liquidated);
+
+        // Assert: only 100 + 50 = 150; the phantom row (200) must be excluded
+        sum.Should().Be(150m, "phantom-fee backfill rows must be excluded from the SQL sum");
+    }
+
+    [Fact]
+    public async Task SumRealizedPnlExcludingPhantomAsync_WithNoStatuses_ReturnsZero()
+    {
+        // Arrange: seed a closed position with PnL — it must not appear in the result because
+        // LINQ Contains over an empty params array returns false for every row.
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = 42m;
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — call with no status arguments; Contains([]) is always false
+        var sum = await _fixture.UnitOfWork.Positions.SumRealizedPnlExcludingPhantomAsync(_user1.Id);
+
+        // Assert: no statuses → no rows match → sum is 0
+        sum.Should().Be(0m, "LINQ Contains over an empty params array matches no rows");
+    }
+
+    [Fact]
+    public async Task SumRealizedPnlExcludingPhantomAsync_OtherUserPositionsNotIncluded()
+    {
+        // Arrange: user1 has one real closed row (100), user2 has another (999)
+        var pos1 = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos1.RealizedPnl = 100m;
+
+        var pos2 = BuildPosition(_user2.Id, PositionStatus.Closed);
+        pos2.RealizedPnl = 999m;
+
+        _fixture.UnitOfWork.Positions.Add(pos1);
+        _fixture.UnitOfWork.Positions.Add(pos2);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var sum = await _fixture.UnitOfWork.Positions.SumRealizedPnlExcludingPhantomAsync(
+            _user1.Id,
+            PositionStatus.Closed,
+            PositionStatus.EmergencyClosed,
+            PositionStatus.Liquidated);
+
+        // Assert: only user1's position is summed
+        sum.Should().Be(100m, "the sum must be scoped to the given userId");
+    }
+
     public void Dispose() => _fixture.Dispose();
 }
