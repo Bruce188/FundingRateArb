@@ -210,4 +210,95 @@ public class ExchangeControllerTests
         redirect.ActionName.Should().Be("Delete");
         _controller.TempData["Error"].Should().NotBeNull();
     }
+
+    [Fact]
+    public async Task Edit_PostWithFundingAccuracyFields_PersistsAllThree()
+    {
+        var exchange = new Exchange
+        {
+            Id = 1,
+            Name = "Lighter",
+            ApiBaseUrl = "https://api.lighter.xyz",
+            WsBaseUrl = "wss://ws.lighter.xyz",
+            FundingInterval = FundingInterval.Hourly,
+            IsActive = true,
+        };
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(1)).ReturnsAsync(exchange);
+
+        var model = new ExchangeEditViewModel
+        {
+            Id = 1,
+            Name = "Lighter",
+            ApiBaseUrl = "https://api.lighter.xyz",
+            WsBaseUrl = "wss://ws.lighter.xyz",
+            FundingInterval = FundingInterval.Hourly,
+            FundingIntervalHours = 1,
+            IsActive = true,
+            FundingRebateRate = 0.15m,
+            FundingTimingDeviationSeconds = 15,
+            FundingNotionalPriceType = FundingNotionalPriceType.MarkPrice,
+        };
+
+        var result = await _controller.Edit(1, model);
+
+        result.Should().BeOfType<RedirectToActionResult>();
+        exchange.FundingRebateRate.Should().Be(0.15m);
+        exchange.FundingTimingDeviationSeconds.Should().Be(15);
+        exchange.FundingNotionalPriceType.Should().Be(FundingNotionalPriceType.MarkPrice);
+    }
+
+    [Fact]
+    public async Task Edit_GetForExistingExchange_ProjectsAllThreeFields()
+    {
+        var exchange = new Exchange
+        {
+            Id = 2,
+            Name = "Lighter",
+            ApiBaseUrl = "https://api.lighter.xyz",
+            WsBaseUrl = "wss://ws.lighter.xyz",
+            FundingInterval = FundingInterval.Hourly,
+            IsActive = true,
+            FundingRebateRate = 0.10m,
+            FundingTimingDeviationSeconds = 20,
+            FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
+        };
+        _mockExchangeRepo.Setup(r => r.GetByIdAsync(2)).ReturnsAsync(exchange);
+
+        var result = await _controller.Edit(2);
+
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<ExchangeEditViewModel>().Subject;
+        model.FundingRebateRate.Should().Be(0.10m);
+        model.FundingTimingDeviationSeconds.Should().Be(20);
+        model.FundingNotionalPriceType.Should().Be(FundingNotionalPriceType.OraclePrice);
+    }
+
+    [Fact]
+    public async Task Create_PostWithFundingAccuracyFields_PersistsAllThree()
+    {
+        Exchange? capturedExchange = null;
+        _mockExchangeRepo
+            .Setup(r => r.Add(It.IsAny<Exchange>()))
+            .Callback<Exchange>(e => capturedExchange = e);
+
+        var model = new ExchangeCreateViewModel
+        {
+            Name = "Lighter",
+            ApiBaseUrl = "https://api.lighter.xyz",
+            WsBaseUrl = "wss://ws.lighter.xyz",
+            FundingInterval = FundingInterval.Hourly,
+            FundingIntervalHours = 1,
+            FundingRebateRate = 0.15m,
+            FundingTimingDeviationSeconds = 10,
+            FundingNotionalPriceType = FundingNotionalPriceType.OraclePrice,
+        };
+
+        var result = await _controller.Create(model);
+
+        result.Should().BeOfType<RedirectToActionResult>();
+        capturedExchange.Should().NotBeNull();
+        capturedExchange!.FundingRebateRate.Should().Be(0.15m);
+        capturedExchange.FundingTimingDeviationSeconds.Should().Be(10);
+        capturedExchange.FundingNotionalPriceType.Should().Be(FundingNotionalPriceType.OraclePrice);
+    }
 }

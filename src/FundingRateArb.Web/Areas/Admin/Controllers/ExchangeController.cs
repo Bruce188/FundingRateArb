@@ -65,7 +65,10 @@ public class ExchangeController : Controller
             FundingIntervalHours = model.FundingIntervalHours ?? 1,
             SupportsSubAccounts = model.SupportsSubAccounts,
             Description = model.Description,
-            IsActive = true
+            IsActive = true,
+            FundingRebateRate = model.FundingRebateRate,
+            FundingTimingDeviationSeconds = model.FundingTimingDeviationSeconds,
+            FundingNotionalPriceType = model.FundingNotionalPriceType
         };
 
         _uow.Exchanges.Add(exchange);
@@ -98,6 +101,9 @@ public class ExchangeController : Controller
             SupportsSubAccounts = exchange.SupportsSubAccounts,
             IsActive = exchange.IsActive,
             Description = exchange.Description,
+            FundingRebateRate = exchange.FundingRebateRate,
+            FundingTimingDeviationSeconds = exchange.FundingTimingDeviationSeconds,
+            FundingNotionalPriceType = exchange.FundingNotionalPriceType,
             FundingIntervalOptions = GetFundingIntervalOptions()
         };
 
@@ -143,6 +149,9 @@ public class ExchangeController : Controller
         exchange.SupportsSubAccounts = model.SupportsSubAccounts;
         exchange.IsActive = model.IsActive;
         exchange.Description = model.Description;
+        exchange.FundingRebateRate = model.FundingRebateRate;
+        exchange.FundingTimingDeviationSeconds = model.FundingTimingDeviationSeconds;
+        exchange.FundingNotionalPriceType = model.FundingNotionalPriceType;
 
         _uow.Exchanges.Update(exchange);
         await _uow.SaveAsync();

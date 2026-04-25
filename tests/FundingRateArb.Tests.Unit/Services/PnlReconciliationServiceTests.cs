@@ -414,6 +414,32 @@ public class PnlReconciliationServiceTests
         _capturedAlerts.Should().BeEmpty();
     }
 
+    // ── Lighter rebate no-double-apply contract ──
+
+    [Fact]
+    public async Task ReconcileAsync_LighterPayingLegWithRebate_DoesNotDoubleApply()
+    {
+        // Lighter's API returns post-rebate amounts; the connector sums them blindly.
+        // The reconciliation pipeline must store the raw sum as-is — it must NOT apply
+        // another * (1 - rebateRate) factor that would produce -127.5m instead of -150m.
+        var position = CreatePosition(realizedPnl: -0.10m);
+
+        // Lighter leg (long, paying): connector returns post-rebate sum of [-100m, -50m] = -150m
+        SetupConnectorPnl(_mockLongConnector, 0m);
+        SetupConnectorFunding(_mockLongConnector, -150m);
+
+        // Counter-party leg (short): reports no funding
+        SetupConnectorPnl(_mockShortConnector, 0m);
+        SetupConnectorFunding(_mockShortConnector, 0m);
+
+        await _sut.ReconcileAsync(
+            position, TestAsset.Symbol, _mockLongConnector.Object, _mockShortConnector.Object);
+
+        // Must be exactly -150m (raw sum), NOT -127.5m (which would be -150m * 0.85)
+        position.ExchangeReportedFunding.Should().Be(-150m,
+            "reconciliation must not double-apply the Lighter rebate — the connector already returns post-rebate amounts");
+    }
+
     // ── F6: Full-divergence reachable once Lighter reconciliation lands ──
 
     [Fact]
