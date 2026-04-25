@@ -134,6 +134,25 @@
             <div class="card-body" id="live-margin-card" data-margin-url="/api/positions/@pos.Id/live-margin">
                 @if (pos.Status == PositionStatus.Open)
                 {
+                    @if (pos.MaxSafeMovePct.HasValue)
+                    {
+                        <dl class="row mb-2">
+                            <dt class="col-sm-6 fw-bold">Max Safe Move</dt>
+                            <dd class="col-sm-6 fw-bold @(pos.MaxSafeMovePct < 5m ? "text-danger" : pos.MaxSafeMovePct < 10m ? "text-warning" : "")">
+                                @pos.MaxSafeMovePct.Value.ToString("F1")%
+                            </dd>
+                            @if (pos.MaxSafeMovePctLong.HasValue)
+                            {
+                                <dt class="col-sm-6 text-muted small">Long Safe Move</dt>
+                                <dd class="col-sm-6 text-muted small">@pos.MaxSafeMovePctLong.Value.ToString("F1")%</dd>
+                            }
+                            @if (pos.MaxSafeMovePctShort.HasValue)
+                            {
+                                <dt class="col-sm-6 text-muted small">Short Safe Move</dt>
+                                <dd class="col-sm-6 text-muted small">@pos.MaxSafeMovePctShort.Value.ToString("F1")%</dd>
+                            }
+                        </dl>
+                    }
                     <div class="text-center py-3" id="margin-spinner">
                         <div class="spinner-border text-primary" role="status">
                             <span class="visually-hidden">Loading...</span>
@@ -144,9 +163,26 @@
                 }
                 else
                 {
-                    @if (pos.LongMarginUtilizationPct.HasValue || pos.ShortMarginUtilizationPct.HasValue)
+                    @if (pos.MaxSafeMovePct.HasValue || pos.LongMarginUtilizationPct.HasValue || pos.ShortMarginUtilizationPct.HasValue)
                     {
                         <dl class="row mb-0">
+                            @if (pos.MaxSafeMovePct.HasValue)
+                            {
+                                <dt class="col-sm-6 fw-bold">Max Safe Move</dt>
+                                <dd class="col-sm-6 fw-bold @(pos.MaxSafeMovePct < 5m ? "text-danger" : pos.MaxSafeMovePct < 10m ? "text-warning" : "")">
+                                    @pos.MaxSafeMovePct.Value.ToString("F1")%
+                                </dd>
+                            }
+                            @if (pos.MaxSafeMovePctLong.HasValue)
+                            {
+                                <dt class="col-sm-6 text-muted small">Long Safe Move</dt>
+                                <dd class="col-sm-6 text-muted small">@pos.MaxSafeMovePctLong.Value.ToString("F1")%</dd>
+                            }
+                            @if (pos.MaxSafeMovePctShort.HasValue)
+                            {
+                                <dt class="col-sm-6 text-muted small">Short Safe Move</dt>
+                                <dd class="col-sm-6 text-muted small">@pos.MaxSafeMovePctShort.Value.ToString("F1")%</dd>
+                            }
                             @if (pos.LongMarginUtilizationPct.HasValue)
                             {
                                 <dt class="col-sm-6">Long Margin Util.</dt>

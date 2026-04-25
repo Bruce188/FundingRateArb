@@ -8,6 +8,7 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -4291,5 +4292,131 @@ public class PositionHealthMonitorTests
                 al.Message != null && al.Message.Contains("ReconciliationDrift"))),
             Times.Once,
             "a Warning alert must be raised when a ReconciliationDrift row has non-null close legs");
+    }
+
+    // ── Task 1.2: ComputeLiquidationDistance — API price path + missing-price warning ──
+
+    [Fact]
+    public void ComputeLiquidationDistance_BothApiPricesPresent_UsesApiPricesAndReturnsCrossLegMinimum()
+    {
+        // long entry=3000, lev=5: formula longLiq = 2400. API overrides to 2600.
+        // short entry=3001, lev=5: formula shortLiq = 3601.2. API overrides to 3500.
+        // longRange = 3000 - 2600 = 400, currentLongMark=2900 → longDist = (2900-2600)/400 = 0.75
+        // shortRange = 3500 - 3001 = 499, currentShortMark=3100 → shortDist = (3500-3100)/499 ≈ 0.8016
+        // result = Math.Min(0.75, 0.8016) = 0.75
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        var mockLogger = new Mock<ILogger<PositionHealthMonitor>>();
+
+        var distance = PositionHealthMonitor.ComputeLiquidationDistance(
+            pos,
+            currentLongMark: 2900m,
+            currentShortMark: 3100m,
+            apiLongLiqPrice: 2600m,
+            apiShortLiqPrice: 3500m,
+            logger: mockLogger.Object);
+
+        // API prices must be used: verify by checking LiquidationPrice mutations
+        pos.LongLiquidationPrice.Should().Be(2600m, "API long liq price should be used when provided");
+        pos.ShortLiquidationPrice.Should().Be(3500m, "API short liq price should be used when provided");
+        // Cross-leg minimum: 0.75 < ~0.80
+        distance.Should().BeApproximately(0.75m, 0.001m, "result must be Math.Min of the two API-derived distances");
+        // No warning logged — both API prices were present and positive
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never,
+            "no warning should be logged when both API prices are present");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_LongApiPriceMissing_FallsBackToFormulaForLongLeg_AndLogsWarning()
+    {
+        // long entry=3000, lev=5: formula longLiq = 2400 (API absent → formula path)
+        // short entry=3001: API shortLiq = 3500
+        // Expect: LongLiquidationPrice = 2400 (formula), ShortLiquidationPrice = 3500 (API)
+        // Also expect: exactly one LogWarning for the long leg, zero for short
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        var mockLogger = new Mock<ILogger<PositionHealthMonitor>>();
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos,
+            currentLongMark: 2900m,
+            currentShortMark: 3100m,
+            apiLongLiqPrice: null,
+            apiShortLiqPrice: 3500m,
+            logger: mockLogger.Object);
+
+        // Long leg falls back to formula
+        pos.LongLiquidationPrice.Should().Be(2400m, "formula must be used when API long liq price is null");
+        // Short leg uses API
+        pos.ShortLiquidationPrice.Should().Be(3500m, "API short liq price should be used");
+        // Warning logged for long leg
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("long leg")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once,
+            "a LogWarning must be emitted for the long leg when apiLongLiqPrice is null");
+        // No warning for short leg
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("short leg")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never,
+            "no LogWarning should be emitted for the short leg when apiShortLiqPrice is present");
+    }
+
+    [Fact]
+    public void ComputeLiquidationDistance_ShortApiPriceMissing_FallsBackToFormulaForShortLeg_AndLogsWarning()
+    {
+        // long entry=3000: API longLiq = 2600
+        // short entry=3001, lev=5: formula shortLiq = 3601.2 (API absent → formula path)
+        // Expect: LongLiquidationPrice = 2600 (API), ShortLiquidationPrice = 3601.2 (formula)
+        // Also expect: exactly one LogWarning for the short leg, zero for long
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        var mockLogger = new Mock<ILogger<PositionHealthMonitor>>();
+
+        PositionHealthMonitor.ComputeLiquidationDistance(
+            pos,
+            currentLongMark: 2900m,
+            currentShortMark: 3100m,
+            apiLongLiqPrice: 2600m,
+            apiShortLiqPrice: null,
+            logger: mockLogger.Object);
+
+        // Long leg uses API
+        pos.LongLiquidationPrice.Should().Be(2600m, "API long liq price should be used");
+        // Short leg falls back to formula
+        pos.ShortLiquidationPrice.Should().Be(3601.2m, "formula must be used when API short liq price is null");
+        // No warning for long leg
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("long leg")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never,
+            "no LogWarning should be emitted for the long leg when apiLongLiqPrice is present");
+        // Warning logged for short leg
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) => state.ToString()!.Contains("short leg")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once,
+            "a LogWarning must be emitted for the short leg when apiShortLiqPrice is null");
     }
 }

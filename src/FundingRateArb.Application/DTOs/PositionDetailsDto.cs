@@ -54,5 +54,14 @@ public class PositionDetailsDto
     public decimal? ShortMarginUtilizationPct { get; set; }
     public decimal? MaxSafeMovePctLong { get; set; }
     public decimal? MaxSafeMovePctShort { get; set; }
+
+    /// <summary>
+    /// Cross-leg minimum of MaxSafeMovePctLong and MaxSafeMovePctShort.
+    /// Null when either leg's value is unavailable.
+    /// The cross-leg minimum is the operationally meaningful number because
+    /// the bot can only hold the position as long as BOTH legs survive.
+    /// </summary>
+    public decimal? MaxSafeMovePct { get; set; }
+
     public decimal? CyclesUntilLiquidation { get; set; }
 }
