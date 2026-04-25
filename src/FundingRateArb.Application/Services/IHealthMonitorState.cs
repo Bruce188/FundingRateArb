@@ -15,5 +15,10 @@ public interface IHealthMonitorState
     // "no prior observation" (first check after service start or reopen).
     ConcurrentDictionary<int, decimal> PrevLiquidationDistance { get; }
 
+    // Consecutive cycles where divergence exceeded the alert threshold, per position.
+    // Used by the debounce gate: alert fires only when count >= DivergenceAlertConfirmationCycles.
+    // Reset to 0 on a clean cycle or immediately after the alert fires.
+    ConcurrentDictionary<int, int> DivergenceBreachCycles { get; }
+
     bool ShouldCheckStablecoin(int moduloN);
 }

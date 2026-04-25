@@ -82,6 +82,18 @@ public class PortfolioRebalancer : IPortfolioRebalancer
 
                 if (improvement > config.RebalanceMinImprovement * pos.SizeUsdc)
                 {
+                    // Divergence exit cost gate: suppress recommendation when cost to exit
+                    // (due to mark-price divergence) exceeds the new opportunity's edge over the horizon.
+                    var divergenceExitCost = (pos.CurrentDivergencePct ?? 0m) / 100m * pos.SizeUsdc;
+                    var newEdgeOverHorizon = opp.NetYieldPerHour * config.RotationDivergenceHorizonHours * pos.SizeUsdc;
+                    if (divergenceExitCost > newEdgeOverHorizon)
+                    {
+                        _logger?.LogDebug(
+                            "Rebalance suppressed for position #{PositionId}: divergence exit cost {Cost:F4} exceeds new edge {Edge:F4} over {Horizon}h",
+                            pos.Id, divergenceExitCost, newEdgeOverHorizon, config.RotationDivergenceHorizonHours);
+                        continue;
+                    }
+
                     candidates.Add((new RebalanceRecommendationDto(
                         pos.Id,
                         pos.Asset?.Symbol ?? $"#{pos.AssetId}",

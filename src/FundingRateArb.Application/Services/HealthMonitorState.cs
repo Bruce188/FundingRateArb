@@ -10,6 +10,7 @@ public class HealthMonitorState : IHealthMonitorState
     public ConcurrentDictionary<int, int> PriceFetchFailures { get; } = new();
     public ConcurrentDictionary<int, int> ZeroPriceCheckCounts { get; } = new();
     public ConcurrentDictionary<int, decimal> PrevLiquidationDistance { get; } = new();
+    public ConcurrentDictionary<int, int> DivergenceBreachCycles { get; } = new();
 
     public bool ShouldCheckStablecoin(int moduloN)
         => moduloN > 0 && unchecked((uint)Interlocked.Increment(ref _stablecoinCheckCycle)) % (uint)moduloN == 0;

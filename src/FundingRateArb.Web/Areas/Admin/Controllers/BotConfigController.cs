@@ -74,6 +74,9 @@ public class BotConfigController : Controller
             EmergencyCloseSpreadThreshold = config.EmergencyCloseSpreadThreshold,
             MinEdgeMultiplier = config.MinEdgeMultiplier,
             DivergenceAlertMultiplier = config.DivergenceAlertMultiplier,
+            DivergenceAlertConfirmationCycles = config.DivergenceAlertConfirmationCycles,
+            RotationDivergenceHorizonHours = config.RotationDivergenceHorizonHours,
+            PreferCloseOnDivergenceNarrowing = config.PreferCloseOnDivergenceNarrowing,
             SlippageBufferBps = config.SlippageBufferBps,
             StablecoinAlertThresholdPct = config.StablecoinAlertThresholdPct,
             StablecoinCriticalThresholdPct = config.StablecoinCriticalThresholdPct,
@@ -152,6 +155,9 @@ public class BotConfigController : Controller
             EmergencyCloseSpreadThreshold = model.EmergencyCloseSpreadThreshold!.Value,
             MinEdgeMultiplier = model.MinEdgeMultiplier!.Value,
             DivergenceAlertMultiplier = model.DivergenceAlertMultiplier!.Value,
+            DivergenceAlertConfirmationCycles = model.DivergenceAlertConfirmationCycles!.Value,
+            RotationDivergenceHorizonHours = model.RotationDivergenceHorizonHours!.Value,
+            PreferCloseOnDivergenceNarrowing = model.PreferCloseOnDivergenceNarrowing,
             SlippageBufferBps = model.SlippageBufferBps!.Value,
             StablecoinAlertThresholdPct = model.StablecoinAlertThresholdPct!.Value,
             StablecoinCriticalThresholdPct = model.StablecoinCriticalThresholdPct!.Value,
@@ -225,6 +231,9 @@ public class BotConfigController : Controller
         config.EmergencyCloseSpreadThreshold = candidate.EmergencyCloseSpreadThreshold;
         config.MinEdgeMultiplier = candidate.MinEdgeMultiplier;
         config.DivergenceAlertMultiplier = candidate.DivergenceAlertMultiplier;
+        config.DivergenceAlertConfirmationCycles = candidate.DivergenceAlertConfirmationCycles;
+        config.RotationDivergenceHorizonHours = candidate.RotationDivergenceHorizonHours;
+        config.PreferCloseOnDivergenceNarrowing = candidate.PreferCloseOnDivergenceNarrowing;
         config.SlippageBufferBps = candidate.SlippageBufferBps;
         config.StablecoinAlertThresholdPct = candidate.StablecoinAlertThresholdPct;
         config.StablecoinCriticalThresholdPct = candidate.StablecoinCriticalThresholdPct;

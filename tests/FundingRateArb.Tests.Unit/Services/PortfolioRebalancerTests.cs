@@ -302,4 +302,31 @@ public class PortfolioRebalancerTests
         // Should NOT recommend rebalance because the raw NetYieldPerHour is used, not BoostedNetYieldPerHour
         result.Should().BeEmpty("rebalancer must use raw NetYieldPerHour, not BoostedNetYieldPerHour");
     }
+
+    // ── Divergence exit cost gate (Task 2.2) ─────────────────────────────────
+
+    [Fact]
+    public async Task EvaluateAsync_DivergenceExitCostExceedsNewEdge_SuppressesRecommendation()
+    {
+        // Position: divergence=2%, size=10_000 → exit cost = 200
+        // Opportunity: netYield=0.001/hr, horizon=2h → edge = 0.001 * 2 * 10_000 = 20
+        // 200 > 20 → suppressed
+        var pos = MakePosition(sizeUsdc: 10_000m, currentSpread: 0.00001m);
+        pos.CurrentDivergencePct = 2.0m;
+
+        var opp = MakeOpportunity(netYield: 0.001m);
+
+        var config = new BotConfiguration
+        {
+            RebalanceEnabled = true,
+            RebalanceMinImprovement = 0.0002m,
+            MaxHoldTimeHours = 72,
+            RotationDivergenceHorizonHours = 2.0m,
+        };
+
+        var result = await _sut.EvaluateAsync([pos], [opp], config);
+
+        result.Should().BeEmpty(
+            "divergence exit cost 200 exceeds new edge 20 — rebalance should be suppressed");
+    }
 }

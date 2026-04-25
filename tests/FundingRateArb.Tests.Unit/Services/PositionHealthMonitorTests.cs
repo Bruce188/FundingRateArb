@@ -4419,4 +4419,281 @@ public class PositionHealthMonitorTests
             Times.Once,
             "a LogWarning must be emitted for the short leg when apiShortLiqPrice is null");
     }
+
+    // ── Debounce + PrevDivergencePct + Soft Close (Task 2.1) ─────────────────
+
+    [Fact]
+    public async Task DivergenceAlert_OneCycleAboveThreshold_DoesNotFire_WhenConfirmationCyclesIs3()
+    {
+        // N=3: single breach must NOT fire the alert
+        var state = new HealthMonitorState();
+        var sut = new PositionHealthMonitor(_mockUow.Object,
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), state,
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MaxLeverageCap = 50,
+            AdaptiveHoldEnabled = true,
+            DivergenceAlertConfirmationCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        await sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.SpreadWarning && al.Message.Contains("divergence"))), Times.Never,
+            "single breach with N=3 must not fire the alert");
+    }
+
+    [Fact]
+    public async Task DivergenceAlert_ThreeConsecutiveBreaches_FiresAlert_WhenConfirmationCyclesIs3()
+    {
+        // N=3: three consecutive breaches → alert fires on the 3rd
+        var state = new HealthMonitorState();
+        var sut = new PositionHealthMonitor(_mockUow.Object,
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), state,
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MaxLeverageCap = 50,
+            AdaptiveHoldEnabled = true,
+            DivergenceAlertConfirmationCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        await sut.CheckAndActAsync();
+        await sut.CheckAndActAsync();
+        await sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.SpreadWarning && al.Message.Contains("divergence"))), Times.Once,
+            "three consecutive breaches with N=3 must fire the alert exactly once");
+    }
+
+    [Fact]
+    public async Task DivergenceAlert_BreachThenCleanCycle_ResetsCounter()
+    {
+        // 2 breaches, 1 clean, 1 breach → counter resets on clean → alert must not fire
+        var state = new HealthMonitorState();
+        var sut = new PositionHealthMonitor(_mockUow.Object,
+            _mockFactory.Object, new Mock<IMarketDataCache>().Object, _mockReferencePriceProvider.Object,
+            _mockExecutionEngine.Object, Mock.Of<ILeverageTierProvider>(), state,
+            NullLogger<PositionHealthMonitor>.Instance);
+
+        var config = new BotConfiguration
+        {
+            IsEnabled = true,
+            CloseThreshold = -0.00005m,
+            AlertThreshold = 0.0001m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MaxLeverageCap = 50,
+            AdaptiveHoldEnabled = true,
+            DivergenceAlertConfirmationCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+
+        // 2 breach cycles
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+        await sut.CheckAndActAsync();
+        await sut.CheckAndActAsync();
+
+        // 1 clean cycle (marks close together → divergence below threshold)
+        SetupMarkPrices(longMark: 3000m, shortMark: 3001m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000.5m);
+        await sut.CheckAndActAsync();
+
+        // 1 more breach — counter was reset so total is 1, not 3 → no alert
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+        await sut.CheckAndActAsync();
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.SpreadWarning && al.Message.Contains("divergence"))), Times.Never,
+            "counter resets on clean cycle so 4th call (1 post-clean breach) must not fire");
+    }
+
+    [Fact]
+    public async Task PrevDivergencePct_IsPopulatedAcrossCycles()
+    {
+        var pos = MakeOpenPosition(longEntry: 3000m, shortEntry: 3001m);
+        _mockPositions.Setup(p => p.GetOpenTrackedAsync()).ReturnsAsync([pos]);
+        SetupLatestRates(longRate: 0.0001m, shortRate: 0.0006m);
+
+        // Cycle 1: divergence ≈ 3.33%
+        SetupMarkPrices(longMark: 2950m, shortMark: 3050m);
+        _mockReferencePriceProvider.Setup(r => r.GetUnifiedPrice("ETH", "Hyperliquid", "Lighter"))
+            .Returns(3000m);
+        await _sut.CheckAndActAsync();
+
+        var afterCycle1 = pos.CurrentDivergencePct;
+        afterCycle1.Should().NotBeNull("cycle 1 must set CurrentDivergencePct");
+
+        // Cycle 2: wider divergence
+        SetupMarkPrices(longMark: 2900m, shortMark: 3100m);
+        await _sut.CheckAndActAsync();
+
+        pos.PrevDivergencePct.Should().Be(afterCycle1,
+            "PrevDivergencePct after cycle 2 must equal cycle 1's CurrentDivergencePct");
+        pos.CurrentDivergencePct.Should().NotBe(afterCycle1,
+            "CurrentDivergencePct must have updated to the cycle 2 value");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_SpreadCollapsedAndNarrowing_BypassesMinHoldTime()
+    {
+        // spread < CloseThreshold, divergence narrowing, flag on, age < MinHoldTime → SpreadCollapsed
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            MarginUsdc = 100m,
+            SizeUsdc = 100m,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            CurrentDivergencePct = 1.0m, // narrowing: was 2.0
+            PrevDivergencePct = 2.0m,
+            AccumulatedFunding = 0m,
+        };
+
+        var config = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 4,
+            StopLossPct = 0.10m,
+            EmergencyCloseSpreadThreshold = -0.001m,
+            PreferCloseOnDivergenceNarrowing = true,
+            AdaptiveHoldEnabled = false,
+        };
+
+        // hoursOpen = 1 (below MinHoldTimeHours = 4)
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config,
+            unrealizedPnl: 0m,
+            hoursOpen: 1m,
+            spread: -0.001m, // below CloseThreshold
+            minLiquidationDistance: null,
+            negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.033m);
+
+        result.Should().Be(CloseReason.SpreadCollapsed,
+            "narrowing + spread collapsed + flag on should bypass MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_SpreadCollapsedNotNarrowing_RespectsMinHoldTime()
+    {
+        // divergence widening → normal MinHoldTime gate applies
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            MarginUsdc = 100m,
+            SizeUsdc = 100m,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            CurrentDivergencePct = 2.0m, // widening: was 1.0
+            PrevDivergencePct = 1.0m,
+            AccumulatedFunding = 0m,
+        };
+
+        var config = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 4,
+            StopLossPct = 0.10m,
+            EmergencyCloseSpreadThreshold = -0.001m,
+            PreferCloseOnDivergenceNarrowing = true,
+            AdaptiveHoldEnabled = false,
+        };
+
+        // hoursOpen = 1 (below MinHoldTimeHours = 4), but divergence is widening
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config,
+            unrealizedPnl: 0m,
+            hoursOpen: 1m,
+            spread: -0.001m,
+            minLiquidationDistance: null,
+            negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.033m);
+
+        result.Should().BeNull(
+            "widening divergence should NOT bypass MinHoldTimeHours");
+    }
+
+    [Fact]
+    public void DetermineCloseReason_PreferFlagOff_RespectsMinHoldTime()
+    {
+        // narrowing divergence but flag is off → MinHoldTime respected
+        var pos = new ArbitragePosition
+        {
+            Id = 1,
+            MarginUsdc = 100m,
+            SizeUsdc = 100m,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3001m,
+            CurrentDivergencePct = 1.0m, // narrowing
+            PrevDivergencePct = 2.0m,
+            AccumulatedFunding = 0m,
+        };
+
+        var config = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 4,
+            StopLossPct = 0.10m,
+            EmergencyCloseSpreadThreshold = -0.001m,
+            PreferCloseOnDivergenceNarrowing = false, // flag OFF
+            AdaptiveHoldEnabled = false,
+        };
+
+        var result = PositionHealthMonitor.DetermineCloseReason(
+            pos, config,
+            unrealizedPnl: 0m,
+            hoursOpen: 1m,
+            spread: -0.001m,
+            minLiquidationDistance: null,
+            negativeFundingCycles: 0,
+            entrySpreadCostPct: 0.033m);
+
+        result.Should().BeNull(
+            "flag off → soft close bypass must not apply even when divergence narrows");
+    }
 }

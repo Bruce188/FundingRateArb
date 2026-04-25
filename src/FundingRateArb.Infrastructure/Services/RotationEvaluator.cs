@@ -71,6 +71,18 @@ public class RotationEvaluator : IRotationEvaluator
             return null;
         }
 
+        // Divergence exit cost gate: suppress rotation when the cost to exit the worst position
+        // (due to mark-price divergence) exceeds the new opportunity's edge over the horizon.
+        var divergenceExitCost = (worstPosition.CurrentDivergencePct ?? 0m) / 100m * worstPosition.SizeUsdc;
+        var newEdgeOverHorizon = bestOpportunity.NetYieldPerHour * globalConfig.RotationDivergenceHorizonHours * worstPosition.SizeUsdc;
+        if (divergenceExitCost > newEdgeOverHorizon)
+        {
+            _logger.LogDebug(
+                "Rotation suppressed: divergence exit cost {Cost:F4} exceeds new edge {Edge:F4} over {Horizon}h",
+                divergenceExitCost, newEdgeOverHorizon, globalConfig.RotationDivergenceHorizonHours);
+            return null;
+        }
+
         // Check hold time (with CloseThreshold exception)
         var minutesOpen = (DateTime.UtcNow - worstPosition.OpenedAt).TotalMinutes;
 

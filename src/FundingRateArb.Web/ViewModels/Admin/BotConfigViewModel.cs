@@ -138,6 +138,15 @@ public class BotConfigViewModel
     [Required, Range(0.5, 10.0), Display(Name = "Divergence Alert Multiplier")]
     public decimal? DivergenceAlertMultiplier { get; set; } = 2.0m;
 
+    [Required, Range(1, 20), Display(Name = "Divergence Alert Confirmation Cycles")]
+    public int? DivergenceAlertConfirmationCycles { get; set; } = 1;
+
+    [Required, Range(0.25, 24.0), Display(Name = "Rotation Divergence Horizon (hours)")]
+    public decimal? RotationDivergenceHorizonHours { get; set; } = 2.0m;
+
+    [Display(Name = "Prefer Close on Divergence Narrowing")]
+    public bool PreferCloseOnDivergenceNarrowing { get; set; } = true;
+
     [Required, Range(0, 50), Display(Name = "Slippage Buffer (bps)")]
     public int? SlippageBufferBps { get; set; } = 5;
 
