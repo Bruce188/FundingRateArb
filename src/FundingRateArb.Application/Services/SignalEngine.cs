@@ -39,6 +39,7 @@ public class SignalEngine : ISignalEngine
     private readonly ISignalEngineMetrics? _metrics;
     private readonly IMemoryCache? _opportunityCache;
     private readonly IBalanceAggregator? _balanceAggregator;
+    private readonly ICapitalProvider? _capitalProvider;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -50,7 +51,8 @@ public class SignalEngine : ISignalEngine
         ILogger<SignalEngine>? logger = null,
         ISignalEngineMetrics? metrics = null,
         IMemoryCache? opportunityCache = null,
-        IBalanceAggregator? balanceAggregator = null)
+        IBalanceAggregator? balanceAggregator = null,
+        ICapitalProvider? capitalProvider = null)
     {
         _uow = uow;
         _cache = cache;
@@ -62,6 +64,7 @@ public class SignalEngine : ISignalEngine
         _metrics = metrics;
         _opportunityCache = opportunityCache;
         _balanceAggregator = balanceAggregator;
+        _capitalProvider = capitalProvider;
     }
 
     /// <summary>
@@ -162,30 +165,46 @@ public class SignalEngine : ISignalEngine
 
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
 
-        var liveCapitalUsdc = config.TotalCapitalUsdc;
-        if (_balanceAggregator is not null)
+        // Resolve the capital amount to evaluate against ONCE per pipeline invocation.
+        // ICapitalProvider (30 s cache) is preferred; when absent, the direct
+        // IBalanceAggregator path (injected by tests or older callers) runs as a fallback;
+        // when that is also absent, the static config field is used so unit tests that
+        // supply neither dependency keep working.
+        decimal evaluatedCapital;
+        if (_capitalProvider is not null)
         {
-            var userIds = await _uow.UserConfigurations.GetAllEnabledUserIdsAsync();
-            var allBalances = new List<ExchangeBalanceDto>();
-            foreach (var uid in userIds)
+            evaluatedCapital = await _capitalProvider.GetEvaluatedCapitalUsdcAsync(ct);
+        }
+        else
+        {
+#pragma warning disable CS0618
+            var liveCapitalUsdc = config.TotalCapitalUsdc;
+#pragma warning restore CS0618
+            if (_balanceAggregator is not null)
             {
-                try
+                var userIds = await _uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+                var allBalances = new List<ExchangeBalanceDto>();
+                foreach (var uid in userIds)
                 {
-                    var snap = await _balanceAggregator.GetBalanceSnapshotAsync(uid, ct);
-                    allBalances.AddRange(snap.Balances);
+                    try
+                    {
+                        var snap = await _balanceAggregator.GetBalanceSnapshotAsync(uid, ct);
+                        allBalances.AddRange(snap.Balances);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger?.LogWarning(ex, "Failed to fetch balance snapshot for user {UserId}", uid);
+                    }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                if (allBalances.Count > 0)
                 {
-                    _logger?.LogWarning(ex, "Failed to fetch balance snapshot for user {UserId}", uid);
+                    liveCapitalUsdc = allBalances.Sum(dto =>
+                        dto.IsUnavailable ? 0m :
+                        dto.IsFallbackEligible ? dto.LastKnownAvailableUsdc!.Value :
+                        dto.AvailableUsdc);
                 }
             }
-            if (allBalances.Count > 0)
-            {
-                liveCapitalUsdc = allBalances.Sum(dto =>
-                    dto.IsUnavailable ? 0m :
-                    dto.IsFallbackEligible ? dto.LastKnownAvailableUsdc!.Value :
-                    dto.AvailableUsdc);
-            }
+            evaluatedCapital = liveCapitalUsdc;
         }
 
         var diagnostics = new PipelineDiagnosticsDto
@@ -193,7 +212,8 @@ public class SignalEngine : ISignalEngine
             TotalRatesLoaded = rates.Count,
             StalenessMinutes = Math.Max(config.RateStalenessMinutes, 1),
             MinVolumeThreshold = config.MinVolume24hUsdc,
-            OpenThreshold = config.OpenThreshold
+            OpenThreshold = config.OpenThreshold,
+            EvaluatedCapitalUsdc = evaluatedCapital
         };
 
         // H3: Filter out stale rates (guard against zero — would filter everything)
@@ -421,7 +441,7 @@ public class SignalEngine : ISignalEngine
                     if (_tierProvider is not null)
                     {
                         var cappedLeverage = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
-                        var refNotional = liveCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverage;
+                        var refNotional = evaluatedCapital * config.MaxCapitalPerPosition * cappedLeverage;
                         var longMaxLev = _tierProvider.GetEffectiveMaxLeverage(longR.Exchange.Name, symbol!, refNotional);
                         var shortMaxLev = _tierProvider.GetEffectiveMaxLeverage(shortR.Exchange.Name, symbol!, refNotional);
                         var tierMax = Math.Min(longMaxLev, shortMaxLev);
@@ -482,7 +502,7 @@ public class SignalEngine : ISignalEngine
                     if (_symbolConstraintsProvider is not null && HasKnownSymbolCap(longR.Exchange.Name, shortR.Exchange.Name))
                     {
                         var cappedLeverageForCap = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
-                        var sizedNotional = liveCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;
+                        var sizedNotional = evaluatedCapital * config.MaxCapitalPerPosition * cappedLeverageForCap;
                         var longMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
                             longR.Exchange.Name, symbol!, ct);
                         var shortMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
