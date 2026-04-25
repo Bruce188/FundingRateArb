@@ -48,6 +48,32 @@ public class ArbitrageOpportunityDto
 
     // Leverage-adjusted metrics (populated when tier data is available)
     public int? EffectiveLeverage { get; set; }
+
+    /// <summary>
+    /// Decimal yield per funding cycle: <c>net × effectiveLeverage × cycleHours</c>.
+    /// cycleHours = max(long leg interval, short leg interval), floored at 1.
+    /// Use <see cref="CyclesPerYear"/> to annualise: <c>ReturnOnCapitalPerCycle × CyclesPerYear</c>.
+    /// </summary>
+    public decimal? ReturnOnCapitalPerCycle { get; set; }
+
+    /// <summary>
+    /// Decimal annualised yield on capital: <c>ReturnOnCapitalPerCycle × CyclesPerYear</c>.
+    /// Expressed as a decimal fraction (e.g. <c>0.80</c> = 80 % APY).
+    /// Back-compat: <see cref="AprOnCapital"/> = <c>AnnualizedReturnOnCapital × 100</c> (percent).
+    /// </summary>
+    public decimal? AnnualizedReturnOnCapital { get; set; }
+
+    /// <summary>
+    /// Number of funding cycles per year: <c>(24 / cycleHours) × 365</c>, integer for display clarity.
+    /// Typical values: 8760 (1-hour cycles), 1095 (8-hour cycles).
+    /// </summary>
+    public int? CyclesPerYear { get; set; }
+
+    /// <summary>
+    /// Return on capital annualised, expressed in percent (e.g. <c>80</c> = 80 %).
+    /// Kept for back-compat with <c>dashboard.js:713</c> and existing callers.
+    /// Equals <c>AnnualizedReturnOnCapital × 100</c>.
+    /// </summary>
     public decimal? ReturnOnCapitalPerHour { get; set; }
     public decimal? AprOnCapital { get; set; }
     public decimal? BreakEvenCycles { get; set; }

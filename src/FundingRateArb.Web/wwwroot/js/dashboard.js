@@ -710,7 +710,21 @@
             // Col 10: ROC APR (return on capital, leverage-adjusted)
             var tdRoc = document.createElement("td");
             tdRoc.className = "small";
-            if (opp.aprOnCapital != null) {
+            if (opp.returnOnCapitalPerCycle != null && opp.aprOnCapital != null) {
+                var rocClass = opp.aprOnCapital > 100 ? "text-success fw-bold"
+                    : opp.aprOnCapital > 50 ? "text-warning fw-bold" : "";
+                var rocDiv = document.createElement("div");
+                rocDiv.className = "d-flex flex-column";
+                var rocBadge = document.createElement("span");
+                rocBadge.className = "badge bg-primary";
+                rocBadge.textContent = (opp.returnOnCapitalPerCycle * 100).toFixed(2) + "%";
+                var rocSmall = document.createElement("small");
+                rocSmall.className = "text-muted " + rocClass;
+                rocSmall.textContent = opp.aprOnCapital.toFixed(1) + "% APR";
+                rocDiv.appendChild(rocBadge);
+                rocDiv.appendChild(rocSmall);
+                tdRoc.appendChild(rocDiv);
+            } else if (opp.aprOnCapital != null) {
                 var rocClass = opp.aprOnCapital > 100 ? "text-success fw-bold"
                     : opp.aprOnCapital > 50 ? "text-warning fw-bold" : "";
                 var rocSpan = document.createElement("span");
