@@ -212,4 +212,88 @@ public class SignalEngineLiveCapitalTests
         // refNotional = 5000 * 1.0 * 4 = 20000 (not 8000 = (5000+3000) * 1.0 * 4)
         capturedNotional.Should().Be(5_000m * 1.0m * 4m);
     }
+
+    // --- ICapitalProvider wiring tests (Task 4.1 stubs the provider directly) ---
+
+    private static ICapitalProvider MakeCapitalProvider(decimal evaluatedCapital)
+    {
+        var mock = new Mock<ICapitalProvider>();
+        mock.Setup(p => p.GetEvaluatedCapitalUsdcAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(evaluatedCapital);
+        return mock.Object;
+    }
+
+    [Fact]
+    public async Task WithCapitalProvider_RefNotionalUsesProviderValue_NotAggregator()
+    {
+        // Provider returns 56 (live=$56, cap=$500 capped). Aggregator is irrelevant when provider is wired.
+        var tierProvider = new Mock<ILeverageTierProvider>();
+        decimal capturedNotional = -1m;
+        tierProvider
+            .Setup(t => t.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()))
+            .Callback<string, string, decimal>((_, _, n) => capturedNotional = n)
+            .Returns(int.MaxValue);
+
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            tierProvider: tierProvider.Object,
+            balanceAggregator: MakeAggregator(SingleExchangeSnapshot(9_999m)),
+            capitalProvider: MakeCapitalProvider(56m));
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+#pragma warning disable CS0618
+            TotalCapitalUsdc = 500m,
+#pragma warning restore CS0618
+            MaxCapitalPerPosition = 0.50m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            });
+
+        await sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // refNotional = providerValue(56) * MaxCapPerPos(0.5) * lev(5) = 140
+        // NOT aggregator-derived (would be 9999 * 0.5 * 5 = 24997.5)
+        capturedNotional.Should().Be(56m * 0.50m * 5m);
+    }
+
+    [Fact]
+    public async Task WithCapitalProvider_DiagnosticsEvaluatedCapitalUsdcMatchesProvider()
+    {
+        var sut = new SignalEngine(_mockUow.Object, _mockCache.Object,
+            balanceAggregator: MakeAggregator(SingleExchangeSnapshot(0m)),
+            capitalProvider: MakeCapitalProvider(56m));
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 3,
+            MaxLeverageCap = 10,
+#pragma warning disable CS0618
+            TotalCapitalUsdc = 500m,
+#pragma warning restore CS0618
+            MaxCapitalPerPosition = 1.0m,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+                MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+            });
+
+        var result = await sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        result.Diagnostics.Should().NotBeNull();
+        result.Diagnostics!.EvaluatedCapitalUsdc.Should().Be(56m);
+    }
 }

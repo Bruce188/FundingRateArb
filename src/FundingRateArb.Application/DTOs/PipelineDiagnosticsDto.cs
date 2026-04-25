@@ -47,4 +47,12 @@ public class PipelineDiagnosticsDto
     public int StalenessMinutes { get; set; }
     public decimal MinVolumeThreshold { get; set; }
     public decimal OpenThreshold { get; set; }
+
+    /// <summary>
+    /// The capital amount (USDC) that SignalEngine actually evaluated against during this pipeline
+    /// invocation — <c>min(liveExchangeBalance, config.TotalCapitalUsdc)</c> when
+    /// <c>ICapitalProvider</c> is wired; <c>null</c> when SignalEngine ran without a provider
+    /// (e.g. unit tests that omit the dependency).
+    /// </summary>
+    public decimal? EvaluatedCapitalUsdc { get; set; }
 }

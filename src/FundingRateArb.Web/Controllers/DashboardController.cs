@@ -31,6 +31,7 @@ public class DashboardController : Controller
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMarketDataCache _marketDataCache;
     private readonly IBalanceAggregator _balanceAggregator;
+    private readonly ICapitalProvider _capitalProvider;
 
     private const string AnonymousOpportunityCacheKey = "dashboard:anonymous:opportunities";
     private const string AuthenticatedOpportunityCacheKey = "dashboard:auth:opportunities";
@@ -45,7 +46,8 @@ public class DashboardController : Controller
         ICircuitBreakerManager circuitBreakerManager,
         IServiceScopeFactory scopeFactory,
         IMarketDataCache marketDataCache,
-        IBalanceAggregator balanceAggregator)
+        IBalanceAggregator balanceAggregator,
+        ICapitalProvider capitalProvider)
     {
         _uow = uow;
         _logger = logger;
@@ -57,6 +59,7 @@ public class DashboardController : Controller
         _scopeFactory = scopeFactory;
         _marketDataCache = marketDataCache;
         _balanceAggregator = balanceAggregator;
+        _capitalProvider = capitalProvider;
     }
 
     [AllowAnonymous]
@@ -317,7 +320,8 @@ public class DashboardController : Controller
 
             if (User.IsInRole("Admin") && botConfig is not null)
             {
-                vm.NotionalPerLeg = botConfig.TotalCapitalUsdc * botConfig.MaxCapitalPerPosition * botConfig.DefaultLeverage;
+                var evaluatedCapital = await _capitalProvider.GetEvaluatedCapitalUsdcAsync(ct);
+                vm.NotionalPerLeg = evaluatedCapital * botConfig.MaxCapitalPerPosition * botConfig.DefaultLeverage;
                 vm.VolumeFraction = botConfig.VolumeFraction;
             }
 

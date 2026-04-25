@@ -318,6 +318,7 @@ try
     builder.Services.AddSingleton<IConfigValidator, ConfigValidator>();
     builder.Services.AddScoped<IUserSettingsService, UserSettingsService>();
     builder.Services.AddScoped<IBalanceAggregator, BalanceAggregator>();
+    builder.Services.AddScoped<ICapitalProvider, CapitalProvider>();
     builder.Services.AddScoped<ITradeAnalyticsService, TradeAnalyticsService>();
     builder.Services.AddScoped<IRateAnalyticsService, RateAnalyticsService>();
     builder.Services.AddScoped<IRatePredictionService, RatePredictionService>();

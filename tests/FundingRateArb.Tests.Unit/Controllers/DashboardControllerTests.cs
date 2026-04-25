@@ -39,6 +39,7 @@ public class DashboardControllerTests
     private readonly Mock<IServiceProvider> _mockScopeProvider;
     private readonly Mock<IMarketDataCache> _mockMarketDataCache;
     private readonly Mock<IBalanceAggregator> _mockBalanceAggregator;
+    private readonly Mock<ICapitalProvider> _mockCapitalProvider;
     private readonly IMemoryCache _cache;
     private readonly DashboardController _controller;
 
@@ -103,8 +104,12 @@ public class DashboardControllerTests
         _mockMarketDataCache.Setup(m => m.GetLastFetchTime()).Returns((DateTime?)null);
 
         _mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        _mockCapitalProvider = new Mock<ICapitalProvider>();
+        _mockCapitalProvider
+            .Setup(p => p.GetEvaluatedCapitalUsdcAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
 
-        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
+        _controller = new DashboardController(_mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object, _mockBotControl.Object, _mockUserSettings.Object, _cache, _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object, _mockCapitalProvider.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -906,7 +911,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object, _mockCapitalProvider.Object);
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
             new Claim(ClaimTypes.NameIdentifier, "test-user-id"),
@@ -956,7 +961,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object, _mockCapitalProvider.Object);
 
         // Wire an HttpContext whose RequestAborted is already cancelled so the
         // new catch clause's `when` guard fires.
@@ -1035,7 +1040,7 @@ public class DashboardControllerTests
         var isolatedController = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, isolatedCache,
-            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
+            _mockCircuitBreaker.Object, _mockScopeFactory.Object, _mockMarketDataCache.Object, _mockBalanceAggregator.Object, _mockCapitalProvider.Object);
 
         // RequestAborted stays UNCANCELLED so the new catch's `when` guard is false
         // and the exception must fall through.

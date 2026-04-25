@@ -115,12 +115,17 @@ public class DashboardControllerTests
         _mockMarketDataCache.Setup(m => m.GetLastFetchTime()).Returns((DateTime?)null);
 
         _mockBalanceAggregator = new Mock<IBalanceAggregator>();
+        var mockCapitalProvider = new Mock<ICapitalProvider>();
+        mockCapitalProvider
+            .Setup(p => p.GetEvaluatedCapitalUsdcAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(0m);
 
         _controller = new DashboardController(
             _mockUow.Object, _mockLogger.Object, _mockSignalEngine.Object,
             _mockBotControl.Object, _mockUserSettings.Object, _cache,
             _mockCircuitBreaker.Object, _mockScopeFactory.Object,
-            _mockMarketDataCache.Object, _mockBalanceAggregator.Object);
+            _mockMarketDataCache.Object, _mockBalanceAggregator.Object,
+            mockCapitalProvider.Object);
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
