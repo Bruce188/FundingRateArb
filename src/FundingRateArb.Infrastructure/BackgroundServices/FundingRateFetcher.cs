@@ -234,6 +234,7 @@ public class FundingRateFetcher : BackgroundService
                 IndexPrice = rate.IndexPrice,
                 Volume24hUsd = rate.Volume24hUsd,
                 RecordedAt = now,
+                DetectedFundingIntervalHours = rate.DetectedFundingIntervalHours,
             });
         }
 

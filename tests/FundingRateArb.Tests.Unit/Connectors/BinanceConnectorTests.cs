@@ -116,6 +116,17 @@ public class BinanceConnectorTests
             new ServerError("error", new ErrorInfo(ErrorType.SystemError, message), null!));
 
     /// <summary>
+    /// Creates a successful WebCallResult wrapping an array of BinanceFuturesFundingInfo objects.
+    /// </summary>
+    private static WebCallResult<BinanceFuturesFundingInfo[]> SuccessFundingInfo(BinanceFuturesFundingInfo[] data)
+        => new WebCallResult<BinanceFuturesFundingInfo[]>(
+            HttpStatusCode.OK, null, null, null, null, null, null, null, null,
+            null, null, ResultDataSource.Server, data, null);
+
+    private static BinanceFuturesFundingInfo MakeFundingInfo(string symbol, int intervalHours)
+        => new BinanceFuturesFundingInfo { Symbol = symbol, FundingIntervalHours = intervalHours };
+
+    /// <summary>
     /// Builds a mock IBinanceRestClient wired with the given mark price response on UsdFuturesApi.ExchangeData.
     /// Also mocks GetTickersAsync with an empty array by default (needed since GetFundingRatesAsync
     /// fetches tickers in parallel for volume data).
@@ -130,6 +141,9 @@ public class BinanceConnectorTests
         exchangeDataMock
             .Setup(x => x.GetTickersAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessTickers([]));
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([]));
 
         var futuresApiMock = new Mock<IBinanceRestClientUsdFuturesApi>();
         futuresApiMock.SetupGet(f => f.ExchangeData).Returns(exchangeDataMock.Object);
@@ -1467,5 +1481,105 @@ public class BinanceConnectorTests
         var result = await sut.GetLeverageTiersAsync("ETH");
 
         result.Should().BeNull("no credentials means the leverageBracket call should be skipped");
+    }
+
+    // ── Variable funding-interval detection ────────────────────────────────────
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WithFundingInfo_PropagatesEightHourInterval()
+    {
+        var prices = new[]
+        {
+            MakeMarkPrice("BTCUSDT", 65000m, 64980m, fundingRate: 0.0008m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.UsdFuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([MakeFundingInfo("BTCUSDT", 8)]));
+
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var btc = rates.Single(r => r.Symbol == "BTC");
+        btc.DetectedFundingIntervalHours.Should().Be(8);
+        btc.RatePerHour.Should().Be(0.0008m / 8m,
+            "BTCUSDT reports 8h interval — RatePerHour should divide the raw 8h rate by 8");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WithFundingInfo_PropagatesFourHourInterval()
+    {
+        var prices = new[]
+        {
+            MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.UsdFuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([MakeFundingInfo("ETHUSDT", 4)]));
+
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var eth = rates.Single(r => r.Symbol == "ETH");
+        eth.DetectedFundingIntervalHours.Should().Be(4);
+        eth.RatePerHour.Should().Be(0.0004m / 4m,
+            "ETHUSDT reports 4h interval — RatePerHour should divide the raw 4h rate by 4");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WithFundingInfo_PropagatesOneHourInterval()
+    {
+        var prices = new[]
+        {
+            MakeMarkPrice("SOLUSDT", 150m, 149m, fundingRate: 0.0001m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.UsdFuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([MakeFundingInfo("SOLUSDT", 1)]));
+
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var sol = rates.Single(r => r.Symbol == "SOL");
+        sol.DetectedFundingIntervalHours.Should().Be(1);
+        sol.RatePerHour.Should().Be(0.0001m / 1m,
+            "SOLUSDT reports 1h interval — RatePerHour should divide the raw 1h rate by 1");
+    }
+
+    [Fact]
+    public async Task GetFundingRatesAsync_WhenFundingInfoFails_FallsBackToEightHourDefault()
+    {
+        var prices = new[]
+        {
+            MakeMarkPrice("BTCUSDT", 65000m, 64980m, fundingRate: 0.0008m),
+            MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
+        var exchangeDataMock = Mock.Get(client.Object.UsdFuturesApi.ExchangeData);
+        exchangeDataMock
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("funding info endpoint offline"));
+
+        var sut = new BinanceConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        rates.Should().HaveCount(2);
+        rates.Should().AllSatisfy(r => r.DetectedFundingIntervalHours.Should().BeNull(
+            "funding info failed — interval should not be reported"));
+
+        var btc = rates.Single(r => r.Symbol == "BTC");
+        btc.RatePerHour.Should().Be(0.0008m / 8m, "BTC should fall back to the 8h divisor");
+
+        var eth = rates.Single(r => r.Symbol == "ETH");
+        eth.RatePerHour.Should().Be(0.0004m / 8m, "ETH should fall back to the 8h divisor");
     }
 }

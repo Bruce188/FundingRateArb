@@ -11,6 +11,7 @@ public class FundingRateSnapshot
     public decimal IndexPrice { get; set; }
     public decimal Volume24hUsd { get; set; }
     public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
+    public int? DetectedFundingIntervalHours { get; set; }
 
     public Exchange Exchange { get; set; } = null!;
     public Asset Asset { get; set; } = null!;
