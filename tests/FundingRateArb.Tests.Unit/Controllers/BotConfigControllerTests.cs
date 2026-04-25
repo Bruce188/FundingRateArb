@@ -378,4 +378,71 @@ public class BotConfigControllerTests
         model.ForceConcurrentExecution.Should().BeTrue();
         model.ReconciliationIntervalCycles.Should().Be(25);
     }
+
+    // ── Task 2.3: new divergence monitoring fields round-trip ─────────────────
+
+    [Fact]
+    public async Task Save_PostWithDivergenceMonitoringFields_PersistsAllThree()
+    {
+        // Arrange: build a minimal valid config/model with non-default values for the three new fields
+        var config = new BotConfiguration
+        {
+            OpenThreshold = 0.0003m,
+            AlertThreshold = 0.0001m,
+            CloseThreshold = 0.00005m,
+            FeeAmortizationHours = 24,
+            MaxHoldTimeHours = 72,
+            DefaultLeverage = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            MaxConcurrentPositions = 1,
+            MinPositionSizeUsdc = 10m,
+            DailyDrawdownPausePct = 0.05m,
+        };
+
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        _mockValidator.Setup(v => v.Validate(It.IsAny<BotConfiguration>()))
+            .Returns(new ConfigValidationResult(true, new List<string>()));
+        _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
+
+        var model = new BotConfigViewModel
+        {
+            OpenThreshold = 0.0003m,
+            AlertThreshold = 0.0001m,
+            CloseThreshold = 0.00005m,
+            TotalCapitalUsdc = 107m,
+            DefaultLeverage = 5,
+            MaxConcurrentPositions = 1,
+            MaxCapitalPerPosition = 0.8m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            VolumeFraction = 0.001m,
+            BreakevenHoursMax = 6,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 24,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50_000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            // The three new divergence monitoring fields with non-default values
+            DivergenceAlertConfirmationCycles = 5,
+            RotationDivergenceHorizonHours = 4.0m,
+            PreferCloseOnDivergenceNarrowing = false,
+        };
+
+        // Act
+        var result = await _controller.Index(model);
+
+        // Assert: save succeeded and all three new fields persisted
+        result.Should().BeOfType<RedirectToActionResult>();
+        config.DivergenceAlertConfirmationCycles.Should().Be(5,
+            "DivergenceAlertConfirmationCycles must round-trip through controller save");
+        config.RotationDivergenceHorizonHours.Should().Be(4.0m,
+            "RotationDivergenceHorizonHours must round-trip through controller save");
+        config.PreferCloseOnDivergenceNarrowing.Should().BeFalse(
+            "PreferCloseOnDivergenceNarrowing must round-trip through controller save");
+    }
 }

@@ -96,6 +96,10 @@ else
                             @if (pos.DivergencePct > 0.01m)
                             {
                                 <span class="badge bg-info" title="Cross-exchange price divergence (|longMark - shortMark| / unified)">@pos.DivergencePct.ToString("F2")%</span>
+                                @if (pos.IsDivergenceNarrowing)
+                                {
+                                    <i class="bi bi-arrow-down-circle text-success ms-1" title="Narrowing"></i>
+                                }
                             }
                             else
                             {

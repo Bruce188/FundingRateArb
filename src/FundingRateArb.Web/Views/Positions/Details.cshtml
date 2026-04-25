@@ -111,12 +111,30 @@
                     @if (pos.CurrentDivergencePct.HasValue && pos.CurrentDivergencePct > 0)
                     {
                         <span class="badge bg-info fs-4">@pos.CurrentDivergencePct.Value.ToString("F2")%</span>
+                        @if (pos.IsDivergenceNarrowing)
+                        {
+                            <i class="bi bi-arrow-down-circle text-success ms-1" title="Narrowing — divergence decreased since last cycle"></i>
+                        }
                     }
                     else
                     {
                         <span class="text-muted">No divergence data</span>
                     }
                 </p>
+                @if (pos.PrevDivergencePct.HasValue)
+                {
+                    <p class="text-muted small mb-1">
+                        Previous cycle: <strong>@pos.PrevDivergencePct.Value.ToString("F2")%</strong>
+                        @if (pos.IsDivergenceNarrowing)
+                        {
+                            <span class="text-success">(narrowing)</span>
+                        }
+                        else if (pos.CurrentDivergencePct.HasValue && pos.CurrentDivergencePct > pos.PrevDivergencePct)
+                        {
+                            <span class="text-warning">(widening)</span>
+                        }
+                    </p>
+                }
                 <p class="text-muted small mb-0">
                     This is a phantom PnL that collapses when prices reconverge across exchanges.
                     Exchange PnL may differ from strategy PnL by this amount.

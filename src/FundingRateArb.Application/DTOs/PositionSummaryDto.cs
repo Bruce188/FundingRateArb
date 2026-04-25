@@ -24,6 +24,12 @@ public class PositionSummaryDto
     /// <summary>Cross-exchange price divergence percentage.</summary>
     public decimal DivergencePct { get; set; }
 
+    /// <summary>Previous cycle's cross-exchange price divergence percentage. Null on first cycle.</summary>
+    public decimal? PrevDivergencePct { get; set; }
+
+    /// <summary>True when divergence is narrowing (current &lt; previous). Computed from the two nullable values.</summary>
+    public bool IsDivergenceNarrowing => DivergencePct > 0 && PrevDivergencePct.HasValue && DivergencePct < PrevDivergencePct;
+
     public decimal? RealizedPnl { get; set; }
 
     /// <summary>Reason the position was closed, if applicable.</summary>

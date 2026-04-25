@@ -68,6 +68,7 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             _state.PriceFetchFailures.Clear();
             _state.ZeroPriceCheckCounts.Clear();
             _state.PrevLiquidationDistance.Clear();
+            _state.DivergenceBreachCycles.Clear();
 
             return new HealthCheckResult(
                 Array.Empty<(ArbitragePosition, CloseReason)>(),
@@ -315,10 +316,16 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     if (pos.CurrentDivergencePct is null ||
                         Math.Abs(pos.CurrentDivergencePct.Value - newDivergencePct) >= 0.0001m)
                     {
+                        // Write previous value before overwriting — skip on first cycle (null)
+                        if (pos.CurrentDivergencePct.HasValue)
+                        {
+                            pos.PrevDivergencePct = pos.CurrentDivergencePct;
+                        }
+
                         pos.CurrentDivergencePct = newDivergencePct;
                     }
 
-                    // Alert if divergence exceeds threshold
+                    // Alert if divergence exceeds threshold (with debounce)
                     var entryMid = (pos.LongEntryPrice + pos.ShortEntryPrice) / 2m;
                     var entrySpreadCostPct = entryMid > 0
                         ? Math.Abs(pos.ShortEntryPrice - pos.LongEntryPrice) / entryMid * 100m
@@ -327,20 +334,34 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
                     if (pos.CurrentDivergencePct > divergenceThreshold && divergenceThreshold > 0)
                     {
-                        var hasRecentDivAlert = recentAlerts.ContainsKey((pos.Id, AlertType.SpreadWarning));
-                        if (!hasRecentDivAlert)
+                        // Increment debounce counter; fire only when confirmed cycles >= threshold
+                        var cycles = _state.DivergenceBreachCycles.AddOrUpdate(pos.Id, 1, (_, c) => c + 1);
+
+                        if (cycles >= config.DivergenceAlertConfirmationCycles)
                         {
-                            _uow.Alerts.Add(new Alert
+                            var hasRecentDivAlert = recentAlerts.ContainsKey((pos.Id, AlertType.SpreadWarning));
+                            if (!hasRecentDivAlert)
                             {
-                                UserId = pos.UserId,
-                                ArbitragePositionId = pos.Id,
-                                Type = AlertType.SpreadWarning,
-                                Severity = AlertSeverity.Warning,
-                                Message = $"Price divergence warning: {assetSymbol} " +
-                                          $"{longExchangeName}/{shortExchangeName} " +
-                                          $"divergence={pos.CurrentDivergencePct:F2}% (threshold={divergenceThreshold:F2}%)",
-                            });
+                                _uow.Alerts.Add(new Alert
+                                {
+                                    UserId = pos.UserId,
+                                    ArbitragePositionId = pos.Id,
+                                    Type = AlertType.SpreadWarning,
+                                    Severity = AlertSeverity.Warning,
+                                    Message = $"Price divergence warning: {assetSymbol} " +
+                                              $"{longExchangeName}/{shortExchangeName} " +
+                                              $"divergence={pos.CurrentDivergencePct:F2}% (threshold={divergenceThreshold:F2}%)",
+                                });
+                            }
+
+                            // Reset counter after firing so re-alert is throttled by recentAlerts (4h window)
+                            _state.DivergenceBreachCycles[pos.Id] = 0;
                         }
+                    }
+                    else
+                    {
+                        // Clean cycle — reset breach counter
+                        _state.DivergenceBreachCycles[pos.Id] = 0;
                     }
                 }
 
@@ -506,6 +527,13 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             if (!openIds.Contains(key))
             {
                 _state.PrevLiquidationDistance.TryRemove(key, out _);
+            }
+        }
+        foreach (var key in _state.DivergenceBreachCycles.Keys)
+        {
+            if (!openIds.Contains(key))
+            {
+                _state.DivergenceBreachCycles.TryRemove(key, out _);
             }
         }
 
@@ -741,6 +769,17 @@ public class PositionHealthMonitor : IPositionHealthMonitor
 
         // Emergency spread: bypass MinHoldTimeHours for catastrophic spread reversal
         if (spread < config.EmergencyCloseSpreadThreshold)
+        {
+            return CloseReason.SpreadCollapsed;
+        }
+
+        // Soft close preference: bypass MinHoldTimeHours when spread collapsed and divergence is narrowing.
+        // Mirrors the EmergencyCloseSpreadThreshold bypass — position is recovering and can be exited cheaply.
+        if (spread < config.CloseThreshold
+            && config.PreferCloseOnDivergenceNarrowing
+            && pos.CurrentDivergencePct.HasValue
+            && pos.PrevDivergencePct.HasValue
+            && pos.CurrentDivergencePct < pos.PrevDivergencePct)
         {
             return CloseReason.SpreadCollapsed;
         }

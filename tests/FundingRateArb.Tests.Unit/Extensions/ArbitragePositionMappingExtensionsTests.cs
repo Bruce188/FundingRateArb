@@ -474,4 +474,63 @@ public class ArbitragePositionMappingExtensionsTests
     {
         ArbitragePositionMappingExtensions.ToDisplayName(reason).Should().Be(expected);
     }
+
+    // ── Task 2.3: PrevDivergencePct + IsDivergenceNarrowing ─────────────────
+
+    [Fact]
+    public void Mapping_PreservesPrevDivergencePctAndIsNarrowingFlag()
+    {
+        // Arrange: position with narrowing divergence
+        var pos = CreatePositionWithNavigationProperties();
+        pos.CurrentDivergencePct = 1.5m;
+        pos.PrevDivergencePct = 3.0m; // was 3.0, now 1.5 → narrowing
+
+        // Act
+        var summaryDto = pos.ToSummaryDto();
+        var detailsDto = pos.ToDetailsDto();
+
+        // Assert SummaryDto
+        summaryDto.PrevDivergencePct.Should().Be(3.0m,
+            "SummaryDto must carry PrevDivergencePct from the entity");
+        summaryDto.IsDivergenceNarrowing.Should().BeTrue(
+            "IsDivergenceNarrowing should be true when current < previous");
+
+        // Assert DetailsDto
+        detailsDto.PrevDivergencePct.Should().Be(3.0m,
+            "DetailsDto must carry PrevDivergencePct from the entity");
+        detailsDto.IsDivergenceNarrowing.Should().BeTrue(
+            "IsDivergenceNarrowing should be true when current < previous");
+    }
+
+    [Fact]
+    public void Mapping_IsNarrowingFalse_WhenDivergenceWidens()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.CurrentDivergencePct = 3.0m;
+        pos.PrevDivergencePct = 1.5m; // widening
+
+        var summaryDto = pos.ToSummaryDto();
+        var detailsDto = pos.ToDetailsDto();
+
+        summaryDto.IsDivergenceNarrowing.Should().BeFalse(
+            "widening divergence must not be flagged as narrowing");
+        detailsDto.IsDivergenceNarrowing.Should().BeFalse(
+            "widening divergence must not be flagged as narrowing");
+    }
+
+    [Fact]
+    public void Mapping_IsNarrowingFalse_WhenPrevDivergencePctIsNull()
+    {
+        var pos = CreatePositionWithNavigationProperties();
+        pos.CurrentDivergencePct = 2.0m;
+        pos.PrevDivergencePct = null; // no previous value (first cycle)
+
+        var summaryDto = pos.ToSummaryDto();
+        var detailsDto = pos.ToDetailsDto();
+
+        summaryDto.IsDivergenceNarrowing.Should().BeFalse(
+            "null previous value means no narrowing determination possible");
+        detailsDto.IsDivergenceNarrowing.Should().BeFalse(
+            "null previous value means no narrowing determination possible");
+    }
 }

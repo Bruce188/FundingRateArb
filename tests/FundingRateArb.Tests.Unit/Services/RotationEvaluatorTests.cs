@@ -246,4 +246,79 @@ public class RotationEvaluatorTests
 
         result.Should().BeNull();
     }
+
+    // ── Divergence exit cost gate (Task 2.2) ─────────────────────────────────
+
+    [Fact]
+    public void Evaluate_DivergenceExitCostExceedsNewEdge_ReturnsNull()
+    {
+        // worst position: divergence=2%, size=10_000 → exit cost = 200
+        // best opportunity: netYield=0.001/hr, horizon=2h → edge = 0.001 * 2 * 10_000 = 20
+        // 200 > 20 → suppressed → null
+        var position = MakePosition(id: 1, currentSpread: 0.0001m);
+        position.SizeUsdc = 10_000m;
+        position.CurrentDivergencePct = 2.0m;
+
+        var opportunity = MakeOpportunity(netYield: 0.001m);
+        var userConfig = MakeUserConfig(rotationThreshold: 0.0003m, minHoldMinutes: 0);
+
+        var globalConfig = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            UpdatedByUserId = "admin",
+            RotationDivergenceHorizonHours = 2.0m,
+        };
+
+        var result = _sut.Evaluate([position], [opportunity], userConfig, globalConfig);
+
+        result.Should().BeNull("divergence exit cost 200 exceeds new edge 20 over 2h");
+    }
+
+    [Fact]
+    public void Evaluate_DivergenceExitCostBelowNewEdge_ReturnsRecommendation()
+    {
+        // worst position: divergence=0.05%, size=10_000 → exit cost = 5
+        // best opportunity: netYield=0.001/hr, horizon=2h → edge = 20
+        // 5 < 20 → allowed → recommendation returned
+        var position = MakePosition(id: 1, currentSpread: 0.0001m);
+        position.SizeUsdc = 10_000m;
+        position.CurrentDivergencePct = 0.05m;
+
+        var opportunity = MakeOpportunity(netYield: 0.001m);
+        var userConfig = MakeUserConfig(rotationThreshold: 0.0003m, minHoldMinutes: 0);
+
+        var globalConfig = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            UpdatedByUserId = "admin",
+            RotationDivergenceHorizonHours = 2.0m,
+        };
+
+        var result = _sut.Evaluate([position], [opportunity], userConfig, globalConfig);
+
+        result.Should().NotBeNull("divergence exit cost 5 is below new edge 20 — rotation should proceed");
+    }
+
+    [Fact]
+    public void Evaluate_NullDivergence_TreatsAsZeroCost_ReturnsRecommendation()
+    {
+        // null CurrentDivergencePct → exit cost = 0 → always passes the gate
+        var position = MakePosition(id: 1, currentSpread: 0.0001m);
+        position.SizeUsdc = 10_000m;
+        position.CurrentDivergencePct = null;
+
+        var opportunity = MakeOpportunity(netYield: 0.001m);
+        var userConfig = MakeUserConfig(rotationThreshold: 0.0003m, minHoldMinutes: 0);
+
+        var globalConfig = new BotConfiguration
+        {
+            CloseThreshold = -0.00005m,
+            UpdatedByUserId = "admin",
+            RotationDivergenceHorizonHours = 2.0m,
+        };
+
+        var result = _sut.Evaluate([position], [opportunity], userConfig, globalConfig);
+
+        result.Should().NotBeNull("null divergence treated as zero exit cost — should not suppress rotation");
+    }
 }

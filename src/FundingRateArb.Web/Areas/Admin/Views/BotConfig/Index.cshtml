@@ -165,6 +165,18 @@
                             <span asp-validation-for="DivergenceAlertMultiplier" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
+                            <label asp-for="DivergenceAlertConfirmationCycles" class="form-label"></label>
+                            <input asp-for="DivergenceAlertConfirmationCycles" class="form-control" type="number" min="1" max="20" step="1" />
+                            <div class="form-text">Consecutive cycles above threshold before alert fires (1 = immediate, 3 = production debounce)</div>
+                            <span asp-validation-for="DivergenceAlertConfirmationCycles" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
+                            <label asp-for="RotationDivergenceHorizonHours" class="form-label"></label>
+                            <input asp-for="RotationDivergenceHorizonHours" class="form-control" type="number" step="0.25" min="0.25" max="24" />
+                            <div class="form-text">Hours over which new rotation opportunity must outperform divergence exit cost</div>
+                            <span asp-validation-for="RotationDivergenceHorizonHours" class="text-danger"></span>
+                        </div>
+                        <div class="col-md-4">
                             <label asp-for="SlippageBufferBps" class="form-label"></label>
                             <input asp-for="SlippageBufferBps" class="form-control" type="number" min="0" max="50" />
                             <div class="form-text">Basis points subtracted from net yield for slippage</div>
@@ -406,6 +418,13 @@
                                 <label asp-for="UseRiskBasedDivergenceClose" class="form-check-label"></label>
                             </div>
                             <div class="form-text text-warning">When enabled, DivergenceCritical close requires both MinHoldTime AND unhealthy liquidation distance. Disable to revert to immediate threshold-based close.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
+                                <input asp-for="PreferCloseOnDivergenceNarrowing" class="form-check-input" type="checkbox" />
+                                <label asp-for="PreferCloseOnDivergenceNarrowing" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text">When enabled, SpreadCollapsed close bypasses MinHoldTimeHours if divergence is narrowing. Soft-close preference for recovering positions.</div>
                         </div>
                         <div class="col-md-4">
                             <div class="form-check form-switch mt-4">
