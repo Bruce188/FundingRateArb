@@ -1,37 +1,36 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace FundingRateArb.Infrastructure.Migrations
+namespace FundingRateArb.Infrastructure.Migrations;
+
+/// <inheritdoc />
+public partial class AddArbitragePositionsUserIdStatusCoveringIndex : Migration
 {
     /// <inheritdoc />
-    public partial class AddArbitragePositionsUserIdStatusCoveringIndex : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropIndex(
-                name: "IX_ArbitragePositions_UserId",
-                table: "ArbitragePositions");
+        migrationBuilder.DropIndex(
+            name: "IX_ArbitragePositions_UserId",
+            table: "ArbitragePositions");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ArbitragePositions_UserId_Status",
-                table: "ArbitragePositions",
-                columns: new[] { "UserId", "Status" })
-                .Annotation("SqlServer:Include", new[] { "RealizedPnl", "IsPhantomFeeBackfill" });
-        }
+        migrationBuilder.CreateIndex(
+            name: "IX_ArbitragePositions_UserId_Status",
+            table: "ArbitragePositions",
+            columns: new[] { "UserId", "Status" })
+            .Annotation("SqlServer:Include", new[] { "RealizedPnl", "IsPhantomFeeBackfill" });
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropIndex(
-                name: "IX_ArbitragePositions_UserId_Status",
-                table: "ArbitragePositions");
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropIndex(
+            name: "IX_ArbitragePositions_UserId_Status",
+            table: "ArbitragePositions");
 
-            migrationBuilder.CreateIndex(
-                name: "IX_ArbitragePositions_UserId",
-                table: "ArbitragePositions",
-                column: "UserId");
-        }
+        migrationBuilder.CreateIndex(
+            name: "IX_ArbitragePositions_UserId",
+            table: "ArbitragePositions",
+            column: "UserId");
     }
 }

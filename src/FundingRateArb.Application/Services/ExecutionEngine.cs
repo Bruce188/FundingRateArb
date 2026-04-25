@@ -524,8 +524,15 @@ public class ExecutionEngine : IExecutionEngine
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        if (firstIsLong) position.LongFilledQuantity = firstResult.FilledQuantity;
-                        else position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        if (firstIsLong)
+                        {
+                            position.LongFilledQuantity = firstResult.FilledQuantity;
+                        }
+                        else
+                        {
+                            position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        }
+
                         _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
@@ -558,8 +565,15 @@ public class ExecutionEngine : IExecutionEngine
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
-                        if (firstIsLong) position.LongFilledQuantity = firstResult.FilledQuantity;
-                        else position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        if (firstIsLong)
+                        {
+                            position.LongFilledQuantity = firstResult.FilledQuantity;
+                        }
+                        else
+                        {
+                            position.ShortFilledQuantity = firstResult.FilledQuantity;
+                        }
+
                         _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);

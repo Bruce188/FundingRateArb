@@ -27,23 +27,23 @@ public class BackfillPhantomFeeFlagTests : IDisposable
         decimal entryFees = 1.5m,
         decimal exitFees = 0.8m,
         decimal? realizedPnl = -2.3m) => new()
-    {
-        UserId = _user.Id,
-        AssetId = _fixture.TestAsset.Id,
-        LongExchangeId = _fixture.TestExchange.Id,
-        ShortExchangeId = _fixture.TestExchange.Id,
-        Status = status,
-        SizeUsdc = 500m,
-        MarginUsdc = 100m,
-        Leverage = 5,
-        OpenedAt = DateTime.UtcNow.AddHours(-2),
-        LongFilledQuantity = longFilled,
-        ShortFilledQuantity = shortFilled,
-        EntryFeesUsdc = entryFees,
-        ExitFeesUsdc = exitFees,
-        RealizedPnl = realizedPnl,
-        IsPhantomFeeBackfill = false,
-    };
+        {
+            UserId = _user.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            Status = status,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            OpenedAt = DateTime.UtcNow.AddHours(-2),
+            LongFilledQuantity = longFilled,
+            ShortFilledQuantity = shortFilled,
+            EntryFeesUsdc = entryFees,
+            ExitFeesUsdc = exitFees,
+            RealizedPnl = realizedPnl,
+            IsPhantomFeeBackfill = false,
+        };
 
     private static async Task<int> ApplyBackfillAsync(AppDbContext ctx)
     {
@@ -56,10 +56,14 @@ public class BackfillPhantomFeeFlagTests : IDisposable
 
         // Mirror the SQL script's RAISERROR/THROW 50002 bound: abort if more than 50 rows match.
         if (targets.Count > 50)
+        {
             throw new InvalidOperationException("Backfill affected more than 50 rows — bound exceeded.");
+        }
 
         foreach (var p in targets)
+        {
             p.IsPhantomFeeBackfill = true;
+        }
 
         return await ctx.SaveChangesAsync();
     }
