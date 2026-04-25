@@ -451,6 +451,7 @@ public class PhantomFeesRegressionTests
     [Fact]
     public void SetEmergencyCloseFees_WhenFilledQuantityIsZero_ZeroesFeesAndRealizedPnl()
     {
+        var sut = new EmergencyCloseHandler(_mockUow.Object, NullLogger<EmergencyCloseHandler>.Instance);
         var position = new ArbitragePosition { UserId = "user1" };
         var zeroFillResult = new OrderResultDto
         {
@@ -459,7 +460,7 @@ public class PhantomFeesRegressionTests
             FilledQuantity = 0m,
         };
 
-        EmergencyCloseHandler.SetEmergencyCloseFees(position, zeroFillResult, "Hyperliquid");
+        sut.SetEmergencyCloseFees(position, zeroFillResult, "Hyperliquid");
 
         position.EntryFeesUsdc.Should().Be(0m);
         position.ExitFeesUsdc.Should().Be(0m);

@@ -477,7 +477,7 @@ public class ExecutionEngine : IExecutionEngine
                             position.ClosedAt = DateTime.UtcNow;
                             if (!neverExisted)
                             {
-                                EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                                _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                             }
                             _uow.Positions.Update(position);
                             _uow.Alerts.Add(new Alert
@@ -526,7 +526,7 @@ public class ExecutionEngine : IExecutionEngine
                     {
                         if (firstIsLong) position.LongFilledQuantity = firstResult.FilledQuantity;
                         else position.ShortFilledQuantity = firstResult.FilledQuantity;
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -560,7 +560,7 @@ public class ExecutionEngine : IExecutionEngine
                     {
                         if (firstIsLong) position.LongFilledQuantity = firstResult.FilledQuantity;
                         else position.ShortFilledQuantity = firstResult.FilledQuantity;
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, firstResult, firstExchangeName);
                     }
                     _uow.Positions.Update(position);
                     _uow.Alerts.Add(new Alert
@@ -619,7 +619,7 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedLong)
                         {
                             position.LongFilledQuantity = longTask.Result.FilledQuantity;
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
+                            _emergencyClose.SetEmergencyCloseFees(position, longTask.Result, opp.LongExchangeName);
                             allNeverExisted = false;
                         }
                     }
@@ -629,7 +629,7 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedShort)
                         {
                             position.ShortFilledQuantity = shortTask.Result.FilledQuantity;
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
+                            _emergencyClose.SetEmergencyCloseFees(position, shortTask.Result, opp.ShortExchangeName);
                             allNeverExisted = false;
                         }
                     }
@@ -668,7 +668,7 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedLong)
                         {
                             position.LongFilledQuantity = longResult.FilledQuantity;
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                            _emergencyClose.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
@@ -678,7 +678,7 @@ public class ExecutionEngine : IExecutionEngine
                         if (!neverExistedShort)
                         {
                             position.ShortFilledQuantity = shortResult.FilledQuantity;
-                            EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                            _emergencyClose.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                             concurrentNeverExisted = false;
                         }
                     }
@@ -748,7 +748,7 @@ public class ExecutionEngine : IExecutionEngine
                         longConnector, opp.AssetSymbol, Side.Long, userId, ct);
                     if (!neverExistedLong)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, longResult, opp.LongExchangeName);
                     }
                 }
                 else if (shortQty > 0m && longQty <= 0m)
@@ -757,7 +757,7 @@ public class ExecutionEngine : IExecutionEngine
                         shortConnector, opp.AssetSymbol, Side.Short, userId, ct);
                     if (!neverExistedShort)
                     {
-                        EmergencyCloseHandler.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
+                        _emergencyClose.SetEmergencyCloseFees(position, shortResult, opp.ShortExchangeName);
                     }
                 }
 

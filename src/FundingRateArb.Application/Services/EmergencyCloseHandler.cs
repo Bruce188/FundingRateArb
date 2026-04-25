@@ -31,13 +31,12 @@ public class EmergencyCloseHandler : IEmergencyCloseHandler
     /// leg that filled. When <c>successfulLeg.FilledQuantity &lt;= 0</c> the method clears all three
     /// fields to zero (no trade occurred) and returns early.
     /// </summary>
-    internal static void SetEmergencyCloseFees(
-        ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName,
-        ILogger<EmergencyCloseHandler>? logger = null)
+    public void SetEmergencyCloseFees(
+        ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
     {
         if (successfulLeg.FilledQuantity < 0m)
         {
-            logger?.LogError(
+            _logger.LogError(
                 "SetEmergencyCloseFees called with negative FilledQuantity={Qty} on position #{Id} ({Exchange}) — coercing to zero. Likely connector parsing bug.",
                 successfulLeg.FilledQuantity, position.Id, exchangeName);
         }
