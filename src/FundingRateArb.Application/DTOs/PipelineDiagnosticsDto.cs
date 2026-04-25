@@ -35,6 +35,13 @@ public class PipelineDiagnosticsDto
     /// </summary>
     public int PairsFilteredByExchangeSymbolCap { get; set; }
 
+    /// <summary>
+    /// Opportunities hard-rejected by the entry-side trend gate because the funding
+    /// spread was not favorable for all <c>MinConsecutiveFavorableCycles</c> snapshots,
+    /// or insufficient history was available to confirm the trend.
+    /// </summary>
+    public int PairsFilteredByTrendUnconfirmed { get; set; }
+
     public int PairsPassing { get; set; }
     public decimal BestRawSpread { get; set; }
     public int StalenessMinutes { get; set; }

@@ -27,6 +27,7 @@ public class SignalEngineTests
         _mockUow.Setup(u => u.BotConfig).Returns(_mockBotConfig.Object);
         _mockUow.Setup(u => u.FundingRates).Returns(_mockFundingRates.Object);
         _sut = new SignalEngine(_mockUow.Object, _mockCache.Object);
+
     }
 
     private static FundingRateSnapshot MakeRate(
@@ -2069,11 +2070,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot>
-            {
-                new() { RatePerHour = 0.0010m },
-            });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
@@ -2163,10 +2164,13 @@ public class SignalEngineTests
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        // Assert
-        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
-        allOpps.Should().NotBeEmpty();
-        allOpps[0].TrendUnconfirmed.Should().BeTrue("one historical cycle had negative spread");
+        // Assert: hard reject — opportunity must not appear in either list
+        result.Opportunities.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "trend-unconfirmed pair must be hard-rejected and not appear in Opportunities");
+        result.AllNetPositive.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "trend-unconfirmed pair must be hard-rejected and not appear in AllNetPositive");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().BeGreaterThan(0,
+            "the trend-unconfirmed counter must increment when a pair is hard-rejected");
     }
 
     [Fact]
@@ -2212,9 +2216,11 @@ public class SignalEngineTests
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        // Assert
-        result.Opportunities.Should().NotBeEmpty();
+        // Assert: all cycles favorable — opportunity must be admitted and counter stays zero
+        result.Opportunities.Should().NotBeEmpty("all trend cycles were favorable");
         result.Opportunities[0].TrendUnconfirmed.Should().BeFalse("all cycles had positive spread");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().Be(0,
+            "no pair was rejected by the trend gate");
     }
 
     [Fact]
@@ -2256,8 +2262,11 @@ public class SignalEngineTests
 
         // Provide sufficient history for trend analysis
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
@@ -2310,10 +2319,13 @@ public class SignalEngineTests
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
-        // Assert
-        var allOpps = result.Opportunities.Concat(result.AllNetPositive).ToList();
-        allOpps.Should().NotBeEmpty();
-        allOpps[0].TrendUnconfirmed.Should().BeTrue("insufficient history snapshots");
+        // Assert: hard reject — insufficient history must not produce an opportunity
+        result.Opportunities.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "pair with insufficient history must be hard-rejected and not appear in Opportunities");
+        result.AllNetPositive.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "pair with insufficient history must be hard-rejected and not appear in AllNetPositive");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().BeGreaterThan(0,
+            "the trend-unconfirmed counter must increment for insufficient-history pairs");
     }
 
     // ── Review-v6: Trend analysis lookback scales by exchange funding interval ──
@@ -2383,6 +2395,156 @@ public class SignalEngineTests
             "max exchange interval (8h) * MinConsecutiveFavorableCycles (3) = 24h minimum lookback");
     }
 
+    [Fact]
+    public async Task GetOpportunities_StableTrendOverN3Cycles_AdmitsOpportunity()
+    {
+        // Arrange: 3 consecutive favorable snapshots per leg (short > long in each)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // Long leg history: low rate all 3 cycles
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+            });
+
+        // Short leg history: high rate all 3 cycles → spread > 0 in each
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 2, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+                new() { RatePerHour = 0.0010m },
+                new() { RatePerHour = 0.0010m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: stable trend over 3 cycles → opportunity admitted, counter stays zero
+        result.Opportunities.Should().Contain(o => o.AssetSymbol == "ETH",
+            "all 3 trend cycles were favorable — opportunity must be admitted");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().Be(0,
+            "no pair was rejected by the trend gate when all cycles are favorable");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_OneBadCycleInN3_RejectsOpportunity()
+    {
+        // Arrange: 3 snapshots per leg, the second cycle has negative spread
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 3,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+                new() { RatePerHour = 0.0001m },
+            });
+
+        // Short leg: cycle 1 (index 1) has rate below long → unfavorable
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 2, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 3, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+                new() { RatePerHour = 0.00005m }, // spread = 0.00005 - 0.0001 < 0 → unfavorable
+                new() { RatePerHour = 0.0010m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: one bad cycle in N=3 → hard reject
+        result.Opportunities.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "one unfavorable cycle in N=3 must trigger hard reject");
+        result.AllNetPositive.Should().NotContain(o => o.AssetSymbol == "ETH",
+            "hard-rejected pair must not appear in AllNetPositive");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().BeGreaterThanOrEqualTo(1,
+            "the trend-unconfirmed counter must increment for the rejected pair");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_NEqualsOneAndOneSnapshot_AdmitsOpportunity()
+    {
+        // Arrange: WLFI parity case — N=1, 1 favorable snapshot per leg
+        // This mirrors WlfiPairScenarioTests fixture: MinConsecutiveFavorableCycles = 1
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "Hyperliquid", 1, "ETH", 0.0001m),
+            MakeRate(2, "Lighter",     1, "ETH", 0.0010m),
+        };
+
+        var config = new BotConfiguration
+        {
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            BreakevenHoursMax = 168,
+            FeeAmortizationHours = 12,
+            MinConsecutiveFavorableCycles = 1,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        // 1 favorable snapshot per leg: short > long
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0001m },
+            });
+
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            1, 2, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot>
+            {
+                new() { RatePerHour = 0.0010m },
+            });
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+
+        // Assert: N=1, 1 favorable snapshot → gate satisfied, opportunity admitted
+        result.Opportunities.Should().Contain(o => o.AssetSymbol == "ETH",
+            "N=1 with 1 favorable snapshot satisfies the gate (1 >= 1 and spread > 0)");
+        result.Diagnostics!.PairsFilteredByTrendUnconfirmed.Should().Be(0,
+            "no pair should be rejected when the single required snapshot is favorable");
+    }
+
     // ── B6: 3× MinEdgeMultiplier filter ──────────────────────────────────────
 
     [Fact]
@@ -2419,8 +2581,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         // Act
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
@@ -2464,8 +2629,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
@@ -2495,8 +2663,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
@@ -2531,8 +2702,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         // BTC is the hot symbol (despite lower yield)
         var screening = new Mock<ICoinGlassScreeningProvider>();
@@ -2579,8 +2753,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
         screening.SetupGet(s => s.IsAvailable).Returns(true);
@@ -2619,8 +2796,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         // _sut has no screening provider (null)
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
@@ -2650,8 +2830,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
         screening.SetupGet(s => s.IsAvailable).Returns(true);
@@ -2906,8 +3089,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
         screening.SetupGet(s => s.IsAvailable).Returns(false);
@@ -2950,8 +3136,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
         screening.SetupGet(s => s.IsAvailable).Returns(false);
@@ -2992,8 +3181,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var screening = new Mock<ICoinGlassScreeningProvider>();
         screening.SetupGet(s => s.IsAvailable).Returns(true);
@@ -3204,8 +3396,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0005m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
@@ -3245,7 +3440,10 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
             .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0030m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
@@ -3286,8 +3484,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0004m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
@@ -3333,8 +3534,11 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
-            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0002m } });
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0010m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
 
@@ -3371,7 +3575,10 @@ public class SignalEngineTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
         _mockFundingRates.Setup(f => f.GetHistoryAsync(
-            It.IsAny<int>(), It.IsAny<int>(), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            It.IsAny<int>(), 1, It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
+            .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0001m } });
+        _mockFundingRates.Setup(f => f.GetHistoryAsync(
+            It.IsAny<int>(), It.Is<int>(id => id != 1), It.IsAny<DateTime>(), It.IsAny<DateTime>(), 1, It.IsAny<int>()))
             .ReturnsAsync(new List<FundingRateSnapshot> { new() { RatePerHour = 0.0030m } });
 
         var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);

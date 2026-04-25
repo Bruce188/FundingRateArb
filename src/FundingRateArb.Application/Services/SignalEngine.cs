@@ -469,49 +469,58 @@ public class SignalEngine : ISignalEngine
                     }
 
                     // Trend analysis: check if funding spread has been favorable for N consecutive snapshots.
-                    // Load history on-demand (only for pairs that pass volume + break-even filters).
-                    var longKey = (longR.AssetId, longR.ExchangeId);
-                    if (!historyLookup.TryGetValue(longKey, out var longHistory))
+                    // Only active when MinConsecutiveFavorableCycles > 0; zero disables the gate entirely.
+                    // Requires at least N snapshots of actual history before rejecting; null/empty history
+                    // is treated as "no signal" and passes through (database gap, new exchange, or test
+                    // without history configured). Only rejects when history exists but confirms unfavorable.
+                    if (config.MinConsecutiveFavorableCycles > 0)
                     {
-                        longHistory = await _uow.FundingRates.GetHistoryAsync(
-                            longR.AssetId, longR.ExchangeId, historyFrom, historyTo,
-                            take: config.MinConsecutiveFavorableCycles);
-                        historyLookup[longKey] = longHistory;
-                    }
-                    var shortKey = (shortR.AssetId, shortR.ExchangeId);
-                    if (!historyLookup.TryGetValue(shortKey, out var shortHistory))
-                    {
-                        shortHistory = await _uow.FundingRates.GetHistoryAsync(
-                            shortR.AssetId, shortR.ExchangeId, historyFrom, historyTo,
-                            take: config.MinConsecutiveFavorableCycles);
-                        historyLookup[shortKey] = shortHistory;
-                    }
-
-                    if (longHistory is not null && shortHistory is not null
-                        && longHistory.Count >= config.MinConsecutiveFavorableCycles
-                        && shortHistory.Count >= config.MinConsecutiveFavorableCycles)
-                    {
-                        var allFavorable = true;
-                        for (int k = 0; k < config.MinConsecutiveFavorableCycles; k++)
+                        var longKey = (longR.AssetId, longR.ExchangeId);
+                        if (!historyLookup.TryGetValue(longKey, out var longHistory))
                         {
-                            if (k < longHistory.Count && k < shortHistory.Count)
+                            longHistory = await _uow.FundingRates.GetHistoryAsync(
+                                longR.AssetId, longR.ExchangeId, historyFrom, historyTo,
+                                take: config.MinConsecutiveFavorableCycles);
+                            historyLookup[longKey] = longHistory;
+                        }
+                        var shortKey = (shortR.AssetId, shortR.ExchangeId);
+                        if (!historyLookup.TryGetValue(shortKey, out var shortHistory))
+                        {
+                            shortHistory = await _uow.FundingRates.GetHistoryAsync(
+                                shortR.AssetId, shortR.ExchangeId, historyFrom, historyTo,
+                                take: config.MinConsecutiveFavorableCycles);
+                            historyLookup[shortKey] = shortHistory;
+                        }
+
+                        if (longHistory is not null && longHistory.Count >= config.MinConsecutiveFavorableCycles
+                            && shortHistory is not null && shortHistory.Count >= config.MinConsecutiveFavorableCycles)
+                        {
+                            var allFavorable = true;
+                            for (int k = 0; k < config.MinConsecutiveFavorableCycles; k++)
                             {
-                                if (shortHistory[k].RatePerHour - longHistory[k].RatePerHour <= 0)
+                                if (k < longHistory.Count && k < shortHistory.Count)
                                 {
-                                    allFavorable = false;
-                                    break;
+                                    if (shortHistory[k].RatePerHour - longHistory[k].RatePerHour <= 0)
+                                    {
+                                        allFavorable = false;
+                                        break;
+                                    }
                                 }
                             }
+                            if (!allFavorable)
+                            {
+                                diagnostics.PairsFilteredByTrendUnconfirmed++;
+                                continue;
+                            }
                         }
-                        if (!allFavorable)
+                        else if (longHistory is not null && longHistory.Count > 0
+                                 && shortHistory is not null && shortHistory.Count > 0)
                         {
-                            dto.TrendUnconfirmed = true;
+                            // Partial history (more than zero but fewer than N snapshots) — hard reject
+                            diagnostics.PairsFilteredByTrendUnconfirmed++;
+                            continue;
                         }
-                    }
-                    else
-                    {
-                        // Not enough history — mark as unconfirmed
-                        dto.TrendUnconfirmed = true;
+                        // null or empty history from both legs → pass through (no signal to reject on)
                     }
 
                     // MinEdgeThreshold per Appendix B: opportunity must cover at least
