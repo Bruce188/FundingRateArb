@@ -710,6 +710,24 @@ public class PositionRepositoryTests : IDisposable
     }
 
     [Fact]
+    public async Task SumRealizedPnlExcludingPhantomAsync_WithNoStatuses_ReturnsZero()
+    {
+        // Arrange: seed a closed position with PnL — it must not appear in the result because
+        // LINQ Contains over an empty params array returns false for every row.
+        var pos = BuildPosition(_user1.Id, PositionStatus.Closed);
+        pos.RealizedPnl = 42m;
+
+        _fixture.UnitOfWork.Positions.Add(pos);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act — call with no status arguments; Contains([]) is always false
+        var sum = await _fixture.UnitOfWork.Positions.SumRealizedPnlExcludingPhantomAsync(_user1.Id);
+
+        // Assert: no statuses → no rows match → sum is 0
+        sum.Should().Be(0m, "LINQ Contains over an empty params array matches no rows");
+    }
+
+    [Fact]
     public async Task SumRealizedPnlExcludingPhantomAsync_OtherUserPositionsNotIncluded()
     {
         // Arrange: user1 has one real closed row (100), user2 has another (999)

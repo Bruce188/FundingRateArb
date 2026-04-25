@@ -30,6 +30,10 @@
                     @badgeText
                 </span>
                 @if (pos.IsDryRun) { <span class="badge bg-warning text-dark ms-1">Paper</span> }
+                @if (pos.IsPhantomFeeBackfill)
+                {
+                    <span class="badge bg-secondary ms-1" title="Entry/exit fees were corrected via phantom-fee backfill. This row is excluded from realized PnL aggregates.">phantom</span>
+                }
                 @if (pos.CloseReason.HasValue)
                 {
                     <span class="badge bg-dark ms-2">@pos.CloseReason</span>

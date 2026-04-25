@@ -8,10 +8,13 @@ using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Infrastructure.Data;
+using FundingRateArb.Tests.Unit.Helpers;
 using FundingRateArb.Web.Controllers;
 using FundingRateArb.Web.ViewModels;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -191,5 +194,26 @@ public class DashboardControllerTests
 
         model.TotalRealizedPnl.Should().Be(0m,
             "TotalRealizedPnl must be 0 when there are no closed positions");
+    }
+
+    [Fact]
+    public async Task Index_SumRealizedPnlThrows_ReturnsDegradedView()
+    {
+        // Arrange — SumRealizedPnlExcludingPhantomAsync throws a transient DB exception.
+        // The Task.WhenAll block propagates it into the DatabaseUnavailableException catch,
+        // which returns the degraded view with DatabaseAvailable=false.
+        _mockPositionRepo
+            .Setup(r => r.SumRealizedPnlExcludingPhantomAsync(
+                It.IsAny<string>(), It.IsAny<PositionStatus[]>()))
+            .ThrowsAsync(new DatabaseUnavailableException("test db unavailable"));
+
+        // Act
+        var result = await _controller.Index();
+
+        // Assert — controller must return the degraded view, not a 500 error.
+        var viewResult = result.Should().BeOfType<ViewResult>().Subject;
+        var model = viewResult.Model.Should().BeOfType<DashboardViewModel>().Subject;
+        model.DatabaseAvailable.Should().BeFalse(
+            "a transient DB exception on the new parallel task must trigger the degraded-view catch block");
     }
 }

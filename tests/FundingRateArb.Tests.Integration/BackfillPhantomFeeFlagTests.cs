@@ -54,6 +54,10 @@ public class BackfillPhantomFeeFlagTests : IDisposable
                      && !p.IsPhantomFeeBackfill)
             .ToListAsync();
 
+        // Mirror the SQL script's RAISERROR/THROW 50002 bound: abort if more than 50 rows match.
+        if (targets.Count > 50)
+            throw new InvalidOperationException("Backfill affected more than 50 rows — bound exceeded.");
+
         foreach (var p in targets)
             p.IsPhantomFeeBackfill = true;
 
@@ -133,6 +137,27 @@ public class BackfillPhantomFeeFlagTests : IDisposable
         phantomNullLong.IsPhantomFeeBackfill.Should().BeTrue("long NULL + short 0 is also phantom — neither leg filled");
         phantomNullShort.IsPhantomFeeBackfill.Should().BeTrue("long 0 + short NULL is also phantom — neither leg filled");
         realFillNullOther.IsPhantomFeeBackfill.Should().BeFalse("a real fill on one leg means the position was live");
+    }
+
+    [Fact]
+    public async Task Backfill_AbortsWhen_BoundExceeded()
+    {
+        // Arrange: seed 51 zero-fill EmergencyClosed phantom rows — one more than the 50-row bound.
+        for (var i = 0; i < 51; i++)
+        {
+            _fixture.Context.Add(BuildPosition(PositionStatus.EmergencyClosed, longFilled: 0m, shortFilled: 0m));
+        }
+        await _fixture.Context.SaveChangesAsync();
+
+        // Act & Assert: ApplyBackfillAsync must throw before SaveChangesAsync (no row is modified).
+        await FluentActions.Invoking(() => ApplyBackfillAsync(_fixture.Context))
+            .Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("Backfill affected more than 50 rows — bound exceeded.");
+
+        // Verify rollback semantics: no row was flagged because the throw precedes SaveChangesAsync.
+        var flaggedCount = await _fixture.Context.Set<ArbitragePosition>()
+            .CountAsync(p => p.IsPhantomFeeBackfill);
+        flaggedCount.Should().Be(0, "the abort fires before SaveChangesAsync so no row is persisted");
     }
 
     public void Dispose() => _fixture.Dispose();

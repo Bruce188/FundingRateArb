@@ -65,5 +65,9 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
 
         builder.HasIndex(p => new { p.Status, p.OpenConfirmedAt })
             .HasDatabaseName("IX_ArbitragePositions_Status_OpenConfirmedAt");
+
+        builder.HasIndex(p => new { p.UserId, p.Status })
+            .HasDatabaseName("IX_ArbitragePositions_UserId_Status")
+            .IncludeProperties(p => new { p.RealizedPnl, p.IsPhantomFeeBackfill });
     }
 }

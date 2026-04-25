@@ -237,6 +237,9 @@ public class ExecutionEngineZeroFillTests
             "no fee can be incurred when neither leg filled any quantity");
         savedPos.ExitFeesUsdc.Should().Be(0m,
             "no exit fee can be incurred when neither leg opened a position");
+        // Post-fill end-guard sets CloseReason = None when both quantities are zero (line 764-767).
+        savedPos.CloseReason.Should().Be(CloseReason.None,
+            "the post-fill zero-fill guard sets CloseReason=None when both legs have zero fill");
 
         // Neither leg should have been called to emergency-close (nothing to close)
         _mockLongConnector.Verify(
@@ -304,6 +307,9 @@ public class ExecutionEngineZeroFillTests
             "long leg had zero fill: SetEmergencyCloseFees must not write fees for a zero-fill leg");
         savedPos.ExitFeesUsdc.Should().Be(0m,
             "no trade occurred on either leg — exit fees must not be written");
+        // Concurrent fail path does not set CloseReason — pin null so future additions break this test.
+        savedPos.CloseReason.Should().BeNull(
+            "the concurrent non-exception fail branch does not write CloseReason; it stays null");
     }
 
     /// <summary>
@@ -343,6 +349,9 @@ public class ExecutionEngineZeroFillTests
             "long threw and short was zero-fill — both effective quantities are 0, status must be Failed");
         savedPos.EntryFeesUsdc.Should().Be(0m, "no real fill on either leg");
         savedPos.ExitFeesUsdc.Should().Be(0m, "no real fill on either leg");
+        // Concurrent exception path does not set CloseReason — pin null so future additions break this test.
+        savedPos.CloseReason.Should().BeNull(
+            "the concurrent exception branch does not write CloseReason; it stays null");
     }
 
     // ── Scenario 2: Long leg filled, short zero-fill ─────────────────────────
@@ -487,6 +496,9 @@ public class ExecutionEngineZeroFillTests
             "no fee can be incurred when the first leg filled zero quantity");
         savedPos.ExitFeesUsdc.Should().Be(0m,
             "no exit fee when no real position existed");
+        // neverExisted=false so LongFilledQuantity is written explicitly as 0 (not null) — pin this contract.
+        savedPos.LongFilledQuantity.Should().Be(0m,
+            "explicit zero is written when neverExisted=false and firstResult.FilledQuantity==0; null would mean the field was never set");
     }
 
     /// <summary>
@@ -533,5 +545,8 @@ public class ExecutionEngineZeroFillTests
             "no fee can be incurred when the first leg filled zero quantity");
         savedPos.ExitFeesUsdc.Should().Be(0m,
             "no exit fee when no real position existed");
+        // neverExisted=false so LongFilledQuantity is written explicitly as 0 (not null) — pin this contract.
+        savedPos.LongFilledQuantity.Should().Be(0m,
+            "explicit zero is written when neverExisted=false and firstResult.FilledQuantity==0; null would mean the field was never set");
     }
 }
