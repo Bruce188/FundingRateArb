@@ -410,13 +410,13 @@ public class SignalEngine : ISignalEngine
                                 Math.Max(1, longR.Exchange.FundingIntervalHours),
                                 Math.Max(1, shortR.Exchange.FundingIntervalHours));
                             var cyclesPerYear = (24m / cycleHours) * 365m;
-                            dto.EffectiveLeverage         = effectiveLev;
-                            dto.ReturnOnCapitalPerCycle   = net * effectiveLev * cycleHours;
+                            dto.EffectiveLeverage = effectiveLev;
+                            dto.ReturnOnCapitalPerCycle = net * effectiveLev * cycleHours;
                             dto.AnnualizedReturnOnCapital = dto.ReturnOnCapitalPerCycle.Value * cyclesPerYear;
-                            dto.CyclesPerYear             = (int)cyclesPerYear;
+                            dto.CyclesPerYear = (int)cyclesPerYear;
                             // Back-compat fields — preserved for dashboard.js:713 and other callers
-                            dto.ReturnOnCapitalPerHour    = net * effectiveLev;
-                            dto.AprOnCapital              = dto.AnnualizedReturnOnCapital.Value * 100m;
+                            dto.ReturnOnCapitalPerHour = net * effectiveLev;
+                            dto.AprOnCapital = dto.AnnualizedReturnOnCapital.Value * 100m;
                             // BreakEvenCycles per Appendix B:
                             //   cycles = totalEntryCost / (netPerCycle * leverage)
                             // totalEntryCost already includes round-trip fees + slippage buffer.

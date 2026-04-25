@@ -3920,9 +3920,12 @@ public class SignalEngineTests
 
         var config = new BotConfiguration
         {
-            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
-            DefaultLeverage = 5, MaxLeverageCap = 50,
-            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
@@ -3968,9 +3971,12 @@ public class SignalEngineTests
 
         var config = new BotConfiguration
         {
-            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
-            DefaultLeverage = 5, MaxLeverageCap = 50,
-            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 
@@ -4038,9 +4044,12 @@ public class SignalEngineTests
 
         var config = new BotConfiguration
         {
-            SlippageBufferBps = 0, OpenThreshold = 0.0001m,
-            DefaultLeverage = 5, MaxLeverageCap = 50,
-            TotalCapitalUsdc = 10_000m, MaxCapitalPerPosition = 0.50m,
+            SlippageBufferBps = 0,
+            OpenThreshold = 0.0001m,
+            DefaultLeverage = 5,
+            MaxLeverageCap = 50,
+            TotalCapitalUsdc = 10_000m,
+            MaxCapitalPerPosition = 0.50m,
         };
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
 

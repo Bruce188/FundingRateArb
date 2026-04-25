@@ -1,28 +1,27 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace FundingRateArb.Infrastructure.Migrations
+namespace FundingRateArb.Infrastructure.Migrations;
+
+/// <inheritdoc />
+public partial class AddDetectedFundingIntervalHoursToSnapshot : Migration
 {
     /// <inheritdoc />
-    public partial class AddDetectedFundingIntervalHoursToSnapshot : Migration
+    protected override void Up(MigrationBuilder migrationBuilder)
     {
-        /// <inheritdoc />
-        protected override void Up(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.AddColumn<int>(
-                name: "DetectedFundingIntervalHours",
-                table: "FundingRateSnapshots",
-                type: "int",
-                nullable: true);
-        }
+        migrationBuilder.AddColumn<int>(
+            name: "DetectedFundingIntervalHours",
+            table: "FundingRateSnapshots",
+            type: "int",
+            nullable: true);
+    }
 
-        /// <inheritdoc />
-        protected override void Down(MigrationBuilder migrationBuilder)
-        {
-            migrationBuilder.DropColumn(
-                name: "DetectedFundingIntervalHours",
-                table: "FundingRateSnapshots");
-        }
+    /// <inheritdoc />
+    protected override void Down(MigrationBuilder migrationBuilder)
+    {
+        migrationBuilder.DropColumn(
+            name: "DetectedFundingIntervalHours",
+            table: "FundingRateSnapshots");
     }
 }
