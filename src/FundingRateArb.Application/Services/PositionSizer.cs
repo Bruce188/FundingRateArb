@@ -44,9 +44,11 @@ public class PositionSizer : IPositionSizer
         var userActivePositions = await _uow.Positions.GetByUserAndStatusesAsync(userId, PositionStatus.Open, PositionStatus.Opening);
         var allocatedCapital = userActivePositions.Sum(p => p.SizeUsdc);
 
-        // Use real exchange balance, capped by configured TotalCapitalUsdc
         var balanceSnapshot = await _balanceAggregator.GetBalanceSnapshotAsync(userId, ct);
-        var realCapital = Math.Min(balanceSnapshot.TotalAvailableUsdc, config.TotalCapitalUsdc);
+        var realCapital = balanceSnapshot.Balances.Sum(dto =>
+            dto.IsUnavailable ? 0m :
+            dto.IsFallbackEligible ? dto.LastKnownAvailableUsdc!.Value :
+            dto.AvailableUsdc);
         var availableCapital = Math.Max(0, realCapital - allocatedCapital);
         var totalCapital = availableCapital * config.MaxCapitalPerPosition;
         var sizes = new decimal[opportunities.Count];

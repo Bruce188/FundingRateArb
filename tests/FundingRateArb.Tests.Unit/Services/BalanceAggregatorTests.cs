@@ -778,9 +778,9 @@ public class BalanceAggregatorTests
     }
 
     [Fact]
-    public async Task GetBalanceSnapshot_TransientError_StaleBalance_SetsIsStale()
+    public async Task GetBalanceSnapshot_TransientError_OldLkg_SetsUnavailable()
     {
-        // Arrange — use a fresh cache and pre-populate LKG with old timestamp
+        // Arrange — pre-populate LKG with >5 min old timestamp; new spec: >5 min → unavailable
         const string userId = "user-stale-lkg";
         var freshCache = new MemoryCache(new MemoryCacheOptions());
         var sut = new BalanceAggregator(_mockUserSettings.Object, _mockConnectorFactory.Object, freshCache, _mockCircuitBreaker.Object, _mockLogger.Object);
@@ -799,9 +799,10 @@ public class BalanceAggregatorTests
         _mockUserSettings.Setup(u => u.DecryptCredential(It.IsAny<UserExchangeCredential>()))
             .Returns(((string?)null, (string?)null, (string?)null, "pk", (string?)null, (string?)null));
 
-        // Manually pre-populate LKG cache with a stale (>10 min ago) timestamp
-        var staleTimestamp = DateTime.UtcNow.AddMinutes(-15);
-        freshCache.Set($"balance-lkg:{userId}:30", (Value: 75m, FetchedAt: staleTimestamp), TimeSpan.FromHours(1));
+        // Manually pre-populate LKG cache with a timestamp older than the 5-minute fallback window
+        var oldTimestamp = DateTime.UtcNow.AddMinutes(-15);
+        freshCache.Set($"balance:lastgood:{userId}:Lighter", (Value: 75m, FetchedAt: oldTimestamp),
+            new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(24) });
 
         var mockConnector = new Mock<IExchangeConnector>();
         mockConnector
@@ -815,11 +816,11 @@ public class BalanceAggregatorTests
         // Act
         var result = await sut.GetBalanceSnapshotAsync(userId);
 
-        // Assert
+        // Assert: LKG older than 5 min must produce IsUnavailable=true (not a stale fallback)
         result.Balances.Should().HaveCount(1);
-        result.Balances[0].IsStale.Should().BeTrue();
-        result.Balances[0].IsUnavailable.Should().BeFalse();
-        result.Balances[0].AvailableUsdc.Should().Be(75m);
+        result.Balances[0].IsUnavailable.Should().BeTrue();
+        result.Balances[0].IsStale.Should().BeFalse();
+        result.Balances[0].AvailableUsdc.Should().Be(0m);
     }
 
     [Fact]
@@ -884,9 +885,10 @@ public class BalanceAggregatorTests
             .Setup(f => f.CreateForUserAsync("Hyperliquid", null, null, "w", null, null, null, It.IsAny<string?>()))
             .ReturnsAsync(mockHl.Object);
 
-        // Lighter: transient error, with stale LKG of 30m pre-populated
-        var staleTimestamp = DateTime.UtcNow.AddMinutes(-15);
-        freshCache.Set($"balance-lkg:{userId}:51", (Value: 30m, FetchedAt: staleTimestamp), TimeSpan.FromHours(1));
+        // Lighter: transient error, with recent LKG of 30m pre-populated (within 5-min fallback window)
+        var staleTimestamp = DateTime.UtcNow.AddMinutes(-2);
+        freshCache.Set($"balance:lastgood:{userId}:Lighter", (Value: 30m, FetchedAt: staleTimestamp),
+            new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(24) });
         var mockLighter = new Mock<IExchangeConnector>();
         mockLighter.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ThrowsAsync(new HttpRequestException("timeout"));
         _mockConnectorFactory

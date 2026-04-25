@@ -31,6 +31,12 @@ public class BotConfiguration : IValidatableObject
     [Range(1, 168)]
     public int BreakevenHoursMax { get; set; } = 8;
 
+    /// <remarks>
+    /// Deprecated. Sizing logic now reads live equity from
+    /// <c>IBalanceAggregator.GetBalanceSnapshotAsync</c> instead of this static field.
+    /// Field is retained for EF schema and seed compatibility only — do not consume in new code.
+    /// </remarks>
+    [Obsolete("Sizing now reads live equity from IBalanceAggregator. Field retained for schema/seed compatibility only — do not consume in new code.", error: false)]
     [Range(0.01, (double)decimal.MaxValue)]
     public decimal TotalCapitalUsdc { get; set; } = 39m;
 
@@ -71,11 +77,11 @@ public class BotConfiguration : IValidatableObject
     [Range(1, 60)]
     public int FundingWindowMinutes { get; set; } = 10;
 
-    /// <summary>Max fraction of TotalCapitalUsdc in any single asset (e.g., 0.5 = 50%).</summary>
+    /// <summary>Max fraction of live aggregated capital (from IBalanceAggregator) in any single asset (e.g., 0.5 = 50%).</summary>
     [Range(0.01, 1.0)]
     public decimal MaxExposurePerAsset { get; set; } = 0.5m;
 
-    /// <summary>Max fraction of TotalCapitalUsdc on any single exchange (e.g., 0.7 = 70%).</summary>
+    /// <summary>Max fraction of live aggregated capital (from IBalanceAggregator) on any single exchange (e.g., 0.7 = 70%).</summary>
     [Range(0.01, 1.0)]
     public decimal MaxExposurePerExchange { get; set; } = 0.7m;
 

@@ -210,7 +210,7 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
         public IBotConfigRepository BotConfig => new CounterBotConfigRepository(this);
         public IExchangeAssetConfigRepository ExchangeAssetConfigs => throw new InvalidOperationException("Not expected in this test scenario");
         public IUserExchangeCredentialRepository UserCredentials => throw new InvalidOperationException("Not expected in this test scenario");
-        public IUserConfigurationRepository UserConfigurations => throw new InvalidOperationException("Not expected in this test scenario");
+        public IUserConfigurationRepository UserConfigurations => new EmptyUserConfigurationRepository();
         public IUserPreferenceRepository UserPreferences => throw new InvalidOperationException("Not expected in this test scenario");
         public IOpportunitySnapshotRepository OpportunitySnapshots => throw new InvalidOperationException("Not expected in this test scenario");
         public Task<int> SaveAsync(CancellationToken ct = default) => Task.FromResult(0);
@@ -284,6 +284,14 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
             public Task<List<(int AssetId, int ExchangeId, decimal Mean, decimal StdDev)>> GetAggregateStatsByPairAsync(
                 DateTime from, DateTime to, CancellationToken ct = default)
                 => Task.FromResult(new List<(int, int, decimal, decimal)>());
+        }
+
+        private sealed class EmptyUserConfigurationRepository : IUserConfigurationRepository
+        {
+            public Task<UserConfiguration?> GetByUserAsync(string userId) => Task.FromResult<UserConfiguration?>(null);
+            public Task<List<string>> GetAllEnabledUserIdsAsync() => Task.FromResult(new List<string>());
+            public void Add(UserConfiguration config) { }
+            public void Update(UserConfiguration config) { }
         }
     }
 

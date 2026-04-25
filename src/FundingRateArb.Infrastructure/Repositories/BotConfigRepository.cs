@@ -73,7 +73,9 @@ public class BotConfigRepository : IBotConfigRepository
         VolumeFraction = src.VolumeFraction,
         MaxCapitalPerPosition = src.MaxCapitalPerPosition,
         BreakevenHoursMax = src.BreakevenHoursMax,
+#pragma warning disable CS0618
         TotalCapitalUsdc = src.TotalCapitalUsdc,
+#pragma warning restore CS0618
         DefaultLeverage = src.DefaultLeverage,
         MaxConcurrentPositions = src.MaxConcurrentPositions,
         AllocationStrategy = src.AllocationStrategy,

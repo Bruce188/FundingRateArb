@@ -379,6 +379,107 @@ public class BotConfigControllerTests
         model.ReconciliationIntervalCycles.Should().Be(25);
     }
 
+    // ── Task 4.2: TotalCapitalUsdc is ignored on POST (derives from live balances) ──
+
+    [Fact]
+    public async Task Index_Post_ChangedTotalCapitalUsdc_DoesNotMutatePersistedValue()
+    {
+        // Arrange: entity has a specific TotalCapitalUsdc value already persisted in DB
+        const decimal dbCapitalValue = 500m;
+        const decimal submittedCapitalValue = 9999m; // attacker/user submits a different value
+
+        var config = new BotConfiguration
+        {
+            TotalCapitalUsdc = dbCapitalValue, // DB-side value that must be preserved
+            OpenThreshold = 0.0003m,
+            AlertThreshold = 0.0001m,
+            CloseThreshold = 0.00005m,
+            FeeAmortizationHours = 24,
+            MaxHoldTimeHours = 72,
+            DefaultLeverage = 5,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            MaxConcurrentPositions = 1,
+            MinPositionSizeUsdc = 10m,
+            DailyDrawdownPausePct = 0.05m,
+        };
+
+        // GetActiveTrackedAsync returns the same config object both times the controller calls it
+        _mockBotConfigRepo.Setup(r => r.GetActiveTrackedAsync()).ReturnsAsync(config);
+        _mockValidator.Setup(v => v.Validate(It.IsAny<BotConfiguration>()))
+            .Returns(new ConfigValidationResult(true, new List<string>()));
+        _mockUow.Setup(u => u.SaveAsync(default)).ReturnsAsync(1);
+
+        var model = new BotConfigViewModel
+        {
+            OpenThreshold = 0.0003m,
+            AlertThreshold = 0.0001m,
+            CloseThreshold = 0.00005m,
+            TotalCapitalUsdc = submittedCapitalValue, // user changes this — must be ignored
+            DefaultLeverage = 5,
+            MaxConcurrentPositions = 1,
+            MaxCapitalPerPosition = 0.8m,
+            StopLossPct = 0.15m,
+            MaxHoldTimeHours = 72,
+            MinHoldTimeHours = 2,
+            VolumeFraction = 0.001m,
+            BreakevenHoursMax = 6,
+            AllocationStrategy = AllocationStrategy.Concentrated,
+            AllocationTopN = 3,
+            FeeAmortizationHours = 24,
+            MinPositionSizeUsdc = 10m,
+            MinVolume24hUsdc = 50_000m,
+            RateStalenessMinutes = 15,
+            DailyDrawdownPausePct = 0.05m,
+            ConsecutiveLossPause = 3,
+            FundingWindowMinutes = 10,
+            MaxExposurePerAsset = 0.5m,
+            MaxExposurePerExchange = 0.7m,
+            TargetPnlMultiplier = 2.0m,
+            RebalanceMinImprovement = 0.0002m,
+            MaxRebalancesPerCycle = 2,
+            MaxLeverageCap = 3,
+            MarginUtilizationAlertPct = 0.70m,
+            PnlTargetCooldownMinutes = 30,
+            MinHoldBeforePnlTargetMinutes = 120,
+            LiquidationWarningPct = 0.40m,
+            LiquidationEarlyWarningPct = 0.80m,
+            ExchangeCircuitBreakerThreshold = 5,
+            ExchangeCircuitBreakerMinutes = 30,
+            PriceFeedFailureCloseThreshold = 20,
+            EmergencyCloseSpreadThreshold = -0.005m,
+            MinEdgeMultiplier = 4.0m,
+            DivergenceAlertMultiplier = 3.0m,
+            DivergenceAlertConfirmationCycles = 5,
+            RotationDivergenceHorizonHours = 4.0m,
+            PreferCloseOnDivergenceNarrowing = false,
+            SlippageBufferBps = 10,
+            StablecoinAlertThresholdPct = 0.5m,
+            StablecoinCriticalThresholdPct = 2.0m,
+            MinConsecutiveFavorableCycles = 5,
+            FundingFlipExitCycles = 4,
+            UseRiskBasedDivergenceClose = false,
+            UseBreakEvenSizeFilter = true,
+            DryRunEnabled = false,
+            ForceConcurrentExecution = false,
+            ReconciliationIntervalCycles = 10,
+        };
+
+        // Act
+        var result = await _controller.Index(model);
+
+        // Assert: save succeeded (redirect), but TotalCapitalUsdc must be the original DB value
+        result.Should().BeOfType<RedirectToActionResult>(
+            "a valid POST should still redirect on success");
+
+        config.TotalCapitalUsdc.Should().Be(dbCapitalValue,
+            "TotalCapitalUsdc is derived from live exchange balances and must not be " +
+            "overwritten by a user-supplied form value");
+
+        config.TotalCapitalUsdc.Should().NotBe(submittedCapitalValue,
+            "the user-submitted TotalCapitalUsdc value must be ignored entirely");
+    }
+
     // ── Task 2.3: new divergence monitoring fields round-trip ─────────────────
 
     [Fact]
