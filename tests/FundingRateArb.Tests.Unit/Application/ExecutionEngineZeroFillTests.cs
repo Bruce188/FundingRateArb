@@ -22,7 +22,7 @@ namespace FundingRateArb.Tests.Unit.Services;
 /// path (both return Success=true with FilledQuantity=0) and through the intermediate
 /// concurrent failure path (long returns 0-fill, short fails entirely) — the latter
 /// path currently assigns PositionStatus.EmergencyClosed instead of Failed because the
-/// intermediate guard at lines 652–674 does not check effective fill quantities.
+/// intermediate concurrent-failure guard does not check effective fill quantities.
 /// </summary>
 public class ExecutionEngineZeroFillTests
 {
@@ -205,7 +205,7 @@ public class ExecutionEngineZeroFillTests
 
     /// <summary>
     /// Direct path: both concurrent legs report Success=true but FilledQuantity=0.
-    /// The zero-fill end-guard (lines 719–760) must set Status=Failed, not EmergencyClosed,
+    /// The zero-fill post-confirm end-guard must set Status=Failed, not EmergencyClosed,
     /// and must not write any fee values.
     /// </summary>
     [Fact]
@@ -257,7 +257,7 @@ public class ExecutionEngineZeroFillTests
     /// are zero the engine must set Status=Failed — not EmergencyClosed — and must not
     /// write any fee values.
     ///
-    /// Current bug: lines 652–674 set concurrentNeverExisted=false whenever the
+    /// Current bug: the concurrent-failure emergency-close branch sets concurrentNeverExisted=false whenever the
     /// emergency-close branch fires, without checking whether the surviving leg actually
     /// filled any quantity.  This causes Status=EmergencyClosed even when both effective
     /// quantities are 0.
@@ -437,5 +437,101 @@ public class ExecutionEngineZeroFillTests
             "a real fill on Hyperliquid incurs a taker entry fee");
         savedPos.LongFilledQuantity.Should().Be(0.1m);
         savedPos.ShortFilledQuantity.Should().Be(0.1m);
+    }
+
+    // ── Scenario 4: Sequential-path zero-fill guards (NB12 / B1 / B2) ────────
+
+    /// <summary>
+    /// Sequential throw-branch (B1): first leg returns Success=true but FilledQuantity=0,
+    /// then the second leg throws. The emergency-close of the first leg confirms the position
+    /// momentarily existed (neverExisted=false), but because firstResult.FilledQuantity == 0
+    /// the guard at ExecutionEngine.cs:521 must set Status=Failed, not EmergencyClosed.
+    /// Trigger the sequential path by marking the long connector as IsEstimatedFillExchange=true.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_SequentialPath_FirstLegZeroFillSecondThrows_StatusMustBeFailed()
+    {
+        // Mark long connector as estimated-fill so the sequential path is chosen
+        _mockLongConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+
+        // First leg: success but zero fill
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ZeroFillOrder("long-1"));
+
+        // Second leg: throws
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Short exchange transient error"));
+
+        // Emergency-close of first (long) leg confirms position existed
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true });
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions
+            .Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        var result = await _sut.OpenPositionAsync(
+            TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        savedPos.Should().NotBeNull();
+        savedPos!.Status.Should().Be(PositionStatus.Failed,
+            "first leg zero-fill + second throws — both effective fills are 0, Status must be Failed");
+        savedPos.EntryFeesUsdc.Should().Be(0m,
+            "no fee can be incurred when the first leg filled zero quantity");
+        savedPos.ExitFeesUsdc.Should().Be(0m,
+            "no exit fee when no real position existed");
+    }
+
+    /// <summary>
+    /// Sequential fail-branch (B2): first leg returns Success=true but FilledQuantity=0,
+    /// then the second leg returns Success=false. The guard at ExecutionEngine.cs:553
+    /// must set Status=Failed (not EmergencyClosed) because firstResult.FilledQuantity == 0.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_SequentialPath_FirstLegZeroFillSecondFails_StatusMustBeFailed()
+    {
+        // Mark long connector as estimated-fill so the sequential path is chosen
+        _mockLongConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
+
+        // First leg: success but zero fill
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ZeroFillOrder("long-1"));
+
+        // Second leg: fails
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(FailOrder("Short exchange unavailable"));
+
+        // Emergency-close of first (long) leg confirms position existed
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true });
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions
+            .Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        var result = await _sut.OpenPositionAsync(
+            TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        savedPos.Should().NotBeNull();
+        savedPos!.Status.Should().Be(PositionStatus.Failed,
+            "first leg zero-fill + second fails — both effective fills are 0, Status must be Failed");
+        savedPos.EntryFeesUsdc.Should().Be(0m,
+            "no fee can be incurred when the first leg filled zero quantity");
+        savedPos.ExitFeesUsdc.Should().Be(0m,
+            "no exit fee when no real position existed");
     }
 }

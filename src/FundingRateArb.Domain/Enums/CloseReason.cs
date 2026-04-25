@@ -2,6 +2,7 @@ namespace FundingRateArb.Domain.Enums;
 
 public enum CloseReason
 {
+    None = 0,
     SpreadCollapsed,
     MaxHoldTimeReached,
     StopLoss,

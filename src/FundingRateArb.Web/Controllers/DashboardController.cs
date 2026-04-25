@@ -137,7 +137,7 @@ public class DashboardController : Controller
             List<int>? enabledExchangeIds = null;
             List<ArbitragePosition>? openPositions = null;
             List<Alert>? unreadAlerts = null;
-            List<ArbitragePosition>? closedPositions = null;
+            decimal totalRealizedPnl = 0m;
 
             await Task.WhenAll(
                 Task.Run(async () =>
@@ -176,7 +176,8 @@ public class DashboardController : Controller
                 {
                     using var scope = _scopeFactory.CreateScope();
                     var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-                    closedPositions = await uow.Positions.GetByUserAndStatusesAsync(
+                    // Aggregation pushed to SQL — excludes IsPhantomFeeBackfill rows, no row materialization.
+                    totalRealizedPnl = await uow.Positions.SumRealizedPnlExcludingPhantomAsync(
                         userId!,
                         PositionStatus.Closed,
                         PositionStatus.EmergencyClosed,
@@ -247,10 +248,6 @@ public class DashboardController : Controller
             }
 
             var positionSummaries = openPositions!.Select(p => p.ToSummaryDto()).ToList();
-
-            var totalRealizedPnl = (closedPositions ?? [])
-                .Where(p => !p.IsPhantomFeeBackfill)
-                .Sum(p => p.RealizedPnl ?? 0m);
 
             var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
             var bestSpread = opportunities.Count > 0

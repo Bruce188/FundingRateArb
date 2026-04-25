@@ -87,6 +87,9 @@ public class DashboardControllerTests
         _mockPositionRepo.Setup(r => r.GetByUserAndStatusesAsync(
                 It.IsAny<string>(), It.IsAny<PositionStatus[]>()))
             .ReturnsAsync([]);
+        _mockPositionRepo.Setup(r => r.SumRealizedPnlExcludingPhantomAsync(
+                It.IsAny<string>(), It.IsAny<PositionStatus[]>()))
+            .ReturnsAsync(0m);
         _mockFundingRateRepo.Setup(r => r.GetLatestPerExchangePerAssetAsync())
             .ReturnsAsync([]);
         _mockAlertRepo.Setup(r => r.GetByUserAsync(It.IsAny<string>(), true, It.IsAny<int>(), It.IsAny<int>()))
@@ -131,44 +134,20 @@ public class DashboardControllerTests
     [Fact]
     public async Task Index_RealizedPnlAggregate_ExcludesPhantomBackfillRows()
     {
-        // Arrange: three closed positions, one of which is a phantom-fee backfill.
-        // The backfill position's RealizedPnl must NOT contribute to the dashboard total.
+        // Arrange: SQL aggregate returns 150 (sum of two non-phantom rows: 100 + 50).
+        // The phantom row (200) is excluded by the SQL WHERE clause in the repository.
         _mockPositionRepo
-            .Setup(r => r.GetByUserAndStatusesAsync(
+            .Setup(r => r.SumRealizedPnlExcludingPhantomAsync(
                 "test-user-id",
                 PositionStatus.Closed,
                 PositionStatus.EmergencyClosed,
                 PositionStatus.Liquidated))
-            .ReturnsAsync(new List<ArbitragePosition>
-            {
-                new()
-                {
-                    Id = 10, UserId = "test-user-id",
-                    Status = PositionStatus.Closed,
-                    RealizedPnl = 100m,
-                    IsPhantomFeeBackfill = false,
-                },
-                new()
-                {
-                    Id = 11, UserId = "test-user-id",
-                    Status = PositionStatus.Closed,
-                    RealizedPnl = 50m,
-                    IsPhantomFeeBackfill = false,
-                },
-                new()
-                {
-                    Id = 12, UserId = "test-user-id",
-                    Status = PositionStatus.Closed,
-                    RealizedPnl = 200m,
-                    IsPhantomFeeBackfill = true,   // must be excluded from total
-                },
-            });
+            .ReturnsAsync(150m);
 
         // Act
         var result = await _controller.Index();
 
-        // Assert: only the two normal closed positions are summed (100 + 50 = 150).
-        // The phantom-fee backfill (200) must not appear in the aggregate.
+        // Assert: the SQL aggregate (150) flows through to TotalRealizedPnl on the ViewModel.
         var model = result.Should().BeOfType<ViewResult>().Subject
             .Model.Should().BeOfType<DashboardViewModel>().Subject;
 
@@ -179,31 +158,14 @@ public class DashboardControllerTests
     [Fact]
     public async Task Index_RealizedPnlAggregate_AllPhantomBackfill_YieldsZero()
     {
-        // Arrange: all closed positions are phantom-fee backfills.
-        // Total should be 0 (not some non-zero sum of phantom corrections).
+        // Arrange: SQL aggregate returns 0 when all rows are phantom-fee backfills.
         _mockPositionRepo
-            .Setup(r => r.GetByUserAndStatusesAsync(
+            .Setup(r => r.SumRealizedPnlExcludingPhantomAsync(
                 "test-user-id",
                 PositionStatus.Closed,
                 PositionStatus.EmergencyClosed,
                 PositionStatus.Liquidated))
-            .ReturnsAsync(new List<ArbitragePosition>
-            {
-                new()
-                {
-                    Id = 20, UserId = "test-user-id",
-                    Status = PositionStatus.Closed,
-                    RealizedPnl = 75m,
-                    IsPhantomFeeBackfill = true,
-                },
-                new()
-                {
-                    Id = 21, UserId = "test-user-id",
-                    Status = PositionStatus.Closed,
-                    RealizedPnl = 125m,
-                    IsPhantomFeeBackfill = true,
-                },
-            });
+            .ReturnsAsync(0m);
 
         // Act
         var result = await _controller.Index();
@@ -219,7 +181,7 @@ public class DashboardControllerTests
     [Fact]
     public async Task Index_RealizedPnlAggregate_NoClosedPositions_YieldsZero()
     {
-        // Arrange: no closed positions at all — default mock returns empty list.
+        // Arrange: default mock returns 0m (no closed positions) — no override needed.
         // Act
         var result = await _controller.Index();
 

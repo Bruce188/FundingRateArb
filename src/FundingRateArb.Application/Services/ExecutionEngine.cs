@@ -762,7 +762,9 @@ public class ExecutionEngine : IExecutionEngine
                 }
 
                 position.Status = (longQty > 0m || shortQty > 0m) ? PositionStatus.EmergencyClosed : PositionStatus.Failed;
-                position.CloseReason = CloseReason.EmergencyLegFailed;
+                position.CloseReason = (longQty > 0m || shortQty > 0m)
+                    ? CloseReason.EmergencyLegFailed
+                    : CloseReason.None;
                 position.ClosedAt = DateTime.UtcNow;
                 _uow.Positions.Update(position);
                 _uow.Alerts.Add(new Alert

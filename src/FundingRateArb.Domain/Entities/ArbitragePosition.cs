@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using FundingRateArb.Domain.Enums;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace FundingRateArb.Domain.Entities;
 
@@ -52,6 +53,7 @@ public class ArbitragePosition
     public bool IsDryRun { get; set; }
 
     /// <summary>True if entry/exit fees were backfilled via the phantom-fee correction path.</summary>
+    [BindNever]
     public bool IsPhantomFeeBackfill { get; set; }
 
     [MaxLength(200)]

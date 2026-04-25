@@ -49,78 +49,33 @@ public class ArbitragePositionMappingTests
 
     // ── PositionSummaryDto round-trip ─────────────────────────────────────────
 
-    [Fact]
-    public void ToSummaryDto_IsPhantomFeeBackfill_True_RoundTrips()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Maps_IsPhantomFeeBackfill_ToSummaryDto_RoundTrip(bool flag)
     {
         var pos = CreatePosition();
-        pos.IsPhantomFeeBackfill = true;
+        pos.IsPhantomFeeBackfill = flag;
 
         var dto = pos.ToSummaryDto();
 
-        dto.IsPhantomFeeBackfill.Should().BeTrue(
-            "IsPhantomFeeBackfill=true must be preserved through entity→PositionSummaryDto mapping");
-    }
-
-    [Fact]
-    public void ToSummaryDto_IsPhantomFeeBackfill_False_RoundTrips()
-    {
-        var pos = CreatePosition();
-        pos.IsPhantomFeeBackfill = false;
-
-        var dto = pos.ToSummaryDto();
-
-        dto.IsPhantomFeeBackfill.Should().BeFalse(
-            "IsPhantomFeeBackfill=false must be preserved through entity→PositionSummaryDto mapping");
-    }
-
-    [Fact]
-    public void ToSummaryDto_IsPhantomFeeBackfill_DefaultsToFalse()
-    {
-        // Entity default is false; DTO must also default to false
-        var pos = CreatePosition();
-        // IsPhantomFeeBackfill is implicitly false (default)
-
-        var dto = pos.ToSummaryDto();
-
-        dto.IsPhantomFeeBackfill.Should().BeFalse(
-            "IsPhantomFeeBackfill must default to false when the entity field is unset");
+        dto.IsPhantomFeeBackfill.Should().Be(flag,
+            "IsPhantomFeeBackfill must be preserved through entity→PositionSummaryDto mapping");
     }
 
     // ── PositionDetailsDto round-trip ─────────────────────────────────────────
 
-    [Fact]
-    public void ToDetailsDto_IsPhantomFeeBackfill_True_RoundTrips()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Maps_IsPhantomFeeBackfill_ToDetailsDto_RoundTrip(bool flag)
     {
         var pos = CreatePosition();
-        pos.IsPhantomFeeBackfill = true;
+        pos.IsPhantomFeeBackfill = flag;
 
         var dto = pos.ToDetailsDto();
 
-        dto.IsPhantomFeeBackfill.Should().BeTrue(
-            "IsPhantomFeeBackfill=true must be preserved through entity→PositionDetailsDto mapping");
-    }
-
-    [Fact]
-    public void ToDetailsDto_IsPhantomFeeBackfill_False_RoundTrips()
-    {
-        var pos = CreatePosition();
-        pos.IsPhantomFeeBackfill = false;
-
-        var dto = pos.ToDetailsDto();
-
-        dto.IsPhantomFeeBackfill.Should().BeFalse(
-            "IsPhantomFeeBackfill=false must be preserved through entity→PositionDetailsDto mapping");
-    }
-
-    [Fact]
-    public void ToDetailsDto_IsPhantomFeeBackfill_DefaultsToFalse()
-    {
-        var pos = CreatePosition();
-        // IsPhantomFeeBackfill is implicitly false (default)
-
-        var dto = pos.ToDetailsDto();
-
-        dto.IsPhantomFeeBackfill.Should().BeFalse(
-            "IsPhantomFeeBackfill must default to false when the entity field is unset");
+        dto.IsPhantomFeeBackfill.Should().Be(flag,
+            "IsPhantomFeeBackfill must be preserved through entity→PositionDetailsDto mapping");
     }
 }

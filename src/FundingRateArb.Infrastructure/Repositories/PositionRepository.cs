@@ -277,6 +277,12 @@ public class PositionRepository : IPositionRepository
             .ToListAsync(ct);
     }
 
+    public Task<decimal> SumRealizedPnlExcludingPhantomAsync(string userId, params PositionStatus[] statuses) =>
+        _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.UserId == userId && statuses.Contains(p.Status) && !p.IsPhantomFeeBackfill)
+            .SumAsync(p => p.RealizedPnl ?? 0m);
+
     public async Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(
         string userId, TimeSpan olderThan, CancellationToken ct, int maxResults = 100)
     {

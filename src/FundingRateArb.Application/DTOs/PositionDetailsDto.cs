@@ -1,4 +1,5 @@
 using FundingRateArb.Domain.Enums;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace FundingRateArb.Application.DTOs;
 
@@ -56,6 +57,7 @@ public class PositionDetailsDto
     public bool IsDryRun { get; set; }
 
     /// <summary>True when this row represents a synthetic phantom-fee correction entry and should be excluded from PnL aggregates.</summary>
+    [BindNever]
     public bool IsPhantomFeeBackfill { get; set; }
 
     // Margin utilization fields (populated when margin state is available)

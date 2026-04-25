@@ -482,6 +482,8 @@ public class ExecutionEngineTests
         savedPos.Should().NotBeNull();
         savedPos!.Status.Should().Be(PositionStatus.Failed,
             "both legs filled zero — no position was ever live on-chain, EmergencyClosed is reserved for genuinely-filled positions");
+        savedPos.CloseReason.Should().Be(CloseReason.None,
+            "when both fills are zero no leg actually failed — EmergencyLegFailed would be misleading");
         savedPos.EntryFeesUsdc.Should().Be(0m,
             "both legs filled zero — no surviving leg to record fees against");
         savedPos.ExitFeesUsdc.Should().Be(0m);
