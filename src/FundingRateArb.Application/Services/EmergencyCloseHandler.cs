@@ -33,6 +33,8 @@ public class EmergencyCloseHandler : IEmergencyCloseHandler
     internal static void SetEmergencyCloseFees(
         ArbitragePosition position, OrderResultDto successfulLeg, string exchangeName)
     {
+        if (successfulLeg.FilledQuantity <= 0m) return;
+
         var legNotional = successfulLeg.FilledPrice * successfulLeg.FilledQuantity;
         var feeRate = ExchangeFeeConstants.GetTakerFeeRate(exchangeName);
         var entryFee = legNotional * feeRate;
