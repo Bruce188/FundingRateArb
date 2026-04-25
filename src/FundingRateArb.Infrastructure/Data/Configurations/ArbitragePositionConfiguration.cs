@@ -35,6 +35,7 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
         builder.Property(p => p.ExchangeReportedFunding).HasColumnType("decimal(18,4)");
         builder.Property(p => p.LongLegClosed).HasDefaultValue(false);
         builder.Property(p => p.ShortLegClosed).HasDefaultValue(false);
+        builder.Property(p => p.IsPhantomFeeBackfill).HasDefaultValue(false).IsRequired();
         builder.Property(p => p.LongOrderId).HasMaxLength(200);
         builder.Property(p => p.ShortOrderId).HasMaxLength(200);
         builder.Property(p => p.Notes).HasMaxLength(500);

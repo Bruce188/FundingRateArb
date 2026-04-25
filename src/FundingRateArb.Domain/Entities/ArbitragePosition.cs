@@ -51,6 +51,9 @@ public class ArbitragePosition
     /// <summary>True if this position was opened in dry-run (paper trading) mode.</summary>
     public bool IsDryRun { get; set; }
 
+    /// <summary>True if entry/exit fees were backfilled via the phantom-fee correction path.</summary>
+    public bool IsPhantomFeeBackfill { get; set; }
+
     [MaxLength(200)]
     public string? LongOrderId { get; set; }
 
