@@ -48,8 +48,8 @@ public class BackfillPhantomFeeFlagTests : IDisposable
     private static async Task<int> ApplyBackfillAsync(AppDbContext ctx)
     {
         var targets = await ctx.Set<ArbitragePosition>()
-            .Where(p => p.LongFilledQuantity == 0m
-                     && p.ShortFilledQuantity == 0m
+            .Where(p => (p.LongFilledQuantity == null || p.LongFilledQuantity == 0m)
+                     && (p.ShortFilledQuantity == null || p.ShortFilledQuantity == 0m)
                      && p.Status == PositionStatus.EmergencyClosed
                      && !p.IsPhantomFeeBackfill)
             .ToListAsync();
@@ -114,6 +114,25 @@ public class BackfillPhantomFeeFlagTests : IDisposable
 
         var secondPassRows = await ApplyBackfillAsync(_fixture.Context);
         secondPassRows.Should().Be(0, "idempotent: already-flagged rows are excluded by the WHERE clause");
+    }
+
+    [Fact]
+    public async Task Backfill_FlagsRowsWithNullFillQuantities()
+    {
+        var phantomNullBoth = BuildPosition(PositionStatus.EmergencyClosed, longFilled: null, shortFilled: null);
+        var phantomNullLong = BuildPosition(PositionStatus.EmergencyClosed, longFilled: null, shortFilled: 0m);
+        var phantomNullShort = BuildPosition(PositionStatus.EmergencyClosed, longFilled: 0m, shortFilled: null);
+        var realFillNullOther = BuildPosition(PositionStatus.EmergencyClosed, longFilled: 0.5m, shortFilled: null);
+
+        _fixture.Context.AddRange(phantomNullBoth, phantomNullLong, phantomNullShort, realFillNullOther);
+        await _fixture.Context.SaveChangesAsync();
+
+        await ApplyBackfillAsync(_fixture.Context);
+
+        phantomNullBoth.IsPhantomFeeBackfill.Should().BeTrue("both legs NULL is the historical phantom shape");
+        phantomNullLong.IsPhantomFeeBackfill.Should().BeTrue("long NULL + short 0 is also phantom — neither leg filled");
+        phantomNullShort.IsPhantomFeeBackfill.Should().BeTrue("long 0 + short NULL is also phantom — neither leg filled");
+        realFillNullOther.IsPhantomFeeBackfill.Should().BeFalse("a real fill on one leg means the position was live");
     }
 
     public void Dispose() => _fixture.Dispose();

@@ -518,7 +518,9 @@ public class ExecutionEngine : IExecutionEngine
                     _logger.LogError(ex, "Second leg threw for {Asset} on {Exchange} — emergency closing first leg",
                         opp.AssetSymbol, secondExchangeName);
                     var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    position.Status = (neverExisted || firstResult.FilledQuantity <= 0m)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
@@ -550,7 +552,9 @@ public class ExecutionEngine : IExecutionEngine
                         "EMERGENCY CLOSE — Second leg failed: {Asset} {Exchange} Error={Error}",
                         opp.AssetSymbol, secondExchangeName, secondErrorMsg);
                     var neverExisted = await _emergencyClose.TryEmergencyCloseWithRetryAsync(firstConnector, opp.AssetSymbol, firstSide, userId, ct);
-                    position.Status = neverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    position.Status = (neverExisted || firstResult.FilledQuantity <= 0m)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     if (!neverExisted)
                     {
@@ -630,7 +634,12 @@ public class ExecutionEngine : IExecutionEngine
                         }
                     }
 
-                    position.Status = allNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    var concurrentExBothEffectivelyZero =
+                        (position.LongFilledQuantity ?? 0m) <= 0m &&
+                        (position.ShortFilledQuantity ?? 0m) <= 0m;
+                    position.Status = (allNeverExisted || concurrentExBothEffectivelyZero)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
                     var errorMsg = longEx?.Message ?? shortEx?.Message ?? "Unknown error";

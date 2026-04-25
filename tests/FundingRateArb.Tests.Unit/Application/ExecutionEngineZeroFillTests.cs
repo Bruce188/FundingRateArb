@@ -306,6 +306,45 @@ public class ExecutionEngineZeroFillTests
             "no trade occurred on either leg — exit fees must not be written");
     }
 
+    /// <summary>
+    /// Concurrent-exception path: long leg throws, short leg succeeds with FilledQuantity=0.
+    /// Emergency close of the short leg confirms the position momentarily existed
+    /// (neverExisted=false, so allNeverExisted=false). Even so, both effective fill
+    /// quantities are zero — Status must be Failed, not EmergencyClosed.
+    /// Covers the guard at ExecutionEngine.cs:633.
+    /// </summary>
+    [Fact]
+    public async Task OpenPosition_LongThrows_ShortZeroFill_BothEffectivelyZero_StatusMustBeFailed()
+    {
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Long exchange transient error"));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short,
+                It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ZeroFillOrder("short-1", price: 3001m));
+
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OrderResultDto { Success = true });
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions
+            .Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        var result = await _sut.OpenPositionAsync(
+            TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        result.Success.Should().BeFalse();
+        savedPos.Should().NotBeNull();
+        savedPos!.Status.Should().Be(PositionStatus.Failed,
+            "long threw and short was zero-fill — both effective quantities are 0, status must be Failed");
+        savedPos.EntryFeesUsdc.Should().Be(0m, "no real fill on either leg");
+        savedPos.ExitFeesUsdc.Should().Be(0m, "no real fill on either leg");
+    }
+
     // ── Scenario 2: Long leg filled, short zero-fill ─────────────────────────
 
     /// <summary>
