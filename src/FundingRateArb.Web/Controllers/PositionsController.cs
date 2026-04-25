@@ -135,6 +135,12 @@ public class PositionsController : Controller
                         positionDto.MaxSafeMovePctShort =
                             Math.Abs(currentShortMark - shortMargin.LiquidationPrice.Value) / currentShortMark * 100m;
                     }
+
+                    // Cross-leg minimum: null when either leg's value is unavailable
+                    if (positionDto.MaxSafeMovePctLong is not null && positionDto.MaxSafeMovePctShort is not null)
+                    {
+                        positionDto.MaxSafeMovePct = Math.Min(positionDto.MaxSafeMovePctLong.Value, positionDto.MaxSafeMovePctShort.Value);
+                    }
                 }
             }
             catch (Exception ex)

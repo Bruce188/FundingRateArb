@@ -365,7 +365,8 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     currentLongMark,
                     currentShortMark,
                     longMargin?.LiquidationPrice,
-                    shortMargin?.LiquidationPrice);
+                    shortMargin?.LiquidationPrice,
+                    _logger);
 
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
 
@@ -777,11 +778,28 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         decimal currentLongMark,
         decimal currentShortMark,
         decimal? apiLongLiqPrice = null,
-        decimal? apiShortLiqPrice = null)
+        decimal? apiShortLiqPrice = null,
+        ILogger<PositionHealthMonitor>? logger = null)
     {
         if (pos.Leverage <= 0 || pos.LongEntryPrice <= 0 || pos.ShortEntryPrice <= 0)
         {
             return null;
+        }
+
+        // Warn when the API did not supply a liquidation price for a leg that has a known exchange —
+        // this indicates exchange API degradation and the leverage formula is being used as fallback.
+        if (apiLongLiqPrice is null or <= 0m && pos.LongExchange?.Name is { Length: > 0 } longExchangeName)
+        {
+            logger?.LogWarning(
+                "Liquidation price unavailable for long leg of position {PosId} on {Exchange}; using leverage formula",
+                pos.Id, longExchangeName);
+        }
+
+        if (apiShortLiqPrice is null or <= 0m && pos.ShortExchange?.Name is { Length: > 0 } shortExchangeName)
+        {
+            logger?.LogWarning(
+                "Liquidation price unavailable for short leg of position {PosId} on {Exchange}; using leverage formula",
+                pos.Id, shortExchangeName);
         }
 
         // Prefer API-pulled liquidation prices (authoritative per-exchange margin engine)

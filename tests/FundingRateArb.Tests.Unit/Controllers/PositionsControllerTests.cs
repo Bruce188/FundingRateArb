@@ -870,4 +870,108 @@ public class PositionsControllerTests
         statusResult.StatusCode.Should().Be(503);
         statusResult.Value!.ToString().Should().Contain("unavailable");
     }
+
+    // ── Details: cross-leg MaxSafeMovePct ────────────────────────────────────
+
+    [Fact]
+    public async Task Details_BothLegsHaveSafeMovePct_PopulatesCrossLegMinimum()
+    {
+        // long=30%, short=25% → cross-leg min = 25%
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        // |mark - liq| / mark * 100 = 30  →  liq = mark * (1 - 0.30) = 3000 * 0.70 = 2100
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 2100m });
+        // |mark - liq| / mark * 100 = 25  →  liq = mark + mark * 0.25 = 3000 + 750 = 3750
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 3750m });
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        vm.Position.MaxSafeMovePctLong.Should().BeApproximately(30m, 0.01m);
+        vm.Position.MaxSafeMovePctShort.Should().BeApproximately(25m, 0.01m);
+        vm.Position.MaxSafeMovePct.Should().BeApproximately(25m, 0.01m,
+            "cross-leg minimum should be the lesser of long (30%) and short (25%)");
+    }
+
+    [Fact]
+    public async Task Details_OneLegSafeMovePctIsNull_ReturnsNull()
+    {
+        // long=30%, short=null → cross-leg = null
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = 2100m });
+        // Short returns null liquidation price → MaxSafeMovePctShort stays null
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = null });
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        vm.Position.MaxSafeMovePctLong.Should().NotBeNull();
+        vm.Position.MaxSafeMovePctShort.Should().BeNull();
+        vm.Position.MaxSafeMovePct.Should().BeNull(
+            "cross-leg MaxSafeMovePct must be null when either leg's value is unavailable");
+    }
+
+    [Fact]
+    public async Task Details_BothLegsSafeMovePctNull_ReturnsNull()
+    {
+        // both legs null → cross-leg = null
+        var position = OpenPositionWithEntryPrices("trader-id", longEntry: 3000m, shortEntry: 3000m);
+        _mockPositions.Setup(p => p.GetByIdAsync(position.Id)).ReturnsAsync(position);
+
+        var longConnector = new Mock<IExchangeConnector>();
+        var shortConnector = new Mock<IExchangeConnector>();
+        _mockConnectorFactory.Setup(f => f.GetConnector("Hyperliquid")).Returns(longConnector.Object);
+        _mockConnectorFactory.Setup(f => f.GetConnector("Lighter")).Returns(shortConnector.Object);
+
+        longConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = null });
+        shortConnector.Setup(c => c.GetPositionMarginStateAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FundingRateArb.Application.DTOs.MarginStateDto { LiquidationPrice = null });
+        longConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        shortConnector.Setup(c => c.GetMarkPriceAsync("ETH", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+
+        var controller = CreateControllerForUser(TraderUser("trader-id"));
+        var result = await controller.Details(position.Id);
+
+        var view = result.Should().BeOfType<ViewResult>().Subject;
+        var vm = view.Model.Should().BeOfType<PositionDetailsViewModel>().Subject;
+
+        vm.Position.MaxSafeMovePctLong.Should().BeNull();
+        vm.Position.MaxSafeMovePctShort.Should().BeNull();
+        vm.Position.MaxSafeMovePct.Should().BeNull(
+            "cross-leg MaxSafeMovePct must be null when both legs are unavailable");
+    }
 }
