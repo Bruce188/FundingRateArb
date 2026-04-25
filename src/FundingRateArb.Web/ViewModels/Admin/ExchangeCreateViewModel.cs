@@ -28,5 +28,14 @@ public class ExchangeCreateViewModel
     [MaxLength(500)]
     public string? Description { get; set; }
 
+    [Display(Name = "Funding Rebate Rate"), Range(0.0, 1.0)]
+    public decimal FundingRebateRate { get; set; }
+
+    [Display(Name = "Timing Deviation (seconds)"), Range(0, 300)]
+    public int FundingTimingDeviationSeconds { get; set; }
+
+    [Display(Name = "Notional Price Type")]
+    public FundingNotionalPriceType FundingNotionalPriceType { get; set; } = FundingNotionalPriceType.MarkPrice;
+
     public IEnumerable<SelectListItem>? FundingIntervalOptions { get; set; }
 }
