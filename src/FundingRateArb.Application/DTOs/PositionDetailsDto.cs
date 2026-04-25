@@ -55,6 +55,9 @@ public class PositionDetailsDto
     public string? Notes { get; set; }
     public bool IsDryRun { get; set; }
 
+    /// <summary>True when this row represents a synthetic phantom-fee correction entry and should be excluded from PnL aggregates.</summary>
+    public bool IsPhantomFeeBackfill { get; set; }
+
     // Margin utilization fields (populated when margin state is available)
     public decimal? LongMarginUtilizationPct { get; set; }
     public decimal? ShortMarginUtilizationPct { get; set; }

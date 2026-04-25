@@ -137,6 +137,7 @@ public class DashboardController : Controller
             List<int>? enabledExchangeIds = null;
             List<ArbitragePosition>? openPositions = null;
             List<Alert>? unreadAlerts = null;
+            List<ArbitragePosition>? closedPositions = null;
 
             await Task.WhenAll(
                 Task.Run(async () =>
@@ -170,6 +171,16 @@ public class DashboardController : Controller
                     using var scope = _scopeFactory.CreateScope();
                     var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
                     unreadAlerts = await uow.Alerts.GetByUserAsync(userId!, unreadOnly: true);
+                }, ct),
+                Task.Run(async () =>
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+                    closedPositions = await uow.Positions.GetByUserAndStatusesAsync(
+                        userId!,
+                        PositionStatus.Closed,
+                        PositionStatus.EmergencyClosed,
+                        PositionStatus.Liquidated);
                 }, ct)
             );
 
@@ -237,6 +248,10 @@ public class DashboardController : Controller
 
             var positionSummaries = openPositions!.Select(p => p.ToSummaryDto()).ToList();
 
+            var totalRealizedPnl = (closedPositions ?? [])
+                .Where(p => !p.IsPhantomFeeBackfill)
+                .Sum(p => p.RealizedPnl ?? 0m);
+
             var totalPnl = positionSummaries.Sum(p => p.AccumulatedFunding);
             var bestSpread = opportunities.Count > 0
                 ? opportunities.Max(o => o.SpreadPerHour)
@@ -286,6 +301,7 @@ public class DashboardController : Controller
                 OpeningPositionCount = openingCount,
                 NeedsAttentionCount = needsAttentionCount,
                 TotalPnl = totalPnl,
+                TotalRealizedPnl = totalRealizedPnl,
                 BestSpread = bestSpread,
                 TotalUnreadAlerts = unreadAlerts!.Count,
                 OpenPositions = positionSummaries,

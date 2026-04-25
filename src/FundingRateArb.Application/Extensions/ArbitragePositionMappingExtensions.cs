@@ -42,6 +42,7 @@ public static class ArbitragePositionMappingExtensions
             ConfirmedAtUtc = pos.ConfirmedAtUtc,
             ClosedAt = pos.ClosedAt,
             IsDryRun = pos.IsDryRun,
+            IsPhantomFeeBackfill = pos.IsPhantomFeeBackfill,
         };
     }
 
@@ -78,6 +79,7 @@ public static class ArbitragePositionMappingExtensions
             ClosedAt = pos.ClosedAt,
             Notes = pos.Notes,
             IsDryRun = pos.IsDryRun,
+            IsPhantomFeeBackfill = pos.IsPhantomFeeBackfill,
         };
     }
 
