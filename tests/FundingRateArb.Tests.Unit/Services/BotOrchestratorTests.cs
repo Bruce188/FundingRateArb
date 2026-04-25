@@ -2289,4 +2289,95 @@ public class BotOrchestratorTests
         _circuitBreaker.RotationCooldowns.Should().ContainKey(cooldownKey,
             "cooldown must be set so the gated rotation is not retried immediately");
     }
+
+    [Fact]
+    public async Task ExecuteCycle_RebalanceCandidate_WithinDeviationWindow_DoesNotClose()
+    {
+        // Rebalance gate matches replacement opportunity by AssetSymbol + LongExchangeName + ShortExchangeName
+        // (unlike the rotation gate which matches by ID). A regression on any of those three names would not
+        // be caught by the rotation test, so this test exercises the rebalance lookup path specifically.
+
+        var posToClose = new ArbitragePosition
+        {
+            Id = 20,
+            UserId = TestUserId,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 100m,
+            MarginUsdc = 20m,
+            Leverage = 5,
+            CurrentSpreadPerHour = 0.0001m,
+            EntrySpreadPerHour = 0.0002m,
+            OpenedAt = DateTime.UtcNow.AddHours(-3),
+            Status = PositionStatus.Open,
+            Asset = new Asset { Id = 1, Symbol = "ETH" },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter" },
+        };
+
+        // Replacement opportunity is within the deviation window;
+        // names must exactly match what the rebalance recommendation carries.
+        var replacementOpp = new ArbitrageOpportunityDto
+        {
+            AssetId = 3,
+            AssetSymbol = "SOL",
+            LongExchangeId = 1,
+            ShortExchangeId = 4,
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Aster",
+            NetYieldPerHour = 0.002m,
+            SpreadPerHour = 0.002m,
+            LongVolume24h = 1_000_000m,
+            ShortVolume24h = 1_000_000m,
+            LongMarkPrice = 150m,
+            ShortMarkPrice = 150m,
+            MaxLegFundingDeviationSeconds = 15,
+            EarliestLegNextSettlementUtc = DateTime.UtcNow.AddSeconds(5),
+        };
+
+        // Bot config: rebalancing enabled, user cycle skipped (Stopped state exits early after rebalance)
+        var botConfig = new BotConfiguration
+        {
+            IsEnabled = false,
+            OperatingState = BotOperatingState.Stopped,
+            RebalanceEnabled = true,
+            MaxRebalancesPerCycle = 2,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(botConfig);
+        _mockPositionRepo.Setup(r => r.GetOpenAsync()).ReturnsAsync([posToClose]);
+        _mockSignalEngine.Setup(s => s.GetOpportunitiesWithDiagnosticsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new OpportunityResultDto { Opportunities = [replacementOpp] });
+
+        // Rebalancer recommends closing posToClose in favour of the SOL opportunity
+        var mockRebalancer = new Mock<IPortfolioRebalancer>();
+        mockRebalancer
+            .Setup(r => r.EvaluateAsync(
+                It.IsAny<IReadOnlyList<ArbitragePosition>>(),
+                It.IsAny<IReadOnlyList<ArbitrageOpportunityDto>>(),
+                It.IsAny<BotConfiguration>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<RebalanceRecommendationDto>
+            {
+                new(
+                    PositionId: 20,
+                    PositionAsset: "ETH",
+                    CurrentSpread: 0.0001m,
+                    RemainingExpectedPnl: 0.5m,
+                    ReplacementAsset: "SOL",
+                    ReplacementLongExchange: "Hyperliquid",
+                    ReplacementShortExchange: "Aster",
+                    ReplacementSpread: 0.002m,
+                    ExpectedImprovement: 0.0019m)
+            });
+        _mockSp.Setup(sp => sp.GetService(typeof(IPortfolioRebalancer))).Returns(mockRebalancer.Object);
+
+        await _sut.RunCycleAsync(CancellationToken.None);
+
+        // Rebalance close must not fire — replacement is within the deviation window
+        _mockExecutionEngine.Verify(
+            e => e.ClosePositionAsync(It.IsAny<string>(), It.IsAny<ArbitragePosition>(),
+                CloseReason.Rebalanced, It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }
