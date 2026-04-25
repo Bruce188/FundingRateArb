@@ -316,11 +316,14 @@ public class SignalEngine : ISignalEngine
                         }
                     }
 
+                    // Compute per-leg deviation seconds (clamped 0..300) — used both for
+                    // MinutesToNextSettlement adjustment and for the new DTO gate fields.
+                    var longDeviationSec = Math.Clamp(longR.Exchange.FundingTimingDeviationSeconds, 0, 300);
+                    var shortDeviationSec = Math.Clamp(shortR.Exchange.FundingTimingDeviationSeconds, 0, 300);
+
                     // Adjust for exchange-specific timing deviations (e.g. Aster settles 15s after boundary)
                     if (minutesToSettlement.HasValue)
                     {
-                        var longDeviationSec = Math.Clamp(longR.Exchange.FundingTimingDeviationSeconds, 0, 300);
-                        var shortDeviationSec = Math.Clamp(shortR.Exchange.FundingTimingDeviationSeconds, 0, 300);
                         var maxDeviationSec = Math.Max(longDeviationSec, shortDeviationSec);
                         var maxDeviationMin = (maxDeviationSec + 59) / 60;
                         if (maxDeviationMin > 0)
@@ -360,6 +363,12 @@ public class SignalEngine : ISignalEngine
                         LongMarkPrice = longR.MarkPrice,
                         ShortMarkPrice = shortR.MarkPrice,
                         MinutesToNextSettlement = minutesToSettlement,
+                        MaxLegFundingDeviationSeconds = (longDeviationSec > 0 || shortDeviationSec > 0)
+                            ? Math.Max(longDeviationSec, shortDeviationSec)
+                            : (int?)null,
+                        EarliestLegNextSettlementUtc = (longNext.HasValue && shortNext.HasValue)
+                            ? (DateTime?)(longNext.Value < shortNext.Value ? longNext.Value : shortNext.Value)
+                            : (longNext ?? shortNext),
                         PredictedLongRate = longPred?.PredictedRatePerHour,
                         PredictedShortRate = shortPred?.PredictedRatePerHour,
                         PredictedSpread = longPred is not null && shortPred is not null

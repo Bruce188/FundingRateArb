@@ -439,6 +439,22 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     var posToClose = allOpenPositions.FirstOrDefault(p => p.Id == rec.PositionId);
                     if (posToClose is not null)
                     {
+                        // Funding deviation gate for rebalance replacement opportunity
+                        var rebalanceReplacementOpp = allOpportunities.FirstOrDefault(o =>
+                            o.AssetSymbol == rec.ReplacementAsset &&
+                            o.LongExchangeName == rec.ReplacementLongExchange &&
+                            o.ShortExchangeName == rec.ReplacementShortExchange);
+                        if (rebalanceReplacementOpp is not null &&
+                            IsInsideFundingDeviationWindow(rebalanceReplacementOpp, DateTime.UtcNow, out var rebalanceSecondsUntilSettlement))
+                        {
+                            _logger.LogInformation(
+                                "Rebalancing skipped — replacement {Asset} {LongExchange}/{ShortExchange} within funding deviation window " +
+                                "(seconds to settlement: {Seconds:F1}, deviation: {Deviation}s). Will retry next cycle.",
+                                rebalanceReplacementOpp.AssetSymbol, rebalanceReplacementOpp.LongExchangeName, rebalanceReplacementOpp.ShortExchangeName,
+                                rebalanceSecondsUntilSettlement, rebalanceReplacementOpp.MaxLegFundingDeviationSeconds);
+                            continue;
+                        }
+
                         _logger.LogInformation(
                             "Rebalancing: closing position #{PositionId} ({Asset}) for better opportunity {NewAsset} on {NewLong}/{NewShort}",
                             rec.PositionId, rec.PositionAsset, rec.ReplacementAsset,
@@ -650,33 +666,52 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                             }
                             else
                             {
-                                _logger.LogInformation(
-                                    "Rotating position {PositionId} ({Asset} spread={Spread:F6}/hr) → {Replacement} (yield={Yield:F6}/hr, improvement={Improvement:F6}/hr)",
-                                    rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
-                                    rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
-
-                                try
+                                // Funding deviation gate for rotation replacement opportunity
+                                var replacementOpp = userOpportunities.FirstOrDefault(o =>
+                                    o.AssetId == rotationRec.ReplacementAssetId &&
+                                    o.LongExchangeId == rotationRec.ReplacementLongExchangeId &&
+                                    o.ShortExchangeId == rotationRec.ReplacementShortExchangeId);
+                                if (replacementOpp is not null &&
+                                    IsInsideFundingDeviationWindow(replacementOpp, DateTime.UtcNow, out var rotationSecondsUntilSettlement))
                                 {
-                                    await ctx.ExecutionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogWarning(ex, "Rotation close threw for position {PositionId}", positionToClose.Id);
-                                }
-
-                                // Always set cooldown to prevent retry storms, even on failure/exception
-                                _circuitBreaker.SetRotationCooldown(cooldownKey, DateTime.UtcNow.Add(_circuitBreaker.RotationCooldownDuration));
-
-                                // Only count as success if position fully closed
-                                if (positionToClose.Status == PositionStatus.Closed)
-                                {
-                                    _circuitBreaker.SetDailyRotationCount(userId, today, count + 1);
-                                    userOpenPositions = userOpenPositions.Where(p => p.Id != rotationRec.PositionId).ToList();
-                                    rotationExecuted = true;
+                                    _logger.LogInformation(
+                                        "Rotation skipped — replacement {Asset} {LongExchange}/{ShortExchange} within funding deviation window " +
+                                        "(seconds to settlement: {Seconds:F1}, deviation: {Deviation}s). Will retry next cycle.",
+                                        replacementOpp.AssetSymbol, replacementOpp.LongExchangeName, replacementOpp.ShortExchangeName,
+                                        rotationSecondsUntilSettlement, replacementOpp.MaxLegFundingDeviationSeconds);
+                                    // Set rotation cooldown so this replacement is not retried immediately
+                                    _circuitBreaker.SetRotationCooldown(cooldownKey, DateTime.UtcNow.Add(_circuitBreaker.RotationCooldownDuration));
                                 }
                                 else
                                 {
-                                    _logger.LogWarning("Rotation close did not complete for position {PositionId} — status is {Status}", positionToClose.Id, positionToClose.Status);
+                                    _logger.LogInformation(
+                                        "Rotating position {PositionId} ({Asset} spread={Spread:F6}/hr) → {Replacement} (yield={Yield:F6}/hr, improvement={Improvement:F6}/hr)",
+                                        rotationRec.PositionId, rotationRec.PositionAsset, rotationRec.CurrentSpreadPerHour,
+                                        rotationRec.ReplacementAsset, rotationRec.ReplacementNetYieldPerHour, rotationRec.ImprovementPerHour);
+
+                                    try
+                                    {
+                                        await ctx.ExecutionEngine.ClosePositionAsync(userId, positionToClose, CloseReason.Rotation, ct);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        _logger.LogWarning(ex, "Rotation close threw for position {PositionId}", positionToClose.Id);
+                                    }
+
+                                    // Always set cooldown to prevent retry storms, even on failure/exception
+                                    _circuitBreaker.SetRotationCooldown(cooldownKey, DateTime.UtcNow.Add(_circuitBreaker.RotationCooldownDuration));
+
+                                    // Only count as success if position fully closed
+                                    if (positionToClose.Status == PositionStatus.Closed)
+                                    {
+                                        _circuitBreaker.SetDailyRotationCount(userId, today, count + 1);
+                                        userOpenPositions = userOpenPositions.Where(p => p.Id != rotationRec.PositionId).ToList();
+                                        rotationExecuted = true;
+                                    }
+                                    else
+                                    {
+                                        _logger.LogWarning("Rotation close did not complete for position {PositionId} — status is {Status}", positionToClose.Id, positionToClose.Status);
+                                    }
                                 }
                             }
                         }
@@ -903,6 +938,18 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
             var key = opp.OpportunityKey();
             var cooldownKey = $"{userId}:{key}";
+
+            // Funding deviation proximity gate — skip entry when near a settlement boundary
+            if (IsInsideFundingDeviationWindow(opp, DateTime.UtcNow, out var secondsUntilSettlement))
+            {
+                _logger.LogInformation(
+                    "Skipping {Asset} {LongExchange}/{ShortExchange} — within funding deviation window " +
+                    "(seconds to settlement: {Seconds:F1}, deviation: {Deviation}s). Will retry next cycle.",
+                    opp.AssetSymbol, opp.LongExchangeName, opp.ShortExchangeName,
+                    secondsUntilSettlement, opp.MaxLegFundingDeviationSeconds);
+                tracker.FundingDeviationWindowKeys.Add(key);
+                continue;
+            }
 
             _logger.LogInformation(
                 "Opening position for user {UserId}: {Asset} {LongExchange}/{ShortExchange} size={Size} USDC",
@@ -1303,6 +1350,10 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                     {
                         skipReason = "not_selected";
                     }
+                    else if (tracker.FundingDeviationWindowKeys.Contains(key))
+                    {
+                        skipReason = "funding_deviation_window";
+                    }
                     else
                     {
                         skipReason = "below_threshold";
@@ -1336,6 +1387,36 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
         {
             _logger.LogWarning(ex, "Failed to persist opportunity snapshots");
         }
+    }
+
+    // ── Funding deviation gate ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns true when the opportunity is within the funding-deviation proximity window,
+    /// meaning entry or discretionary close should be deferred until after settlement.
+    /// </summary>
+    /// <param name="opp">The opportunity to check.</param>
+    /// <param name="utcNow">Current UTC time (injected to keep the helper pure/testable).</param>
+    /// <param name="secondsUntilSettlement">
+    /// Set to the signed seconds until the earliest leg's next settlement.
+    /// Negative means settlement already passed but we're still within the aftermath window.
+    /// </param>
+    private static bool IsInsideFundingDeviationWindow(
+        ArbitrageOpportunityDto opp, DateTime utcNow, out double secondsUntilSettlement)
+    {
+        secondsUntilSettlement = 0;
+        if (opp.MaxLegFundingDeviationSeconds is not int devSec || devSec <= 0)
+        {
+            return false;
+        }
+        if (opp.EarliestLegNextSettlementUtc is not DateTime nextSettle)
+        {
+            return false;
+        }
+        secondsUntilSettlement = (nextSettle - utcNow).TotalSeconds;
+        // Inside the window if settlement is imminent (0 < s <= devSec) OR
+        // if the boundary just crossed but we're still within devSec aftermath (s <= 0 && |s| <= devSec).
+        return secondsUntilSettlement <= devSec && secondsUntilSettlement >= -devSec;
     }
 
     // M-BO2: Dispose SemaphoreSlim and CTS to release kernel resources

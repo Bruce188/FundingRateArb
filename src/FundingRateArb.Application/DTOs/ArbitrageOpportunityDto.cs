@@ -25,6 +25,20 @@ public class ArbitrageOpportunityDto
     /// </summary>
     public int? MinutesToNextSettlement { get; set; }
 
+    /// <summary>
+    /// Maximum of the two legs' <c>FundingTimingDeviationSeconds</c>, clamped to 0..300.
+    /// Used by <see cref="FundingRateArb.Infrastructure.BackgroundServices.BotOrchestrator"/> to decide whether
+    /// to skip entry near a settlement boundary. Null if neither leg has settlement timing data.
+    /// </summary>
+    public int? MaxLegFundingDeviationSeconds { get; set; }
+
+    /// <summary>
+    /// Earliest of the two legs' next funding settlement timestamps. Used together with
+    /// <see cref="MaxLegFundingDeviationSeconds"/> for the orchestrator's deviation-proximity gate.
+    /// Null if no leg's settlement time is cached.
+    /// </summary>
+    public DateTime? EarliestLegNextSettlementUtc { get; set; }
+
     // Prediction fields (populated by SignalEngine when IRatePredictionService is available)
     public decimal? PredictedLongRate { get; set; }
     public decimal? PredictedShortRate { get; set; }

@@ -1854,6 +1854,157 @@ public class SignalEngineTests
             "600s deviation should be capped at 300s (5 min), reducing 10 min settlement to 5 min");
     }
 
+    // ── New DTO gate fields: MaxLegFundingDeviationSeconds + EarliestLegNextSettlementUtc ──
+
+    [Fact]
+    public async Task GetOpportunities_PopulatesMaxLegDeviation_FromAsterShortLeg()
+    {
+        // Arrange: Hyperliquid long (dev=0), Aster short (dev=15)
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = 0.0001m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 15 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 60 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var nextSettlement = now.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(nextSettlement);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var oppWithDeviation = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+
+        // Assert
+        oppWithDeviation.Should().NotBeNull();
+        oppWithDeviation!.MaxLegFundingDeviationSeconds.Should().Be(15,
+            "Aster short leg has dev=15, Hyperliquid long leg has dev=0, so max is 15");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_PopulatesMaxLegDeviation_NonAsterLegsAreZero()
+    {
+        // Arrange: Hyperliquid + Lighter, both deviation=0
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = 0.0001m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 2,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 2, Name = "Lighter", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 60 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var nextSettlement = now.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(nextSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Lighter", "ETH")).Returns(nextSettlement);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+
+        // Assert
+        opp.Should().NotBeNull();
+        opp!.MaxLegFundingDeviationSeconds.Should().BeNull(
+            "both legs have dev=0, so the field should be null per the populator contract");
+    }
+
+    [Fact]
+    public async Task GetOpportunities_PopulatesEarliestLegNextSettlement_PicksMinimum()
+    {
+        // Arrange: one leg settles in 10 min, the other in 30 min — DTO should carry the T+10m timestamp
+        var now = DateTime.UtcNow;
+        var rates = new List<FundingRateSnapshot>
+        {
+            new FundingRateSnapshot
+            {
+                ExchangeId = 1,
+                AssetId = 1,
+                RatePerHour = 0.0001m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 1, Name = "Hyperliquid", FundingTimingDeviationSeconds = 0 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+            new FundingRateSnapshot
+            {
+                ExchangeId = 3,
+                AssetId = 1,
+                RatePerHour = 0.0010m,
+                MarkPrice = 3000m,
+                Volume24hUsd = 1_000_000m,
+                RecordedAt = now,
+                Exchange = new Exchange { Id = 3, Name = "Aster", FundingTimingDeviationSeconds = 15 },
+                Asset = new Asset { Id = 1, Symbol = "ETH" },
+            },
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration { SlippageBufferBps = 0, OpenThreshold = 0.0001m, FundingWindowMinutes = 60 });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
+
+        var earlierSettlement = now.AddMinutes(10);
+        var laterSettlement = now.AddMinutes(30);
+        _mockCache.Setup(c => c.GetNextSettlement("Hyperliquid", "ETH")).Returns(earlierSettlement);
+        _mockCache.Setup(c => c.GetNextSettlement("Aster", "ETH")).Returns(laterSettlement);
+
+        // Act
+        var result = await _sut.GetOpportunitiesWithDiagnosticsAsync(CancellationToken.None);
+        var opp = result.Opportunities.Concat(result.AllNetPositive).FirstOrDefault();
+
+        // Assert
+        opp.Should().NotBeNull();
+        opp!.EarliestLegNextSettlementUtc.Should().HaveValue();
+        opp.EarliestLegNextSettlementUtc!.Value.Should().BeCloseTo(earlierSettlement, TimeSpan.FromSeconds(1),
+            "EarliestLegNextSettlementUtc should be the minimum of the two leg settlement timestamps");
+    }
+
     // ── Break-even filter ─────────────────────────────────────────────────────
 
     [Fact]
