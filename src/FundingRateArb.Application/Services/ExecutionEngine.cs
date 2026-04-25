@@ -679,7 +679,15 @@ public class ExecutionEngine : IExecutionEngine
                         concurrentNeverExisted = true;
                     }
 
-                    position.Status = concurrentNeverExisted ? PositionStatus.Failed : PositionStatus.EmergencyClosed;
+                    // When both effective fill quantities are zero, no position was ever live on-chain.
+                    // Use Failed regardless of whether emergency-close fired — EmergencyClosed is
+                    // reserved for positions where at least one leg had a real fill.
+                    var bothEffectivelyZero =
+                        (position.LongFilledQuantity ?? 0m) <= 0m &&
+                        (position.ShortFilledQuantity ?? 0m) <= 0m;
+                    position.Status = (concurrentNeverExisted || bothEffectivelyZero)
+                        ? PositionStatus.Failed
+                        : PositionStatus.EmergencyClosed;
                     position.ClosedAt = DateTime.UtcNow;
                     _uow.Positions.Update(position);
 
