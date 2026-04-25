@@ -162,8 +162,20 @@ public class PositionSizerTests
     [Fact]
     public async Task CalculateBatchSizesAsync_WeightedSpread_DistributesProportionally()
     {
+        // maxCapitalPerPos=0.4 keeps each size below per-exchange balance (50) so cap doesn't bind
         _mockBotConfig.Setup(b => b.GetActiveAsync())
-            .ReturnsAsync(DefaultConfig());
+            .ReturnsAsync(DefaultConfig(maxCapitalPerPos: 0.4m));
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 100m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // First has 3x the yield of second
         var opps = MakeOpps((0.003m, 100_000_000m), (0.001m, 100_000_000m));
@@ -171,7 +183,7 @@ public class PositionSizerTests
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.WeightedSpread, "test-user");
 
         sizes[0].Should().BeGreaterThan(sizes[1]);
-        // First should get ~75%, second ~25%
+        // totalCapital = 100 * 0.4 = 40; sizes[0] = 30, sizes[1] = 10 → 3:1
         sizes[0].Should().BeApproximately(sizes[1] * 3, 0.01m);
     }
 
@@ -180,13 +192,24 @@ public class PositionSizerTests
     {
         _mockBotConfig.Setup(b => b.GetActiveAsync())
             .ReturnsAsync(DefaultConfig());
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 107m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 54m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 53m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         var opps = MakeOpps((0.001m, 100_000_000m), (0.002m, 100_000_000m));
 
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.EqualSpread, "test-user");
 
         sizes[0].Should().Be(sizes[1]);
-        // Total = 107 * 0.80 = 85.6, each = 42.8
+        // Live capital sum = 54 + 53 = 107; totalCapital = 107 * 0.80 = 85.6, each = 42.8
         sizes[0].Should().Be(42.8m);
     }
 
@@ -405,16 +428,27 @@ public class PositionSizerTests
     [Fact]
     public async Task CalculateBatchSizesAsync_ZeroesOutPositionsBelowMinSize()
     {
-        // totalCapital = 10 * 0.80 = 8, MinPositionSizeUsdc = 10 → 8 < 10 → zeroed
+        // Live sum = 10, totalCapital = 10 * 0.80 = 8, MinPositionSizeUsdc = 10 → 8 < 10 → zeroed
         var config = DefaultConfig(totalCapital: 10m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 10m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 10m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 5m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 5m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        sizes[0].Should().Be(0m, "position size 8 < MinPositionSizeUsdc 10");
+        sizes[0].Should().Be(0m, "position size 5 (per-exchange cap) < MinPositionSizeUsdc 10");
     }
 
     [Fact]
@@ -423,6 +457,18 @@ public class PositionSizerTests
         var config = DefaultConfig(totalCapital: 100m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 10m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 200, totalCapital = 160; per-exchange cap (80) limits result to 80
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 160m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         var opps = MakeOpps((0.001m, 100_000_000m));
 
@@ -438,13 +484,22 @@ public class PositionSizerTests
     [Fact]
     public async Task CalculateBatchSizesAsync_SubtractsOpenPositionCapital()
     {
-        // Config: TotalCapitalUsdc=1000, MaxCapitalPerPosition=0.8
-        // Open positions consuming 500 USDC
-        // Available = Math.Max(0, 1000 - 500) = 500
-        // totalCapital = 500 * 0.8 = 400
+        // Live sum = 1000, open positions = 500
+        // Available = 1000 - 500 = 500, totalCapital = 500 * 0.8 = 400
         var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
@@ -472,13 +527,15 @@ public class PositionSizerTests
     }
 
     [Fact]
-    public async Task CalculateBatchSizesAsync_RealBalanceBelowConfigCap_UsesRealBalance()
+    public async Task CalculateBatchSizesAsync_LiveCapitalSumUsedDirectly_IgnoresOldConfigCap()
     {
-        // Real balance = 80, config cap = 107 → uses 80
+        // Live sum = E1(80) + E2(80) = 160; config.TotalCapitalUsdc=107 is no longer a cap
+        // realCapital = 160, totalCapital = 160 * 0.80 = 128
+        // Per-exchange cap: min(80, 80) = 80 → sizes[0] = 80
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto
             {
-                TotalAvailableUsdc = 80m,
+                TotalAvailableUsdc = 160m,
                 FetchedAt = DateTime.UtcNow,
                 Balances = new List<ExchangeBalanceDto>
                 {
@@ -491,18 +548,19 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Available = min(80, 107) * 0.80 = 64
-        sizes[0].Should().Be(64m);
+        sizes[0].Should().Be(80m);
     }
 
     [Fact]
-    public async Task CalculateBatchSizesAsync_RealBalanceAboveConfigCap_UsesConfigCap()
+    public async Task CalculateBatchSizesAsync_HighLiveBalance_UsesLiveSumIgnoringOldConfigCap()
     {
-        // Real balance = 200, config cap = 107 → uses 107
+        // Live sum = E1(200) + E2(200) = 400; config.TotalCapitalUsdc=107 is no longer a cap
+        // realCapital = 400, totalCapital = 400 * 0.80 = 320
+        // Per-exchange cap: min(200, 200) = 200 → sizes[0] = 200
         _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync("test-user", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto
             {
-                TotalAvailableUsdc = 200m,
+                TotalAvailableUsdc = 400m,
                 FetchedAt = DateTime.UtcNow,
                 Balances = new List<ExchangeBalanceDto>
                 {
@@ -515,8 +573,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Available = min(200, 107) * 0.80 = 85.6
-        sizes[0].Should().Be(85.6m);
+        sizes[0].Should().Be(200m);
     }
 
     // ── Exposure limit tests ────────────────────────────────────────────────
@@ -529,6 +586,18 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 0.3m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 100; realCapital = 100
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 100m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // Existing open position for asset 1 with 20 USDC
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
@@ -539,7 +608,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Available = (100 - 20) * 1.0 = 80 from capital, but asset limit = 30 - 20 = 10
+        // Available = (100 - 20) * 1.0 = 80 from capital, but asset limit = 0.3*100 - 20 = 10
         sizes[0].Should().Be(10m);
     }
 
@@ -552,6 +621,18 @@ public class PositionSizerTests
         config.MaxExposurePerExchange = 0.4m;
         config.MinPositionSizeUsdc = 1m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 100; realCapital = 100
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 100m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // Existing open position on exchange 1 with 35 USDC
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
@@ -563,7 +644,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Capital available = (100 - 35) * 1.0 = 65, but exchange limit = 40 - 35 = 5
+        // Capital available = (100 - 35) * 1.0 = 65, but exchange limit = 0.4*100 - 35 = 5
         sizes[0].Should().Be(5m);
     }
 
@@ -575,12 +656,24 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 1.0m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 160; per-exchange cap (80) limits to 80
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 160m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 80m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Full capital allocation: 100 * 0.8 = 80
+        // Live sum = 160, totalCapital = 128; per-exchange cap (80) limits result to 80
         sizes[0].Should().Be(80m);
     }
 
@@ -593,6 +686,20 @@ public class PositionSizerTests
         config.MaxExposurePerExchange = 1.0m;
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 100; per-exchange balances cover required allocation
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 100m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 30m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 30m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 3, ExchangeName = "E3", AvailableUsdc = 30m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 4, ExchangeName = "E4", AvailableUsdc = 10m, FetchedAt = DateTime.UtcNow },
+                }
+            });
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>());
 
         // Two opportunities for the same asset on different exchanges
@@ -661,6 +768,18 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 0.5m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 100; realCapital = 100
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 100m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 50m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // Existing positions already at the 50 USDC asset limit
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>())).ReturnsAsync(new List<ArbitragePosition>
@@ -680,10 +799,21 @@ public class PositionSizerTests
     public async Task CalculateBatchSizesAsync_OpeningPositions_CountedInAllocatedCapital()
     {
         // 1 Open (50 USDC) + 1 Opening (50 USDC) = 100 allocated
-        // TotalCapital = 1000, available = 1000 - 100 = 900, * 0.8 = 720
+        // Live sum = 1440, available = 1440 - 100 = 1340, * 0.8 = 1072; per-exchange cap (720) limits to 720
         var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1440m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 720m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 720m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
@@ -695,7 +825,6 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // Available = (1000 - 100) * 0.80 = 720
         sizes[0].Should().Be(720m, "Opening positions should reduce available capital");
     }
 
@@ -703,12 +832,23 @@ public class PositionSizerTests
     public async Task CalculateBatchSizesAsync_OpeningPositions_ReduceAvailableSlots()
     {
         // 1 Open + 1 Opening on the same asset: total asset exposure = 400
-        // MaxExposurePerAsset = 0.5 → max = 0.5 * 1000 = 500, remaining = 500 - 400 = 100
+        // Live sum = 1000; MaxExposurePerAsset = 0.5 → max = 500, remaining = 500 - 400 = 100
         var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 0m;
         config.MaxExposurePerAsset = 0.5m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", It.IsAny<PositionStatus[]>()))
             .ReturnsAsync(new List<ArbitragePosition>
@@ -733,6 +873,18 @@ public class PositionSizerTests
         var config = DefaultConfig(totalCapital: 1000m, maxCapitalPerPos: 0.80m);
         config.MinPositionSizeUsdc = 0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 1440; per-exchange cap (720) limits the result to 720
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1440m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 720m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 720m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("test-user", PositionStatus.Open, PositionStatus.Opening))
             .ReturnsAsync(new List<ArbitragePosition>
@@ -744,7 +896,6 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "test-user");
 
-        // allocatedCapital = 100, available = (1000-100)*0.8 = 720
         sizes[0].Should().Be(720m, "single query should return both Open and Opening positions");
         _mockPositions.Verify(p => p.GetByUserAndStatusesAsync("test-user", PositionStatus.Open, PositionStatus.Opening), Times.Once);
     }
@@ -759,6 +910,18 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 1.0m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 1400; per-exchange cap (700) limits result to 700
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1400m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 700m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 700m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // GetByUserAndStatusesAsync pushes filter into SQL — only user-a's positions returned
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("user-a", It.IsAny<PositionStatus[]>()))
@@ -770,7 +933,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-a");
 
-        // Available = min(10000, 1000) - 300 (only user-a) = 700, * 1.0 = 700
+        // Live sum = 1400, available = (1400 - 300) * 1.0 = 1100; per-exchange cap (700) limits to 700
         sizes[0].Should().Be(700m, "only user-a's positions (300) should be subtracted, not user-b's (500)");
     }
 
@@ -785,6 +948,18 @@ public class PositionSizerTests
         config.MaxExposurePerAsset = 0.5m;
         config.MaxExposurePerExchange = 1.0m;
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
+        // Live sum = 1000; per-exchange cap (500) limits result to 500
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 1000m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 500m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // GetByUserAndStatusesAsync for user-a returns empty — user-a has no positions
         _mockPositions.Setup(p => p.GetByUserAndStatusesAsync("user-a", It.IsAny<PositionStatus[]>()))
@@ -793,8 +968,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await _sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-a");
 
-        // Available = min(10000, 1000) - 0 = 1000, * 1.0 = 1000
-        // Asset exposure cap = 0.5 * 1000 = 500
+        // Live sum = 1000, * 1.0 = 1000; asset cap = 0.5 * 1000 = 500
         // User A should get 500 (not reduced by User B's positions)
         sizes[0].Should().Be(500m, "user-a's asset exposure should not include user-b's 400 USDC position");
     }
@@ -841,6 +1015,18 @@ public class PositionSizerTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockUserSettings.Setup(s => s.GetOrCreateConfigAsync(It.IsAny<string>()))
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 10 });
+        // Live sum = 200; per-exchange cap (100) limits result to 100
+        _mockBalanceAggregator.Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BalanceSnapshotDto
+            {
+                TotalAvailableUsdc = 200m,
+                FetchedAt = DateTime.UtcNow,
+                Balances = new List<ExchangeBalanceDto>
+                {
+                    new() { ExchangeId = 1, ExchangeName = "E1", AvailableUsdc = 100m, FetchedAt = DateTime.UtcNow },
+                    new() { ExchangeId = 2, ExchangeName = "E2", AvailableUsdc = 100m, FetchedAt = DateTime.UtcNow },
+                }
+            });
 
         // Capture the notional argument passed to GetEffectiveMaxLeverage
         var capturedNotionals = new List<decimal>();
@@ -855,7 +1041,7 @@ public class PositionSizerTests
         var opps = MakeOpps((0.001m, 100_000_000m));
         var sizes = await sut.CalculateBatchSizesAsync(opps, AllocationStrategy.Concentrated, "user-1");
 
-        // Available capital = min(10000, 100) - 0 = 100, * 1.0 = 100
+        // Live sum = 200, * 1.0 = 200; per-exchange cap (100) limits to 100
         // With MaxLeverageCap=2: effectiveLeverage = min(10, 2) = 2
         // tentativeNotional = 100 * 2 = 200, NOT 100 * 10 = 1000
         sizes[0].Should().Be(100m);

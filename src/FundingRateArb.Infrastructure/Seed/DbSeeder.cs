@@ -299,6 +299,7 @@ public static class DbSeeder
             return;
         }
 
+#pragma warning disable CS0618
         context.BotConfigurations.Add(new BotConfiguration
         {
             IsEnabled = false,
@@ -324,6 +325,7 @@ public static class DbSeeder
             LastUpdatedAt = DateTime.UtcNow,
             UpdatedByUserId = admin.Id
         });
+#pragma warning restore CS0618
         await context.SaveChangesAsync();
     }
 

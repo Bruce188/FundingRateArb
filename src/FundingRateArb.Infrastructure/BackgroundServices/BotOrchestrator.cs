@@ -28,6 +28,10 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
     // Cycle counter for periodic reconciliation
     private int _cycleCount;
 
+    // Start-of-day equity baseline for drawdown gate (refreshed on day rollover)
+    internal decimal? _startOfDayLiveEquity;
+    internal DateOnly? _startOfDayCapturedFor;
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IFundingRateReadinessSignal _readinessSignal;
     private readonly ISignalRNotifier _notifier;
@@ -590,20 +594,41 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
         // Check user's open positions vs their limit
         var userOpenPositions = allOpenPositions.Where(p => p.UserId == userId).ToList();
 
+        // Capture start-of-day live equity for drawdown baseline (refresh on day rollover)
+        var utcToday = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (_startOfDayLiveEquity is null || _startOfDayCapturedFor != utcToday)
+        {
+            try
+            {
+                using var sodScope = _scopeFactory.CreateScope();
+                var sodAggregator = sodScope.ServiceProvider.GetRequiredService<IBalanceAggregator>();
+                var sodSnapshot = await sodAggregator.GetBalanceSnapshotAsync(userId, ct);
+                _startOfDayLiveEquity = sodSnapshot.TotalAvailableUsdc;
+                _startOfDayCapturedFor = utcToday;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to capture start-of-day live equity for user {UserId} — drawdown gate skipped this cycle", userId);
+            }
+        }
+
         // Daily drawdown circuit breaker for this user
         var closedToday = await ctx.Uow.Positions.GetClosedSinceAsync(DateTime.UtcNow.Date);
         var userClosedToday = closedToday.Where(p => p.UserId == userId).ToList();
         var dailyPnl = userClosedToday.Where(p => !p.IsDryRun).Sum(p => p.RealizedPnl ?? 0m)
                      + userOpenPositions.Where(p => !p.IsDryRun).Sum(p => p.AccumulatedFunding);
-        var drawdownLimit = userConfig.TotalCapitalUsdc * userConfig.DailyDrawdownPausePct;
-        if (dailyPnl < -drawdownLimit)
+        if (_startOfDayLiveEquity.HasValue)
         {
-            _logger.LogWarning(
-                "Daily drawdown limit hit for user {UserId}: {DailyPnl:F2} USDC (limit: -{Limit:F2})",
-                userId, dailyPnl, drawdownLimit);
-            await _notifier.PushStatusExplanationAsync(userId,
-                $"Daily drawdown limit hit ({dailyPnl:F2} USDC, limit: -{drawdownLimit:F2}) — pausing position opens", "warning");
-            return;
+            var drawdownLimit = _startOfDayLiveEquity.Value * userConfig.DailyDrawdownPausePct;
+            if (dailyPnl < -drawdownLimit)
+            {
+                _logger.LogWarning(
+                    "Daily drawdown limit hit for user {UserId}: {DailyPnl:F2} USDC (limit: -{Limit:F2})",
+                    userId, dailyPnl, drawdownLimit);
+                await _notifier.PushStatusExplanationAsync(userId,
+                    $"Daily drawdown limit hit ({dailyPnl:F2} USDC, limit: -{drawdownLimit:F2}) — pausing position opens", "warning");
+                return;
+            }
         }
 
         // Consecutive loss circuit breaker for this user

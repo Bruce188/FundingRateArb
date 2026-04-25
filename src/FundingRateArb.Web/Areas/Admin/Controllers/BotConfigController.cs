@@ -192,7 +192,7 @@ public class BotConfigController : Controller
         config.OpenThreshold = candidate.OpenThreshold;
         config.CloseThreshold = candidate.CloseThreshold;
         config.AlertThreshold = candidate.AlertThreshold;
-        config.TotalCapitalUsdc = candidate.TotalCapitalUsdc;
+        // TotalCapitalUsdc is derived from live exchange balances — not consumed from form input
         config.DefaultLeverage = candidate.DefaultLeverage;
         config.MaxConcurrentPositions = candidate.MaxConcurrentPositions;
         config.MaxCapitalPerPosition = candidate.MaxCapitalPerPosition;

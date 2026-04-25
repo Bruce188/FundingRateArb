@@ -38,6 +38,7 @@ public class SignalEngine : ISignalEngine
     private readonly ILogger<SignalEngine>? _logger;
     private readonly ISignalEngineMetrics? _metrics;
     private readonly IMemoryCache? _opportunityCache;
+    private readonly IBalanceAggregator? _balanceAggregator;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -48,7 +49,8 @@ public class SignalEngine : ISignalEngine
         IExchangeSymbolConstraintsProvider? symbolConstraintsProvider = null,
         ILogger<SignalEngine>? logger = null,
         ISignalEngineMetrics? metrics = null,
-        IMemoryCache? opportunityCache = null)
+        IMemoryCache? opportunityCache = null,
+        IBalanceAggregator? balanceAggregator = null)
     {
         _uow = uow;
         _cache = cache;
@@ -59,6 +61,7 @@ public class SignalEngine : ISignalEngine
         _logger = logger;
         _metrics = metrics;
         _opportunityCache = opportunityCache;
+        _balanceAggregator = balanceAggregator;
     }
 
     /// <summary>
@@ -158,6 +161,32 @@ public class SignalEngine : ISignalEngine
         }
 
         var rates = latestRates.Where(r => r.Asset is not null && r.Exchange is not null).ToList();
+
+        var liveCapitalUsdc = config.TotalCapitalUsdc;
+        if (_balanceAggregator is not null)
+        {
+            var userIds = await _uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+            var allBalances = new List<ExchangeBalanceDto>();
+            foreach (var uid in userIds)
+            {
+                try
+                {
+                    var snap = await _balanceAggregator.GetBalanceSnapshotAsync(uid, ct);
+                    allBalances.AddRange(snap.Balances);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger?.LogWarning(ex, "Failed to fetch balance snapshot for user {UserId}", uid);
+                }
+            }
+            if (allBalances.Count > 0)
+            {
+                liveCapitalUsdc = allBalances.Sum(dto =>
+                    dto.IsUnavailable ? 0m :
+                    dto.IsFallbackEligible ? dto.LastKnownAvailableUsdc!.Value :
+                    dto.AvailableUsdc);
+            }
+        }
 
         var diagnostics = new PipelineDiagnosticsDto
         {
@@ -392,7 +421,7 @@ public class SignalEngine : ISignalEngine
                     if (_tierProvider is not null)
                     {
                         var cappedLeverage = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
-                        var refNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverage;
+                        var refNotional = liveCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverage;
                         var longMaxLev = _tierProvider.GetEffectiveMaxLeverage(longR.Exchange.Name, symbol!, refNotional);
                         var shortMaxLev = _tierProvider.GetEffectiveMaxLeverage(shortR.Exchange.Name, symbol!, refNotional);
                         var tierMax = Math.Min(longMaxLev, shortMaxLev);
@@ -453,7 +482,7 @@ public class SignalEngine : ISignalEngine
                     if (_symbolConstraintsProvider is not null && HasKnownSymbolCap(longR.Exchange.Name, shortR.Exchange.Name))
                     {
                         var cappedLeverageForCap = Math.Max(1, Math.Min(config.DefaultLeverage, config.MaxLeverageCap));
-                        var sizedNotional = config.TotalCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;
+                        var sizedNotional = liveCapitalUsdc * config.MaxCapitalPerPosition * cappedLeverageForCap;
                         var longMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(
                             longR.Exchange.Name, symbol!, ct);
                         var shortMaxNotional = await _symbolConstraintsProvider.GetMaxNotionalAsync(

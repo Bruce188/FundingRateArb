@@ -9,6 +9,14 @@ public class ExchangeBalanceDto
     public DateTime FetchedAt { get; set; }
     public bool IsStale { get; set; }
     public bool IsUnavailable { get; set; }
+    public decimal? LastKnownAvailableUsdc { get; set; }
+    public DateTimeOffset? LastKnownAt { get; set; }
+
+    public bool IsFallbackEligible =>
+        IsStale &&
+        LastKnownAvailableUsdc.HasValue &&
+        LastKnownAt.HasValue &&
+        (FetchedAt - LastKnownAt.Value.UtcDateTime) <= TimeSpan.FromMinutes(5);
 }
 
 public class BalanceSnapshotDto

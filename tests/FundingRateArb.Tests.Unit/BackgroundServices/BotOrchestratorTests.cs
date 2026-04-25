@@ -689,11 +689,11 @@ public class BotOrchestratorTests
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(config);
         _mockPositions.Setup(p => p.GetOpenAsync()).ReturnsAsync([]);
 
-        // Closed positions today with -$60 realized loss for this user
+        // -$600 loss exceeds start-of-day equity (10 000 USDC from mock) * 5% = $500 drawdown limit
         var closedPosition = new ArbitragePosition
         {
             UserId = TestUserId,
-            RealizedPnl = -60m,
+            RealizedPnl = -600m,
             Status = PositionStatus.Closed,
         };
         _mockPositions.Setup(p => p.GetClosedSinceAsync(It.IsAny<DateTime>()))

@@ -13,8 +13,9 @@
          CA1716: Parameter names conflicting with reserved keywords ('to' in repository interfaces)
          CA1725: Parameter name 'ct' vs 'stoppingToken' in BackgroundService overrides
          CA1861: Constant array arguments in EF-generated migrations
-         CA1822: Members that can be static in exchange connector helpers -->
-    <NoWarn>CA1848;CA1873;CA1711;CA1716;CA1725;CA1861;CA1822</NoWarn>
+         CA1822: Members that can be static in exchange connector helpers
+         CS0618: TotalCapitalUsdc obsolete — existing consumers migrate to IBalanceAggregator in later tasks -->
+    <NoWarn>CA1848;CA1873;CA1711;CA1716;CA1725;CA1861;CA1822;CS0618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

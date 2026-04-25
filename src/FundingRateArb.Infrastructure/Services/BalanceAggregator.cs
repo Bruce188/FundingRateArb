@@ -189,7 +189,10 @@ public class BalanceAggregator : IBalanceAggregator
                 });
 
                 // Write last-known-good cache for transient error fallback
-                _cache.Set($"balance-lkg:{userId}:{exchangeId}", (Value: balance, FetchedAt: now), TimeSpan.FromHours(1));
+                _cache.Set(
+                    $"balance:lastgood:{userId}:{exchangeName}",
+                    (Value: balance, FetchedAt: now),
+                    new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(24) });
 
                 // Clear transient unavailability flag on successful fetch
                 _circuitBreaker.ClearUnavailable(exchangeName);
@@ -222,15 +225,15 @@ public class BalanceAggregator : IBalanceAggregator
                 else
                 {
                     // Transient error (network/5xx/unknown): mark exchange unavailable via circuit breaker,
-                    // then fall back to last-known-good balance.
+                    // then fall back to last-known-good balance if within 5-minute window.
                     _circuitBreaker.MarkUnavailable(exchangeName);
                     _logger.LogWarning(ex, "{ExceptionType} balance fetch error for {Exchange}, user {UserId}",
                         ex.GetBaseException().GetType().Name, exchangeName, userId);
 
-                    var lkgKey = $"balance-lkg:{userId}:{exchangeId}";
-                    if (_cache.TryGetValue<(decimal Value, DateTime FetchedAt)>(lkgKey, out var lkg))
+                    var lkgKey = $"balance:lastgood:{userId}:{exchangeName}";
+                    if (_cache.TryGetValue<(decimal Value, DateTime FetchedAt)>(lkgKey, out var lkg)
+                        && (now - lkg.FetchedAt) <= TimeSpan.FromMinutes(5))
                     {
-                        var isStale = now - lkg.FetchedAt > TimeSpan.FromMinutes(10);
                         balances.Add(new ExchangeBalanceDto
                         {
                             ExchangeId = exchangeId,
@@ -238,7 +241,10 @@ public class BalanceAggregator : IBalanceAggregator
                             AvailableUsdc = lkg.Value,
                             ErrorMessage = $"{exchangeName}: using cached balance",
                             FetchedAt = now,
-                            IsStale = isStale,
+                            IsStale = true,
+                            IsUnavailable = false,
+                            LastKnownAvailableUsdc = lkg.Value,
+                            LastKnownAt = new DateTimeOffset(lkg.FetchedAt, TimeSpan.Zero),
                         });
                     }
                     else
