@@ -294,6 +294,9 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
+                    b.HasIndex("Status", "OpenConfirmedAt")
+                        .HasDatabaseName("IX_ArbitragePositions_Status_OpenConfirmedAt");
+
                     b.ToTable("ArbitragePositions");
                 });
 
@@ -473,7 +476,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<int>("OpenConfirmTimeoutSeconds")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(30);
 
                     b.Property<decimal>("OpenThreshold")
                         .HasColumnType("decimal(18,10)");

@@ -60,5 +60,8 @@ public class ArbitragePositionConfiguration : IEntityTypeConfiguration<Arbitrage
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(p => p.Status);
+
+        builder.HasIndex(p => new { p.Status, p.OpenConfirmedAt })
+            .HasDatabaseName("IX_ArbitragePositions_Status_OpenConfirmedAt");
     }
 }

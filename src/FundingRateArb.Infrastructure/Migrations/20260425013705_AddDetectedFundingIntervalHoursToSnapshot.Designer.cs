@@ -12,7 +12,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace FundingRateArb.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260425012253_AddDetectedFundingIntervalHoursToSnapshot")]
+    [Migration("20260425013705_AddDetectedFundingIntervalHoursToSnapshot")]
     partial class AddDetectedFundingIntervalHoursToSnapshot
     {
         /// <inheritdoc />
@@ -297,6 +297,9 @@ namespace FundingRateArb.Infrastructure.Migrations
 
                     b.HasIndex("UserId");
 
+                    b.HasIndex("Status", "OpenConfirmedAt")
+                        .HasDatabaseName("IX_ArbitragePositions_Status_OpenConfirmedAt");
+
                     b.ToTable("ArbitragePositions");
                 });
 
@@ -476,7 +479,9 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<int>("OpenConfirmTimeoutSeconds")
-                        .HasColumnType("int");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(30);
 
                     b.Property<decimal>("OpenThreshold")
                         .HasColumnType("decimal(18,10)");
