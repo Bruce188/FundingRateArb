@@ -17,7 +17,7 @@ public interface IAssetExchangeFundingIntervalRepository
     /// </param>
     /// <param name="ct">Cancellation token.</param>
     Task UpsertManyAsync(
-        IEnumerable<(int ExchangeId, int AssetId, int IntervalHours, int? SnapshotId)> entries,
+        IEnumerable<(int ExchangeId, int AssetId, int IntervalHours, int? SourceSnapshotId)> entries,
         CancellationToken ct = default);
 
     /// <summary>

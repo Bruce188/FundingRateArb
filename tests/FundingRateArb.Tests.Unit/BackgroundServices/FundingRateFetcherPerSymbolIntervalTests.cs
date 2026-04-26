@@ -379,6 +379,93 @@ public class FundingRateFetcherPerSymbolIntervalTests
             "FetchAllAsync must forward its cancellation token to UpsertManyAsync, not introduce a new one");
     }
 
+    // ── No upsert when all detected intervals are null ────────────────────────
+
+    /// <summary>
+    /// When every rate returned by connectors has DetectedFundingIntervalHours == null,
+    /// FetchAllAsync must NOT call UpsertManyAsync on the interval repository.
+    /// The per-symbol upsert path must be skipped entirely so that valid persisted intervals
+    /// are not overwritten with nulls (which would be silently dropped anyway) and no
+    /// unnecessary write is performed.
+    /// </summary>
+    [Fact]
+    public async Task FetchAllAsync_WhenAllRatesHaveNullDetectedInterval_UpsertManyAsyncIsNeverCalled()
+    {
+        // Arrange: all rates from both connectors carry null DetectedFundingIntervalHours
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                MakeRate("Aster", "ETH", detectedIntervalHours: null),
+                MakeRate("Aster", "BTC", detectedIntervalHours: null),
+            ]);
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                MakeRate("Hyperliquid", "ETH", detectedIntervalHours: null),
+                MakeRate("Hyperliquid", "BTC", detectedIntervalHours: null),
+            ]);
+
+        // Act
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: no upsert when all intervals are unknown
+        _mockIntervalRepo.Verify(
+            r => r.UpsertManyAsync(
+                It.IsAny<IEnumerable<(int, int, int, int?)>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Never,
+            "UpsertManyAsync must not be called when all rates have DetectedFundingIntervalHours == null");
+    }
+
+    /// <summary>
+    /// Spec requirement: feed allRates with mixed DetectedFundingIntervalHours values
+    /// (some null, some 4h, some 8h on Aster) and assert the captured batch contains
+    /// exactly the non-null rates with the correct (ExchangeId, AssetId, IntervalHours) tuples.
+    ///
+    /// Aster (Id=3) returns ETH with 8h, BTC with 4h, and one null-interval rate.
+    /// Hyperliquid returns all-null rates.
+    /// Expected upsert batch: exactly 2 entries — (3,1,8) and (3,2,4).
+    /// </summary>
+    [Fact]
+    public async Task FetchAllAsync_MixedNullFourAndEightHourIntervalsOnAster_BatchContainsExactlyNonNullEntriesWithCorrectIntervals()
+    {
+        // Arrange: mixed intervals on Aster; Hyperliquid all-null
+        _mockAster.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                MakeRate("Aster", "ETH", detectedIntervalHours: 8),   // qualifies → (3, 1, 8)
+                MakeRate("Aster", "BTC", detectedIntervalHours: 4),   // qualifies → (3, 2, 4)
+            ]);
+        _mockHyperliquid.Setup(c => c.GetFundingRatesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                MakeRate("Hyperliquid", "ETH", detectedIntervalHours: null),  // excluded
+                MakeRate("Hyperliquid", "BTC", detectedIntervalHours: null),  // excluded
+            ]);
+
+        // Capture what was passed to UpsertManyAsync
+        IEnumerable<(int ExchangeId, int AssetId, int IntervalHours, int? SnapshotId)>? capturedBatch = null;
+        _mockIntervalRepo
+            .Setup(r => r.UpsertManyAsync(
+                It.IsAny<IEnumerable<(int, int, int, int?)>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<IEnumerable<(int, int, int, int?)>, CancellationToken>(
+                (entries, _) => capturedBatch = entries.ToList())
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await _sut.FetchAllAsync(CancellationToken.None);
+
+        // Assert: exactly 2 non-null entries, each with the correct interval
+        capturedBatch.Should().NotBeNull("UpsertManyAsync should have been called with a non-empty batch");
+        capturedBatch!.Should().HaveCount(2,
+            "only the two Aster rates with non-null DetectedFundingIntervalHours qualify");
+
+        capturedBatch.Should().Contain(e => e.ExchangeId == 3 && e.AssetId == 1 && e.IntervalHours == 8,
+            "Aster(Id=3)/ETH(Id=1) with 8h interval must be in the batch");
+        capturedBatch.Should().Contain(e => e.ExchangeId == 3 && e.AssetId == 2 && e.IntervalHours == 4,
+            "Aster(Id=3)/BTC(Id=2) with 4h interval must be in the batch");
+
+        capturedBatch.Should().NotContain(e => e.ExchangeId == 1,
+            "Hyperliquid (Id=1) rates had null intervals and must not appear in the batch");
+    }
+
     // ── Upsert happens AFTER snapshot persistence ─────────────────────────────
 
     /// <summary>

@@ -3,10 +3,12 @@ using FundingRateArb.Domain.Entities;
 using FundingRateArb.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using CommonRepos = FundingRateArb.Application.Common.Repositories;
 
 namespace FundingRateArb.Infrastructure.Repositories;
 
-public class AssetExchangeFundingIntervalRepository : IAssetExchangeFundingIntervalRepository
+public class AssetExchangeFundingIntervalRepository : IAssetExchangeFundingIntervalRepository,
+    CommonRepos.IAssetExchangeFundingIntervalRepository
 {
     private const string CacheKey = "AssetExchangeFundingIntervals";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(10);

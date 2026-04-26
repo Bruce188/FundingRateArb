@@ -334,3 +334,33 @@ public class AssetExchangeFundingIntervalRepositoryDiRegistrationTests
         descriptor.ImplementationType.Should().Be(typeof(AssetExchangeFundingIntervalRepository));
     }
 }
+
+/// <summary>
+/// Verifies that AssetExchangeFundingIntervalRepository satisfies the interface contract
+/// that FundingRateFetcher resolves from its DI scope.
+///
+/// FundingRateFetcher calls:
+///   scope.ServiceProvider.GetService&lt;Application.Common.Repositories.IAssetExchangeFundingIntervalRepository&gt;()
+///
+/// For this to return the real implementation (instead of null), the concrete class must
+/// implement Application.Common.Repositories.IAssetExchangeFundingIntervalRepository —
+/// not just Application.Interfaces.IAssetExchangeFundingIntervalRepository.
+/// Without this, UpsertManyAsync is silently skipped at runtime.
+/// </summary>
+public class AssetExchangeFundingIntervalFetcherContractTests
+{
+    [Fact]
+    public void AssetExchangeFundingIntervalRepository_ImplementsCommonRepositoriesInterface()
+    {
+        // FundingRateFetcher resolves Application.Common.Repositories.IAssetExchangeFundingIntervalRepository
+        // from its DI scope. The concrete class must implement THAT interface so DI can satisfy the request.
+        // This test fails when the class only implements Application.Interfaces.IAssetExchangeFundingIntervalRepository.
+        typeof(AssetExchangeFundingIntervalRepository)
+            .Should()
+            .Implement<FundingRateArb.Application.Common.Repositories.IAssetExchangeFundingIntervalRepository>(
+                because: "FundingRateFetcher.FetchAllAsync calls " +
+                         "scope.ServiceProvider.GetService<Application.Common.Repositories.IAssetExchangeFundingIntervalRepository>(); " +
+                         "if the class does not implement that interface the GetService call returns null and " +
+                         "the per-symbol upsert path is silently skipped on every fetch cycle");
+    }
+}
