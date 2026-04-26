@@ -473,6 +473,20 @@ public class SignalEngine : ISignalEngine
                         ReferenceIntervalHours = FundingRateNormalization.ReferenceIntervalHours,
                     };
 
+                    // Cycle hours: computed whenever the interval repository is wired in,
+                    // regardless of whether a tier provider is also present. This allows
+                    // CyclesPerYear to be surfaced without leverage metadata.
+                    // When _intervalRepo is null (legacy/test path with no interval data),
+                    // CyclesPerYear stays null to preserve back-compat with callers that
+                    // rely on null meaning "no interval context available".
+                    var cycleHoursBase = Math.Max(
+                        Math.Max(1, ResolveIntervalHours(longR, perSymbolIntervals)),
+                        Math.Max(1, ResolveIntervalHours(shortR, perSymbolIntervals)));
+                    if (_intervalRepo is not null)
+                    {
+                        dto.CyclesPerYear = (int)((24m / cycleHoursBase) * 365m);
+                    }
+
                     // Compute leverage-adjusted metrics when tier data is available
                     if (_tierProvider is not null)
                     {
@@ -491,9 +505,7 @@ public class SignalEngine : ISignalEngine
                             //   cyclesPerYear           = (24 / cycleHours) × 365
                             //   AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle × cyclesPerYear
                             //     which is mathematically equivalent to net × effectiveLev × 24 × 365
-                            var cycleHours = Math.Max(
-                                Math.Max(1, ResolveIntervalHours(longR, perSymbolIntervals)),
-                                Math.Max(1, ResolveIntervalHours(shortR, perSymbolIntervals)));
+                            var cycleHours = cycleHoursBase;
                             var cyclesPerYear = (24m / cycleHours) * 365m;
                             dto.EffectiveLeverage = effectiveLev;
                             dto.ReturnOnCapitalPerCycle = net * effectiveLev * cycleHours;
