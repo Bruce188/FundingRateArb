@@ -21,4 +21,16 @@ public class FundingRateDto
     /// Used by FundingRateFetcher to detect interval changes (e.g. Binance 8h to 4h).
     /// </summary>
     public int? DetectedFundingIntervalHours { get; set; }
+
+    /// <summary>
+    /// Best bid price from the order book snapshot, if available.
+    /// Populated by connectors that provide order-book data alongside funding rates.
+    /// </summary>
+    public decimal? BestBid { get; set; }
+
+    /// <summary>
+    /// Best ask price from the order book snapshot, if available.
+    /// Populated by connectors that provide order-book data alongside funding rates.
+    /// </summary>
+    public decimal? BestAsk { get; set; }
 }

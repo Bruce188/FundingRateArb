@@ -16,6 +16,10 @@ public class LighterMarketDataStream : IMarketDataStream
     private readonly ILogger<LighterMarketDataStream> _logger;
     private readonly Dictionary<int, string> _marketIndexToSymbol = new();
 
+    // In-memory WS state used by LighterConnector.HasAnyLiquidity for the empty-book fallback.
+    private readonly Dictionary<string, (decimal Price, DateTime ReceivedAt)> _wsLastTradePrice = new();
+    private readonly Dictionary<string, (decimal Bid, decimal Ask)> _wsBookLevels = new();
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -42,6 +46,38 @@ public class LighterMarketDataStream : IMarketDataStream
     /// <summary>Seed market-index-to-symbol mappings for unit testing.</summary>
     internal void SetMarketMapping(int marketIndex, string symbol)
         => _marketIndexToSymbol[marketIndex] = symbol;
+
+    // ── WS liveness accessors (used by LighterConnector.HasAnyLiquidity) ──
+
+    /// <summary>
+    /// Returns the last WS-received trade price and its receive time for <paramref name="symbol"/>,
+    /// or null if no data has been received for this symbol.
+    /// </summary>
+    internal (decimal Price, DateTime ReceivedAt)? GetWsLastTradePrice(string symbol)
+        => _wsLastTradePrice.TryGetValue(symbol, out var v) ? v : null;
+
+    /// <summary>
+    /// Returns the in-memory WS book bid/ask levels for <paramref name="symbol"/>,
+    /// or null if no book data has been received for this symbol.
+    /// </summary>
+    internal (decimal Bid, decimal Ask)? GetWsBookLevels(string symbol)
+        => _wsBookLevels.TryGetValue(symbol, out var v) ? v : null;
+
+    // ── Test seams ──
+
+    /// <summary>
+    /// Test seam: inject a fresh last-trade-price for <paramref name="symbol"/> as if it
+    /// arrived via the WS market_stats feed right now.
+    /// </summary>
+    internal void SimulateWsLastTradePrice(string symbol, decimal price)
+        => _wsLastTradePrice[symbol] = (price, DateTime.UtcNow);
+
+    /// <summary>
+    /// Test seam: inject WS order-book bid/ask levels for <paramref name="symbol"/> as if
+    /// they arrived via the WS market_stats feed.
+    /// </summary>
+    internal void SimulateWsBookLevels(string symbol, decimal bid, decimal ask)
+        => _wsBookLevels[symbol] = (bid, ask);
 
     public async Task StartAsync(IEnumerable<string> symbols, CancellationToken ct)
     {

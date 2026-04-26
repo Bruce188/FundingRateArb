@@ -315,6 +315,27 @@ public class SignalEngine : ISignalEngine
                         continue;
                     }
 
+                    // Layer 2 — Generic empty-book pre-filter (exchange-agnostic):
+                    // Drop any candidate where, for either leg, the cached snapshot reports
+                    // BestBid == 0 AND BestAsk == 0. This guards against stale/empty order-book
+                    // snapshots on any exchange. One-sided emptiness (only bid=0 or only ask=0)
+                    // is NOT "empty book" — those candidates are kept as they may still be tradable.
+                    // Null means "no snapshot cached" which is treated as "not empty" (pass through).
+                    var longBid = _cache.GetBestBid(longR.Exchange.Name, symbol!);
+                    var longAsk = _cache.GetBestAsk(longR.Exchange.Name, symbol!);
+                    if (longBid == 0m && longAsk == 0m)
+                    {
+                        diagnostics.PairsFilteredByEmptyBook++;
+                        continue;
+                    }
+                    var shortBid = _cache.GetBestBid(shortR.Exchange.Name, symbol!);
+                    var shortAsk = _cache.GetBestAsk(shortR.Exchange.Name, symbol!);
+                    if (shortBid == 0m && shortAsk == 0m)
+                    {
+                        diagnostics.PairsFilteredByEmptyBook++;
+                        continue;
+                    }
+
                     // Use DB-stored TakerFeeRate when available; fall back to shared constants.
                     var longFee = longR.Exchange.TakerFeeRate * 2
                                    ?? ExchangeFeeConstants.GetTakerFeeRate(longR.Exchange.Name) * 2;

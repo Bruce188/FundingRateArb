@@ -1,6 +1,7 @@
 using System.Net;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
+using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
@@ -3135,6 +3136,252 @@ public class LighterConnectorTests
             result.Success.Should().BeFalse("a reverted tx should return Success=false");
             result.RevertReason.Should().Be(LighterOrderRevertReason.Unknown,
                 "when GetCancellationReasonAsync returns (null, None), RevertReason must be Unknown not None");
+        }
+    }
+
+    // ── WS-fallback liveness (Layer 1 empty-book fix) ──────────────────────
+    // These tests assert the NEW behaviour: when REST best_bid/best_ask are both
+    // 0m (null from API), HasAnyLiquidity must consult LighterMarketDataStream
+    // for corroborating evidence before rejecting the market as dead.
+
+    /// <summary>
+    /// Creates a <see cref="LighterMarketDataStream"/> that has a fresh
+    /// last-trade-price for <paramref name="symbol"/> injected via the internal
+    /// SimulateWsLastTradePrice test seam.
+    /// </summary>
+    private static LighterMarketDataStream CreateStreamWithFreshLastTradePrice(
+        string symbol, decimal price = 3500m)
+    {
+        var wsLogger = Mock.Of<ILogger<LighterWebSocketClient>>();
+        var wsClient = new LighterWebSocketClient(wsLogger);
+        var cache = new MarketDataCache();
+        var stream = new LighterMarketDataStream(
+            wsClient,
+            cache,
+            Mock.Of<IHttpClientFactory>(),
+            Mock.Of<ILogger<LighterMarketDataStream>>());
+        stream.SetMarketMapping(0, symbol);
+        // SimulateWsLastTradePrice is the new internal test seam the implementer must add.
+        // Calling it here makes the tests fail to compile (red) until it exists.
+        stream.SimulateWsLastTradePrice(symbol, price);
+        return stream;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="LighterMarketDataStream"/> that has non-zero
+    /// WS book levels for <paramref name="symbol"/> but no fresh last-trade-price.
+    /// </summary>
+    private static LighterMarketDataStream CreateStreamWithWsBookLevels(
+        string symbol, decimal bid = 3499m, decimal ask = 3501m)
+    {
+        var wsLogger = Mock.Of<ILogger<LighterWebSocketClient>>();
+        var wsClient = new LighterWebSocketClient(wsLogger);
+        var cache = new MarketDataCache();
+        var stream = new LighterMarketDataStream(
+            wsClient,
+            cache,
+            Mock.Of<IHttpClientFactory>(),
+            Mock.Of<ILogger<LighterMarketDataStream>>());
+        stream.SetMarketMapping(0, symbol);
+        // SimulateWsBookLevels is the new internal test seam the implementer must add.
+        // Calling it here makes the tests fail to compile (red) until it exists.
+        stream.SimulateWsBookLevels(symbol, bid, ask);
+        return stream;
+    }
+
+    /// <summary>
+    /// Creates a <see cref="LighterMarketDataStream"/> with no WS data for
+    /// <paramref name="symbol"/> — simulates a stream that is connected but
+    /// has never received market_stats data for this market.
+    /// </summary>
+    private static LighterMarketDataStream CreateStreamWithNoWsData(string symbol)
+    {
+        var wsLogger = Mock.Of<ILogger<LighterWebSocketClient>>();
+        var wsClient = new LighterWebSocketClient(wsLogger);
+        var cache = new MarketDataCache();
+        var stream = new LighterMarketDataStream(
+            wsClient,
+            cache,
+            Mock.Of<IHttpClientFactory>(),
+            Mock.Of<ILogger<LighterMarketDataStream>>());
+        stream.SetMarketMapping(0, symbol);
+        // No SimulateWs* calls → stream has empty state for the symbol
+        return stream;
+    }
+
+    [Fact]
+    public void HasAnyLiquidity_ReturnsTrue_WhenRestBidAskZero_ButWsLastTradePriceFresh()
+    {
+        // Arrange: REST snapshot has both sides zero (null from Lighter API → deserialized to 0m)
+        var market = new LighterOrderBookDetail
+        {
+            Symbol = "ETH",
+            MarketId = 0,
+            BestBid = 0m,
+            BestAsk = 0m,
+        };
+
+        // WS stream has a fresh LastTradePrice for this market → market is live
+        var wsStream = CreateStreamWithFreshLastTradePrice("ETH", price: 3500m);
+
+        // Act: buy direction (isAsk=false → needs ask-side liquidity)
+        var buyResult = LighterConnector.HasAnyLiquidity(market, isAsk: false, wsStream: wsStream);
+        // Act: sell direction (isAsk=true → needs bid-side liquidity)
+        var sellResult = LighterConnector.HasAnyLiquidity(market, isAsk: true, wsStream: wsStream);
+
+        buyResult.Should().BeTrue(
+            "a fresh WS LastTradePrice proves the market is live even when REST bid/ask are 0");
+        sellResult.Should().BeTrue(
+            "a fresh WS LastTradePrice proves the market is live even when REST bid/ask are 0");
+    }
+
+    [Fact]
+    public void HasAnyLiquidity_ReturnsTrue_WhenRestBidAskZero_ButWsBookHasLevels()
+    {
+        // Arrange: REST snapshot has both sides zero
+        var market = new LighterOrderBookDetail
+        {
+            Symbol = "ETH",
+            MarketId = 0,
+            BestBid = 0m,
+            BestAsk = 0m,
+        };
+
+        // WS in-memory book has non-zero bid+ask levels → market is live
+        var wsStream = CreateStreamWithWsBookLevels("ETH", bid: 3499m, ask: 3501m);
+
+        var buyResult = LighterConnector.HasAnyLiquidity(market, isAsk: false, wsStream: wsStream);
+        var sellResult = LighterConnector.HasAnyLiquidity(market, isAsk: true, wsStream: wsStream);
+
+        buyResult.Should().BeTrue(
+            "non-zero WS book bid/ask proves the market is live even when REST bid/ask are 0");
+        sellResult.Should().BeTrue(
+            "non-zero WS book bid/ask proves the market is live even when REST bid/ask are 0");
+    }
+
+    [Fact]
+    public void HasAnyLiquidity_ReturnsFalse_WhenRestBidAskZero_AndNoWsEvidence()
+    {
+        // Arrange: REST snapshot has both sides zero AND the WS stream has no data for this market
+        var market = new LighterOrderBookDetail
+        {
+            Symbol = "ETH",
+            MarketId = 0,
+            BestBid = 0m,
+            BestAsk = 0m,
+        };
+
+        // Stream is present but has received no WS data for ETH → genuinely-dead market
+        var wsStream = CreateStreamWithNoWsData("ETH");
+
+        var buyResult = LighterConnector.HasAnyLiquidity(market, isAsk: false, wsStream: wsStream);
+        var sellResult = LighterConnector.HasAnyLiquidity(market, isAsk: true, wsStream: wsStream);
+
+        buyResult.Should().BeFalse(
+            "no REST bid/ask and no WS evidence means the market is genuinely dead");
+        sellResult.Should().BeFalse(
+            "no REST bid/ask and no WS evidence means the market is genuinely dead");
+    }
+
+    [Fact]
+    public void HasAnyLiquidity_ReturnsTrue_WhenRestBidAskNonZero()
+    {
+        // Regression: existing behaviour — REST snapshot has non-zero bid and ask.
+        // The WS stream should not be consulted (and is not required).
+        var market = new LighterOrderBookDetail
+        {
+            Symbol = "ETH",
+            MarketId = 0,
+            BestBid = 3500m,
+            BestAsk = 3501m,
+        };
+
+        // wsStream=null → no WS fallback needed when REST data is healthy
+        var buyResult = LighterConnector.HasAnyLiquidity(market, isAsk: false, wsStream: null);
+        var sellResult = LighterConnector.HasAnyLiquidity(market, isAsk: true, wsStream: null);
+
+        buyResult.Should().BeTrue(
+            "non-zero REST BestAsk is sufficient to confirm buy-side liquidity");
+        sellResult.Should().BeTrue(
+            "non-zero REST BestBid is sufficient to confirm sell-side liquidity");
+    }
+
+    // ── IsPreFlightRejection discriminator tests ────────────────────────────
+    // Task 1.1 point 3: OrderResultDto must expose IsPreFlightRejection so
+    // ExecutionEngine (Task 1.3) can distinguish a pre-flight veto from a
+    // genuine on-chain revert.
+
+    [Fact]
+    public void OrderResultDto_IsPreFlightRejection_DefaultsToFalse()
+    {
+        // IsPreFlightRejection must exist and default to false so on-chain reverts
+        // (which don't set it) are not misclassified.
+        var dto = new OrderResultDto { Success = false, RevertReason = LighterOrderRevertReason.Slippage };
+        dto.IsPreFlightRejection.Should().BeFalse(
+            "on-chain reverts must not be flagged as pre-flight rejections by default");
+    }
+
+    [Fact]
+    public void OrderResultDto_IsPreFlightRejection_CanBeSetToTrue()
+    {
+        // Pre-flight guards must be able to mark the DTO so downstream can distinguish them.
+        var dto = new OrderResultDto
+        {
+            Success = false,
+            RevertReason = LighterOrderRevertReason.InsufficientDepth,
+            IsPreFlightRejection = true,
+        };
+        dto.IsPreFlightRejection.Should().BeTrue(
+            "pre-flight guard must be able to set IsPreFlightRejection=true");
+    }
+
+    [Fact]
+    public async Task PlaceMarketOrder_PreFlightReject_SetsIsPreFlightRejectionTrue()
+    {
+        // When HasAnyLiquidity returns false (REST bid/ask both 0, no WS evidence),
+        // the returned OrderResultDto must have IsPreFlightRejection=true so that
+        // ExecutionEngine can tell this from a real on-chain InsufficientDepth revert.
+        var zeroBidAskJson = """
+            {
+                "code": 200,
+                "order_book_details": [
+                    {
+                        "market_id": 0,
+                        "symbol": "ETH",
+                        "size_decimals": 4,
+                        "price_decimals": 2,
+                        "last_trade_price": 0,
+                        "best_bid": 0,
+                        "best_ask": 0
+                    }
+                ]
+            }
+            """;
+
+        // No WS stream injected → connector falls back to null/empty → no WS evidence
+        var sut = CreateMultiRouteConnector(h =>
+        {
+            h.AddRoute("orderBookDetails", zeroBidAskJson);
+            h.AddRoute("assetDetails", AssetDetailsJson);
+        });
+
+        _configMock.Setup(c => c["Exchanges:Lighter:SignerPrivateKey"]).Returns("0xabc123");
+        _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
+        _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
+
+        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 10);
+
+        result.Success.Should().BeFalse("pre-flight rejection must not return Success=true");
+
+        var signerUnavailable = result.Error?.Contains("signer", StringComparison.OrdinalIgnoreCase) == true
+            || result.Error?.Contains("SignerPrivateKey", StringComparison.OrdinalIgnoreCase) == true;
+
+        if (!signerUnavailable)
+        {
+            result.RevertReason.Should().Be(LighterOrderRevertReason.InsufficientDepth,
+                "zero REST bid/ask with no WS evidence must produce InsufficientDepth");
+            result.IsPreFlightRejection.Should().BeTrue(
+                "pre-flight veto must set IsPreFlightRejection=true so ExecutionEngine can distinguish it from on-chain revert");
         }
     }
 }

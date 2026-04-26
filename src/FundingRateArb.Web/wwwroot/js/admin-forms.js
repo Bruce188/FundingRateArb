@@ -48,3 +48,36 @@ function bindPercentInput(percentInputId, rawHiddenInputId, multiplier) {
         updateBadge();
     });
 }
+
+/**
+ * BPS input binding for BotConfig admin form.
+ * Provides a user-friendly BPS input that translates to/from the raw decimal
+ * stored in the hidden form field (e.g., a visible value is stored as visible * factor).
+ *
+ * @param {string} visibleId - ID of the visible number input
+ * @param {string} rawId - ID of the hidden input bound to the viewmodel
+ * @param {number} [factor=10000] - Conversion factor (default 10000 for bps)
+ */
+function bindBpsInput(visibleId, rawId, factor) {
+    if (factor === undefined) factor = 10000;
+    var visInput = document.getElementById(visibleId);
+    var rawInput = document.getElementById(rawId);
+    if (!visInput || !rawInput) return;
+
+    // On load: visible = raw / factor
+    var rawVal = parseFloat(rawInput.value);
+    if (!isNaN(rawVal)) {
+        visInput.value = (rawVal / factor).toFixed(10).replace(/\.?0+$/, '');
+    }
+
+    // On input/change: raw = visible * factor; NaN → leave raw unchanged
+    function handleChange() {
+        var visVal = parseFloat(visInput.value);
+        if (!isNaN(visVal)) {
+            rawInput.value = (visVal * factor).toFixed(8).replace(/\.?0+$/, '');
+        }
+    }
+
+    visInput.addEventListener('input', handleChange);
+    visInput.addEventListener('change', handleChange);
+}

@@ -2376,4 +2376,170 @@ public class AsterConnectorTests
         var btc = rates.Single(r => r.Symbol == "BTC");
         btc.RatePerHour.Should().Be(0.0001m, "BTC should fall back to the 8h divisor (0.0008 / 8)");
     }
+
+    // ── Normalization audit: per-symbol interval pin tests ────────────────────
+
+    [Fact]
+    public async Task GetFundingRates_FundingInfo4h_DividesByFourAndSurfacesDetectedInterval()
+    {
+        // Phase 2 target: per-4h symbol whose FundingIntervalHours=4 is returned by
+        // GetFundingInfoAsync. RatePerHour must be rawRate/4 and
+        // DetectedFundingIntervalHours must equal 4.
+        var now = DateTime.UtcNow;
+        var mp = new AsterMarkPrice
+        {
+            Symbol = "ETHUSDT",
+            MarkPrice = 3500m,
+            IndexPrice = 3495m,
+            FundingRate = -0.000542m,
+            NextFundingTime = now.AddHours(1),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([mp]));
+        Mock.Get(client.Object.FuturesApi.ExchangeData)
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([MakeFundingInfo("ETHUSDT", 4)]));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var dto = rates.Should().ContainSingle().Which;
+        dto.RawRate.Should().Be(-0.000542m);
+        dto.DetectedFundingIntervalHours.Should().Be(4);
+        dto.RatePerHour.Should().Be(-0.000542m / 4m,
+            "4h interval: raw rate must be divided by 4");
+        dto.RatePerHour.Should().Be(dto.RawRate / (decimal)dto.DetectedFundingIntervalHours!.Value,
+            "invariant: RatePerHour == RawRate / DetectedFundingIntervalHours");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_FundingInfo8h_DividesByEightAndSurfacesDetectedInterval()
+    {
+        // Phase 2 target: per-8h symbol whose FundingIntervalHours=8 is returned by
+        // GetFundingInfoAsync. RatePerHour must be rawRate/8 and
+        // DetectedFundingIntervalHours must equal 8.
+        var now = DateTime.UtcNow;
+        var mp = new AsterMarkPrice
+        {
+            Symbol = "BTCUSDT",
+            MarkPrice = 65000m,
+            IndexPrice = 64980m,
+            FundingRate = -0.000542m,
+            NextFundingTime = now.AddHours(1),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([mp]));
+        Mock.Get(client.Object.FuturesApi.ExchangeData)
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([MakeFundingInfo("BTCUSDT", 8)]));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var dto = rates.Should().ContainSingle().Which;
+        dto.RawRate.Should().Be(-0.000542m);
+        dto.DetectedFundingIntervalHours.Should().Be(8);
+        dto.RatePerHour.Should().Be(-0.000542m / 8m,
+            "8h interval: raw rate must be divided by 8");
+        dto.RatePerHour.Should().Be(dto.RawRate / (decimal)dto.DetectedFundingIntervalHours!.Value,
+            "invariant: RatePerHour == RawRate / DetectedFundingIntervalHours");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_FundingInfoMissingForSymbol_InfersIntervalFromNextFundingTime()
+    {
+        // Phase 2 target: GetFundingInfoAsync returns no entry for this symbol.
+        // Connector must infer the interval from NextFundingTime (now+30m places the
+        // settlement near a 4h boundary, so the inferred interval must be 4).
+        // Currently fails because the connector defaults to the 8h fallback.
+        var now = DateTime.UtcNow;
+        var mp = new AsterMarkPrice
+        {
+            Symbol = "ETHUSDT",
+            MarkPrice = 3500m,
+            IndexPrice = 3495m,
+            FundingRate = -0.000542m,
+            NextFundingTime = now.AddMinutes(30),
+        };
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([mp]));
+        Mock.Get(client.Object.FuturesApi.ExchangeData)
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessFundingInfo([])); // funding info present but no entry for this symbol
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        var dto = rates.Should().ContainSingle().Which;
+        dto.DetectedFundingIntervalHours.Should().Be(4,
+            "NextFundingTime ~30m away maps to the 4h cycle via nearest-plausible-interval inference");
+        dto.RatePerHour.Should().Be(dto.RawRate / (decimal)dto.DetectedFundingIntervalHours!.Value,
+            "invariant: RatePerHour == RawRate / DetectedFundingIntervalHours");
+    }
+
+    [Fact]
+    public async Task GetFundingRates_FundingInfoThrows_EmitsInferableDtosAndSkipsUninferableWithWarning()
+    {
+        // Phase 2 target: GetFundingInfoAsync throws a transient error.
+        // - Symbols with a NextFundingTime that allows interval inference → DTO emitted,
+        //   DetectedFundingIntervalHours set to the inferred value (never 8 = old fallback).
+        // - Symbols with NextFundingTime=null (uninferrable) → skipped entirely;
+        //   a warning containing the symbol name must be logged.
+        var now = DateTime.UtcNow;
+        var loggerMock = new Mock<ILogger<AsterConnector>>();
+
+        var mpInferable = new AsterMarkPrice
+        {
+            Symbol = "ETHUSDT",
+            MarkPrice = 3500m,
+            IndexPrice = 3495m,
+            FundingRate = -0.000542m,
+            NextFundingTime = now.AddMinutes(30), // near 4h boundary → inferable
+        };
+        var mpUninferrable = new AsterMarkPrice
+        {
+            Symbol = "BTCUSDT",
+            MarkPrice = 65000m,
+            IndexPrice = 64980m,
+            FundingRate = 0.0001m,
+            NextFundingTime = default, // DateTime.MinValue → implausibly far in past, uninferrable
+        };
+
+        var client = BuildClientWithMarkPrices(SuccessMarkPrices([mpInferable, mpUninferrable]));
+        Mock.Get(client.Object.FuturesApi.ExchangeData)
+            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("funding info endpoint offline"));
+
+        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), loggerMock.Object, new SingletonMarkPriceCache());
+
+        var rates = await sut.GetFundingRatesAsync();
+
+        // ETH has a NextFundingTime — interval is inferable; DTO must be emitted
+        rates.Should().Contain(r => r.Symbol == "ETH",
+            "ETH NextFundingTime allows interval inference — DTO must still be emitted");
+        var eth = rates.Single(r => r.Symbol == "ETH");
+        eth.DetectedFundingIntervalHours.Should().NotBeNull(
+            "inferred interval must be surfaced even when funding info is unavailable");
+        eth.DetectedFundingIntervalHours.Should().NotBe(8,
+            "8h is the old blind fallback — an inferred value must differ from it");
+
+        // BTC has DateTime.MinValue NextFundingTime — uninferrable; connector must skip it
+        rates.Should().NotContain(r => r.Symbol == "BTC",
+            "BTC NextFundingTime is null — connector must skip it and emit no DTO");
+
+        // A warning containing the skipped symbol name must be logged
+        loggerMock.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("BTCUSDT")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.AtLeastOnce,
+            "a warning containing the skipped symbol name must be logged");
+
+        // No DTO may carry DetectedFundingIntervalHours=8 (that is the old blind fallback)
+        rates.Should().NotContain(r => r.DetectedFundingIntervalHours == 8,
+            "no emitted DTO should use the 8h default when funding info is unavailable");
+    }
 }

@@ -49,6 +49,20 @@ public class MarketDataCache : IMarketDataCache
         return _rates.TryGetValue(key, out var entry) ? entry.Rate.MarkPrice : 0m;
     }
 
+    public decimal? GetBestBid(string exchangeName, string symbol)
+    {
+        var key = Key(exchangeName, symbol);
+        if (!_rates.TryGetValue(key, out var entry)) return null;
+        return entry.Rate.BestBid;
+    }
+
+    public decimal? GetBestAsk(string exchangeName, string symbol)
+    {
+        var key = Key(exchangeName, symbol);
+        if (!_rates.TryGetValue(key, out var entry)) return null;
+        return entry.Rate.BestAsk;
+    }
+
     public DateTime? GetNextSettlement(string exchangeName, string symbol)
     {
         var key = Key(exchangeName, symbol);

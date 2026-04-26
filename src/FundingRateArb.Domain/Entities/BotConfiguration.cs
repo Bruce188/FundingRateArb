@@ -9,13 +9,23 @@ public class BotConfiguration : IValidatableObject
     public int Id { get; set; }
     public bool IsEnabled { get; set; }
     public BotOperatingState OperatingState { get; set; } = BotOperatingState.Stopped;
+    [Range(0.0, 0.01)]
     public decimal OpenThreshold { get; set; } = 0.0002m;
+
+    [Range(0.0, 0.01)]
     public decimal AlertThreshold { get; set; } = 0.0001m;
+
+    /// <remarks>
+    /// Close fires when spread/h drops below this magnitude (negative number).
+    /// A value of -0.00005 means the close triggers when the hourly spread falls below -0.005%.
+    /// </remarks>
+    [Range(-0.01, 0.0)]
     public decimal CloseThreshold { get; set; } = -0.00005m;
 
     [Range(0.01, 1.0)]
     public decimal StopLossPct { get; set; } = 0.10m;
 
+    [Range(1, 168)]
     public int MaxHoldTimeHours { get; set; } = 48;
 
     /// <summary>Minimum hours to hold before allowing SpreadCollapsed close. StopLoss always applies.
@@ -23,6 +33,7 @@ public class BotConfiguration : IValidatableObject
     [Range(0, 48)]
     public int MinHoldTimeHours { get; set; } = 2;
 
+    [Range(0.0001, 0.1)]
     public decimal VolumeFraction { get; set; } = 0.001m;
 
     [Range(0.01, 1.0)]
