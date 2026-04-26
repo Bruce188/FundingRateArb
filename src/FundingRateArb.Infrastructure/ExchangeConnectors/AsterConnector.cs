@@ -642,14 +642,20 @@ public class AsterConnector : IExchangeConnector, IDisposable
     private static int? ResolveIntervalHours(int? fundingInfoHours, DateTime? nextFundingTimeUtc, DateTime nowUtc)
     {
         if (fundingInfoHours is > 0)
+        {
             return fundingInfoHours;
+        }
 
         if (nextFundingTimeUtc is null)
+        {
             return null;
+        }
 
         var gap = nextFundingTimeUtc.Value - nowUtc;
         if (gap.TotalHours <= 0.0 || gap.TotalHours > 12.0)
+        {
             return null;
+        }
 
         // Snap gap to the nearest standard Aster funding interval.
         // Aster uses 4h or 8h cycles; smaller intervals are handled via fundingInfo above.

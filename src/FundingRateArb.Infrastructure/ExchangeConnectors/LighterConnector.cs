@@ -1444,26 +1444,36 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         // isAsk=true means we are selling → we need a bid; isAsk=false means buying → need an ask
         bool restLiquid = isAsk ? market.BestBid > 0 : market.BestAsk > 0;
         if (restLiquid)
+        {
             return true;
+        }
 
         // If only the relevant side is 0 but the other side has data, trust the REST snapshot.
         if (market.BestBid != 0m || market.BestAsk != 0m)
+        {
             return false;
+        }
 
         // Both REST sides are 0 — Lighter API returns null for illiquid markets which
         // deserializes to 0m. Consult the WS stream for corroborating evidence.
         if (wsStream is null)
+        {
             return false;
+        }
 
         // WS fallback 1: last-trade-price received recently proves the market is live.
         var lastTrade = wsStream.GetWsLastTradePrice(market.Symbol);
         if (lastTrade is not null && DateTime.UtcNow - lastTrade.Value.ReceivedAt <= CacheTtl)
+        {
             return true;
+        }
 
         // WS fallback 2: in-memory WS book has at least one non-zero level.
         var levels = wsStream.GetWsBookLevels(market.Symbol);
         if (levels is not null && (levels.Value.Bid > 0m || levels.Value.Ask > 0m))
+        {
             return true;
+        }
 
         // No REST or WS evidence — genuinely dead market.
         return false;

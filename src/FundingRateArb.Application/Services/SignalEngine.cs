@@ -88,7 +88,10 @@ public class SignalEngine : ISignalEngine
         IReadOnlyDictionary<(int ExchangeId, int AssetId), int> perSymbol)
     {
         if (perSymbol.TryGetValue((rate.ExchangeId, rate.AssetId), out var iv) && iv > 0)
+        {
             return iv;
+        }
+
         return rate.Exchange?.FundingIntervalHours ?? 1;
     }
 
