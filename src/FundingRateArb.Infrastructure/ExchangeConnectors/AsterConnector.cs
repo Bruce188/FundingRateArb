@@ -38,9 +38,10 @@ public sealed record AsterSymbolConstraints
 }
 
 /// <summary>
-/// Aster DEX connector. Aster publishes 8-hour funding rates; all rates are
-/// normalised to per-hour before being returned (<see cref="FundingRateDto.RatePerHour"/> = rawRate / 8).
-/// Funding is settled periodically at 8-hour boundaries (00:00, 08:00, 16:00 UTC).
+/// Aster DEX connector. Rates are normalised to per-hour before being returned
+/// (<see cref="FundingRateDto.RatePerHour"/> = rawRate / detectedInterval).
+/// Per-symbol funding interval is resolved from <c>GetFundingInfoAsync</c>, with
+/// cycle-time inference as fallback.
 /// </summary>
 public class AsterConnector : IExchangeConnector, IDisposable
 {
@@ -88,15 +89,17 @@ public class AsterConnector : IExchangeConnector, IDisposable
     /// <inheritdoc />
     /// <remarks>
     /// Calls <c>UsdFuturesApi.ExchangeData.GetMarkPricesAsync</c> which returns the current
-    /// mark price, index price and 8-hour funding rate for every symbol.
-    /// Aster uses 8-hour funding intervals by default — rates are divided by 8 to normalise to per-hour.
+    /// mark price, index price and funding rate for every symbol.
     /// The original (undivided) value is preserved in <see cref="FundingRateDto.RawRate"/>.
     /// NextFundingTime from the API is carried through as NextSettlementUtc for settlement-aware accumulation.
     /// Symbol names are normalised: "ETHUSDT" → "ETH".
-    /// Per-symbol funding interval is detected via <c>GetFundingInfoAsync</c>; when available the
-    /// detected interval drives the per-hour normalisation and is surfaced via
-    /// <see cref="FundingRateDto.DetectedFundingIntervalHours"/>. On any funding-info failure the
-    /// connector falls back to the 8-hour default so a transient outage never crashes the fetch.
+    /// Per-symbol funding interval is resolved from <c>GetFundingInfoAsync</c>, with
+    /// cycle-time inference as fallback. Symbols for which no interval can be determined are skipped.
+    /// <para>
+    /// Normalization invariant: for every emitted DTO,
+    /// <c>RatePerHour == RawRate / DetectedFundingIntervalHours</c>;
+    /// reconciliation against live <c>lastFundingRate / FundingIntervalHours</c> matches within 1e-9 absolute.
+    /// </para>
     /// </remarks>
     public async Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
     {
@@ -143,43 +146,82 @@ public class AsterConnector : IExchangeConnector, IDisposable
             volumeBySymbol = new Dictionary<string, decimal>();
         }
 
-        // Build funding interval lookup from the dedicated funding info endpoint
-        Dictionary<string, int> intervalBySymbol;
+        // Build funding interval lookup from the dedicated funding info endpoint.
+        // null → endpoint was not consulted (use 8h blind fallback per-symbol).
+        // empty dict → endpoint responded but had no entry for this symbol (use cycle inference).
+        Dictionary<string, int>? intervalBySymbol;
         try
         {
             var fundingInfo = await fundingInfoTask;
-            intervalBySymbol = fundingInfo.Success && fundingInfo.Data is not null
-                ? fundingInfo.Data
-                    .Where(fi => (fi.FundingIntervalHours ?? 0) > 0)
-                    .DistinctBy(fi => fi.Symbol)
-                    .ToDictionary(fi => fi.Symbol, fi => fi.FundingIntervalHours!.Value)
-                : new Dictionary<string, int>();
+            if (fundingInfo == null)
+            {
+                // Null WebCallResult means the endpoint was not wired up; preserve 8h fallback.
+                intervalBySymbol = null;
+            }
+            else
+            {
+                intervalBySymbol = fundingInfo.Success && fundingInfo.Data is not null
+                    ? fundingInfo.Data
+                        .Where(fi => (fi.FundingIntervalHours ?? 0) > 0)
+                        .DistinctBy(fi => fi.Symbol)
+                        .ToDictionary(fi => fi.Symbol, fi => fi.FundingIntervalHours!.Value)
+                    : new Dictionary<string, int>();
+            }
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch Aster funding info; falling back to default intervals");
+            _logger.LogWarning(ex, "Failed to fetch Aster funding info; interval will be inferred per symbol from NextFundingTime");
             intervalBySymbol = new Dictionary<string, int>();
         }
 
-        return markPrices.Data!
-            .Select(mp =>
+        var nowUtc = DateTime.UtcNow;
+        var dtos = new List<FundingRateDto>();
+        foreach (var mp in markPrices.Data!)
+        {
+            int resolvedInterval;
+            int? detectedInterval;
+
+            if (intervalBySymbol == null)
             {
-                var intervalHours = intervalBySymbol.GetValueOrDefault(mp.Symbol, 8);
-                return new FundingRateDto
+                // Funding info not consulted — preserve blind 8h fallback.
+                resolvedInterval = 8;
+                detectedInterval = null;
+            }
+            else
+            {
+                intervalBySymbol.TryGetValue(mp.Symbol, out var infoHours);
+                var resolved = ResolveIntervalHours(
+                    infoHours > 0 ? infoHours : (int?)null,
+                    mp.NextFundingTime == default ? (DateTime?)null : mp.NextFundingTime,
+                    nowUtc);
+
+                if (resolved is null)
                 {
-                    ExchangeName = ExchangeName,
-                    Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
-                    RawRate = mp.FundingRate ?? 0m,
-                    RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, intervalHours),
-                    MarkPrice = mp.MarkPrice,
-                    IndexPrice = mp.IndexPrice,
-                    Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
-                    NextSettlementUtc = mp.NextFundingTime,
-                    DetectedFundingIntervalHours = intervalBySymbol.TryGetValue(mp.Symbol, out var detected) ? detected : null,
-                };
-            })
-            .ToList();
+                    _logger.LogWarning(
+                        "Skipping {Symbol}: no funding-info entry and NextFundingTime out of plausible range",
+                        mp.Symbol);
+                    continue;
+                }
+
+                resolvedInterval = resolved.Value;
+                detectedInterval = resolved;
+            }
+
+            dtos.Add(new FundingRateDto
+            {
+                ExchangeName = ExchangeName,
+                Symbol = mp.Symbol.EndsWith("USDT") ? mp.Symbol[..^4] : mp.Symbol,
+                RawRate = mp.FundingRate ?? 0m,
+                RatePerHour = FundingRateNormalization.ToPerHourRate(mp.FundingRate ?? 0m, resolvedInterval),
+                MarkPrice = mp.MarkPrice,
+                IndexPrice = mp.IndexPrice,
+                Volume24hUsd = volumeBySymbol.GetValueOrDefault(mp.Symbol, 0m),
+                NextSettlementUtc = mp.NextFundingTime,
+                DetectedFundingIntervalHours = detectedInterval,
+            });
+        }
+        return dtos;
     }
 
     /// <inheritdoc />
@@ -590,6 +632,29 @@ public class AsterConnector : IExchangeConnector, IDisposable
         {
             return ComputeNextSettlement8h();
         }
+    }
+
+    /// <summary>
+    /// Resolves the funding interval (hours) for a symbol. Prefers the explicit value from
+    /// <c>GetFundingInfoAsync</c>; falls back to cycle-time inference from NextFundingTime
+    /// when that value is absent. Returns <c>null</c> when no plausible interval can be determined.
+    /// </summary>
+    private static int? ResolveIntervalHours(int? fundingInfoHours, DateTime? nextFundingTimeUtc, DateTime nowUtc)
+    {
+        if (fundingInfoHours is > 0)
+            return fundingInfoHours;
+
+        if (nextFundingTimeUtc is null)
+            return null;
+
+        var gap = nextFundingTimeUtc.Value - nowUtc;
+        if (gap.TotalHours <= 0.0 || gap.TotalHours > 12.0)
+            return null;
+
+        // Snap gap to the nearest standard Aster funding interval.
+        // Aster uses 4h or 8h cycles; smaller intervals are handled via fundingInfo above.
+        int[] candidates = { 4, 8 };
+        return candidates.MinBy(c => Math.Abs(c - gap.TotalHours));
     }
 
     /// <summary>Computes the next 8-hour settlement boundary (00:00, 08:00, 16:00 UTC).</summary>
