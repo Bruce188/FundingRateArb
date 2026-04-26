@@ -51,6 +51,10 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     // Concurrent callers await the same Task instead of all issuing independent HTTP requests.
     private Task<Dictionary<string, LighterOrderBookDetail>>? _pendingMarketRefresh;
 
+    // Optional WS stream for empty-book fallback in HasAnyLiquidity.
+    // Injected via SetMarketDataStream after construction; null when not wired up.
+    private LighterMarketDataStream? _wsStream;
+
     // Short-lived cache for GetAccountAsync — eliminates redundant HTTP round-trip when
     // GetActualEntryPriceAsync is called immediately after VerifyPositionOpenedAsync.
     private LighterAccountResponse? _accountCache;
@@ -88,6 +92,12 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         _ = pipelineProvider; // Pipeline not used: HttpClient-level resilience handles retries (M-LC3)
         _signer = new LighterSigner(logger);
     }
+
+    /// <summary>
+    /// Wires up the live WS stream so <see cref="HasAnyLiquidity"/> can fall back to
+    /// WS-sourced evidence when the REST best_bid/best_ask snapshot is zero.
+    /// </summary>
+    internal void SetMarketDataStream(LighterMarketDataStream? stream) => _wsStream = stream;
 
     public string ExchangeName => "Lighter";
 
@@ -881,7 +891,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             }
 
             // 5b. Pre-submit liveness check — reject if order book depth is insufficient
-            if (!HasAnyLiquidity(market, isAsk))
+            if (!HasAnyLiquidity(market, isAsk, _wsStream))
             {
                 _logger.LogWarning(
                     "Lighter liveness check failed: {Asset} {Side} required={BaseAmount} bestBid={Bid} bestAsk={Ask}",
@@ -890,7 +900,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 {
                     Success = false,
                     RevertReason = LighterOrderRevertReason.InsufficientDepth,
-                    Error = $"Insufficient order book depth for {asset} {side}"
+                    Error = $"Insufficient order book depth for {asset} {side}",
+                    IsPreFlightRejection = true,
                 };
             }
 
@@ -1096,7 +1107,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             }
 
             // 5b. Pre-submit liveness check — reject if order book depth is insufficient
-            if (!HasAnyLiquidity(market, isAsk))
+            if (!HasAnyLiquidity(market, isAsk, _wsStream))
             {
                 _logger.LogWarning(
                     "Lighter liveness check failed: {Asset} {Side} required={BaseAmount} bestBid={Bid} bestAsk={Ask}",
@@ -1105,7 +1116,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 {
                     Success = false,
                     RevertReason = LighterOrderRevertReason.InsufficientDepth,
-                    Error = $"Insufficient order book depth for {asset} {side}"
+                    Error = $"Insufficient order book depth for {asset} {side}",
+                    IsPreFlightRejection = true,
                 };
             }
 
@@ -1325,7 +1337,7 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             }
 
             // 4b. Pre-submit liveness check — reject if order book depth is insufficient
-            if (!HasAnyLiquidity(market, isAsk))
+            if (!HasAnyLiquidity(market, isAsk, _wsStream))
             {
                 _logger.LogWarning(
                     "Lighter close liveness check failed: {Asset} {Side} bestBid={Bid} bestAsk={Ask}",
@@ -1334,7 +1346,8 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
                 {
                     Success = false,
                     RevertReason = LighterOrderRevertReason.InsufficientDepth,
-                    Error = $"Insufficient order book depth for {asset} {side}"
+                    Error = $"Insufficient order book depth for {asset} {side}",
+                    IsPreFlightRejection = true,
                 };
             }
 
@@ -1423,10 +1436,37 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     /// so we use non-zero best price as a proxy for some liquidity being present
     /// on the relevant side of the book.
     /// </summary>
-    internal static bool HasAnyLiquidity(LighterOrderBookDetail market, bool isAsk)
+    internal static bool HasAnyLiquidity(
+        LighterOrderBookDetail market,
+        bool isAsk,
+        LighterMarketDataStream? wsStream = null)
     {
         // isAsk=true means we are selling → we need a bid; isAsk=false means buying → need an ask
-        return isAsk ? market.BestBid > 0 : market.BestAsk > 0;
+        bool restLiquid = isAsk ? market.BestBid > 0 : market.BestAsk > 0;
+        if (restLiquid)
+            return true;
+
+        // If only the relevant side is 0 but the other side has data, trust the REST snapshot.
+        if (market.BestBid != 0m || market.BestAsk != 0m)
+            return false;
+
+        // Both REST sides are 0 — Lighter API returns null for illiquid markets which
+        // deserializes to 0m. Consult the WS stream for corroborating evidence.
+        if (wsStream is null)
+            return false;
+
+        // WS fallback 1: last-trade-price received recently proves the market is live.
+        var lastTrade = wsStream.GetWsLastTradePrice(market.Symbol);
+        if (lastTrade is not null && DateTime.UtcNow - lastTrade.Value.ReceivedAt <= CacheTtl)
+            return true;
+
+        // WS fallback 2: in-memory WS book has at least one non-zero level.
+        var levels = wsStream.GetWsBookLevels(market.Symbol);
+        if (levels is not null && (levels.Value.Bid > 0m || levels.Value.Ask > 0m))
+            return true;
+
+        // No REST or WS evidence — genuinely dead market.
+        return false;
     }
 
     /// <summary>

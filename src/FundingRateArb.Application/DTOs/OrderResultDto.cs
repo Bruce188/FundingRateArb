@@ -11,4 +11,10 @@ public class OrderResultDto
     public decimal FilledQuantity { get; set; }
     public bool IsEstimatedFill { get; set; }
     public LighterOrderRevertReason RevertReason { get; set; }
+
+    /// <summary>
+    /// True when the order was rejected by a pre-flight guard (e.g. insufficient book depth)
+    /// before any on-chain transaction was submitted. False for real on-chain reverts.
+    /// </summary>
+    public bool IsPreFlightRejection { get; set; }
 }

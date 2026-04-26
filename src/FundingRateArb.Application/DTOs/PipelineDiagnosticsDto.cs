@@ -29,6 +29,13 @@ public class PipelineDiagnosticsDto
     public int PairsFilteredByBreakeven { get; set; }
 
     /// <summary>
+    /// Opportunities filtered because, for at least one leg, the cached order-book
+    /// snapshot reports BestBid=0 AND BestAsk=0 (empty book). Exchange-agnostic;
+    /// one-sided emptiness (bid=0 OR ask=0 but not both) does not trigger this counter.
+    /// </summary>
+    public int PairsFilteredByEmptyBook { get; set; }
+
+    /// <summary>
     /// Opportunities filtered because sized notional would exceed an exchange's
     /// per-symbol <c>MAX_NOTIONAL_VALUE</c> limit on at least one leg. Tracked so
     /// operators see "WLFI dropped by Aster cap" instead of a silent skip.

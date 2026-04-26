@@ -4070,4 +4070,171 @@ public class SignalEngineTests
             opp.AnnualizedReturnOnCapital!.Value * 100m, 0.0000001m,
             "AprOnCapital must equal AnnualizedReturnOnCapital * 100 (back-compat invariant)");
     }
+
+    // ── L2: Empty-book pre-filter (Task 1.2) ──────────────────────────────────────
+    // The SignalEngine must drop any candidate opportunity where, for either leg,
+    // the cached IMarketDataCache snapshot reports BestBid == 0m AND BestAsk == 0m.
+    // One-sided emptiness (only bid 0 or only ask 0) is NOT "empty book" — keep those.
+    // The predicate must be exchange-agnostic (no hard-coded exchange names).
+
+    /// <summary>
+    /// A candidate where the long leg's order book is completely empty (BestBid=0 AND
+    /// BestAsk=0) must be dropped even when the spread and volume would otherwise
+    /// qualify it.
+    /// </summary>
+    [Fact]
+    public async Task RankOpportunities_ExcludesCandidate_WhenLegBidAskBothZero()
+    {
+        // Arrange: large spread that passes all other filters (volume, threshold, edge guardrail)
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "ExchangeA", 1, "ETH", 0.0001m),  // long leg
+            MakeRate(2, "ExchangeB", 1, "ETH", 0.0100m),  // short leg — massive spread
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                MinVolume24hUsdc = 50_000m,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Long leg has an empty order book (BestBid=0 AND BestAsk=0)
+        _mockCache.Setup(c => c.GetBestBid("ExchangeA", "ETH")).Returns(0m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeA", "ETH")).Returns(0m);
+        // Short leg has a healthy book
+        _mockCache.Setup(c => c.GetBestBid("ExchangeB", "ETH")).Returns(10_000m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeB", "ETH")).Returns(10_001m);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: candidate dropped because long leg has an empty order book
+        result.Should().BeEmpty(
+            "a candidate whose leg reports BestBid=0 AND BestAsk=0 must be excluded by the empty-book pre-filter");
+    }
+
+    /// <summary>
+    /// One-sided emptiness — BestBid=0 but BestAsk > 0 — is NOT an empty book.
+    /// The candidate must remain eligible.
+    /// </summary>
+    [Fact]
+    public async Task RankOpportunities_IncludesCandidate_WhenOnlyBidZero()
+    {
+        // Arrange
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "ExchangeA", 1, "ETH", 0.0001m),
+            MakeRate(2, "ExchangeB", 1, "ETH", 0.0100m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                MinVolume24hUsdc = 50_000m,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // BestBid = 0 but BestAsk > 0 on long leg — one-sided; NOT an empty book
+        _mockCache.Setup(c => c.GetBestBid("ExchangeA", "ETH")).Returns(0m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeA", "ETH")).Returns(10_001m);
+        _mockCache.Setup(c => c.GetBestBid("ExchangeB", "ETH")).Returns(10_000m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeB", "ETH")).Returns(10_001m);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: candidate kept — one-sided emptiness must not trigger the filter
+        result.Should().HaveCount(1,
+            "BestBid=0 with non-zero BestAsk is not an empty book and must not be filtered out");
+    }
+
+    /// <summary>
+    /// One-sided emptiness — BestBid > 0 but BestAsk=0 — is NOT an empty book.
+    /// The candidate must remain eligible.
+    /// </summary>
+    [Fact]
+    public async Task RankOpportunities_IncludesCandidate_WhenOnlyAskZero()
+    {
+        // Arrange
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, "ExchangeA", 1, "ETH", 0.0001m),
+            MakeRate(2, "ExchangeB", 1, "ETH", 0.0100m),
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                MinVolume24hUsdc = 50_000m,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // BestBid > 0 but BestAsk = 0 on long leg — one-sided; NOT an empty book
+        _mockCache.Setup(c => c.GetBestBid("ExchangeA", "ETH")).Returns(9_999m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeA", "ETH")).Returns(0m);
+        _mockCache.Setup(c => c.GetBestBid("ExchangeB", "ETH")).Returns(10_000m);
+        _mockCache.Setup(c => c.GetBestAsk("ExchangeB", "ETH")).Returns(10_001m);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: candidate kept — one-sided emptiness must not trigger the filter
+        result.Should().HaveCount(1,
+            "BestBid > 0 with only BestAsk=0 is not an empty book and must not be filtered out");
+    }
+
+    /// <summary>
+    /// The empty-book predicate is exchange-agnostic: it must fire for ANY exchange
+    /// whose cached snapshot has BestBid=0 AND BestAsk=0, not only for hard-coded
+    /// exchange names like "Lighter".
+    /// </summary>
+    [Theory]
+    [InlineData("ExchangeAlpha")]
+    [InlineData("ExchangeBeta")]
+    [InlineData("GenericDEX")]
+    [InlineData("Kraken")]
+    [InlineData("Binance")]
+    public async Task RankOpportunities_AppliesFilter_RegardlessOfExchangeName(string emptyBookExchangeName)
+    {
+        // Arrange: the parameterized exchange is the long leg with an empty order book
+        var rates = new List<FundingRateSnapshot>
+        {
+            MakeRate(1, emptyBookExchangeName, 1, "ETH", 0.0001m),  // long leg — empty book
+            MakeRate(2, "ControlExchange",     1, "ETH", 0.0100m),  // short leg — healthy book
+        };
+
+        _mockBotConfig.Setup(b => b.GetActiveAsync())
+            .ReturnsAsync(new BotConfiguration
+            {
+                SlippageBufferBps = 0,
+                OpenThreshold = 0.0001m,
+                MinVolume24hUsdc = 50_000m,
+            });
+        _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync())
+            .ReturnsAsync(rates);
+
+        // Parameterized exchange has an empty order book
+        _mockCache.Setup(c => c.GetBestBid(emptyBookExchangeName, "ETH")).Returns(0m);
+        _mockCache.Setup(c => c.GetBestAsk(emptyBookExchangeName, "ETH")).Returns(0m);
+        // Control exchange has a healthy book
+        _mockCache.Setup(c => c.GetBestBid("ControlExchange", "ETH")).Returns(10_000m);
+        _mockCache.Setup(c => c.GetBestAsk("ControlExchange", "ETH")).Returns(10_001m);
+
+        // Act
+        var result = await _sut.GetOpportunitiesAsync(CancellationToken.None);
+
+        // Assert: filtered regardless of exchange name — predicate must be exchange-agnostic
+        result.Should().BeEmpty(
+            $"the empty-book pre-filter must apply to '{emptyBookExchangeName}' identically to any other exchange");
+    }
 }

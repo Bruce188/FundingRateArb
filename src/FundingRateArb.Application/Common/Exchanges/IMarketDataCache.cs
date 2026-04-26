@@ -16,6 +16,20 @@ public interface IMarketDataCache
     /// </summary>
     DateTime? GetNextSettlement(string exchangeName, string symbol);
 
+    /// <summary>
+    /// Returns the cached best-bid price for the given exchange and symbol.
+    /// Returns null when no snapshot is cached (treated as "no data" — not an empty book).
+    /// Returns 0 when a snapshot is cached and the book is empty on the bid side.
+    /// </summary>
+    decimal? GetBestBid(string exchangeName, string symbol) => null;
+
+    /// <summary>
+    /// Returns the cached best-ask price for the given exchange and symbol.
+    /// Returns null when no snapshot is cached (treated as "no data" — not an empty book).
+    /// Returns 0 when a snapshot is cached and the book is empty on the ask side.
+    /// </summary>
+    decimal? GetBestAsk(string exchangeName, string symbol) => null;
+
     bool IsStale(string exchangeName, string symbol, TimeSpan maxAge);
     bool IsStaleForExchange(string exchangeName, TimeSpan maxAge);
 
