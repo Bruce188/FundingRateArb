@@ -1400,11 +1400,6 @@ namespace FundingRateArb.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("FundingRateArb.Domain.Entities.FundingRateSnapshot", null)
-                        .WithMany()
-                        .HasForeignKey("SourceSnapshotId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Asset");
 
                     b.Navigation("Exchange");

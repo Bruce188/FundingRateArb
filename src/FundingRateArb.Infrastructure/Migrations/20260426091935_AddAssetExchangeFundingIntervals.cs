@@ -36,12 +36,10 @@ public partial class AddAssetExchangeFundingIntervals : Migration
                     principalTable: "Exchanges",
                     principalColumn: "Id",
                     onDelete: ReferentialAction.Cascade);
-                table.ForeignKey(
-                    name: "FK_AssetExchangeFundingIntervals_FundingRateSnapshots_SourceSnapshotId",
-                    column: x => x.SourceSnapshotId,
-                    principalTable: "FundingRateSnapshots",
-                    principalColumn: "Id",
-                    onDelete: ReferentialAction.SetNull);
+                // No FK on SourceSnapshotId — soft reference. SQL Server rejects
+                // FK with SetNull because Asset/Exchange already cascade-delete
+                // FundingRateSnapshots, creating multiple cascade paths to this
+                // table. The index below preserves query performance.
             });
 
         migrationBuilder.CreateIndex(
