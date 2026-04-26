@@ -300,7 +300,7 @@ try
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
     builder.Services.AddScoped<IFundingRateRepository, FundingRateRepository>();
     builder.Services.AddScoped<IAssetRepository, AssetRepository>();
-    builder.Services.AddScoped<IAssetExchangeFundingIntervalRepository, AssetExchangeFundingIntervalRepository>();
+    builder.Services.AddScoped<FundingRateArb.Application.Interfaces.IAssetExchangeFundingIntervalRepository, AssetExchangeFundingIntervalRepository>();
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
     builder.Services.AddScoped<IDatabaseSpaceHealthProbe, DatabaseSpaceHealthProbe>();
 
