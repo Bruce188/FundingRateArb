@@ -20,9 +20,9 @@ public class AssetExchangeFundingIntervalConfiguration : IEntityTypeConfiguratio
             .HasForeignKey(f => f.AssetId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasOne<FundingRateSnapshot>()
-            .WithMany()
-            .HasForeignKey(f => f.SourceSnapshotId)
-            .OnDelete(DeleteBehavior.SetNull);
+        // SourceSnapshotId is a soft reference (no FK constraint) — preserves
+        // observability link without creating multi-cascade-path conflict with
+        // Asset/Exchange cascades on FundingRateSnapshots.
+        builder.HasIndex(f => f.SourceSnapshotId);
     }
 }
