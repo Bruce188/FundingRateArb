@@ -52,14 +52,22 @@ public class MarketDataCache : IMarketDataCache
     public decimal? GetBestBid(string exchangeName, string symbol)
     {
         var key = Key(exchangeName, symbol);
-        if (!_rates.TryGetValue(key, out var entry)) return null;
+        if (!_rates.TryGetValue(key, out var entry))
+        {
+            return null;
+        }
+
         return entry.Rate.BestBid;
     }
 
     public decimal? GetBestAsk(string exchangeName, string symbol)
     {
         var key = Key(exchangeName, symbol);
-        if (!_rates.TryGetValue(key, out var entry)) return null;
+        if (!_rates.TryGetValue(key, out var entry))
+        {
+            return null;
+        }
+
         return entry.Rate.BestAsk;
     }
 

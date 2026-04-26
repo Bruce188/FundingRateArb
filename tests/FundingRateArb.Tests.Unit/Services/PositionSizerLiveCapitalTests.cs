@@ -40,20 +40,20 @@ public class PositionSizerLiveCapitalTests
         decimal maxCapitalPerPos = 1.0m,
         int leverage = 5,
         int maxLeverageCap = 50) => new()
-    {
-        TotalCapitalUsdc = totalCapital,
-        MaxCapitalPerPosition = maxCapitalPerPos,
-        DefaultLeverage = leverage,
-        MaxLeverageCap = maxLeverageCap,
-        VolumeFraction = 0.001m,
-        MaxConcurrentPositions = 10,
-        IsEnabled = true,
-        OpenThreshold = 0.0003m,
-        BreakevenHoursMax = 6,
-        MaxExposurePerAsset = 1.0m,
-        MaxExposurePerExchange = 1.0m,
-        MinPositionSizeUsdc = 0m,
-    };
+        {
+            TotalCapitalUsdc = totalCapital,
+            MaxCapitalPerPosition = maxCapitalPerPos,
+            DefaultLeverage = leverage,
+            MaxLeverageCap = maxLeverageCap,
+            VolumeFraction = 0.001m,
+            MaxConcurrentPositions = 10,
+            IsEnabled = true,
+            OpenThreshold = 0.0003m,
+            BreakevenHoursMax = 6,
+            MaxExposurePerAsset = 1.0m,
+            MaxExposurePerExchange = 1.0m,
+            MinPositionSizeUsdc = 0m,
+        };
 
     private static ArbitrageOpportunityDto DefaultOpp(int longEx = 1, int shortEx = 2) => new()
     {
