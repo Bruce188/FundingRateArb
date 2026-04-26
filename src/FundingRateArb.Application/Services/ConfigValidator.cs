@@ -5,9 +5,13 @@ namespace FundingRateArb.Application.Services;
 
 public class ConfigValidator : IConfigValidator
 {
+    // Taker fee on both legs, both sides (open + close, long + short)
+    private const decimal RoundTripFeeRate = 0.001m;
+
     public ConfigValidationResult Validate(BotConfiguration config)
     {
         var errors = new List<string>();
+        var warnings = new List<string>();
 
         if (config.OpenThreshold <= config.AlertThreshold)
         {
@@ -101,6 +105,21 @@ public class ConfigValidator : IConfigValidator
             errors.Add("MaxCapitalPerPosition × MaxConcurrentPositions exceeds 150% — risk of capital over-allocation.");
         }
 
-        return new ConfigValidationResult(errors.Count == 0, errors);
+        // Gap invariant: OpenThreshold must cover fees over the minimum hold period.
+        // When MinHoldTimeHours == 0 the check is suppressed (divide-by-zero is undefined
+        // and existing validation already rejects MinHoldTimeHours > MaxHoldTimeHours; a
+        // zero value indicates a misconfigured entity and we avoid a secondary exception).
+        if (config.MinHoldTimeHours > 0)
+        {
+            var minSpread = config.CloseThreshold + RoundTripFeeRate / config.MinHoldTimeHours;
+            if (config.OpenThreshold < minSpread)
+            {
+                warnings.Add(
+                    $"OpenThreshold ({config.OpenThreshold}) is below CloseThreshold + round-trip fee / MinHoldTimeHours " +
+                    $"({minSpread:G}). Trades may not cover fees over the minimum hold period.");
+            }
+        }
+
+        return new ConfigValidationResult(errors.Count == 0, errors, warnings.Count > 0 ? warnings : null);
     }
 }

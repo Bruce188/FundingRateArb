@@ -338,4 +338,66 @@ public class ConfigValidatorTests
 
         result.Errors.Should().NotContain(e => e.Contains("MinHoldTimeHours"));
     }
+
+    // ── Gap-invariant tests ────────────────────────────────────────────────────
+
+    [Fact]
+    public void GapInvariant_DefaultConfig_NoWarning()
+    {
+        // BotConfiguration defaults (Task 1.2): Open=0.0005, Close=0.0002, MinHold=4
+        // fee/hold = 0.001/4 = 0.00025; Close+fee/hold = 0.00045; Open=0.0005 >= 0.00045 → pass
+        var result = _sut.Validate(new BotConfiguration());
+
+        result.IsValid.Should().BeTrue();
+        result.Warnings.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public void GapInvariant_ExactBoundary_NoWarning()
+    {
+        // Open == Close + fee/hold exactly → >= is satisfied, no warning
+        var config = ValidConfig();
+        config.MinHoldTimeHours = 4;
+        config.CloseThreshold = 0.00005m; // < AlertThreshold → no CloseThreshold error
+        // Open = 0.00005 + 0.001/4 = 0.00005 + 0.00025 = 0.0003
+        config.OpenThreshold = 0.0003m;
+        config.AlertThreshold = 0.0002m; // keep Open > Alert
+
+        var result = _sut.Validate(config);
+
+        result.Warnings.Should().BeNullOrEmpty();
+    }
+
+    [Fact]
+    public void GapInvariant_OpenBelowMinRequired_Warning()
+    {
+        // Open < Close + fee/hold → warning (not an error — IsValid stays true)
+        var config = ValidConfig();
+        config.MinHoldTimeHours = 4;
+        config.CloseThreshold = 0.00005m; // < AlertThreshold → no CloseThreshold error
+        // minSpread = 0.00005 + 0.001/4 = 0.0003; set Open just below it
+        config.OpenThreshold = 0.00025m;
+        config.AlertThreshold = 0.0002m; // keep Open > Alert
+
+        var result = _sut.Validate(config);
+
+        result.IsValid.Should().BeTrue("gap invariant is a warning, not an error");
+        result.Warnings.Should().NotBeNullOrEmpty();
+        result.Warnings!.Should().Contain(w => w.Contains("OpenThreshold"));
+    }
+
+    [Fact]
+    public void GapInvariant_MinHoldZero_WarningSupressed()
+    {
+        // When MinHoldTimeHours == 0, dividing by zero is undefined.
+        // The check is skipped entirely — no warning is emitted.
+        var config = ValidConfig();
+        config.MinHoldTimeHours = 0;
+        config.MaxHoldTimeHours = 48; // avoid unrelated MinHold > MaxHold error
+
+        var result = _sut.Validate(config);
+
+        result.Warnings.Should().BeNullOrEmpty(
+            "the gap-invariant check is suppressed when MinHoldTimeHours == 0 to avoid divide-by-zero");
+    }
 }
