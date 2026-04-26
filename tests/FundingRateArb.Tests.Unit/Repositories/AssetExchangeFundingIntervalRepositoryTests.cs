@@ -331,7 +331,7 @@ public class AssetExchangeFundingIntervalRepositoryDiRegistrationTests
 
         descriptor.Should().NotBeNull("the service must be registered");
         descriptor!.Lifetime.Should().Be(ServiceLifetime.Scoped);
-        descriptor.ImplementationType.Should().Be(typeof(AssetExchangeFundingIntervalRepository));
+        descriptor.ImplementationType.Should().Be<AssetExchangeFundingIntervalRepository>();
     }
 }
 
