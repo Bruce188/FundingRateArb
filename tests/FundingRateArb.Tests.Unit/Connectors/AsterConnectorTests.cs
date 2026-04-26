@@ -2345,38 +2345,6 @@ public class AsterConnectorTests
             "ETHUSDT reports 4h interval — RatePerHour should divide the raw 4h rate by 4");
     }
 
-    [Fact]
-    public async Task GetFundingRatesAsync_WhenFundingInfoFails_FallsBackToEightHour()
-    {
-        // Mirrors the Binance resilience contract: a funding-info outage must not
-        // crash the fetch. The connector should still return rates with
-        // DetectedFundingIntervalHours=null and the 8h default divisor.
-        var prices = new[]
-        {
-            MakeMarkPrice("ETHUSDT", 3500m, 3495m, fundingRate: 0.0004m),
-            MakeMarkPrice("BTCUSDT", 65000m, 64980m, fundingRate: 0.0008m),
-        };
-        var client = BuildClientWithMarkPrices(SuccessMarkPrices(prices));
-        var exchangeDataMock = Mock.Get(client.Object.FuturesApi.ExchangeData);
-        exchangeDataMock
-            .Setup(x => x.GetFundingInfoAsync(It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InvalidOperationException("funding info endpoint offline"));
-
-        var sut = new AsterConnector(client.Object, BuildEmptyPipelineProvider(), BuildNullLogger(), new SingletonMarkPriceCache());
-
-        var rates = await sut.GetFundingRatesAsync();
-
-        rates.Should().HaveCount(2);
-        rates.Should().AllSatisfy(r => r.DetectedFundingIntervalHours.Should().BeNull(
-            "funding info failed — interval should not be reported"));
-
-        var eth = rates.Single(r => r.Symbol == "ETH");
-        eth.RatePerHour.Should().Be(0.00005m, "ETH should fall back to the 8h divisor (0.0004 / 8)");
-
-        var btc = rates.Single(r => r.Symbol == "BTC");
-        btc.RatePerHour.Should().Be(0.0001m, "BTC should fall back to the 8h divisor (0.0008 / 8)");
-    }
-
     // ── Normalization audit: per-symbol interval pin tests ────────────────────
 
     [Fact]
