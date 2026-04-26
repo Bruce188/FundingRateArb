@@ -17,6 +17,10 @@ public class Exchange
     public string WsBaseUrl { get; set; } = null!;
 
     public FundingInterval FundingInterval { get; set; }
+    /// <summary>
+    /// Fallback funding interval (hours) for symbols whose per-symbol interval is unknown.
+    /// Use <see cref="AssetExchangeFundingInterval"/> for per-(exchange, asset) overrides.
+    /// </summary>
     public int FundingIntervalHours { get; set; } = 1;
     public FundingSettlementType FundingSettlementType { get; set; } = FundingSettlementType.Continuous;
     public bool SupportsSubAccounts { get; set; }
