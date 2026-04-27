@@ -100,6 +100,7 @@ public class FundingRateFetcher : BackgroundService
         using var scope = _scopeFactory.CreateScope();
         var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var factory = scope.ServiceProvider.GetRequiredService<IExchangeConnectorFactory>();
+        var intervalRepo = scope.ServiceProvider.GetService<IAssetExchangeFundingIntervalRepository>();
 
         var connectors = factory.GetAllConnectors().ToList();
 
@@ -240,6 +241,26 @@ public class FundingRateFetcher : BackgroundService
 
         uow.FundingRates.AddRange(snapshots);
         await uow.SaveAsync(ct);
+
+        // Per-symbol funding interval upsert — runs after snapshot save so IDs are assigned
+        var perSymbolEntries = allRates
+            .Where(r => r.DetectedFundingIntervalHours is { } iv && iv > 0
+                        && exchangeMap.ContainsKey(r.ExchangeName)
+                        && assetMap.ContainsKey(r.Symbol))
+            .Select(r =>
+            {
+                var exchangeId = exchangeMap[r.ExchangeName].Id;
+                var assetId = assetMap[r.Symbol].Id;
+                var snapshot = snapshots.FirstOrDefault(s => s.ExchangeId == exchangeId && s.AssetId == assetId);
+                return (exchangeId, assetId, r.DetectedFundingIntervalHours!.Value, snapshot?.Id == 0 ? (int?)null : snapshot?.Id);
+            })
+            .ToList();
+
+        if (intervalRepo is not null && perSymbolEntries.Count > 0)
+        {
+            await intervalRepo.UpsertManyAsync(perSymbolEntries, ct);
+            intervalRepo.InvalidateCache();
+        }
 
         _logger.LogInformation(
             "Funding rates saved: {Total} snapshots from {ExchangeCount} exchanges",

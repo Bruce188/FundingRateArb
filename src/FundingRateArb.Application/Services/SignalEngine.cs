@@ -7,6 +7,7 @@ using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
+using IAssetExchangeFundingIntervalRepository = FundingRateArb.Application.Interfaces.IAssetExchangeFundingIntervalRepository;
 
 namespace FundingRateArb.Application.Services;
 
@@ -40,6 +41,7 @@ public class SignalEngine : ISignalEngine
     private readonly IMemoryCache? _opportunityCache;
     private readonly IBalanceAggregator? _balanceAggregator;
     private readonly ICapitalProvider? _capitalProvider;
+    private readonly IAssetExchangeFundingIntervalRepository? _intervalRepo;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -52,7 +54,8 @@ public class SignalEngine : ISignalEngine
         ISignalEngineMetrics? metrics = null,
         IMemoryCache? opportunityCache = null,
         IBalanceAggregator? balanceAggregator = null,
-        ICapitalProvider? capitalProvider = null)
+        ICapitalProvider? capitalProvider = null,
+        IAssetExchangeFundingIntervalRepository? intervalRepo = null)
     {
         _uow = uow;
         _cache = cache;
@@ -65,6 +68,7 @@ public class SignalEngine : ISignalEngine
         _opportunityCache = opportunityCache;
         _balanceAggregator = balanceAggregator;
         _capitalProvider = capitalProvider;
+        _intervalRepo = intervalRepo;
     }
 
     /// <summary>
@@ -78,6 +82,18 @@ public class SignalEngine : ISignalEngine
 
     private static bool HasKnownSymbolCap(string longExchange, string shortExchange) =>
         ExchangesWithNotionalCaps.Contains(longExchange) || ExchangesWithNotionalCaps.Contains(shortExchange);
+
+    private static int ResolveIntervalHours(
+        FundingRateSnapshot rate,
+        IReadOnlyDictionary<(int ExchangeId, int AssetId), int> perSymbol)
+    {
+        if (perSymbol.TryGetValue((rate.ExchangeId, rate.AssetId), out var iv) && iv > 0)
+        {
+            return iv;
+        }
+
+        return rate.Exchange?.FundingIntervalHours ?? 1;
+    }
 
     public async Task<List<ArbitrageOpportunityDto>> GetOpportunitiesAsync(CancellationToken ct = default)
     {
@@ -273,9 +289,11 @@ public class SignalEngine : ISignalEngine
         var historyLookup = new Dictionary<(int AssetId, int ExchangeId), List<FundingRateSnapshot>>();
         // Scale lookback by max funding interval across all active exchanges.
         // Exchanges with 8h intervals (e.g. Aster) need 24h+ for MinConsecutiveFavorableCycles=3.
+        var perSymbolIntervals = _intervalRepo is not null
+            ? await _intervalRepo.GetIntervalsAsync(ct)
+            : new Dictionary<(int ExchangeId, int AssetId), int>();
         var maxIntervalHours = rates
-            .Where(r => r.Exchange is not null)
-            .Select(r => r.Exchange!.FundingIntervalHours)
+            .Select(r => ResolveIntervalHours(r, perSymbolIntervals))
             .DefaultIfEmpty(1)
             .Max();
         var historyFrom = DateTime.UtcNow.AddHours(-maxIntervalHours * config.MinConsecutiveFavorableCycles);
@@ -458,6 +476,20 @@ public class SignalEngine : ISignalEngine
                         ReferenceIntervalHours = FundingRateNormalization.ReferenceIntervalHours,
                     };
 
+                    // Cycle hours: computed whenever the interval repository is wired in,
+                    // regardless of whether a tier provider is also present. This allows
+                    // CyclesPerYear to be surfaced without leverage metadata.
+                    // When _intervalRepo is null (legacy/test path with no interval data),
+                    // CyclesPerYear stays null to preserve back-compat with callers that
+                    // rely on null meaning "no interval context available".
+                    var cycleHoursBase = Math.Max(
+                        Math.Max(1, ResolveIntervalHours(longR, perSymbolIntervals)),
+                        Math.Max(1, ResolveIntervalHours(shortR, perSymbolIntervals)));
+                    if (_intervalRepo is not null)
+                    {
+                        dto.CyclesPerYear = (int)((24m / cycleHoursBase) * 365m);
+                    }
+
                     // Compute leverage-adjusted metrics when tier data is available
                     if (_tierProvider is not null)
                     {
@@ -476,9 +508,7 @@ public class SignalEngine : ISignalEngine
                             //   cyclesPerYear           = (24 / cycleHours) × 365
                             //   AnnualizedReturnOnCapital = ReturnOnCapitalPerCycle × cyclesPerYear
                             //     which is mathematically equivalent to net × effectiveLev × 24 × 365
-                            var cycleHours = Math.Max(
-                                Math.Max(1, longR.Exchange.FundingIntervalHours),
-                                Math.Max(1, shortR.Exchange.FundingIntervalHours));
+                            var cycleHours = cycleHoursBase;
                             var cyclesPerYear = (24m / cycleHours) * 365m;
                             dto.EffectiveLeverage = effectiveLev;
                             dto.ReturnOnCapitalPerCycle = net * effectiveLev * cycleHours;

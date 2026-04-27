@@ -35,6 +35,7 @@ public class PositionHealthMonitorTests
         AlertThreshold = 0.0001m,
         StopLossPct = 0.15m,
         MaxHoldTimeHours = 72,
+        MinHoldTimeHours = 2, // pinned: MakeOpenPosition default opens 2h ago; entity default raised to 4 in this PR would gate SpreadCollapsed
         MaxLeverageCap = 50,
         AdaptiveHoldEnabled = true, // matches BotConfiguration default; explicit for test clarity
     };
