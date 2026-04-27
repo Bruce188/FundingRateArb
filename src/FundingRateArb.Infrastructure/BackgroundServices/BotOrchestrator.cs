@@ -89,6 +89,35 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
             _logger.LogWarning(ex, "Boot sweep failed — orphaned Opening positions may require manual review");
         }
 
+        // Threshold invariant check: warn if OpenThreshold is too low to cover round-trip fees.
+        try
+        {
+            using var invariantScope = _scopeFactory.CreateScope();
+            var invariantUow = invariantScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            var config = await invariantUow.BotConfig.GetActiveAsync();
+            if (ThresholdInvariantCalculator.IsViolated(
+                    config.OpenThreshold, config.CloseThreshold, config.MinHoldTimeHours))
+            {
+                var floor = ThresholdInvariantCalculator.ComputeRequiredOpenFloor(
+                    config.CloseThreshold, config.MinHoldTimeHours);
+                _logger.LogError(
+                    "Threshold invariant violated at startup: OpenThreshold={Open} < required floor {Floor} (= |CloseThreshold|={CloseAbs} + 0.001/{MinHold})",
+                    config.OpenThreshold, floor, Math.Abs(config.CloseThreshold), config.MinHoldTimeHours);
+                invariantUow.Alerts.Add(new Alert
+                {
+                    Type = AlertType.OperationalWarning,
+                    Severity = AlertSeverity.Warning,
+                    Message = $"Threshold invariant violated: OpenThreshold={config.OpenThreshold} < required floor {floor:F6}. Trades may not cover fees.",
+                });
+                await invariantUow.SaveAsync(ct);
+                await _notifier.PushNewAlertsAsync(invariantUow);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Threshold invariant check failed — proceeding without enforcement");
+        }
+
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(CycleIntervalSeconds));
 
         while (!ct.IsCancellationRequested)

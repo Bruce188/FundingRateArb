@@ -9,6 +9,7 @@ using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Services;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -2864,5 +2865,96 @@ public class BotOrchestratorTests
         // Default exponential backoff: first failure = BaseCooldown (5 min)
         remaining.Should().BeCloseTo(CircuitBreakerManager.BaseCooldown, TimeSpan.FromSeconds(10),
             "Non-Lighter errors should use default exponential backoff");
+    }
+
+    // ── Threshold invariant startup check ──────────────────────────────────────
+
+    [Fact]
+    public async Task ExecuteAsync_ThresholdInvariantViolated_LogsError()
+    {
+        // Arrange: config violates invariant (floor = 0.0002 + 0.001/4 = 0.00045, open = 0.0001)
+        var violatingConfig = new BotConfiguration
+        {
+            OpenThreshold = 0.0001m,
+            CloseThreshold = -0.0002m,
+            MinHoldTimeHours = 4,
+        };
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(violatingConfig);
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockHealthMonitor.Setup(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        // Use a mock logger to capture LogError calls
+        var mockLogger = new Mock<ILogger<BotOrchestrator>>();
+        var sut = new BotOrchestrator(
+            _mockScopeFactory.Object,
+            _mockReadinessSignal.Object,
+            _mockNotifier.Object,
+            _circuitBreaker,
+            _opportunityFilter,
+            _mockRotationEvaluator.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource();
+        // Cancel immediately after readiness signal so loop doesn't run
+        _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => cts.Cancel())
+            .Returns(Task.CompletedTask);
+
+        // Act: StartAsync triggers ExecuteAsync internally; wait for the background task to finish
+        await sut.StartAsync(cts.Token);
+        try { await sut.ExecuteTask!; } catch (OperationCanceledException) { }
+
+        // Assert: LogError called with message containing "Threshold invariant violated"
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Threshold invariant violated")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once,
+            "LogError should be called with 'Threshold invariant violated' when invariant is violated");
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ThresholdInvariantSatisfiedAtDefaults_NoErrorLog()
+    {
+        // Arrange: new BotConfiguration() has defaults that satisfy the invariant
+        // (OpenThreshold=0.0005 >= |CloseThreshold|=0.0002 + 0.001/4=0.00025 => 0.0005 >= 0.00045)
+        _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(new BotConfiguration());
+        _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockHealthMonitor.Setup(h => h.ReconcileOpenPositionsAsync(It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var mockLogger = new Mock<ILogger<BotOrchestrator>>();
+        var sut = new BotOrchestrator(
+            _mockScopeFactory.Object,
+            _mockReadinessSignal.Object,
+            _mockNotifier.Object,
+            _circuitBreaker,
+            _opportunityFilter,
+            _mockRotationEvaluator.Object,
+            mockLogger.Object);
+
+        using var cts = new CancellationTokenSource();
+        _mockReadinessSignal.Setup(r => r.WaitForReadyAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => cts.Cancel())
+            .Returns(Task.CompletedTask);
+
+        // Act
+        await sut.StartAsync(cts.Token);
+        try { await sut.ExecuteTask!; } catch (OperationCanceledException) { }
+
+        // Assert: no LogError with invariant violation message
+        mockLogger.Verify(
+            l => l.Log(
+                LogLevel.Error,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((v, t) => v.ToString()!.Contains("Threshold invariant violated")),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Never,
+            "LogError should NOT be called when invariant is satisfied at new defaults");
     }
 }
