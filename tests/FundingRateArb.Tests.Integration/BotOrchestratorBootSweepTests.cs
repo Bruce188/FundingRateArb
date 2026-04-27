@@ -6,6 +6,7 @@ using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Entities;
 using FundingRateArb.Domain.Enums;
+using FundingRateArb.Domain.ValueObjects;
 using FundingRateArb.Infrastructure.BackgroundServices;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.Repositories;
@@ -336,5 +337,210 @@ public class BotOrchestratorBootSweepTests
             UserConfiguration userConfig,
             BotConfiguration globalConfig)
             => null;
+    }
+
+    // ── Task 6.3: boot-replay test ────────────────────────────────────────────
+
+    /// <summary>
+    /// A position already in Opening state with non-zero attempt counters must go through
+    /// <see cref="IExecutionEngine.ConfirmOrRollbackAsync"/>, which polls
+    /// <see cref="IExchangeConnector.HasOpenPositionAsync"/> on both legs. It must NOT call
+    /// <see cref="IExchangeConnector.PlaceMarketOrderByQuantityAsync"/> — the boot sweep
+    /// confirms existing fills; it never resubmits orders.
+    /// </summary>
+    [Fact]
+    public async Task BootSweep_OpeningPositionWithAttemptCounters_CallsHasOpenPosition_NeverCallsPlaceOrder()
+    {
+        var dbName = $"BootSweepIdempotency_{Guid.NewGuid()}";
+        await using var db = CreateContext(dbName);
+        var (longEx, shortEx, asset, user) = await SeedReferenceDataAsync(db);
+
+        // Seed a position stuck in Opening with existing attempt counters (simulating a restart
+        // mid-confirmation window after clientOrderIds were already submitted to the exchange).
+        var position = BuildOpeningPosition(user.Id, asset.Id, longEx.Id, shortEx.Id);
+        position.LongOrderAttemptN = 1;
+        position.ShortOrderAttemptN = 1;
+        db.ArbitragePositions.Add(position);
+        await db.SaveChangesAsync();
+
+        // Stub connectors that track HasOpenPositionAsync and PlaceMarketOrderByQuantityAsync calls.
+        var longConnector = new TrackingConnectorStub("Lighter", opensPosition: true);
+        var shortConnector = new TrackingConnectorStub("Aster", opensPosition: true);
+
+        var lifecycleManager = new PreconfiguredConnectorLifecycleManager(longConnector, shortConnector);
+
+        var services = new ServiceCollection();
+        services.AddMemoryCache();
+        services.AddSingleton<AppDbContext>(_ => db);
+        services.AddScoped<IUnitOfWork>(sp =>
+            new UnitOfWork(sp.GetRequiredService<AppDbContext>(), sp.GetRequiredService<IMemoryCache>()));
+        services.AddScoped<IExecutionEngine>(sp =>
+        {
+            var uow = sp.GetRequiredService<IUnitOfWork>();
+            var emergencyClose = new EmergencyCloseHandler(uow, NullLogger<EmergencyCloseHandler>.Instance);
+            var positionCloser = new PositionCloser(uow, lifecycleManager,
+                new NullPnlReconciliationService(), NullLogger<PositionCloser>.Instance);
+            return new ExecutionEngine(
+                uow, lifecycleManager, emergencyClose, positionCloser,
+                new NullUserSettingsService(),
+                new NullLeverageTierProvider(),
+                new NullBalanceAggregator(),
+                NullLogger<ExecutionEngine>.Instance);
+        });
+
+        var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        var orchestrator = new BotOrchestrator(
+            scopeFactory,
+            new NullReadinessSignal(),
+            new NullSignalRNotifier(),
+            new NullCircuitBreakerManager(),
+            new NullOpportunityFilter(),
+            new NullRotationEvaluator(),
+            NullLogger<BotOrchestrator>.Instance);
+
+        await orchestrator.RunBootSweepAsync(CancellationToken.None);
+
+        longConnector.HasOpenPositionCallCount.Should().BeGreaterThan(0,
+            "ConfirmOrRollbackAsync must poll HasOpenPositionAsync on the long-leg connector");
+        shortConnector.HasOpenPositionCallCount.Should().BeGreaterThan(0,
+            "ConfirmOrRollbackAsync must poll HasOpenPositionAsync on the short-leg connector");
+        longConnector.PlaceOrderCallCount.Should().Be(0,
+            "boot sweep must never resubmit orders — PlaceMarketOrderByQuantityAsync must not be called on the long connector");
+        shortConnector.PlaceOrderCallCount.Should().Be(0,
+            "boot sweep must never resubmit orders — PlaceMarketOrderByQuantityAsync must not be called on the short connector");
+    }
+
+    // ── stubs for Task 6.3 ────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Connector stub that counts calls to <see cref="IExchangeConnector.HasOpenPositionAsync"/> and
+    /// <see cref="IExchangeConnector.PlaceMarketOrderByQuantityAsync"/> without performing real I/O.
+    /// </summary>
+    private sealed class TrackingConnectorStub : IExchangeConnector
+    {
+        private int _hasOpenPositionCallCount;
+        private int _placeOrderCallCount;
+
+        public int HasOpenPositionCallCount => _hasOpenPositionCallCount;
+        public int PlaceOrderCallCount => _placeOrderCallCount;
+
+        private readonly bool _opensPosition;
+
+        public TrackingConnectorStub(string exchangeName, bool opensPosition)
+        {
+            ExchangeName = exchangeName;
+            _opensPosition = opensPosition;
+        }
+
+        public string ExchangeName { get; }
+        public bool IsEstimatedFillExchange => false;
+
+        public Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _hasOpenPositionCallCount);
+            return Task.FromResult<bool?>(_opensPosition);
+        }
+
+        public Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
+            string asset, Side side, decimal quantity, int leverage,
+            string? clientOrderId = null, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref _placeOrderCallCount);
+            return Task.FromResult(new OrderResultDto { Success = false, Error = "stub — should not be called" });
+        }
+
+        // ── remaining non-default interface members ───────────────────────────
+        public Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default)
+            => Task.FromResult(new List<FundingRateDto>());
+        public Task<OrderResultDto> PlaceMarketOrderAsync(string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default)
+            => Task.FromResult(new OrderResultDto { Success = false, Error = "stub" });
+        public Task<OrderResultDto> ClosePositionAsync(string asset, Side side, CancellationToken ct = default)
+            => Task.FromResult(new OrderResultDto { Success = false, Error = "stub" });
+        public Task<decimal> GetMarkPriceAsync(string asset, CancellationToken ct = default) => Task.FromResult(0m);
+        public Task<decimal> GetAvailableBalanceAsync(CancellationToken ct = default) => Task.FromResult(0m);
+        public Task<int?> GetMaxLeverageAsync(string asset, CancellationToken ct = default) => Task.FromResult<int?>(null);
+        public Task<DateTime?> GetNextFundingTimeAsync(string asset, CancellationToken ct = default) => Task.FromResult<DateTime?>(null);
+    }
+
+    /// <summary>
+    /// <see cref="IConnectorLifecycleManager"/> stub that returns pre-built connectors without
+    /// performing credential resolution or factory calls.
+    /// </summary>
+    private sealed class PreconfiguredConnectorLifecycleManager : IConnectorLifecycleManager
+    {
+        private readonly IExchangeConnector _long;
+        private readonly IExchangeConnector _short;
+
+        public PreconfiguredConnectorLifecycleManager(IExchangeConnector longConnector, IExchangeConnector shortConnector)
+        {
+            _long = longConnector;
+            _short = shortConnector;
+        }
+
+        public Task<(IExchangeConnector Long, IExchangeConnector Short, string? Error)> CreateUserConnectorsAsync(
+            string userId, string longExchangeName, string shortExchangeName)
+            => Task.FromResult<(IExchangeConnector, IExchangeConnector, string?)>((_long, _short, null));
+
+        public (IExchangeConnector Long, IExchangeConnector Short) WrapForDryRun(
+            IExchangeConnector longConnector, IExchangeConnector shortConnector)
+            => (longConnector, shortConnector);
+
+        public Task<int?> GetCachedMaxLeverageAsync(IExchangeConnector connector, string asset, CancellationToken ct)
+            => Task.FromResult<int?>(null);
+
+        public Task EnsureTiersCachedAsync(IExchangeConnector connector, string asset, CancellationToken ct)
+            => Task.CompletedTask;
+    }
+
+    private sealed class NullPnlReconciliationService : IPnlReconciliationService
+    {
+        public Task ReconcileAsync(
+            ArbitragePosition position,
+            string assetSymbol,
+            IExchangeConnector longConnector,
+            IExchangeConnector shortConnector,
+            CancellationToken ct = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class NullUserSettingsService : IUserSettingsService
+    {
+        public Task SaveCredentialAsync(string userId, int exchangeId, string? apiKey, string? apiSecret, string? walletAddress, string? privateKey, string? subAccountAddress = null, string? apiKeyIndex = null) => Task.CompletedTask;
+        public Task<UserExchangeCredential?> GetCredentialAsync(string userId, int exchangeId) => Task.FromResult<UserExchangeCredential?>(null);
+        public Task<List<UserExchangeCredential>> GetActiveCredentialsAsync(string userId) => Task.FromResult(new List<UserExchangeCredential>());
+        public Task<List<UserExchangeCredential>> GetAllCredentialsAsync(string userId) => Task.FromResult(new List<UserExchangeCredential>());
+        public Task DeleteCredentialAsync(string userId, int exchangeId) => Task.CompletedTask;
+        public (string? ApiKey, string? ApiSecret, string? WalletAddress, string? PrivateKey, string? SubAccountAddress, string? ApiKeyIndex) DecryptCredential(UserExchangeCredential credential) => (null, null, null, null, null, null);
+        public Task<UserConfiguration> GetOrCreateConfigAsync(string userId) => Task.FromResult(new UserConfiguration());
+        public Task UpdateConfigAsync(string userId, UserConfiguration config) => Task.CompletedTask;
+        public Task<List<Exchange>> GetAvailableExchangesAsync() => Task.FromResult(new List<Exchange>());
+        public Task<List<int>> GetDataOnlyExchangeIdsAsync() => Task.FromResult(new List<int>());
+        public Task<List<Asset>> GetAvailableAssetsAsync() => Task.FromResult(new List<Asset>());
+        public Task<List<int>> GetUserEnabledExchangeIdsAsync(string userId) => Task.FromResult(new List<int>());
+        public Task<List<int>> GetUserEnabledAssetIdsAsync(string userId) => Task.FromResult(new List<int>());
+        public Task SetExchangePreferenceAsync(string userId, int exchangeId, bool isEnabled) => Task.CompletedTask;
+        public Task SetAssetPreferenceAsync(string userId, int assetId, bool isEnabled) => Task.CompletedTask;
+        public Task SavePreferencesAsync(string userId, Dictionary<int, bool> exchangePreferences, Dictionary<int, bool> assetPreferences) => Task.CompletedTask;
+        public Task InitializeDefaultsForNewUserAsync(string userId) => Task.CompletedTask;
+        public Task<bool> HasValidCredentialsAsync(string userId) => Task.FromResult(false);
+        public Task<List<string>> GetUsersWithCredentialsAsync(string exchange, CancellationToken ct = default) => Task.FromResult(new List<string>());
+        public Task UpdateCredentialErrorAsync(string userId, int exchangeId, string? error, CancellationToken ct = default) => Task.CompletedTask;
+        public Task TouchLastUsedAsync(string userId, int exchangeId, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
+    private sealed class NullLeverageTierProvider : ILeverageTierProvider
+    {
+        public Task<LeverageTier[]> GetTiersAsync(string exchangeName, string asset, CancellationToken ct = default)
+            => Task.FromResult(Array.Empty<LeverageTier>());
+        public int GetEffectiveMaxLeverage(string exchangeName, string asset, decimal notionalUsdc) => int.MaxValue;
+        public decimal GetMaintenanceMarginRate(string exchangeName, string asset, decimal notionalUsdc) => 0m;
+        public void UpdateTiers(string exchangeName, string asset, LeverageTier[] tiers) { }
+        public bool IsStale(string exchangeName, string asset) => false;
+    }
+
+    private sealed class NullBalanceAggregator : IBalanceAggregator
+    {
+        public Task<BalanceSnapshotDto> GetBalanceSnapshotAsync(string userId, CancellationToken ct = default)
+            => Task.FromResult(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 0m, FetchedAt = DateTime.UtcNow });
     }
 }

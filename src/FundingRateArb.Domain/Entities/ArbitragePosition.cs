@@ -60,6 +60,17 @@ public class ArbitragePosition
     [MaxLength(200)]
     public string? ShortOrderId { get; set; }
 
+    /// <summary>Number of submit attempts already issued for the long leg of this position.
+    /// ExecutionEngine reads this BEFORE each <c>PlaceMarketOrderByQuantityAsync</c> call to
+    /// derive the deterministic client-order-id via <c>OrderIdGenerator.For(Id, Side.Long, LongOrderAttemptN + 1)</c>,
+    /// then persists the increment after the SDK call completes. Default 0 = no attempt yet.
+    /// Used by the boot sweep on restart to derive the same ID and poll the exchange for an
+    /// existing order rather than resubmitting.</summary>
+    public int LongOrderAttemptN { get; set; }
+
+    /// <summary>Number of submit attempts already issued for the short leg. See <see cref="LongOrderAttemptN"/>.</summary>
+    public int ShortOrderAttemptN { get; set; }
+
     /// <summary>Actual filled quantity on the long exchange (for audit trail).</summary>
     public decimal? LongFilledQuantity { get; set; }
 

@@ -74,8 +74,9 @@ public sealed class DryRunConnectorWrapper : IExchangeConnector, IPositionVerifi
     }
 
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
+        // clientOrderId ignored in dry-run — simulated fills don't go to an exchange.
         var markPrice = await _inner.GetMarkPriceAsync(asset, ct);
         if (markPrice <= 0)
         {

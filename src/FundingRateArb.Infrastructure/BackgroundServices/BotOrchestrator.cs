@@ -176,6 +176,14 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
     /// Iterates all bot-enabled users, queries <c>GetPendingConfirmAsync</c> per user, and
     /// feeds each result to <c>IExecutionEngine.ConfirmOrRollbackAsync</c>. Uses the active
     /// <c>OpenConfirmTimeoutSeconds</c> from global config. Wrapped in a 2-minute overall budget.
+    /// <para>
+    /// Idempotency: each pending position carries LongOrderAttemptN/ShortOrderAttemptN and a
+    /// derivable clientOrderId via OrderIdGenerator.For. ConfirmOrRollbackAsync uses
+    /// HasOpenPositionAsync to look up the existing exchange order — it does NOT resubmit;
+    /// resubmit would only happen via OpenPositionAsync on a future cycle, which would
+    /// regenerate the same clientOrderId from the persisted counter and the exchange would
+    /// return the existing order rather than creating a duplicate.
+    /// </para>
     /// </summary>
     internal async Task RunBootSweepAsync(CancellationToken ct)
     {

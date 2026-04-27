@@ -233,7 +233,7 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     /// The quantity is rounded to the exchange's precision (may reduce, never increase).
     /// </summary>
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
         if (leverage < 1 || leverage > 125)
         {

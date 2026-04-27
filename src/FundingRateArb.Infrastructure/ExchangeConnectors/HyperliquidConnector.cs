@@ -173,7 +173,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
     /// The quantity is rounded to szDecimals (may reduce, never increase).
     /// </summary>
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
         try
         {
@@ -222,6 +222,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                 ? markPrice * (1 + SlippagePct)
                 : markPrice * (1 - SlippagePct);
 
+            _logger.LogDebug("Hyperliquid order with clientOrderId={ClientOrderId} for {Asset}", clientOrderId ?? "(none)", asset);
             var orderResult = await pipeline.ExecuteAsync(
                 async token => await _restClient.FuturesApi.Trading.PlaceOrderAsync(
                     symbol: asset,
@@ -231,7 +232,7 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
                     price: limitPrice,
                     timeInForce: TimeInForce.ImmediateOrCancel,
                     reduceOnly: false,
-                    clientOrderId: null,
+                    clientOrderId: clientOrderId,
                     triggerPrice: null,
                     tpSlType: null,
                     tpSlGrouping: null,

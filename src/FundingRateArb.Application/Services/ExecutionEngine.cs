@@ -346,12 +346,18 @@ public class ExecutionEngine : IExecutionEngine
                 }
 
                 // Open first leg (with 45-second timeout)
+                var firstAttemptN = (firstSide == Side.Long ? position.LongOrderAttemptN : position.ShortOrderAttemptN) + 1;
+                var firstClientOrderId = OrderIdGenerator.For(position.Id, firstSide, firstAttemptN);
                 OrderResultDto firstResult;
                 try
                 {
                     using var firstOrderCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     firstOrderCts.CancelAfter(TimeSpan.FromSeconds(45));
-                    firstResult = await firstConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, firstSide, targetQuantity, effectiveLeverage, firstOrderCts.Token);
+                    firstResult = await firstConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, firstSide, targetQuantity, effectiveLeverage, firstClientOrderId, firstOrderCts.Token);
+                    // Persist attempt-counter increment so boot sweep can derive the same id, and so the
+                    // next retry attempt N+1 picks a fresh id (handled by reading position.{Side}OrderAttemptN+1).
+                    if (firstSide == Side.Long) position.LongOrderAttemptN = firstAttemptN;
+                    else position.ShortOrderAttemptN = firstAttemptN;
                 }
                 catch (Exception ex)
                 {
@@ -504,6 +510,8 @@ public class ExecutionEngine : IExecutionEngine
                 }
 
                 // First leg confirmed — now open second leg (with 45-second timeout)
+                var secondAttemptN = (secondSide == Side.Long ? position.LongOrderAttemptN : position.ShortOrderAttemptN) + 1;
+                var secondClientOrderId = OrderIdGenerator.For(position.Id, secondSide, secondAttemptN);
                 OrderResultDto secondResult;
                 try
                 {
@@ -513,7 +521,10 @@ public class ExecutionEngine : IExecutionEngine
                     // Re-round to second exchange's precision
                     var secondPrecision = firstIsLong ? shortPrecision : longPrecision;
                     secondQuantity = Math.Round(secondQuantity, secondPrecision, MidpointRounding.ToZero);
-                    secondResult = await secondConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, secondSide, secondQuantity, effectiveLeverage, secondOrderCts.Token);
+                    secondResult = await secondConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, secondSide, secondQuantity, effectiveLeverage, secondClientOrderId, secondOrderCts.Token);
+                    // Persist attempt-counter increment.
+                    if (secondSide == Side.Long) position.LongOrderAttemptN = secondAttemptN;
+                    else position.ShortOrderAttemptN = secondAttemptN;
                 }
                 catch (Exception ex)
                 {
@@ -607,10 +618,14 @@ public class ExecutionEngine : IExecutionEngine
                 }
 
                 // Concurrent path: both connectors are reliable, use Task.WhenAll for speed (with 45-second timeout)
+                var longAttemptN = position.LongOrderAttemptN + 1;
+                var shortAttemptN = position.ShortOrderAttemptN + 1;
+                var longClientOrderId = OrderIdGenerator.For(position.Id, Side.Long, longAttemptN);
+                var shortClientOrderId = OrderIdGenerator.For(position.Id, Side.Short, shortAttemptN);
                 using var concurrentCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 concurrentCts.CancelAfter(TimeSpan.FromSeconds(45));
-                var longTask = longConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Long, targetQuantity, effectiveLeverage, concurrentCts.Token);
-                var shortTask = shortConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Short, targetQuantity, effectiveLeverage, concurrentCts.Token);
+                var longTask = longConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Long, targetQuantity, effectiveLeverage, longClientOrderId, concurrentCts.Token);
+                var shortTask = shortConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, Side.Short, targetQuantity, effectiveLeverage, shortClientOrderId, concurrentCts.Token);
 
                 try
                 {
@@ -672,6 +687,10 @@ public class ExecutionEngine : IExecutionEngine
 
                 longResult = longTask.Result;
                 shortResult = shortTask.Result;
+
+                // Persist attempt-counter increments so boot sweep can derive the same ids.
+                position.LongOrderAttemptN = longAttemptN;
+                position.ShortOrderAttemptN = shortAttemptN;
 
                 // Handle non-exception failures
                 if (!longResult.Success || !shortResult.Success)
@@ -1436,6 +1455,14 @@ public class ExecutionEngine : IExecutionEngine
     }
 
     /// <inheritdoc />
+    /// <para>
+    /// Idempotency contract: when ExecutionEngine.OpenPositionAsync submitted the original orders, it
+    /// passed clientOrderId = OrderIdGenerator.For(position.Id, side, position.{Side}OrderAttemptN).
+    /// On restart, this method polls both connectors via HasOpenPositionAsync — the connector
+    /// implementations (Hyperliquid, Aster) re-look-up by their internal exchange order id; if the
+    /// open submit was retried with the same clientOrderId, the exchange returns the existing order
+    /// rather than minting a new one. Lighter is on-chain (tx-nonce idempotent) and exempt.
+    /// </para>
     public async Task ConfirmOrRollbackAsync(
         string userId, ArbitragePosition position, int timeoutSeconds, CancellationToken ct = default)
     {

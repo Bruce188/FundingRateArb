@@ -55,6 +55,9 @@ public class DryRunExecutionTests
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => p.Id = 1);
+
 
         var longCred = new UserExchangeCredential { Id = 1, ExchangeId = 1, Exchange = new Exchange { Name = "Hyperliquid" } };
         var shortCred = new UserExchangeCredential { Id = 2, ExchangeId = 2, Exchange = new Exchange { Name = "Lighter" } };
@@ -127,7 +130,7 @@ public class DryRunExecutionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var sut = CreateEngine();
         var result = await sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -153,7 +156,7 @@ public class DryRunExecutionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var sut = CreateEngine();
         var result = await sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -179,15 +182,15 @@ public class DryRunExecutionTests
 
         // Non-dry-run needs real connector responses
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var sut = CreateEngine();
         var result = await sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);

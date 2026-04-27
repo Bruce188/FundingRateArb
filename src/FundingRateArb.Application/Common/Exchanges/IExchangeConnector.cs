@@ -65,8 +65,14 @@ public interface IExchangeConnector
     /// <summary>
     /// Places a market order using a pre-computed quantity instead of computing from sizeUsdc.
     /// Used by ExecutionEngine for delta-neutral quantity coordination.
+    ///
+    /// <paramref name="clientOrderId"/> (optional, default null) is the deterministic
+    /// idempotency key from <c>OrderIdGenerator.For</c>. When the exchange recognises a
+    /// previously-submitted ID, it returns the existing order rather than creating a new one.
+    /// Connectors that don't support client order ids (e.g. Lighter — on-chain) ignore the
+    /// argument; callers are not required to pass it.
     /// </summary>
-    Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+    Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not support quantity-based orders");
 
     /// <summary>

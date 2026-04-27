@@ -1001,12 +1001,25 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
 
     // ── Place Market Order by Quantity ──
 
+    /// <summary>
+    /// Places an on-chain market order on Lighter DEX via tx submission. The
+    /// <paramref name="clientOrderId"/> parameter is accepted for interface
+    /// compatibility but intentionally NOT forwarded to the SDK: Lighter is on-chain,
+    /// and idempotency is provided by the tx nonce — the network refuses duplicate-nonce
+    /// txs. ExecutionEngine still passes a value here so the call site is uniform; the
+    /// nonce check on the chain is the actual idempotency primitive for this connector.
+    /// </summary>
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
         _logger.LogInformation(
             "PlaceMarketOrderByQuantityAsync: {Asset} {Side} quantity={Quantity} leverage={Leverage}",
             asset, side, quantity, leverage);
+        // clientOrderId intentionally ignored — Lighter idempotency is per-tx-nonce on-chain.
+        if (clientOrderId is not null)
+        {
+            _logger.LogDebug("Lighter ignoring clientOrderId={ClientOrderId} (nonce-based idempotency)", clientOrderId);
+        }
 
         try
         {

@@ -80,6 +80,9 @@ public class PhantomFeesRegressionTests
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => p.Id = 1);
+
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
 
@@ -129,10 +132,10 @@ public class PhantomFeesRegressionTests
 
         // Default: both connectors return success (individual tests override as needed)
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         // Both connectors confirm leg open for confirmation window
@@ -192,10 +195,10 @@ public class PhantomFeesRegressionTests
         const decimal filledPrice = 3000m;
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", filledPrice, filledQty));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short margin insufficient"));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -203,7 +206,7 @@ public class PhantomFeesRegressionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -234,10 +237,10 @@ public class PhantomFeesRegressionTests
         const decimal filledQty = 0.08m;
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long margin insufficient"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, filledQty));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -245,7 +248,7 @@ public class PhantomFeesRegressionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -272,10 +275,10 @@ public class PhantomFeesRegressionTests
         const decimal filledQty = 0.1m;
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, filledQty));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Short connector timed out"));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -283,7 +286,7 @@ public class PhantomFeesRegressionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -326,10 +329,10 @@ public class PhantomFeesRegressionTests
         const decimal firstLegQty = 0.12m;
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, firstLegQty));
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Long connector timed out"));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -337,7 +340,7 @@ public class PhantomFeesRegressionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -364,10 +367,10 @@ public class PhantomFeesRegressionTests
         const decimal firstLegQty = 0.09m;
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, firstLegQty));
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long margin insufficient"));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -375,7 +378,7 @@ public class PhantomFeesRegressionTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -409,15 +412,15 @@ public class PhantomFeesRegressionTests
     {
         // Both legs succeed on the wire but fill zero (connector bug / IOC expired)
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, qty: 0m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, qty: 0m));
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
