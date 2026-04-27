@@ -5,9 +5,6 @@ namespace FundingRateArb.Application.Services;
 
 public class ConfigValidator : IConfigValidator
 {
-    // Taker fee on both legs, both sides (open + close, long + short)
-    private const decimal RoundTripFeeRate = 0.001m;
-
     public ConfigValidationResult Validate(BotConfiguration config)
     {
         var errors = new List<string>();
@@ -106,18 +103,13 @@ public class ConfigValidator : IConfigValidator
         }
 
         // Gap invariant: OpenThreshold must cover fees over the minimum hold period.
-        // When MinHoldTimeHours == 0 the check is suppressed (divide-by-zero is undefined
-        // and existing validation already rejects MinHoldTimeHours > MaxHoldTimeHours; a
-        // zero value indicates a misconfigured entity and we avoid a secondary exception).
-        if (config.MinHoldTimeHours > 0)
+        if (ThresholdInvariantCalculator.IsViolated(
+                config.OpenThreshold, config.CloseThreshold, config.MinHoldTimeHours))
         {
-            var minSpread = config.CloseThreshold + RoundTripFeeRate / config.MinHoldTimeHours;
-            if (config.OpenThreshold < minSpread)
-            {
-                warnings.Add(
-                    $"OpenThreshold ({config.OpenThreshold}) is below CloseThreshold + round-trip fee / MinHoldTimeHours " +
-                    $"({minSpread:G}). Trades may not cover fees over the minimum hold period.");
-            }
+            var floor = ThresholdInvariantCalculator.ComputeRequiredOpenFloor(
+                config.CloseThreshold, config.MinHoldTimeHours);
+            errors.Add(
+                $"OpenThreshold must be at least |CloseThreshold| + 0.001/MinHoldTimeHours = {floor:F6} (current: {config.OpenThreshold}).");
         }
 
         return new ConfigValidationResult(errors.Count == 0, errors, warnings.Count > 0 ? warnings : null);

@@ -11,13 +11,13 @@ public class ConfigValidatorTests
 
     private static BotConfiguration ValidConfig() => new()
     {
-        OpenThreshold = 0.0002m,
+        OpenThreshold = 0.0005m,
         AlertThreshold = 0.0001m,
-        CloseThreshold = -0.00005m,
+        CloseThreshold = -0.0002m,
         FeeAmortizationHours = 12,
         RateStalenessMinutes = 15,
         MaxHoldTimeHours = 48,
-        MinHoldTimeHours = 2,
+        MinHoldTimeHours = 4,
         DefaultLeverage = 5,
         MaxLeverageCap = 50,
         MaxConcurrentPositions = 1,
@@ -106,6 +106,8 @@ public class ConfigValidatorTests
     {
         var config = ValidConfig();
         config.CloseThreshold = -0.001m; // exactly at floor, should be valid
+        // Raise OpenThreshold to satisfy invariant: |(-0.001)| + 0.001/4 = 0.00125
+        config.OpenThreshold = 0.002m;
 
         var result = _sut.Validate(config);
 
@@ -339,65 +341,55 @@ public class ConfigValidatorTests
         result.Errors.Should().NotContain(e => e.Contains("MinHoldTimeHours"));
     }
 
-    // ── Gap-invariant tests ────────────────────────────────────────────────────
+    // ── Threshold invariant tests ──────────────────────────────────────────────
 
     [Fact]
-    public void GapInvariant_DefaultConfig_NoWarning()
+    public void ThresholdInvariant_AtNewDefaults_PassesValidation()
     {
-        // BotConfiguration defaults (Task 1.2): Open=0.0005, Close=0.0002, MinHold=4
-        // fee/hold = 0.001/4 = 0.00025; Close+fee/hold = 0.00045; Open=0.0005 >= 0.00045 → pass
-        var result = _sut.Validate(new BotConfiguration());
-
+        var result = _sut.Validate(ValidConfig());
         result.IsValid.Should().BeTrue();
-        result.Warnings.Should().BeNullOrEmpty();
+        result.Errors.Should().BeEmpty();
     }
 
     [Fact]
-    public void GapInvariant_ExactBoundary_NoWarning()
+    public void ThresholdInvariant_OpenBelowFloor_Invalid()
     {
-        // Open == Close + fee/hold exactly → >= is satisfied, no warning
         var config = ValidConfig();
-        config.MinHoldTimeHours = 4;
-        config.CloseThreshold = 0.00005m; // < AlertThreshold → no CloseThreshold error
-        // Open = 0.00005 + 0.001/4 = 0.00005 + 0.00025 = 0.0003
-        config.OpenThreshold = 0.0003m;
-        config.AlertThreshold = 0.0002m; // keep Open > Alert
-
+        config.OpenThreshold = 0.0003m;  // floor at defaults = 0.00045
         var result = _sut.Validate(config);
-
-        result.Warnings.Should().BeNullOrEmpty();
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("OpenThreshold must be at least"));
     }
 
     [Fact]
-    public void GapInvariant_OpenBelowMinRequired_Warning()
+    public void ThresholdInvariant_OpenAtFloor_Valid()
     {
-        // Open < Close + fee/hold → warning (not an error — IsValid stays true)
         var config = ValidConfig();
-        config.MinHoldTimeHours = 4;
-        config.CloseThreshold = 0.00005m; // < AlertThreshold → no CloseThreshold error
-        // minSpread = 0.00005 + 0.001/4 = 0.0003; set Open just below it
-        config.OpenThreshold = 0.00025m;
-        config.AlertThreshold = 0.0002m; // keep Open > Alert
-
+        config.OpenThreshold = 0.00045m;  // exactly at floor — must pass
         var result = _sut.Validate(config);
-
-        result.IsValid.Should().BeTrue("gap invariant is a warning, not an error");
-        result.Warnings.Should().NotBeNullOrEmpty();
-        result.Warnings!.Should().Contain(w => w.Contains("OpenThreshold"));
+        result.Errors.Should().NotContain(e => e.Contains("OpenThreshold must be at least"));
     }
 
     [Fact]
-    public void GapInvariant_MinHoldZero_WarningSupressed()
+    public void ThresholdInvariant_BoundaryOpenAtFloorMinusEpsilon_Invalid()
     {
-        // When MinHoldTimeHours == 0, dividing by zero is undefined.
-        // The check is skipped entirely — no warning is emitted.
         var config = ValidConfig();
-        config.MinHoldTimeHours = 0;
-        config.MaxHoldTimeHours = 48; // avoid unrelated MinHold > MaxHold error
-
+        config.OpenThreshold = 0.00044m;  // just below floor
         var result = _sut.Validate(config);
+        result.Errors.Should().Contain(e => e.Contains("OpenThreshold must be at least"));
+    }
 
-        result.Warnings.Should().BeNullOrEmpty(
-            "the gap-invariant check is suppressed when MinHoldTimeHours == 0 to avoid divide-by-zero");
+    [Fact]
+    public void CrossPropertyChecks_AtNewDefaults_AllPass()
+    {
+        // Asserts every cross-property check in ConfigValidator passes at the new
+        // BotConfiguration defaults: OpenThreshold=0.0005, AlertThreshold=0.0001,
+        // CloseThreshold=-0.0002, MinHoldTimeHours=4. Catches future regressions
+        // where a default is bumped without re-validating cross-property invariants.
+        var defaultConfig = new BotConfiguration();
+        var result = _sut.Validate(defaultConfig);
+        result.IsValid.Should().BeTrue(
+            "default BotConfiguration must pass all cross-property checks; errors: {0}",
+            string.Join("; ", result.Errors));
     }
 }
