@@ -8,6 +8,7 @@ public class ConfigValidator : IConfigValidator
     public ConfigValidationResult Validate(BotConfiguration config)
     {
         var errors = new List<string>();
+        var warnings = new List<string>();
 
         if (config.OpenThreshold <= config.AlertThreshold)
         {
@@ -101,6 +102,16 @@ public class ConfigValidator : IConfigValidator
             errors.Add("MaxCapitalPerPosition × MaxConcurrentPositions exceeds 150% — risk of capital over-allocation.");
         }
 
-        return new ConfigValidationResult(errors.Count == 0, errors);
+        // Gap invariant: OpenThreshold must cover fees over the minimum hold period.
+        if (ThresholdInvariantCalculator.IsViolated(
+                config.OpenThreshold, config.CloseThreshold, config.MinHoldTimeHours))
+        {
+            var floor = ThresholdInvariantCalculator.ComputeRequiredOpenFloor(
+                config.CloseThreshold, config.MinHoldTimeHours);
+            errors.Add(
+                $"OpenThreshold must be at least |CloseThreshold| + 0.001/MinHoldTimeHours = {floor:F6} (current: {config.OpenThreshold}).");
+        }
+
+        return new ConfigValidationResult(errors.Count == 0, errors, warnings.Count > 0 ? warnings : null);
     }
 }

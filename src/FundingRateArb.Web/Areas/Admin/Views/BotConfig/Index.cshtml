@@ -1,5 +1,6 @@
 @model BotConfigViewModel
 @using FundingRateArb.Domain.Enums
+@using FundingRateArb.Application.Services
 @{
     ViewData["Title"] = "Bot Configuration";
 }
@@ -129,6 +130,9 @@
                             <input asp-for="OpenThreshold" type="hidden" id="OpenThreshold_raw" />
                             <input type="number" step="0.001" class="form-control" id="OpenThreshold_pct" />
                             <div class="form-text">Minimum rate difference to open position (%/hr)</div>
+                            <div class="form-text" id="OpenThreshold_minViable">
+                                Min viable: <span id="OpenThreshold_minViable_pct">—</span>%/hr
+                            </div>
                             <span asp-validation-for="OpenThreshold" class="text-danger"></span>
                         </div>
                         <div class="col-md-4">
@@ -507,5 +511,33 @@
         bindPercentInput('EmergencyCloseSpreadThreshold_pct', 'EmergencyCloseSpreadThreshold_raw', 100);
         bindPercentInput('RebalanceMinImprovement_pct', 'RebalanceMinImprovement_raw', 100);
         bindPercentInput('VolumeFraction_pct', 'VolumeFraction_raw', 100);
+    </script>
+    <script>
+        (function () {
+            var feeRate = @ThresholdInvariantCalculator.EstimatedRoundTripFeeRate.ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture);
+            function recomputeOpenFloor() {
+                var openInput = document.getElementById('OpenThreshold_pct');
+                var openRaw = parseFloat(document.getElementById('OpenThreshold_raw').value);
+                var closeRaw = parseFloat(document.getElementById('CloseThreshold_raw').value);
+                var minHoldEl = document.getElementsByName('MinHoldTimeHours')[0];
+                var minHold = minHoldEl ? parseFloat(minHoldEl.value) : NaN;
+                if (!isFinite(openRaw) || !isFinite(closeRaw) || !isFinite(minHold) || minHold <= 0) {
+                    document.getElementById('OpenThreshold_minViable_pct').textContent = '—';
+                    return;
+                }
+                var floor = Math.abs(closeRaw) + feeRate / minHold;
+                document.getElementById('OpenThreshold_minViable_pct').textContent = (floor * 100).toFixed(4);
+                if (openRaw < floor) openInput.classList.add('is-invalid');
+                else openInput.classList.remove('is-invalid');
+            }
+            ['OpenThreshold_pct', 'CloseThreshold_pct'].forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('blur', recomputeOpenFloor);
+            });
+            var minHoldEl = document.getElementsByName('MinHoldTimeHours')[0];
+            if (minHoldEl) minHoldEl.addEventListener('blur', recomputeOpenFloor);
+            document.addEventListener('DOMContentLoaded', recomputeOpenFloor);
+            recomputeOpenFloor();
+        })();
     </script>
 }

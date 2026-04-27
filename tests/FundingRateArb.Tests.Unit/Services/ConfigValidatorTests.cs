@@ -11,13 +11,13 @@ public class ConfigValidatorTests
 
     private static BotConfiguration ValidConfig() => new()
     {
-        OpenThreshold = 0.0002m,
+        OpenThreshold = 0.0005m,
         AlertThreshold = 0.0001m,
-        CloseThreshold = -0.00005m,
+        CloseThreshold = -0.0002m,
         FeeAmortizationHours = 12,
         RateStalenessMinutes = 15,
         MaxHoldTimeHours = 48,
-        MinHoldTimeHours = 2,
+        MinHoldTimeHours = 4,
         DefaultLeverage = 5,
         MaxLeverageCap = 50,
         MaxConcurrentPositions = 1,
@@ -106,6 +106,8 @@ public class ConfigValidatorTests
     {
         var config = ValidConfig();
         config.CloseThreshold = -0.001m; // exactly at floor, should be valid
+        // Raise OpenThreshold to satisfy invariant: |(-0.001)| + 0.001/4 = 0.00125
+        config.OpenThreshold = 0.002m;
 
         var result = _sut.Validate(config);
 
@@ -337,5 +339,57 @@ public class ConfigValidatorTests
         var result = _sut.Validate(config);
 
         result.Errors.Should().NotContain(e => e.Contains("MinHoldTimeHours"));
+    }
+
+    // ── Threshold invariant tests ──────────────────────────────────────────────
+
+    [Fact]
+    public void ThresholdInvariant_AtNewDefaults_PassesValidation()
+    {
+        var result = _sut.Validate(ValidConfig());
+        result.IsValid.Should().BeTrue();
+        result.Errors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ThresholdInvariant_OpenBelowFloor_Invalid()
+    {
+        var config = ValidConfig();
+        config.OpenThreshold = 0.0003m;  // floor at defaults = 0.00045
+        var result = _sut.Validate(config);
+        result.IsValid.Should().BeFalse();
+        result.Errors.Should().Contain(e => e.Contains("OpenThreshold must be at least"));
+    }
+
+    [Fact]
+    public void ThresholdInvariant_OpenAtFloor_Valid()
+    {
+        var config = ValidConfig();
+        config.OpenThreshold = 0.00045m;  // exactly at floor — must pass
+        var result = _sut.Validate(config);
+        result.Errors.Should().NotContain(e => e.Contains("OpenThreshold must be at least"));
+    }
+
+    [Fact]
+    public void ThresholdInvariant_BoundaryOpenAtFloorMinusEpsilon_Invalid()
+    {
+        var config = ValidConfig();
+        config.OpenThreshold = 0.00044m;  // just below floor
+        var result = _sut.Validate(config);
+        result.Errors.Should().Contain(e => e.Contains("OpenThreshold must be at least"));
+    }
+
+    [Fact]
+    public void CrossPropertyChecks_AtNewDefaults_AllPass()
+    {
+        // Asserts every cross-property check in ConfigValidator passes at the new
+        // BotConfiguration defaults: OpenThreshold=0.0005, AlertThreshold=0.0001,
+        // CloseThreshold=-0.0002, MinHoldTimeHours=4. Catches future regressions
+        // where a default is bumped without re-validating cross-property invariants.
+        var defaultConfig = new BotConfiguration();
+        var result = _sut.Validate(defaultConfig);
+        result.IsValid.Should().BeTrue(
+            "default BotConfiguration must pass all cross-property checks; errors: {0}",
+            string.Join("; ", result.Errors));
     }
 }

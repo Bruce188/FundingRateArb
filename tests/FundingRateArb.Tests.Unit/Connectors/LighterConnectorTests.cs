@@ -736,7 +736,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 5);
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("SignerPrivateKey");
@@ -752,7 +752,7 @@ public class LighterConnectorTests
 
         var sut = CreateConnector(OrderBookDetailsJson);
 
-        var result = await sut.ClosePositionAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("SignerPrivateKey");
@@ -957,7 +957,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", zeroPriceJson);
         });
 
-        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 5);
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty("zero/negative price must produce an error");
@@ -978,7 +978,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 1m, 1);
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 1m, 1);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty("below-minimum-notional order must produce an error");
@@ -1078,7 +1078,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 5);
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 5);
 
         result.Success.Should().BeFalse();
 
@@ -1116,7 +1116,7 @@ public class LighterConnectorTests
 
         var sut = CreateConnector(emptyAccountJson);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeFalse();
 
@@ -1156,7 +1156,7 @@ public class LighterConnectorTests
 
         var sut = CreateConnector(zeroSizeAccountJson);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         // Zero-size position should be filtered out — treated as empty
         result.Should().BeFalse();
@@ -1650,7 +1650,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("ETH Long size increased from baseline 0.1 to 0.2");
     }
@@ -1673,7 +1673,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("ETH Long was absent from baseline but appeared in first poll");
     }
@@ -1692,7 +1692,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeFalse("ETH Long at baseline size 0.1 never changes — should early-exit");
     }
@@ -1714,7 +1714,7 @@ public class LighterConnectorTests
         };
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("ETH Long size increased from baseline 0.5 to 1.0");
     }
@@ -1734,7 +1734,7 @@ public class LighterConnectorTests
         };
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("ETH Long was not in baseline but appeared in poll");
     }
@@ -1763,7 +1763,7 @@ public class LighterConnectorTests
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("baseline fetch failed so any matching position should be treated as new");
     }
@@ -1812,7 +1812,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("grace check found ETH Long after all polls were exhausted");
 
@@ -1912,7 +1912,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(responses);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeFalse("grace check found position at baseline size — no increase detected");
     }
@@ -1960,7 +1960,7 @@ public class LighterConnectorTests
         };
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeFalse("grace check HTTP error should result in false, not exception");
     }
@@ -1978,7 +1978,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0.5m, 5);
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 0.5m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("SignerPrivateKey");
@@ -1998,7 +1998,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0.001m, 5);
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 0.001m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty("below-minimum-notional order must produce an error");
@@ -2018,7 +2018,7 @@ public class LighterConnectorTests
             h.AddRoute("orderBookDetails", OrderBookDetailsJson);
         });
 
-        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0m, 5);
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 0m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty("zero quantity order must produce an error");
@@ -2044,7 +2044,7 @@ public class LighterConnectorTests
 
         // The signer init fails before we reach the overflow check.
         // This test confirms the method handles the failure gracefully.
-        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 200_000_000_000m, 5);
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 200_000_000_000m, 5);
 
         result.Success.Should().BeFalse();
         result.Error.Should().NotBeNullOrEmpty();
@@ -2070,7 +2070,7 @@ public class LighterConnectorTests
         });
 
         // Valid quantity with extra precision — fails at signer, not at guards
-        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Domain.Enums.Side.Long, 0.12345m, 5);
+        var result = await sut.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, 0.12345m, 5);
 
         result.Success.Should().BeFalse();
         // Error should NOT be from overflow or zero-quantity guards — proving truncation logic runs cleanly
@@ -2199,7 +2199,7 @@ public class LighterConnectorTests
         var sut = CreateConnector(MakeAccountJson(1.0m));
         var baseline = new Dictionary<(string, string), decimal> { [("ETH", "Long")] = 0.5m };
 
-        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+        var result = await sut.CheckPositionExistsAsync("ETH", Side.Long, baseline);
 
         result.Should().BeTrue("position size 1.0 > baseline 0.5 indicates a new position");
     }
@@ -2211,7 +2211,7 @@ public class LighterConnectorTests
         var sut = CreateConnector(MakeAccountJson(0.5m));
         var baseline = new Dictionary<(string, string), decimal> { [("ETH", "Long")] = 0.5m };
 
-        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+        var result = await sut.CheckPositionExistsAsync("ETH", Side.Long, baseline);
 
         result.Should().BeFalse("position size equals baseline — pre-existing position");
     }
@@ -2223,7 +2223,7 @@ public class LighterConnectorTests
         var sut = CreateConnector(MakeAccountJson(0.5m));
         var baseline = new Dictionary<(string, string), decimal>(); // empty — asset not present
 
-        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline);
+        var result = await sut.CheckPositionExistsAsync("ETH", Side.Long, baseline);
 
         result.Should().BeTrue("asset absent from baseline defaults to 0 — any size is new");
     }
@@ -2234,7 +2234,7 @@ public class LighterConnectorTests
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
         var sut = CreateConnector(MakeAccountJson(0.5m));
 
-        var result = await sut.CheckPositionExistsAsync("ETH", Domain.Enums.Side.Long, baseline: null);
+        var result = await sut.CheckPositionExistsAsync("ETH", Side.Long, baseline: null);
 
         result.Should().BeTrue("null baseline falls back to legacy behavior — any match returns true");
     }
@@ -2252,7 +2252,7 @@ public class LighterConnectorTests
 
         var sut = CreateSequentialConnector(new[] { baselineJson, pollJson });
 
-        var result = await sut.VerifyPositionOpenedAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.VerifyPositionOpenedAsync("ETH", Side.Long);
 
         result.Should().BeTrue("ETH Long was absent from baseline but appeared in poll alongside existing BTC position");
     }
@@ -2271,7 +2271,7 @@ public class LighterConnectorTests
 
         // absSize 0.5 >= baselineSize 0.4 + 0.1 * 0.9 = 0.49 → true
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline, expectedQuantity: 0.1m);
+            positions, "ETH", Side.Long, baseline, expectedQuantity: 0.1m);
 
         result.IsNewOrIncreased.Should().BeTrue(
             "absSize 0.5 >= baseline 0.4 + expectedQty 0.1 * 0.9 = 0.49");
@@ -2292,7 +2292,7 @@ public class LighterConnectorTests
         };
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline, expectedQuantity: 0.5m);
+            positions, "ETH", Side.Long, baseline, expectedQuantity: 0.5m);
 
         result.IsNewOrIncreased.Should().BeFalse(
             "absSize 0.4 < baseline 0.4 + expectedQty 0.5 * 0.9 = 0.85");
@@ -2312,7 +2312,7 @@ public class LighterConnectorTests
         };
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline);
+            positions, "ETH", Side.Long, baseline);
 
         result.IsNewOrIncreased.Should().BeFalse(
             "size equals baseline and no expected quantity — not new or increased");
@@ -2329,7 +2329,7 @@ public class LighterConnectorTests
         var baseline = new Dictionary<(string Symbol, string Side), decimal>();
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline);
+            positions, "ETH", Side.Long, baseline);
 
         result.IsNewOrIncreased.Should().BeTrue("fresh pair not in baseline → new");
     }
@@ -2347,7 +2347,7 @@ public class LighterConnectorTests
         };
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline);
+            positions, "ETH", Side.Long, baseline);
 
         result.IsNewOrIncreased.Should().BeTrue("size 0.8 > baseline 0.5 → increased");
     }
@@ -2362,7 +2362,7 @@ public class LighterConnectorTests
         var baseline = new Dictionary<(string Symbol, string Side), decimal>();
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Short, baseline);
+            positions, "ETH", Side.Short, baseline);
 
         result.IsNewOrIncreased.Should().BeFalse("Long position does not match Short target");
     }
@@ -2377,7 +2377,7 @@ public class LighterConnectorTests
         var baseline = new Dictionary<(string Symbol, string Side), decimal>();
 
         var result = LighterConnector.TryMatchPosition(
-            positions, "ETH", Domain.Enums.Side.Long, baseline);
+            positions, "ETH", Side.Long, baseline);
 
         result.IsNewOrIncreased.Should().BeTrue("symbol matching is case-insensitive");
     }
@@ -2522,7 +2522,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380100).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744384000).UtcDateTime;
 
-        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetFundingPaymentsAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(0.05m); // 0.02 + 0.03
     }
@@ -2581,7 +2581,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744383000).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744395000).UtcDateTime;
 
-        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetFundingPaymentsAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(1.00m); // 0.10 + 0.20 + 0.30 + 0.40
         callCount.Should().Be(2);
@@ -2619,7 +2619,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380100).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744384000).UtcDateTime;
 
-        var result = await sut.GetFundingPaymentsAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetFundingPaymentsAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(0.05m); // 0.02 + 0.03 (same window as the seconds-scale test)
     }
@@ -2641,7 +2641,7 @@ public class LighterConnectorTests
         });
 
         var result = await sut.GetFundingPaymentsAsync(
-            "ETH", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+            "ETH", Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
 
         result.Should().BeNull();
     }
@@ -2668,7 +2668,7 @@ public class LighterConnectorTests
         });
 
         var result = await sut.GetFundingPaymentsAsync(
-            "ZZZ", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+            "ZZZ", Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
 
         result.Should().BeNull();
         positionFundingCalls.Should().Be(0);
@@ -2700,7 +2700,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
 
-        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetRealizedPnlAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(10.25m); // 12.50 + (-2.25)
     }
@@ -2728,7 +2728,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
 
-        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetRealizedPnlAsync("ETH", Side.Long, from, to);
 
         result.Should().BeNull();
     }
@@ -2750,7 +2750,7 @@ public class LighterConnectorTests
         });
 
         var result = await sut.GetRealizedPnlAsync(
-            "ETH", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+            "ETH", Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
 
         result.Should().BeNull();
     }
@@ -2765,7 +2765,7 @@ public class LighterConnectorTests
         });
 
         var result = await sut.GetRealizedPnlAsync(
-            "ZZZ", Domain.Enums.Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
+            "ZZZ", Side.Long, DateTime.UtcNow.AddHours(-1), DateTime.UtcNow);
 
         result.Should().BeNull();
     }
@@ -2795,7 +2795,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
 
-        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetRealizedPnlAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(0m);
     }
@@ -2825,7 +2825,7 @@ public class LighterConnectorTests
         var from = DateTimeOffset.FromUnixTimeSeconds(1744380000).UtcDateTime;
         var to = DateTimeOffset.FromUnixTimeSeconds(1744390000).UtcDateTime;
 
-        var result = await sut.GetRealizedPnlAsync("ETH", Domain.Enums.Side.Long, from, to);
+        var result = await sut.GetRealizedPnlAsync("ETH", Side.Long, from, to);
 
         result.Should().Be(0m);
     }
@@ -2838,7 +2838,7 @@ public class LighterConnectorTests
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
         var sut = CreateConnector(AccountJson);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         price.Should().Be(3400.00m);
     }
@@ -2863,7 +2863,7 @@ public class LighterConnectorTests
             """;
         var sut = CreateConnector(emptyAccountJson);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         price.Should().BeNull();
     }
@@ -2875,7 +2875,7 @@ public class LighterConnectorTests
         // AccountJson has ETH Long (sign=1, position=0.0500), querying Short should return null
         var sut = CreateConnector(AccountJson);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Short);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Short);
 
         price.Should().BeNull();
     }
@@ -2886,7 +2886,7 @@ public class LighterConnectorTests
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
         var sut = CreateConnector("server error", HttpStatusCode.InternalServerError);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         price.Should().BeNull();
     }
@@ -2924,7 +2924,7 @@ public class LighterConnectorTests
             """;
         var sut = CreateConnector(zeroEntryJson);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         // AvgEntryPrice=0 parsed as 0, which fails the > 0 check → logs warning and returns null
         price.Should().BeNull();
@@ -2963,7 +2963,7 @@ public class LighterConnectorTests
             """;
         var sut = CreateConnector(malformedJson);
 
-        var price = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         // "invalid" cannot be parsed as decimal → position skipped → returns null
         price.Should().BeNull();
@@ -2981,8 +2981,8 @@ public class LighterConnectorTests
         var sut = new LighterConnector(httpClient, _loggerMock.Object, _configMock.Object);
 
         // Two rapid calls should only make one HTTP request (5s TTL cache)
-        var price1 = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
-        var price2 = await sut.GetActualEntryPriceAsync("ETH", Domain.Enums.Side.Long);
+        var price1 = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
+        var price2 = await sut.GetActualEntryPriceAsync("ETH", Side.Long);
 
         price1.Should().Be(3400.00m);
         price2.Should().Be(3400.00m);
@@ -3027,7 +3027,7 @@ public class LighterConnectorTests
             h.AddRoute("account", AccountJson);
         });
 
-        var result = await sut.ClosePositionAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
         result.Success.Should().BeFalse("liveness check failure must never return Success=true");
 
@@ -3067,7 +3067,7 @@ public class LighterConnectorTests
             h.AddRoute("tx?hash=", pendingTxJson);
         });
 
-        var result = await sut.ClosePositionAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
         var signerUnavailable = result.Error?.Contains("signer", StringComparison.OrdinalIgnoreCase) == true
             || result.Error?.Contains("CreateClient", StringComparison.OrdinalIgnoreCase) == true
@@ -3119,7 +3119,7 @@ public class LighterConnectorTests
             h.AddRoute("accountInactiveOrders", noMatchInactiveOrdersJson);
         });
 
-        var result = await sut.ClosePositionAsync("ETH", Domain.Enums.Side.Long);
+        var result = await sut.ClosePositionAsync("ETH", Side.Long);
 
         var signerUnavailable = result.Error?.Contains("signer", StringComparison.OrdinalIgnoreCase) == true
             || result.Error?.Contains("CreateClient", StringComparison.OrdinalIgnoreCase) == true
@@ -3369,7 +3369,7 @@ public class LighterConnectorTests
         _configMock.Setup(c => c["Exchanges:Lighter:ApiKey"]).Returns("2");
         _configMock.Setup(c => c["Exchanges:Lighter:AccountIndex"]).Returns("281474976624240");
 
-        var result = await sut.PlaceMarketOrderAsync("ETH", Domain.Enums.Side.Long, 100m, 10);
+        var result = await sut.PlaceMarketOrderAsync("ETH", Side.Long, 100m, 10);
 
         result.Success.Should().BeFalse("pre-flight rejection must not return Success=true");
 

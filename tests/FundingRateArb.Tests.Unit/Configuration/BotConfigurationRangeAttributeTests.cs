@@ -83,7 +83,8 @@ public class BotConfigurationRangeAttributeTests
 
     [Theory]
     [InlineData(0.0)]
-    [InlineData(0.0002)]    // default
+    [InlineData(0.0002)]    // legacy default
+    [InlineData(0.0005)]    // current default
     [InlineData(0.01)]
     public void OpenThreshold_InRange_PassesValidation(double value)
     {
@@ -195,7 +196,8 @@ public class BotConfigurationRangeAttributeTests
 
     [Theory]
     [InlineData(-0.01)]
-    [InlineData(-0.00005)]  // default
+    [InlineData(-0.00005)]  // legacy default
+    [InlineData(-0.0002)]   // current default
     [InlineData(0.0)]
     public void CloseThreshold_InRange_PassesValidation(double value)
     {
@@ -351,10 +353,10 @@ public class BotConfigurationRangeAttributeTests
 
     private static BotConfiguration ValidBase() => new BotConfiguration
     {
-        // five newly-guarded fields set to their defaults
-        OpenThreshold = 0.0002m,
+        // five newly-guarded fields set to their current entity defaults
+        OpenThreshold = 0.0005m,
         AlertThreshold = 0.0001m,
-        CloseThreshold = -0.00005m,
+        CloseThreshold = -0.0002m,
         MaxHoldTimeHours = 48,
         VolumeFraction = 0.001m,
     };

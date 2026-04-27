@@ -1,5 +1,6 @@
 using FluentAssertions;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.Data;
 using FundingRateArb.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -101,7 +102,7 @@ public class UserPreferenceReconcilerTests
             Name = "Hyperliquid",
             ApiBaseUrl = "https://api.hyperliquid.xyz",
             WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = true
         });
@@ -128,7 +129,7 @@ public class UserPreferenceReconcilerTests
             Name = "Hyperliquid",
             ApiBaseUrl = "https://api.hyperliquid.xyz",
             WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = true
         });
@@ -172,7 +173,7 @@ public class UserPreferenceReconcilerTests
             Name = "Hyperliquid",
             ApiBaseUrl = "https://api.hyperliquid.xyz",
             WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = true
         };
@@ -181,7 +182,7 @@ public class UserPreferenceReconcilerTests
             Name = "Retired",
             ApiBaseUrl = "https://retired.example",
             WsBaseUrl = "wss://retired.example/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = false
         };
@@ -230,7 +231,7 @@ public class UserPreferenceReconcilerTests
             Name = "Hyperliquid",
             ApiBaseUrl = "https://api.hyperliquid.xyz",
             WsBaseUrl = "wss://api.hyperliquid.xyz/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = true
         };
@@ -239,7 +240,7 @@ public class UserPreferenceReconcilerTests
             Name = "Lighter",
             ApiBaseUrl = "https://api.lighter.xyz",
             WsBaseUrl = "wss://api.lighter.xyz/ws",
-            FundingInterval = Domain.Enums.FundingInterval.Hourly,
+            FundingInterval = FundingInterval.Hourly,
             FundingIntervalHours = 1,
             IsActive = true
         };

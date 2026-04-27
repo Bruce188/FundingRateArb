@@ -14,5 +14,6 @@ public enum AlertType
     LeverageReduced,
     QuantityMismatch,
     PnlDivergence,
-    ExchangeCircuitBreaker
+    ExchangeCircuitBreaker,
+    OperationalWarning
 }
