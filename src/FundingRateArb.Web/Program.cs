@@ -304,6 +304,7 @@ try
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
     builder.Services.AddScoped<IDatabaseSpaceHealthProbe, DatabaseSpaceHealthProbe>();
     builder.Services.AddScoped<IReconciliationReportRepository, ReconciliationReportRepository>();
+    builder.Services.AddScoped<IStatusPageAggregator, StatusPageAggregator>();
 
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();

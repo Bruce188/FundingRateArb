@@ -1,0 +1,331 @@
+@model FundingRateArb.Application.ViewModels.StatusViewModel
+@{
+    ViewData["Title"] = "Operator Status";
+    Layout = "_Layout";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Operator Status</h1>
+</div>
+
+@if (!Model.DatabaseAvailable)
+{
+    <div class="alert alert-warning" role="alert">
+        <strong>Database Unavailable:</strong> @Model.DegradedReason
+    </div>
+    return;
+}
+
+<section data-section-name="bot-state-header" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Bot Configuration State</div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-6">Status</dt>
+                        <dd class="col-sm-6">
+                            @if (Model.BotState.IsEnabled)
+                            {
+                                <span class="badge bg-success">Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="badge bg-danger">Disabled</span>
+                            }
+                        </dd>
+                        <dt class="col-sm-6">Last Updated</dt>
+                        <dd class="col-sm-6">@Model.BotState.LastUpdatedAt.ToString("u")</dd>
+                        <dt class="col-sm-6">Open Threshold</dt>
+                        <dd class="col-sm-6">
+                            @Model.BotState.OpenThreshold.ToString("P4")
+                            @if (Model.BotState.MinViableOpenThresholdViolated)
+                            {
+                                <span class="badge bg-danger ms-1">Below Min Viable</span>
+                            }
+                        </dd>
+                        <dt class="col-sm-6">Min Viable Open Threshold</dt>
+                        <dd class="col-sm-6">@Model.BotState.MinViableOpenThreshold.ToString("P4")</dd>
+                        <dt class="col-sm-6">Close Threshold</dt>
+                        <dd class="col-sm-6">@Model.BotState.CloseThreshold.ToString("P4")</dd>
+                        <dt class="col-sm-6">Alert Threshold</dt>
+                        <dd class="col-sm-6">@Model.BotState.AlertThreshold.ToString("P4")</dd>
+                        <dt class="col-sm-6">Stop Loss</dt>
+                        <dd class="col-sm-6">@Model.BotState.StopLossPct.ToString("P2")</dd>
+                    </dl>
+                </div>
+                <div class="col-md-6">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-6">Open Confirm Timeout</dt>
+                        <dd class="col-sm-6">@Model.BotState.OpenConfirmTimeoutSeconds s</dd>
+                        <dt class="col-sm-6">Min Hold Time</dt>
+                        <dd class="col-sm-6">@Model.BotState.MinHoldTimeHours h</dd>
+                        <dt class="col-sm-6">Emergency Close Spread</dt>
+                        <dd class="col-sm-6">@Model.BotState.EmergencyCloseSpreadThreshold.ToString("P4")</dd>
+                        <dt class="col-sm-6">Default Leverage</dt>
+                        <dd class="col-sm-6">@Model.BotState.DefaultLeverage×</dd>
+                        <dt class="col-sm-6">Max Leverage Cap</dt>
+                        <dd class="col-sm-6">@Model.BotState.MaxLeverageCap×</dd>
+                        <dt class="col-sm-6">Total Capital</dt>
+                        <dd class="col-sm-6">
+                            @Model.BotState.TotalCapitalUsdc.ToString("N2") USDC
+                            <small class="text-muted">(deprecated — sizing reads live equity)</small>
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section data-section-name="pnl-attribution" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">PnL Attribution</div>
+        <div class="card-body">
+            @if (!Model.PnlAttribution.Any())
+            {
+                <em class="text-muted">No closed positions yet.</em>
+            }
+            else
+            {
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Window</th>
+                            <th class="text-end">Gross Funding</th>
+                            <th class="text-end">Entry Fees</th>
+                            <th class="text-end">Exit Fees</th>
+                            <th class="text-end">Slippage Residual</th>
+                            <th class="text-end">Net Realized</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.PnlAttribution)
+                        {
+                            <tr>
+                                <td>@row.Window</td>
+                                <td class="text-end @(row.GrossFunding >= 0 ? "text-success" : "text-danger")">@row.GrossFunding.ToString("N4")</td>
+                                <td class="text-end">@row.EntryFees.ToString("N4")</td>
+                                <td class="text-end">@row.ExitFees.ToString("N4")</td>
+                                <td class="text-end @(row.SlippageResidual >= 0 ? "text-success" : "text-danger")">@row.SlippageResidual.ToString("N4")</td>
+                                <td class="text-end @(row.NetRealized >= 0 ? "text-success" : "text-danger")">@row.NetRealized.ToString("N4")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="hold-time-distribution" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Hold-Time Distribution</div>
+        <div class="card-body">
+            @if (!Model.HoldTimeBuckets.Any())
+            {
+                <em class="text-muted">No closed positions yet.</em>
+            }
+            else
+            {
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Bucket</th>
+                            <th class="text-end">Count</th>
+                            <th class="text-end">Wins</th>
+                            <th class="text-end">Win Rate</th>
+                            <th class="text-end">Total PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var bucket in Model.HoldTimeBuckets)
+                        {
+                            var winRate = bucket.Count > 0 ? (decimal)bucket.WinCount / bucket.Count * 100 : 0;
+                            <tr>
+                                <td>@bucket.Bucket</td>
+                                <td class="text-end">@bucket.Count</td>
+                                <td class="text-end">@bucket.WinCount</td>
+                                <td class="text-end">@winRate.ToString("F1")%</td>
+                                <td class="text-end @(bucket.TotalPnl >= 0 ? "text-success" : "text-danger")">@bucket.TotalPnl.ToString("N4")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="phantom-fee-indicator" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Phantom-Fee Indicator</div>
+        <div class="card-body">
+            <dl class="row mb-0">
+                <dt class="col-sm-8">EmergencyClosed + zero-fill (24h)</dt>
+                <dd class="col-sm-4 text-end @(Model.PhantomFee.EmergencyClosedZeroFill24h > 0 ? "text-warning fw-bold" : "")">
+                    @Model.PhantomFee.EmergencyClosedZeroFill24h
+                </dd>
+                <dt class="col-sm-8">EmergencyClosed + zero-fill (7d)</dt>
+                <dd class="col-sm-4 text-end @(Model.PhantomFee.EmergencyClosedZeroFill7d > 0 ? "text-warning fw-bold" : "")">
+                    @Model.PhantomFee.EmergencyClosedZeroFill7d
+                </dd>
+                <dt class="col-sm-8">Failed + null order IDs (24h, Feature 5 metric)</dt>
+                <dd class="col-sm-4 text-end @(Model.PhantomFee.FailedNullOrderId24h > 0 ? "text-danger fw-bold" : "")">
+                    @Model.PhantomFee.FailedNullOrderId24h
+                </dd>
+            </dl>
+        </div>
+    </div>
+</section>
+
+<section data-section-name="per-pair-pnl" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Per-Pair PnL</div>
+        <div class="card-body">
+            @if (!Model.PerPairPnl.Any())
+            {
+                <em class="text-muted">No closed positions yet.</em>
+            }
+            else
+            {
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Long Exchange</th>
+                            <th>Short Exchange</th>
+                            <th class="text-end">Positions</th>
+                            <th class="text-end">Total PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.PerPairPnl.OrderBy(r => r.TotalPnl))
+                        {
+                            <tr>
+                                <td>@row.LongExchangeName</td>
+                                <td>@row.ShortExchangeName</td>
+                                <td class="text-end">@row.PositionCount</td>
+                                <td class="text-end @(row.TotalPnl >= 0 ? "text-success" : "text-danger")">@row.TotalPnl.ToString("N4")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="per-asset-fee-drag" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Per-Asset Fee Drag</div>
+        <div class="card-body">
+            @if (!Model.PerAssetFeeDrag.Any())
+            {
+                <em class="text-muted">No closed positions yet.</em>
+            }
+            else
+            {
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th class="text-end">Closes</th>
+                            <th class="text-end">Total PnL</th>
+                            <th class="text-end">Avg Fees</th>
+                            <th class="text-end">Avg Funding</th>
+                            <th class="text-end">Fee Drag Ratio</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in Model.PerAssetFeeDrag)
+                        {
+                            <tr class="@(row.FeeDragRatio > 1.0m ? "table-warning" : "")">
+                                <td>@row.AssetSymbol</td>
+                                <td class="text-end">@row.CloseCount</td>
+                                <td class="text-end @(row.TotalPnl >= 0 ? "text-success" : "text-danger")">@row.TotalPnl.ToString("N4")</td>
+                                <td class="text-end">@row.AvgFees.ToString("N4")</td>
+                                <td class="text-end">@row.AvgFunding.ToString("N4")</td>
+                                <td class="text-end">@row.FeeDragRatio.ToString("F2")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="failed-open-events" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Recent Failed-Open Events (24h)</div>
+        <div class="card-body">
+            @if (!Model.FailedOpenEvents.Any())
+            {
+                <em class="text-muted">No failed open events in last 24 hours.</em>
+            }
+            else
+            {
+                <table class="table table-sm table-hover">
+                    <thead>
+                        <tr>
+                            <th>Asset</th>
+                            <th>Long Exchange</th>
+                            <th>Short Exchange</th>
+                            <th class="text-end">Count</th>
+                            <th>Latest</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var ev in Model.FailedOpenEvents)
+                        {
+                            <tr>
+                                <td>@ev.AssetSymbol</td>
+                                <td>@ev.LongExchangeName</td>
+                                <td>@ev.ShortExchangeName</td>
+                                <td class="text-end">@ev.Count</td>
+                                <td>@ev.LatestAt.ToString("u")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="skip-reasons" class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Skip-Reason Histogram</div>
+        <div class="card-body">
+            @if (!Model.SkipReasons.Available)
+            {
+                <em class="text-muted">Skip-reason histogram not yet populated. See Application Insights for live diagnostics.</em>
+            }
+            else
+            {
+                <dl class="row mb-0">
+                    <dt class="col-sm-8">Total pairs evaluated</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.TotalPairsEvaluated</dd>
+                    <dt class="col-sm-8">Filtered by volume</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByVolume</dd>
+                    <dt class="col-sm-8">Filtered by threshold</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByThreshold</dd>
+                    <dt class="col-sm-8">Filtered by exchange symbol cap</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByExchangeSymbolCap</dd>
+                    <dt class="col-sm-8">Filtered by breakeven</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByBreakeven</dd>
+                    <dt class="col-sm-8">Filtered by trend unconfirmed</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByTrendUnconfirmed</dd>
+                    <dt class="col-sm-8">Filtered by empty book</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsFilteredByEmptyBook</dd>
+                    <dt class="col-sm-8">Pairs passing</dt>
+                    <dd class="col-sm-4 text-end">@Model.SkipReasons.PairsPassing</dd>
+                </dl>
+            }
+        </div>
+    </div>
+</section>
+
+<section data-section-name="reconciliation" class="mb-4">
+    <partial name="_ReconciliationSection" model="@Model.Reconciliation" />
+</section>

@@ -83,6 +83,36 @@ public interface IPositionRepository
     /// </summary>
     Task<int> CountPhantomFeeRowsSinceAsync(DateTime since, CancellationToken ct = default);
 
+    /// <summary>
+    /// Returns PnL attribution windows (gross funding, entry fees, exit fees, slippage residual, net realized)
+    /// for each provided window start. <paramref name="sinceUtc"/> is a list of window-start timestamps;
+    /// pass <see cref="DateTime.MinValue"/> for the lifetime window. Aggregation is SQL-side via GROUP BY.
+    /// Per AC#3, slippage residual = SUM(AccumulatedFunding − EntryFeesUsdc − ExitFeesUsdc − RealizedPnl).
+    /// </summary>
+    Task<List<PnlAttributionWindowDto>> GetPnlAttributionWindowsAsync(IReadOnlyList<DateTime> sinceUtc, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns hold-time bucket counts and PnL totals for closed positions.
+    /// Buckets: [0, 60s), [60s, 5m), [5m, 1h), [1h, 6h), [6h, ∞).
+    /// SQL aggregation via DATEDIFF(SECOND, OpenedAt, ClosedAt) inside a CASE expression.
+    /// Win count = Count where RealizedPnl &gt; 0.
+    /// </summary>
+    Task<List<HoldTimeBucketDto>> GetHoldTimeBucketsAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the count of positions where Status = EmergencyClosed AND LongFilledQuantity = 0
+    /// AND ShortFilledQuantity = 0 since <paramref name="since"/>. Distinct from
+    /// <see cref="CountPhantomFeeRowsSinceAsync"/> which keys on Status = Failed + null order IDs.
+    /// </summary>
+    Task<int> CountEmergencyClosedZeroFillSinceAsync(DateTime since, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns recent failed-open events grouped by (AssetId, LongExchangeId, ShortExchangeId).
+    /// Source rows: Status = Failed since <paramref name="since"/>. Output is human-readable
+    /// asset symbol + exchange names with count + latest timestamp per group.
+    /// </summary>
+    Task<List<FailedOpenEventDto>> GetRecentFailedOpensAsync(DateTime since, CancellationToken ct = default);
+
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }
