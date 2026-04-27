@@ -20,7 +20,7 @@ public class BotConfiguration : IValidatableObject
     /// A value of -0.00005 means the close triggers when the hourly spread falls below -0.005%.
     /// </remarks>
     [Range(-0.01, 0.0)]
-    public decimal CloseThreshold { get; set; } = 0.0002m;
+    public decimal CloseThreshold { get; set; } = -0.0002m;
 
     [Range(0.01, 1.0)]
     public decimal StopLossPct { get; set; } = 0.10m;

@@ -3,6 +3,7 @@ using System.Text;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using FundingRateArb.Infrastructure.ExchangeConnectors;
 using FundingRateArb.Tests.Unit.Common;
 using Microsoft.Extensions.Configuration;
@@ -216,7 +217,7 @@ public class CoinGlassConnectorTests : IDisposable
         var response = new HttpResponseMessage(HttpStatusCode.OK);
         var sut = CreateConnector(response);
 
-        Func<Task> act = async () => await sut.PlaceMarketOrderAsync("BTC", Domain.Enums.Side.Long, 100m, 5);
+        Func<Task> act = async () => await sut.PlaceMarketOrderAsync("BTC", Side.Long, 100m, 5);
 
         await act.Should().ThrowAsync<NotSupportedException>();
     }
@@ -227,7 +228,7 @@ public class CoinGlassConnectorTests : IDisposable
         var response = new HttpResponseMessage(HttpStatusCode.OK);
         var sut = CreateConnector(response);
 
-        Func<Task> act = async () => await sut.ClosePositionAsync("BTC", Domain.Enums.Side.Long);
+        Func<Task> act = async () => await sut.ClosePositionAsync("BTC", Side.Long);
 
         await act.Should().ThrowAsync<NotSupportedException>();
     }
