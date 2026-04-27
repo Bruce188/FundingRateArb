@@ -51,6 +51,11 @@ public interface IPositionRepository
     /// <summary>Returns per-exchange-pair KPI breakdown via SQL GROUP BY. No row materialization.</summary>
     Task<List<ExchangePairKpiAggregateDto>> GetPerExchangePairKpiAsync(DateTime since, string? userId = null, CancellationToken ct = default);
 
+    /// <summary>Returns slippage averages grouped by exchange-pair and by asset over the
+    /// given window (e.g., TimeSpan.FromDays(7) for the Admin Overview 7-day rollup).
+    /// SQL-aggregated; no row materialization. Null averages indicate no data in window.</summary>
+    Task<SlippageRollupDto> GetSlippageRollupAsync(TimeSpan window, CancellationToken ct = default);
+
     /// <summary>
     /// Computes the sum of <c>RealizedPnl</c> for closed positions matching the given statuses,
     /// excluding rows where <c>IsPhantomFeeBackfill == true</c>. Pushes the aggregation to SQL

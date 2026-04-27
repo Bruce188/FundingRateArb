@@ -160,3 +160,83 @@
         }
     </div>
 </div>
+
+@* Slippage Attribution (last 7 days) *@
+<div class="card shadow-sm mt-4">
+    <div class="card-header">
+        <h5 class="mb-0">Slippage Attribution (7d)</h5>
+    </div>
+    <div class="card-body">
+        @if (!Model.SlippageAttribution.ByPair.Any() && !Model.SlippageAttribution.ByAsset.Any())
+        {
+            <p class="text-muted mb-0">No closed positions in the last 7 days.</p>
+        }
+        else
+        {
+            <div class="row g-3">
+                <div class="col-lg-6">
+                    <h6 class="text-muted">By Exchange Pair</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Long</th>
+                                    <th>Short</th>
+                                    <th class="text-end">N</th>
+                                    <th class="text-end" title="Average long-leg entry slippage">L Entry</th>
+                                    <th class="text-end" title="Average short-leg entry slippage">S Entry</th>
+                                    <th class="text-end" title="Average long-leg exit slippage">L Exit</th>
+                                    <th class="text-end" title="Average short-leg exit slippage">S Exit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var pair in Model.SlippageAttribution.ByPair)
+                                {
+                                    <tr>
+                                        <td>@pair.LongExchangeName</td>
+                                        <td>@pair.ShortExchangeName</td>
+                                        <td class="text-end">@pair.PositionCount</td>
+                                        <td class="text-end">@(pair.AvgLongEntrySlippagePct.HasValue ? pair.AvgLongEntrySlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(pair.AvgShortEntrySlippagePct.HasValue ? pair.AvgShortEntrySlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(pair.AvgLongExitSlippagePct.HasValue ? pair.AvgLongExitSlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(pair.AvgShortExitSlippagePct.HasValue ? pair.AvgShortExitSlippagePct.Value.ToString("P4") : "-")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="col-lg-6">
+                    <h6 class="text-muted">By Asset</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>Asset</th>
+                                    <th class="text-end">N</th>
+                                    <th class="text-end" title="Average long-leg entry slippage">L Entry</th>
+                                    <th class="text-end" title="Average short-leg entry slippage">S Entry</th>
+                                    <th class="text-end" title="Average long-leg exit slippage">L Exit</th>
+                                    <th class="text-end" title="Average short-leg exit slippage">S Exit</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var asset in Model.SlippageAttribution.ByAsset)
+                                {
+                                    <tr>
+                                        <td>@asset.AssetSymbol</td>
+                                        <td class="text-end">@asset.PositionCount</td>
+                                        <td class="text-end">@(asset.AvgLongEntrySlippagePct.HasValue ? asset.AvgLongEntrySlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(asset.AvgShortEntrySlippagePct.HasValue ? asset.AvgShortEntrySlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(asset.AvgLongExitSlippagePct.HasValue ? asset.AvgLongExitSlippagePct.Value.ToString("P4") : "-")</td>
+                                        <td class="text-end">@(asset.AvgShortExitSlippagePct.HasValue ? asset.AvgShortExitSlippagePct.Value.ToString("P4") : "-")</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
