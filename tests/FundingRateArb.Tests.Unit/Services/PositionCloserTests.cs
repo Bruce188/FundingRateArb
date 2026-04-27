@@ -489,4 +489,84 @@ public class PositionCloserTests
         position.Status.Should().Be(PositionStatus.Closed);
         position.RealizedPnl.Should().NotBeNull();
     }
+
+    // ── Slippage attribution (Phase 5.2) ──────────────────────────────────────
+
+    [Fact]
+    public async Task ClosePositionAsync_BothLegsClose_ComputesBothExitSlippagePcts()
+    {
+        // Arrange: both legs need closing; capture intended mid 3000m / 3000m,
+        // close fills 3001.5m / 2998.5m → +0.0005 / -0.0005.
+        var position = CreateTestPosition();
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(3001.5m, 0.1m));
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(2998.5m, 0.1m));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert
+        position.LongExitSlippagePct.Should().Be(0.0005m);
+        position.ShortExitSlippagePct.Should().Be(-0.0005m);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_LongLegStub_LeavesLongExitSlippageNull()
+    {
+        // Arrange: long leg already closed in a prior round (longLegClosed=true → needLongClose=false).
+        // Only short leg should have slippage computed; long leg remains null.
+        var position = CreateTestPosition(longLegClosed: true);
+        position.LongExitPrice = 3005m;
+        position.LongExitQty = 0.1m;
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(2998.5m, 0.1m));
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert
+        position.LongExitSlippagePct.Should().BeNull(
+            "stub leg (no close fired this round) must not have slippage computed");
+        position.ShortExitSlippagePct.Should().Be(-0.0005m);
+    }
+
+    [Fact]
+    public async Task ClosePositionAsync_ExitSlippage_DoesNotFireHighSlippageAlert()
+    {
+        // Arrange: both legs close with large exit slippage (~0.005 = 0.5%).
+        var position = CreateTestPosition();
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockLongConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(3015m, 0.1m));  // +0.005 long exit slippage
+        _mockShortConnector
+            .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessCloseOrder(2985m, 0.1m));  // -0.005 short exit slippage
+
+        // Act
+        await _sut.ClosePositionAsync("user1", position, CloseReason.Manual);
+
+        // Assert — exit slippage is informational only, no HighSlippageWarning alert (AC3).
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.HighSlippageWarning)),
+            Times.Never);
+    }
 }

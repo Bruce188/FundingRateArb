@@ -4950,4 +4950,97 @@ public class ExecutionEngineTests
             Times.Never,
             "HasOpenPositionAsync must not be called for dry-run positions");
     }
+
+    // ── Slippage attribution (Phase 5.2) ──────────────────────────────────────
+
+    [Fact]
+    public async Task OpenPositionAsync_PersistsIntendedMidOnSentinel_BeforeOrderSubmission()
+    {
+        // Use distinct mark prices so we can verify each leg captured its own.
+        _mockLongConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3000m);
+        _mockShortConnector
+            .Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(3001m);
+
+        ArbitragePosition? sentinelAtAdd = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => sentinelAtAdd = new ArbitragePosition
+            {
+                LongIntendedMidAtSubmit = p.LongIntendedMidAtSubmit,
+                ShortIntendedMidAtSubmit = p.ShortIntendedMidAtSubmit,
+                Status = p.Status,
+            });
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        sentinelAtAdd.Should().NotBeNull();
+        sentinelAtAdd!.LongIntendedMidAtSubmit.Should().Be(3000m,
+            "intended-mid for long leg must be captured on the sentinel BEFORE order submission");
+        sentinelAtAdd.ShortIntendedMidAtSubmit.Should().Be(3001m,
+            "intended-mid for short leg must be captured on the sentinel BEFORE order submission");
+    }
+
+    [Fact]
+    public async Task OpenPositionAsync_OnSuccessfulFill_ComputesSlippagePcts()
+    {
+        // Intended mid 3000m on both legs (DefaultConfig), fill 3001.5 long → +0.0005,
+        // fill 2998.5 short → -0.0005.
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3001.5m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 2998.5m));
+
+        ArbitragePosition? savedPos = null;
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => savedPos = p);
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        savedPos.Should().NotBeNull();
+        savedPos!.LongEntrySlippagePct.Should().Be(0.0005m);
+        savedPos.ShortEntrySlippagePct.Should().Be(-0.0005m);
+    }
+
+    [Fact]
+    public async Task OpenPositionAsync_EntrySlippageAboveThreshold_FiresHighSlippageWarning()
+    {
+        // Threshold default 0.001m; fill 3010 (long) → 0.00333... slippage above threshold.
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3010m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3000m));
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.HighSlippageWarning
+            && al.Severity == AlertSeverity.Warning
+            && al.Message != null
+            && al.Message.Contains("Entry slippage exceeds threshold"))),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task OpenPositionAsync_EntrySlippageBelowThreshold_NoHighSlippageAlert()
+    {
+        // Both fills exactly at intended mid → slippage 0 → below threshold.
+        _mockLongConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("long-1", 3000m));
+        _mockShortConnector
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(SuccessOrder("short-1", 3000m));
+
+        await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
+
+        _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
+            al.Type == AlertType.HighSlippageWarning)),
+            Times.Never);
+    }
 }
