@@ -752,5 +752,49 @@ public class PositionRepositoryTests : IDisposable
         sum.Should().Be(100m, "the sum must be scoped to the given userId");
     }
 
+    [Fact]
+    public async Task Insert_WithSlippageFields_PersistsCorrectPrecision()
+    {
+        // Arrange — build a closed position with all six new slippage / intended-mid fields populated.
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 1,
+            LongEntryPrice = 100m,
+            ShortEntryPrice = 100m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            Status = PositionStatus.Closed,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            ClosedAt = DateTime.UtcNow,
+            LongIntendedMidAtSubmit = 100.0001m,
+            ShortIntendedMidAtSubmit = 100.0001m,
+            LongEntrySlippagePct = 0.00012345m,
+            ShortEntrySlippagePct = -0.00012345m,
+            LongExitSlippagePct = 0.00067890m,
+            ShortExitSlippagePct = 0.00000001m,  // sub-bps
+        };
+
+        // Act
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        var loaded = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+
+        // Assert
+        loaded.Should().NotBeNull();
+        loaded!.LongIntendedMidAtSubmit.Should().Be(100.0001m);
+        loaded.ShortIntendedMidAtSubmit.Should().Be(100.0001m);
+        loaded.LongEntrySlippagePct.Should().Be(0.00012345m);
+        loaded.ShortEntrySlippagePct.Should().Be(-0.00012345m);
+        loaded.LongExitSlippagePct.Should().Be(0.00067890m);
+        loaded.ShortExitSlippagePct.Should().Be(0.00000001m);
+    }
+
     public void Dispose() => _fixture.Dispose();
 }
