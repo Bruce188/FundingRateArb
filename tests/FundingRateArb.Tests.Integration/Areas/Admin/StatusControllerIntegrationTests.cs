@@ -32,7 +32,7 @@ namespace FundingRateArb.Tests.Integration.Areas.Admin;
 public class StatusControllerIntegrationTests
 {
     [Fact]
-    public async Task Get_AsAnonymous_Returns302Redirect()
+    public async Task Get_AsAnonymous_RejectsUnauthenticated()
     {
         await using var factory = new StatusPageFactory();
         SeedMinimal(factory);
