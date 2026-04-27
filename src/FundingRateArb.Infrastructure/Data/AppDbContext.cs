@@ -50,6 +50,15 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(p => p.ShortEntrySlippagePct).HasPrecision(18, 8);
             entity.Property(p => p.LongExitSlippagePct).HasPrecision(18, 8);
             entity.Property(p => p.ShortExitSlippagePct).HasPrecision(18, 8);
+            var rv = entity.Property(p => p.RowVersion).IsRowVersion();
+            // SQLite does not implement rowversion stamping; supply a server-side default so
+            // EnsureCreated-based integration tests can insert without violating NOT NULL.
+            // SQL Server ignores HasDefaultValueSql when IsRowVersion() is set.
+            if (Database.ProviderName == "Microsoft.EntityFrameworkCore.Sqlite")
+            {
+                rv.HasDefaultValueSql("randomblob(8)");
+            }
+            entity.Property(p => p.OpenAttemptN).HasDefaultValue(0);
         });
 
         builder.Entity<BotConfiguration>(entity =>

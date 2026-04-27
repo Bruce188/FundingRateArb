@@ -21,13 +21,21 @@ public class ExecutionEngine : IExecutionEngine
     /// Guards against concurrent callers issuing duplicate ClosePositionAsync calls for the same
     /// position. Duplicate callers await the winner's Task rather than returning immediately.
     /// Keys are removed in the winner's finally block after the rollback completes (success or fault).
-    /// In-process dedup only — does not survive process restarts. Unbounded growth is capped by
-    /// a size-warning log; normal TTL is the rollback duration (seconds).
+    ///
+    /// <para>
+    /// SCOPE: per-process only — does not survive process restarts. The cross-process
+    /// idempotency anchor is <see cref="ArbitragePosition.OpenAttemptN"/>, persisted on the
+    /// row by <see cref="ConfirmOrRollbackAsync"/> in the rollback finally block. A fresh
+    /// process reads <c>OpenAttemptN</c> from the DB and generates the same idempotency key
+    /// the crashed process used (so retries land on the same key, and fresh rollback cycles
+    /// produce a new key with the incremented N).
+    /// </para>
+    ///
+    /// <para>
+    /// Unbounded growth is capped by a size-warning log; normal TTL is the rollback duration (seconds).
+    /// </para>
     /// </summary>
     private readonly ConcurrentDictionary<string, Task<bool>> _rollbackInFlight = new();
-
-    /// <summary>Tracks per-position attempt count to construct scoped idempotency keys.</summary>
-    private readonly ConcurrentDictionary<int, int> _positionAttemptCount = new();
 
     private readonly IUnitOfWork _uow;
     private readonly IConnectorLifecycleManager _connectorLifecycle;
@@ -1148,7 +1156,10 @@ public class ExecutionEngine : IExecutionEngine
         // attemptN tracks how many rollback CYCLES have been issued for this position.
         // Concurrent callers in the SAME cycle share the same in-flight Task via the key.
         // The counter is incremented only when a new rollback winner is registered (not per-caller).
-        var attemptN = _positionAttemptCount.GetOrAdd(position.Id, 1);
+        // Read the persisted per-cycle counter. OpenAttemptN > 0 means a prior rollback already
+        // fired (typical after restart-then-recover); 0 means this is the first cycle, so map to 1
+        // to keep the existing 1-based key format stable.
+        var attemptN = position.OpenAttemptN > 0 ? position.OpenAttemptN : 1;
         var idempotencyKey = $"{userId}-{position.Id}-{attemptN}";
 
         // Size-safety warning (N4): alert ops if the in-flight dict is growing unexpectedly.
@@ -1221,8 +1232,24 @@ public class ExecutionEngine : IExecutionEngine
         finally
         {
             _rollbackInFlight.TryRemove(idempotencyKey, out _);
-            // Increment attempt counter for the next rollback cycle on this position.
-            _positionAttemptCount.AddOrUpdate(position.Id, 2, (_, v) => v + 1);
+            // Persist the incremented per-cycle counter so a subsequent rollback (this process or
+            // a fresh one after restart) reads the next attemptN. The increment fires whether the
+            // rollback succeeded or threw — the cycle counter tracks attempts, not successes.
+            position.OpenAttemptN = attemptN + 1;
+            try
+            {
+                _uow.Positions.Update(position);
+                await _uow.SaveAsync(CancellationToken.None);
+            }
+            catch (Exception persistEx)
+            {
+                // Persist failure is non-fatal for the rollback's own outcome; log and continue.
+                // UnitOfWork's 3-attempt concurrency retry already covers the optimistic-locking
+                // case, so this catch primarily handles transient DB outages.
+                _logger.LogWarning(persistEx,
+                    "Failed to persist OpenAttemptN={N} for position #{Id} after rollback",
+                    attemptN + 1, position.Id);
+            }
         }
 
         rollbackTcs.TrySetResult(rollbackResult);

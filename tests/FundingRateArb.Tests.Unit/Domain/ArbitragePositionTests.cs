@@ -34,4 +34,16 @@ public class ArbitragePositionTests
         p.LongOrderAttemptN.Should().Be(0);
         p.ShortOrderAttemptN.Should().Be(0);
     }
+
+    [Fact]
+    public void DefaultConstructor_RowVersion_IsEmptyArray()
+    {
+        new ArbitragePosition().RowVersion.Should().BeEquivalentTo(Array.Empty<byte>());
+    }
+
+    [Fact]
+    public void DefaultConstructor_OpenAttemptN_IsZero()
+    {
+        new ArbitragePosition().OpenAttemptN.Should().Be(0);
+    }
 }

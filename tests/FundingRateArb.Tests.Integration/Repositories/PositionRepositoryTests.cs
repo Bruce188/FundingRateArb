@@ -961,5 +961,88 @@ public class PositionRepositoryTests : IDisposable
         loaded.ShortOrderAttemptN.Should().Be(0);
     }
 
+    // ── Concurrency retry and round-trip tests (Task 5.3) ─────────────────────
+
+    [Fact]
+    public async Task Update_AfterChangeTrackerReload_PersistsBothWriters()
+    {
+        // Arrange: seed a position with both filled-quantity fields null.
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            Status = PositionStatus.Opening,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            EntrySpreadPerHour = 0.001m,
+            CurrentSpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow,
+            RowVersion = Array.Empty<byte>(),
+        };
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Writer A: update LongFilledQuantity = 1.5m and save.
+        position.LongFilledQuantity = 1.5m;
+        _fixture.UnitOfWork.Positions.Update(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Writer B: clear the change tracker, reload the row (picking up A's write + current
+        // RowVersion), then update ShortFilledQuantity = 2.5m and save.  Under the InMemory
+        // provider rowversion semantics are not enforced, so the reload avoids the stale-token
+        // path entirely; both writes therefore persist without a conflict exception.
+        _fixture.Context.ChangeTracker.Clear();
+        var posB = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+        posB!.ShortFilledQuantity = 2.5m;
+        _fixture.UnitOfWork.Positions.Update(posB);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Assert: both fields are present in the DB.
+        _fixture.Context.ChangeTracker.Clear();
+        var final = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+        final!.LongFilledQuantity.Should().Be(1.5m, "writer A's LongFilledQuantity must survive");
+        final.ShortFilledQuantity.Should().Be(2.5m, "writer B's ShortFilledQuantity must be persisted");
+    }
+
+    [Fact]
+    public async Task Insert_WithRowVersionAndOpenAttemptN_RoundTrips()
+    {
+        // Arrange: insert a position with OpenAttemptN = 4.
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            Status = PositionStatus.Opening,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            EntrySpreadPerHour = 0.001m,
+            CurrentSpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow,
+            OpenAttemptN = 4,
+            RowVersion = Array.Empty<byte>(),
+        };
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act: reload from a fresh query (not change-tracker cache).
+        _fixture.Context.ChangeTracker.Clear();
+        var reloaded = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+
+        // Assert: OpenAttemptN round-trips; RowVersion is initialized (InMemory keeps Array.Empty).
+        reloaded.Should().NotBeNull();
+        reloaded!.OpenAttemptN.Should().Be(4);
+        reloaded.RowVersion.Should().NotBeNull("RowVersion property must persist on the entity");
+    }
+
     public void Dispose() => _fixture.Dispose();
 }
