@@ -62,6 +62,8 @@ public class OverviewController : Controller
             });
         }
 
+        var slippageRollup = await _uow.Positions.GetSlippageRollupAsync(TimeSpan.FromDays(7));
+
         var model = new AdminOverviewViewModel
         {
             TotalActiveUsers = userItems.Count(u => u.BotEnabled),
@@ -69,7 +71,8 @@ public class OverviewController : Controller
             AggregateRealizedPnl = userItems.Sum(u => u.RealizedPnl),
             AggregateUnrealizedPnl = allOpenPositions.Sum(p => p.AccumulatedFunding),
             GlobalBotEnabled = globalConfig.IsEnabled,
-            Users = userItems
+            Users = userItems,
+            SlippageAttribution = slippageRollup,
         };
 
         return View(model);

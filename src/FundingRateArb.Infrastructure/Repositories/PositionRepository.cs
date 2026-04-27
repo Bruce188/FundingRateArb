@@ -277,6 +277,50 @@ public class PositionRepository : IPositionRepository
             .ToListAsync(ct);
     }
 
+    public async Task<SlippageRollupDto> GetSlippageRollupAsync(TimeSpan window, CancellationToken ct = default)
+    {
+        var since = DateTime.UtcNow - window;
+
+        var byPair = await _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.OpenedAt >= since && p.ClosedAt != null)
+            .GroupBy(p => new
+            {
+                LongExchangeName = p.LongExchange != null ? p.LongExchange.Name : "?",
+                ShortExchangeName = p.ShortExchange != null ? p.ShortExchange.Name : "?",
+            })
+            .Select(g => new PairSlippageRollupDto
+            {
+                LongExchangeName = g.Key.LongExchangeName,
+                ShortExchangeName = g.Key.ShortExchangeName,
+                PositionCount = g.Count(),
+                AvgLongEntrySlippagePct = g.Average(p => p.LongEntrySlippagePct),
+                AvgShortEntrySlippagePct = g.Average(p => p.ShortEntrySlippagePct),
+                AvgLongExitSlippagePct = g.Average(p => p.LongExitSlippagePct),
+                AvgShortExitSlippagePct = g.Average(p => p.ShortExitSlippagePct),
+            })
+            .Take(MaxGroupResults)
+            .ToListAsync(ct);
+
+        var byAsset = await _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.OpenedAt >= since && p.ClosedAt != null)
+            .GroupBy(p => p.Asset != null ? p.Asset.Symbol : "Unknown")
+            .Select(g => new AssetSlippageRollupDto
+            {
+                AssetSymbol = g.Key,
+                PositionCount = g.Count(),
+                AvgLongEntrySlippagePct = g.Average(p => p.LongEntrySlippagePct),
+                AvgShortEntrySlippagePct = g.Average(p => p.ShortEntrySlippagePct),
+                AvgLongExitSlippagePct = g.Average(p => p.LongExitSlippagePct),
+                AvgShortExitSlippagePct = g.Average(p => p.ShortExitSlippagePct),
+            })
+            .Take(MaxGroupResults)
+            .ToListAsync(ct);
+
+        return new SlippageRollupDto { ByPair = byPair, ByAsset = byAsset };
+    }
+
     public Task<decimal> SumRealizedPnlExcludingPhantomAsync(string userId, params PositionStatus[] statuses) =>
         _context.ArbitragePositions
             .AsNoTracking()

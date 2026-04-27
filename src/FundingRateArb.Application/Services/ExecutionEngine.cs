@@ -287,6 +287,8 @@ public class ExecutionEngine : IExecutionEngine
                 Status = PositionStatus.Opening,
                 OpenedAt = DateTime.UtcNow,
                 IsDryRun = isDryRun,
+                LongIntendedMidAtSubmit = longMarkPrice,
+                ShortIntendedMidAtSubmit = shortMarkPrice,
             };
 
             _uow.Positions.Add(position);
@@ -876,6 +878,35 @@ public class ExecutionEngine : IExecutionEngine
                 _logger.LogInformation("Reconciled short entry price for {Asset}: estimated {Estimated} → actual {Actual}",
                     opp.AssetSymbol, position.ShortEntryPrice, shortActual.Value);
                 position.ShortEntryPrice = shortActual.Value;
+            }
+
+            // Compute entry slippage pct now that fill prices are reconciled.
+            position.LongEntrySlippagePct = SlippageCalculator.Compute(
+                position.LongIntendedMidAtSubmit, position.LongEntryPrice);
+            position.ShortEntrySlippagePct = SlippageCalculator.Compute(
+                position.ShortIntendedMidAtSubmit, position.ShortEntryPrice);
+
+            // Fire HighSlippageWarning alert if either leg exceeds the threshold.
+            // Dedup key: (positionId, AlertType.HighSlippageWarning) — handled by existing
+            // IAlertRepository.GetRecentByPositionIdsAsync 4h window pattern; we just write
+            // the alert row, dedup is enforced on the read side.
+            var slippageThreshold = config.MaxAcceptableSlippagePct;
+            if (SlippageCalculator.ExceedsThreshold(position.LongEntrySlippagePct, slippageThreshold) ||
+                SlippageCalculator.ExceedsThreshold(position.ShortEntrySlippagePct, slippageThreshold))
+            {
+                var longSlipMsg = position.LongEntrySlippagePct.HasValue
+                    ? $"long={position.LongEntrySlippagePct.Value:P4}" : "long=n/a";
+                var shortSlipMsg = position.ShortEntrySlippagePct.HasValue
+                    ? $"short={position.ShortEntrySlippagePct.Value:P4}" : "short=n/a";
+                _uow.Alerts.Add(new Alert
+                {
+                    UserId = userId,
+                    ArbitragePositionId = position.Id,
+                    Type = AlertType.HighSlippageWarning,
+                    Severity = AlertSeverity.Warning,
+                    Message = $"Entry slippage exceeds threshold {slippageThreshold:P4} for {opp.AssetSymbol}: " +
+                              $"{longSlipMsg}, {shortSlipMsg}.",
+                });
             }
 
             // Both-leg confirmation window: poll both connectors until confirmed or timeout.

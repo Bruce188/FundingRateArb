@@ -96,6 +96,30 @@ public class PositionCloser : IPositionCloser
                 return;
             }
 
+            // Capture intended-mid for each leg that's about to close so we can compute exit slippage
+            // after fills are reconciled. Stub legs (already closed in a prior round) are left null.
+            decimal? longCloseIntendedMid = null;
+            decimal? shortCloseIntendedMid = null;
+            try
+            {
+                if (needLongClose)
+                {
+                    longCloseIntendedMid = await longConnector.GetMarkPriceAsync(assetSymbol, ct);
+                }
+                if (needShortClose)
+                {
+                    shortCloseIntendedMid = await shortConnector.GetMarkPriceAsync(assetSymbol, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Sanitization per cross-feature blocking intel: log type name only, never ex.Message.
+                _logger.LogWarning(
+                    "Failed to capture intended close-mid for position #{PositionId}: {ExType}",
+                    position.Id, ex.GetBaseException().GetType().Name);
+                // Continue with null; SlippageCalculator.Compute returns null for null inputs.
+            }
+
             // Dispatch only the legs that need closing
             Task<OrderResultDto> longCloseTask;
             Task<OrderResultDto> shortCloseTask;
@@ -322,6 +346,20 @@ public class PositionCloser : IPositionCloser
             {
                 shortExitPrice = position.ShortExitPrice ?? 0m;
                 shortExitQty = position.ShortExitQty ?? 0m;
+            }
+
+            // Compute exit slippage pct. Stub legs (FilledPrice=0 from the Task.FromResult dispatch
+            // in single-leg-close rounds) yield null via SlippageCalculator.Compute's zero-fill-price
+            // guard. Only set if NOT stubbed in this round — preserve any value from a prior cycle.
+            if (needLongClose)
+            {
+                position.LongExitSlippagePct = SlippageCalculator.Compute(
+                    longCloseIntendedMid, position.LongExitPrice);
+            }
+            if (needShortClose)
+            {
+                position.ShortExitSlippagePct = SlippageCalculator.Compute(
+                    shortCloseIntendedMid, position.ShortExitPrice);
             }
 
             var longPnl = (longExitPrice - position.LongEntryPrice) * longExitQty;

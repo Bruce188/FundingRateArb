@@ -1,3 +1,5 @@
+using FundingRateArb.Application.DTOs;
+
 namespace FundingRateArb.Web.ViewModels;
 
 public class AdminOverviewViewModel
@@ -8,6 +10,7 @@ public class AdminOverviewViewModel
     public decimal AggregateUnrealizedPnl { get; set; }
     public bool GlobalBotEnabled { get; set; }
     public List<UserSummaryItem> Users { get; set; } = [];
+    public SlippageRollupDto SlippageAttribution { get; set; } = new();
 }
 
 public class UserSummaryItem

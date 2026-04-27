@@ -166,6 +166,15 @@ public class BotConfiguration : IValidatableObject
     [Range(0.005, 0.10)]
     public decimal LighterSlippageMaxPct { get; set; } = 0.03m;
 
+    /// <summary>
+    /// Threshold above which entry slippage triggers an AlertType.HighSlippageWarning alert.
+    /// Default 0.001 = 0.1%. First-cut: single global threshold; future work could add
+    /// per-exchange-pair overrides. AVOID list explicitly forbids using this as an entry-side
+    /// REJECTION gate without prior backtest validation — this is informational alerting only.
+    /// </summary>
+    [Range(0.0001, 0.01)]
+    public decimal MaxAcceptableSlippagePct { get; set; } = 0.001m;
+
     /// <summary>Fraction of distance-to-liquidation at which to close. 0.5 = close when 50% of the safe range remains (i.e. half consumed).</summary>
     [Range(0.1, 0.9)]
     public decimal LiquidationWarningPct { get; set; } = 0.50m;

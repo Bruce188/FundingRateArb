@@ -752,5 +752,161 @@ public class PositionRepositoryTests : IDisposable
         sum.Should().Be(100m, "the sum must be scoped to the given userId");
     }
 
+    [Fact]
+    public async Task GetSlippageRollupAsync_WithSeededPositions_ReturnsCorrectAverages()
+    {
+        // Arrange — seed three Exchange + two Asset rows; three closed positions in the 7-day window.
+        var hl = new Exchange { Name = "Hyperliquid", ApiBaseUrl = "h", WsBaseUrl = "h" };
+        var lighter = new Exchange { Name = "Lighter", ApiBaseUrl = "l", WsBaseUrl = "l" };
+        var aster = new Exchange { Name = "Aster", ApiBaseUrl = "a", WsBaseUrl = "a" };
+        var sol = new Asset { Symbol = "SOL", Name = "Solana" };
+        var eth = new Asset { Symbol = "ETH", Name = "Ethereum" };
+        _fixture.Context.Exchanges.AddRange(hl, lighter, aster);
+        _fixture.Context.Assets.AddRange(sol, eth);
+        await _fixture.Context.SaveChangesAsync();
+
+        var now = DateTime.UtcNow;
+        // Two SOL on Hyperliquid+Lighter
+        var sol1 = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = sol.Id,
+            LongExchangeId = hl.Id,
+            ShortExchangeId = lighter.Id,
+            Status = PositionStatus.Closed,
+            SizeUsdc = 100m, MarginUsdc = 100m, Leverage = 1,
+            OpenedAt = now.AddHours(-2),
+            ClosedAt = now.AddHours(-1),
+            LongEntrySlippagePct = 0.0010m,
+            ShortEntrySlippagePct = 0.0020m,
+            LongExitSlippagePct = 0.0030m,
+            ShortExitSlippagePct = 0.0040m,
+        };
+        var sol2 = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = sol.Id,
+            LongExchangeId = hl.Id,
+            ShortExchangeId = lighter.Id,
+            Status = PositionStatus.Closed,
+            SizeUsdc = 100m, MarginUsdc = 100m, Leverage = 1,
+            OpenedAt = now.AddHours(-3),
+            ClosedAt = now.AddHours(-2),
+            LongEntrySlippagePct = 0.0030m,
+            ShortEntrySlippagePct = 0.0040m,
+            LongExitSlippagePct = 0.0050m,
+            ShortExitSlippagePct = 0.0060m,
+        };
+        // One ETH on Aster+Lighter
+        var eth1 = new ArbitragePosition
+        {
+            UserId = _user2.Id,
+            AssetId = eth.Id,
+            LongExchangeId = aster.Id,
+            ShortExchangeId = lighter.Id,
+            Status = PositionStatus.Closed,
+            SizeUsdc = 100m, MarginUsdc = 100m, Leverage = 1,
+            OpenedAt = now.AddHours(-4),
+            ClosedAt = now.AddHours(-3),
+            LongEntrySlippagePct = 0.0005m,
+            ShortEntrySlippagePct = 0.0015m,
+            LongExitSlippagePct = 0.0025m,
+            ShortExitSlippagePct = 0.0035m,
+        };
+        _fixture.UnitOfWork.Positions.Add(sol1);
+        _fixture.UnitOfWork.Positions.Add(sol2);
+        _fixture.UnitOfWork.Positions.Add(eth1);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var rollup = await _fixture.UnitOfWork.Positions.GetSlippageRollupAsync(TimeSpan.FromDays(7));
+
+        // Assert — two pair groups (Hyperliquid/Lighter, Aster/Lighter), two asset groups (SOL, ETH)
+        rollup.ByPair.Should().HaveCount(2);
+        var hlLighter = rollup.ByPair.Single(p => p.LongExchangeName == "Hyperliquid" && p.ShortExchangeName == "Lighter");
+        hlLighter.PositionCount.Should().Be(2);
+        hlLighter.AvgLongEntrySlippagePct.Should().Be(0.0020m);   // (0.0010 + 0.0030) / 2
+        hlLighter.AvgShortEntrySlippagePct.Should().Be(0.0030m);  // (0.0020 + 0.0040) / 2
+        hlLighter.AvgLongExitSlippagePct.Should().Be(0.0040m);    // (0.0030 + 0.0050) / 2
+        hlLighter.AvgShortExitSlippagePct.Should().Be(0.0050m);   // (0.0040 + 0.0060) / 2
+
+        var asterLighter = rollup.ByPair.Single(p => p.LongExchangeName == "Aster" && p.ShortExchangeName == "Lighter");
+        asterLighter.PositionCount.Should().Be(1);
+        asterLighter.AvgLongEntrySlippagePct.Should().Be(0.0005m);
+
+        rollup.ByAsset.Should().HaveCount(2);
+        var solRollup = rollup.ByAsset.Single(a => a.AssetSymbol == "SOL");
+        solRollup.PositionCount.Should().Be(2);
+        solRollup.AvgLongEntrySlippagePct.Should().Be(0.0020m);
+
+        var ethRollup = rollup.ByAsset.Single(a => a.AssetSymbol == "ETH");
+        ethRollup.PositionCount.Should().Be(1);
+        ethRollup.AvgLongEntrySlippagePct.Should().Be(0.0005m);
+    }
+
+    [Fact]
+    public async Task GetSlippageRollupAsync_WhenNoClosedPositionsInWindow_ReturnsEmptyRollup()
+    {
+        // Arrange — only an open position exists, plus a closed one outside the window.
+        var oldClosed = BuildPosition(_user1.Id, PositionStatus.Closed);
+        oldClosed.OpenedAt = DateTime.UtcNow.AddDays(-30);
+        oldClosed.ClosedAt = DateTime.UtcNow.AddDays(-29);
+        oldClosed.LongEntrySlippagePct = 0.001m;
+
+        _fixture.UnitOfWork.Positions.Add(oldClosed);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        // Act
+        var rollup = await _fixture.UnitOfWork.Positions.GetSlippageRollupAsync(TimeSpan.FromDays(7));
+
+        // Assert
+        rollup.ByPair.Should().BeEmpty();
+        rollup.ByAsset.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Insert_WithSlippageFields_PersistsCorrectPrecision()
+    {
+        // Arrange — build a closed position with all six new slippage / intended-mid fields populated.
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 1,
+            LongEntryPrice = 100m,
+            ShortEntryPrice = 100m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            Status = PositionStatus.Closed,
+            OpenedAt = DateTime.UtcNow.AddHours(-1),
+            ClosedAt = DateTime.UtcNow,
+            LongIntendedMidAtSubmit = 100.0001m,
+            ShortIntendedMidAtSubmit = 100.0001m,
+            LongEntrySlippagePct = 0.00012345m,
+            ShortEntrySlippagePct = -0.00012345m,
+            LongExitSlippagePct = 0.00067890m,
+            ShortExitSlippagePct = 0.00000001m,  // sub-bps
+        };
+
+        // Act
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        var loaded = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+
+        // Assert
+        loaded.Should().NotBeNull();
+        loaded!.LongIntendedMidAtSubmit.Should().Be(100.0001m);
+        loaded.ShortIntendedMidAtSubmit.Should().Be(100.0001m);
+        loaded.LongEntrySlippagePct.Should().Be(0.00012345m);
+        loaded.ShortEntrySlippagePct.Should().Be(-0.00012345m);
+        loaded.LongExitSlippagePct.Should().Be(0.00067890m);
+        loaded.ShortExitSlippagePct.Should().Be(0.00000001m);
+    }
+
     public void Dispose() => _fixture.Dispose();
 }

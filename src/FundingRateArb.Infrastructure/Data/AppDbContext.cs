@@ -42,6 +42,21 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
         base.OnModelCreating(builder);
         builder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
 
+        builder.Entity<ArbitragePosition>(entity =>
+        {
+            entity.Property(p => p.LongIntendedMidAtSubmit).HasPrecision(18, 4);
+            entity.Property(p => p.ShortIntendedMidAtSubmit).HasPrecision(18, 4);
+            entity.Property(p => p.LongEntrySlippagePct).HasPrecision(18, 8);
+            entity.Property(p => p.ShortEntrySlippagePct).HasPrecision(18, 8);
+            entity.Property(p => p.LongExitSlippagePct).HasPrecision(18, 8);
+            entity.Property(p => p.ShortExitSlippagePct).HasPrecision(18, 8);
+        });
+
+        builder.Entity<BotConfiguration>(entity =>
+        {
+            entity.Property(p => p.MaxAcceptableSlippagePct).HasPrecision(18, 8);
+        });
+
         foreach (var entityType in builder.Model.GetEntityTypes())
         {
             foreach (var property in entityType.GetProperties())
