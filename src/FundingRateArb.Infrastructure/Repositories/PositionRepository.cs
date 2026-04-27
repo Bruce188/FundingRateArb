@@ -383,7 +383,7 @@ public class PositionRepository : IPositionRepository
                     GrossFunding = g.Sum(p => p.AccumulatedFunding),
                     EntryFees = g.Sum(p => p.EntryFeesUsdc),
                     ExitFees = g.Sum(p => p.ExitFeesUsdc),
-                    SlippageResidual = g.Sum(p => p.AccumulatedFunding - p.EntryFeesUsdc - p.ExitFeesUsdc - (decimal?)p.RealizedPnl ?? 0m),
+                    SlippageResidual = g.Sum(p => p.AccumulatedFunding - p.EntryFeesUsdc - p.ExitFeesUsdc - (p.RealizedPnl ?? 0m)),
                     NetRealized = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
                 })
                 .FirstOrDefaultAsync(ct);

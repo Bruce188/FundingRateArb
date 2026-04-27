@@ -231,25 +231,20 @@
                             <th>Asset</th>
                             <th class="text-end">Closes</th>
                             <th class="text-end">Total PnL</th>
-                            <th class="text-end">Avg Fees</th>
-                            <th class="text-end">Avg Funding</th>
-                            <th class="text-end">Fee Drag Ratio</th>
                         </tr>
                     </thead>
                     <tbody>
                         @foreach (var row in Model.PerAssetFeeDrag)
                         {
-                            <tr class="@(row.FeeDragRatio > 1.0m ? "table-warning" : "")">
+                            <tr>
                                 <td>@row.AssetSymbol</td>
                                 <td class="text-end">@row.CloseCount</td>
                                 <td class="text-end @(row.TotalPnl >= 0 ? "text-success" : "text-danger")">@row.TotalPnl.ToString("N4")</td>
-                                <td class="text-end">@row.AvgFees.ToString("N4")</td>
-                                <td class="text-end">@row.AvgFunding.ToString("N4")</td>
-                                <td class="text-end">@row.FeeDragRatio.ToString("F2")</td>
                             </tr>
                         }
                     </tbody>
                 </table>
+                <small class="text-muted">Average fees, average funding, and fee drag ratio pending repository extension.</small>
             }
         </div>
     </div>

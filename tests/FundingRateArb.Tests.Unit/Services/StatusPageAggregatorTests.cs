@@ -68,10 +68,9 @@ public class StatusPageAggregatorTests
         var scopeFactory = new Mock<IServiceScopeFactory>();
         scopeFactory.Setup(f => f.CreateScope()).Returns(scope.Object);
 
-        var signalEngine = new Mock<ISignalEngine>();
         var logger = new Mock<ILogger<StatusPageAggregator>>();
 
-        var sut = new StatusPageAggregator(cache, scopeFactory.Object, signalEngine.Object, logger.Object);
+        var sut = new StatusPageAggregator(cache, scopeFactory.Object, logger.Object);
         return (sut, mockUow, cache);
     }
 

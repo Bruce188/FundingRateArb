@@ -18,12 +18,12 @@ namespace FundingRateArb.Application.Services;
 public class StatusPageAggregator(
     IMemoryCache cache,
     IServiceScopeFactory scopeFactory,
-    ISignalEngine signalEngine,
     ILogger<StatusPageAggregator> logger
 ) : IStatusPageAggregator
 {
-    // signalEngine reserved for future skip-reason histogram wiring (ISignalEngine.GetLastDiagnostics not yet exposed).
-    private readonly ISignalEngine _signalEngine = signalEngine;
+    // Skip-reason histogram (section 8) is deferred: ISignalEngine does not yet expose a
+    // synchronous diagnostics snapshot. The section renders a placeholder until a future
+    // iteration adds ISignalEngine.GetLastDiagnostics() and wires it here.
     private const string CacheKey = "admin:status:viewmodel";
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(60);
 
@@ -176,10 +176,10 @@ public class StatusPageAggregator(
         return await uow.Positions.GetRecentFailedOpensAsync(since, ct);
     }
 
-    private SkipReasonHistogram BuildSkipReasonsFromDiagnostics()
+    private static SkipReasonHistogram BuildSkipReasonsFromDiagnostics()
     {
-        // ISignalEngine does not currently expose a synchronous diagnostics snapshot.
-        // TODO: wire skip-reason histogram once ISignalEngine exposes diagnostics.
+        // Deferred: ISignalEngine does not yet expose a synchronous diagnostics snapshot.
+        // Wire once ISignalEngine.GetLastDiagnostics() is available.
         return new SkipReasonHistogram { Available = false };
     }
 

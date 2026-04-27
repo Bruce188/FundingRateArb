@@ -37,6 +37,9 @@ public class StatusController(
         }
         catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested)
         {
+            // Note: the aggregator swaps CancellationToken.None before calling BuildAsync,
+            // so OperationCanceledException cannot bubble from the aggregator itself.
+            // This catch handles the Razor view-rendering path only.
             logger.LogDebug("Status page request cancelled by client");
             return new EmptyResult();
         }

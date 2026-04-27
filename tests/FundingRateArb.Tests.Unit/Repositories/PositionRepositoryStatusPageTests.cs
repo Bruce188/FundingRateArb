@@ -119,6 +119,48 @@ public class PositionRepositoryStatusPageTests
     }
 
     [Fact]
+    public async Task GetPnlAttributionWindowsAsync_NullRealizedPnl_StillContributesToSlippageResidual()
+    {
+        // Regression: operator-precedence bug previously zeroed the residual contribution
+        // for any row where RealizedPnl IS NULL (e.g. zero-fill emergency closes).
+        // The fix: coalesce on the leaf → (p.RealizedPnl ?? 0m), so the row's
+        // funding/fees still count toward the residual.
+        await using var ctx = BuildContext();
+        var user = SeedUser(ctx);
+        var asset = SeedAsset(ctx);
+        var (ex1, _, _) = SeedExchanges(ctx);
+        await ctx.SaveChangesAsync();
+
+        var now = DateTime.UtcNow;
+
+        // EmergencyClosed row with null RealizedPnl (zero-fill emergency close).
+        // accumFunding=50, entryFees=5, exitFees=5, realizedPnl=null
+        // Expected residual contribution = 50 - 5 - 5 - 0 = 40 (coalesces null→0).
+        ctx.ArbitragePositions.Add(BuildPosition(
+            user.Id, asset.Id, ex1.Id, ex1.Id, PositionStatus.EmergencyClosed,
+            now.AddDays(-1), now.AddHours(-23),
+            realizedPnl: null, accumFunding: 50m, entryFees: 5m, exitFees: 5m,
+            longFilled: 0m, shortFilled: 0m));
+        await ctx.SaveChangesAsync();
+
+        var repo = new PositionRepository(ctx);
+        var windows = new[] { now.AddDays(-7), now.AddDays(-30), DateTime.MinValue };
+        var result = await repo.GetPnlAttributionWindowsAsync(windows);
+
+        result.Should().HaveCount(3);
+        foreach (var row in result)
+        {
+            // The null-RealizedPnl row must contribute its funding/fees to the residual.
+            row.GrossFunding.Should().Be(50m, $"window {row.Window}");
+            row.EntryFees.Should().Be(5m, $"window {row.Window}");
+            row.ExitFees.Should().Be(5m, $"window {row.Window}");
+            row.NetRealized.Should().Be(0m, $"null RealizedPnl coalesces to 0 for window {row.Window}");
+            row.SlippageResidual.Should().Be(40m,
+                $"residual identity (50-5-5-0=40) must hold even with null RealizedPnl for window {row.Window}");
+        }
+    }
+
+    [Fact]
     public async Task GetHoldTimeBucketsAsync_BucketsCorrectlyOnExclusiveUpperBounds()
     {
         await using var ctx = BuildContext();
