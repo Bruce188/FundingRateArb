@@ -67,4 +67,11 @@ public class BotConfigurationTests
         config.PreferCloseOnDivergenceNarrowing.Should().BeTrue(
             "soft close preference should be on by default");
     }
+
+    [Fact]
+    public void DefaultConstructor_MaxAcceptableSlippagePct_Is0_001()
+    {
+        var cfg = new BotConfiguration();
+        cfg.MaxAcceptableSlippagePct.Should().Be(0.001m);
+    }
 }

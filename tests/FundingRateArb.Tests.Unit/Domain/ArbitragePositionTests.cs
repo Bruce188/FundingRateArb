@@ -13,4 +13,17 @@ public class ArbitragePositionTests
         position.IsPhantomFeeBackfill.Should().BeFalse(
             "a freshly constructed entity must default to false so existing positions are unaffected by the backfill flag");
     }
+
+    [Fact]
+    public void DefaultConstructor_NewSlippageFields_AreNull()
+    {
+        var position = new ArbitragePosition();
+
+        position.LongIntendedMidAtSubmit.Should().BeNull();
+        position.ShortIntendedMidAtSubmit.Should().BeNull();
+        position.LongEntrySlippagePct.Should().BeNull();
+        position.ShortEntrySlippagePct.Should().BeNull();
+        position.LongExitSlippagePct.Should().BeNull();
+        position.ShortExitSlippagePct.Should().BeNull();
+    }
 }

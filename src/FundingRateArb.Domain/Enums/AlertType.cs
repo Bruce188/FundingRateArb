@@ -15,5 +15,6 @@ public enum AlertType
     QuantityMismatch,
     PnlDivergence,
     ExchangeCircuitBreaker,
-    OperationalWarning
+    OperationalWarning,
+    HighSlippageWarning,
 }

@@ -87,6 +87,26 @@ public class ArbitragePosition
     /// <summary>Quantity actually filled when the short leg closed. See <see cref="ShortExitPrice"/>.</summary>
     public decimal? ShortExitQty { get; set; }
 
+    /// <summary>Long-leg intended mid price at order-submit time (from GetMarkPriceAsync pre-flight).
+    /// Null for positions opened before this field was added or when the mid was unavailable.</summary>
+    public decimal? LongIntendedMidAtSubmit { get; set; }
+
+    /// <summary>Short-leg intended mid price at order-submit time. See <see cref="LongIntendedMidAtSubmit"/>.</summary>
+    public decimal? ShortIntendedMidAtSubmit { get; set; }
+
+    /// <summary>Long-leg entry slippage as a fraction: (LongEntryPrice - LongIntendedMidAtSubmit) / LongIntendedMidAtSubmit.
+    /// Null when either the intended mid or the actual fill price was not captured.</summary>
+    public decimal? LongEntrySlippagePct { get; set; }
+
+    /// <summary>Short-leg entry slippage. See <see cref="LongEntrySlippagePct"/>.</summary>
+    public decimal? ShortEntrySlippagePct { get; set; }
+
+    /// <summary>Long-leg exit slippage. Null for the stub leg of a single-leg close round (FilledPrice = 0).</summary>
+    public decimal? LongExitSlippagePct { get; set; }
+
+    /// <summary>Short-leg exit slippage. See <see cref="LongExitSlippagePct"/>.</summary>
+    public decimal? ShortExitSlippagePct { get; set; }
+
     public DateTime OpenedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>

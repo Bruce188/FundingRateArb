@@ -348,6 +348,62 @@ public class BotConfigurationRangeAttributeTests
     }
 
     // -----------------------------------------------------------------------
+    // MaxAcceptableSlippagePct  [Range(0.0001, 0.01)]
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void MaxAcceptableSlippagePct_HasRangeAttribute()
+    {
+        var attr = GetRangeAttribute(nameof(BotConfiguration.MaxAcceptableSlippagePct));
+        attr.Should().NotBeNull("MaxAcceptableSlippagePct must carry a [Range] attribute");
+    }
+
+    [Fact]
+    public void MaxAcceptableSlippagePct_RangeAttribute_HasCorrectMinimum()
+    {
+        var attr = GetRangeAttribute(nameof(BotConfiguration.MaxAcceptableSlippagePct));
+        attr.Should().NotBeNull();
+        ToDouble(attr!.Minimum).Should().Be(0.0001,
+            "MaxAcceptableSlippagePct lower bound must be 0.0001");
+    }
+
+    [Fact]
+    public void MaxAcceptableSlippagePct_RangeAttribute_HasCorrectMaximum()
+    {
+        var attr = GetRangeAttribute(nameof(BotConfiguration.MaxAcceptableSlippagePct));
+        attr.Should().NotBeNull();
+        ToDouble(attr!.Maximum).Should().Be(0.01,
+            "MaxAcceptableSlippagePct upper bound must be 0.01");
+    }
+
+    [Theory]
+    [InlineData(0.00009)]   // below minimum
+    [InlineData(0.011)]     // above maximum
+    public void MaxAcceptableSlippagePct_OutOfRange_FailsValidation(double value)
+    {
+        var cfg = ValidBase();
+        cfg.MaxAcceptableSlippagePct = (decimal)value;
+        var results = Validate(cfg);
+        results.Should().Contain(r =>
+            r.MemberNames.Contains(nameof(BotConfiguration.MaxAcceptableSlippagePct)),
+            $"MaxAcceptableSlippagePct={value} should fail [Range(0.0001, 0.01)] validation");
+    }
+
+    [Theory]
+    [InlineData(0.0001)]
+    [InlineData(0.001)]     // default
+    [InlineData(0.01)]
+    public void MaxAcceptableSlippagePct_InRange_PassesValidation(double value)
+    {
+        var cfg = ValidBase();
+        cfg.MaxAcceptableSlippagePct = (decimal)value;
+        var results = Validate(cfg);
+        results.Should().NotContain(r =>
+            r.MemberNames.Contains(nameof(BotConfiguration.MaxAcceptableSlippagePct)),
+            $"MaxAcceptableSlippagePct={value} should pass [Range(0.0001, 0.01)] validation");
+    }
+
+    // -----------------------------------------------------------------------
     // Factory: a fully-valid BotConfiguration baseline
     // -----------------------------------------------------------------------
 
