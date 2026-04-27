@@ -345,6 +345,18 @@ public class PositionRepository : IPositionRepository
             .ToListAsync(ct);
     }
 
+    public Task<int> CountPhantomFeeRowsSinceAsync(DateTime since, CancellationToken ct = default)
+    {
+        return _context.ArbitragePositions
+            .Where(p => p.Status == PositionStatus.Failed
+                        && (p.LongOrderId == null || p.LongOrderId == "")
+                        && (p.ShortOrderId == null || p.ShortOrderId == "")
+                        && (p.EntryFeesUsdc + p.ExitFeesUsdc) > 0
+                        && p.ClosingStartedAt != null
+                        && p.ClosingStartedAt >= since)
+            .CountAsync(ct);
+    }
+
     public void Add(ArbitragePosition position) =>
         _context.ArbitragePositions.Add(position);
 

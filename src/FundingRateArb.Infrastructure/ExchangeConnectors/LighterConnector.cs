@@ -2334,6 +2334,39 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         }
     }
 
+    public async Task<IReadOnlyList<(string Asset, Side Side, decimal Size)>?> GetAllOpenPositionsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var accountIndex = GetAccountIndex();
+            var accountResponse = await GetAccountAsync(accountIndex, ct);
+            var account = accountResponse?.Accounts?.FirstOrDefault();
+            if (account?.Positions is null)
+            {
+                return null;
+            }
+
+            var positions = new List<(string Asset, Side Side, decimal Size)>();
+            foreach (var p in account.Positions)
+            {
+                if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var qty) || qty == 0m) continue;
+                var side = qty > 0 ? Side.Long : Side.Short;
+                positions.Add((p.Symbol, side, Math.Abs(qty)));
+            }
+            return positions;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetAllOpenPositionsAsync failed for Lighter");
+            return null;
+        }
+    }
+
+    // GetCommissionIncomeAsync intentionally not overridden — Lighter is an on-chain exchange
+    // and does not expose a commission-income aggregate API endpoint.
+    // The interface default (return null) causes the fee-reconciliation pass to degrade gracefully.
+
     public void Dispose()
     {
         _signer?.Dispose();

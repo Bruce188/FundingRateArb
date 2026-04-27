@@ -181,6 +181,7 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
         public IUserConfigurationRepository UserConfigurations => throw new InvalidOperationException("Not expected in this test scenario");
         public IUserPreferenceRepository UserPreferences => throw new InvalidOperationException("Not expected in this test scenario");
         public IOpportunitySnapshotRepository OpportunitySnapshots => throw new InvalidOperationException("Not expected in this test scenario");
+        public IReconciliationReportRepository ReconciliationReports => throw new InvalidOperationException("Not expected in this test scenario");
         public Task<int> SaveAsync(CancellationToken ct = default) => Task.FromResult(0);
         public void Dispose() { }
 
@@ -213,6 +214,7 @@ public class SignalEnginePollyRetryIntegrationTests : IDisposable
         public IUserConfigurationRepository UserConfigurations => new EmptyUserConfigurationRepository();
         public IUserPreferenceRepository UserPreferences => throw new InvalidOperationException("Not expected in this test scenario");
         public IOpportunitySnapshotRepository OpportunitySnapshots => throw new InvalidOperationException("Not expected in this test scenario");
+        public IReconciliationReportRepository ReconciliationReports => throw new InvalidOperationException("Not expected in this test scenario");
         public Task<int> SaveAsync(CancellationToken ct = default) => Task.FromResult(0);
         public void Dispose() { }
 

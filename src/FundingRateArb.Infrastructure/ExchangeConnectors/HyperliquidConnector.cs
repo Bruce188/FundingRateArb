@@ -661,6 +661,44 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
         }
     }
 
+    public async Task<IReadOnlyList<(string Asset, Side Side, decimal Size)>?> GetAllOpenPositionsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => await _restClient.FuturesApi.Account.GetAccountInfoAsync(_vaultAddress, null, token),
+                ct);
+
+            if (!result.Success || result.Data?.Positions is null)
+            {
+                _logger.LogWarning("Hyperliquid GetAllOpenPositionsAsync failed: {Error}", result.Error?.ToString());
+                return null;
+            }
+
+            var positions = new List<(string Asset, Side Side, decimal Size)>();
+            foreach (var wrapper in result.Data.Positions)
+            {
+                var position = wrapper.Position;
+                if (position is null) continue;
+                var qty = position.PositionQuantity ?? 0m;
+                if (qty == 0m) continue;
+                var side = qty > 0 ? Side.Long : Side.Short;
+                positions.Add((position.Symbol, side, Math.Abs(qty)));
+            }
+            return positions;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetAllOpenPositionsAsync failed for Hyperliquid");
+            return null;
+        }
+    }
+
+    // GetCommissionIncomeAsync intentionally not overridden — Hyperliquid SDK does not expose
+    // a direct commission-income aggregate via the available API surface; the interface default
+    // (return null) is the correct behavior so the fee-reconciliation pass degrades gracefully.
+
     private async Task<(decimal Quantity, bool ApiConfirmed)> GetPositionQuantityAsync(string asset, CancellationToken ct)
     {
         try

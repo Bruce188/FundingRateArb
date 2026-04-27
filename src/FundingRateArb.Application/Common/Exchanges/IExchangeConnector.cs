@@ -87,6 +87,25 @@ public interface IExchangeConnector
 
     Task<MarginStateDto?> GetPositionMarginStateAsync(string asset, CancellationToken ct = default)
         => Task.FromResult<MarginStateDto?>(null);
+
+    /// <summary>
+    /// Returns all open positions reported by the exchange for the connected account.
+    /// Tuple per position: (Asset symbol on the exchange, Side, position size in base-asset units).
+    /// Returns null when the exchange or this connector does not support the enumeration; reconciliation
+    /// degrades gracefully on null. Used by the periodic reconciliation job to detect orphan positions
+    /// — open on the exchange but not in the DB.
+    /// </summary>
+    Task<IReadOnlyList<(string Asset, Side Side, decimal Size)>?> GetAllOpenPositionsAsync(CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<(string, Side, decimal)>?>(null);
+
+    /// <summary>
+    /// Returns the exchange-reported commission income (sum of trading fees) over the time window.
+    /// Returns null when the exchange does not expose commission income or the API call fails.
+    /// Used by the periodic reconciliation job to compare DB-summed entry+exit fees vs the exchange's
+    /// reported total.
+    /// </summary>
+    Task<decimal?> GetCommissionIncomeAsync(DateTime from, DateTime to, CancellationToken ct = default)
+        => Task.FromResult<decimal?>(null);
 }
 
 /// <summary>

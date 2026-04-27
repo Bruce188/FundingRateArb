@@ -75,6 +75,14 @@ public interface IPositionRepository
     Task<IReadOnlyList<ArbitragePosition>> GetPendingConfirmAsync(
         string userId, TimeSpan olderThan, CancellationToken ct, int maxResults = 100);
 
+    /// <summary>
+    /// Counts phantom-fee rows since <paramref name="since"/>: <c>Status = Failed</c> with both
+    /// <c>LongOrderId</c> and <c>ShortOrderId</c> null/empty, AND <c>EntryFeesUsdc + ExitFeesUsdc &gt; 0</c>,
+    /// AND <c>ClosingStartedAt &gt;= since</c>. Should return zero post fix/phantom-fees-on-neither-leg-filled.
+    /// SQL <c>COUNT(*)</c> — no row materialization.
+    /// </summary>
+    Task<int> CountPhantomFeeRowsSinceAsync(DateTime since, CancellationToken ct = default);
+
     void Add(ArbitragePosition position);
     void Update(ArbitragePosition position);
 }

@@ -74,4 +74,10 @@ public class BotConfigurationTests
         var cfg = new BotConfiguration();
         cfg.MaxAcceptableSlippagePct.Should().Be(0.001m);
     }
+
+    [Fact]
+    public void DefaultConstructor_ReconciliationIntervalMinutes_IsFive()
+    {
+        new BotConfiguration().ReconciliationIntervalMinutes.Should().Be(5);
+    }
 }
