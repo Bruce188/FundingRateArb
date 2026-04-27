@@ -13,8 +13,8 @@ public class BotConfigurationDefaultsTests
         config.OpenThreshold.Should().Be(0.0005m,
             "OpenThreshold default must be updated to 0.0005m");
 
-        config.CloseThreshold.Should().Be(0.0002m,
-            "CloseThreshold default must be updated to 0.0002m");
+        config.CloseThreshold.Should().Be(-0.0002m,
+            "CloseThreshold default must be -0.0002m (stored as negative magnitude per BotConfiguration.cs:23 sign convention; AC value 0.0002m maps to -0.0002m)");
 
         config.MinHoldTimeHours.Should().Be(4,
             "MinHoldTimeHours default must be updated to 4");
