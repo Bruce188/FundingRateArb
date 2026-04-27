@@ -69,7 +69,7 @@ public class EntryPriceReconciliationTests
         mock.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mock.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mock.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mock.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mock.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mock.As<IEntryPriceReconcilable>()
             .Setup(r => r.GetActualEntryPriceAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -85,6 +85,9 @@ public class EntryPriceReconciliationTests
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => p.Id = 1);
+
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
 
@@ -104,7 +107,7 @@ public class EntryPriceReconciliationTests
         _mockLongConnector.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         _mockLongConnector.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         _mockLongConnector.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        _mockLongConnector.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        _mockLongConnector.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "long-1", FilledPrice = 3000m, FilledQuantity = 0.1m });
 
         _mockFactory
@@ -143,7 +146,7 @@ public class EntryPriceReconciliationTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var sut = CreateExecutionEngine();
         var result = await sut.OpenPositionAsync("test-user", DefaultOpp, 100m, ct: CancellationToken.None);
@@ -168,7 +171,7 @@ public class EntryPriceReconciliationTests
         mockShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
 
         _mockFactory
@@ -177,7 +180,7 @@ public class EntryPriceReconciliationTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var sut = CreateExecutionEngine();
         var result = await sut.OpenPositionAsync("test-user", DefaultOpp, 100m, ct: CancellationToken.None);
@@ -200,7 +203,7 @@ public class EntryPriceReconciliationTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var sut = CreateExecutionEngine();
         var result = await sut.OpenPositionAsync("test-user", DefaultOpp, 100m, ct: CancellationToken.None);

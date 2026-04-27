@@ -166,7 +166,7 @@ public sealed class DydxConnector : IExchangeConnector, IDisposable
 
     /// <inheritdoc />
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
         var ticker = asset + "-USD";
 

@@ -73,6 +73,9 @@ public class ExecutionEngineTests
         _mockUow.Setup(u => u.Exchanges).Returns(_mockExchanges.Object);
         _mockUow.Setup(u => u.Assets).Returns(_mockAssets.Object);
         _mockUow.Setup(u => u.SaveAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => p.Id = 1);
+
 
         _mockBotConfig.Setup(b => b.GetActiveAsync()).ReturnsAsync(DefaultConfig);
 
@@ -125,10 +128,10 @@ public class ExecutionEngineTests
 
         // Default: PlaceMarketOrderByQuantityAsync returns success
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         // Default: both connectors confirm leg open immediately so the both-leg confirmation
@@ -185,10 +188,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_BothLegsSucceed_SavesPosition()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -203,10 +206,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_BothLegsSucceed_CreatesPositionOpenedAlert()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -218,15 +221,15 @@ public class ExecutionEngineTests
     public async Task OpenPosition_BothLegsSucceed_SetsCorrectEntryPrices()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 2999m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3002m));
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -253,11 +256,11 @@ public class ExecutionEngineTests
             .ReturnsAsync(1);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("LongLeg"))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("ShortLeg"))
             .ReturnsAsync(SuccessOrder());
 
@@ -279,10 +282,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_LegFail_PositionPersistedAsEmergencyClosed()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long failed"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -290,7 +293,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -308,7 +311,7 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short failed"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -317,7 +320,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Short failed");
         // Second leg (long) should never be called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         // No emergency close needed — first leg returned failure, nothing to close
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockLongConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -327,10 +330,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_ShortLegFails_ClosesLongLeg_ReturnsError()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short failed"));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -347,10 +350,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_BothLegsFail_ReturnsError_NoEmergencyClose()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long failed"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short failed"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -369,10 +372,10 @@ public class ExecutionEngineTests
         // QuantityFilled=0. The ExecutionEngine must not mark this Open — it must
         // emergency-close the surviving short leg and transition to EmergencyClosed.
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, qty: 0m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m, qty: 0.1m));
         _mockShortConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -380,7 +383,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -420,10 +423,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_ShortLegZeroFill_EmergencyClosesLongLeg_MarksEmergencyClosed()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, qty: 0.1m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m, qty: 0m));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -431,7 +434,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -465,15 +468,15 @@ public class ExecutionEngineTests
     public async Task OpenPosition_BothLegsZeroFill_MarksFailed_NoEmergencyCloseCalled()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, qty: 0m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m, qty: 0m));
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -509,10 +512,10 @@ public class ExecutionEngineTests
     {
         // Long leg succeeds with fill (price=3000, qty=0.1), short fails → emergency close
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.1m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short failed"));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -520,7 +523,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -541,12 +544,12 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -556,7 +559,7 @@ public class ExecutionEngineTests
         addedPosition!.Status.Should().Be(PositionStatus.Failed);
         // Second leg (long) should never be called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
     }
 
@@ -569,12 +572,12 @@ public class ExecutionEngineTests
     {
         // Long leg succeeds (first with default mock config)
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
 
         // Short leg throws (second leg)
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
         // Emergency close on the long leg must be called
@@ -584,7 +587,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -607,12 +610,12 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Short connection refused"));
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -623,7 +626,7 @@ public class ExecutionEngineTests
         addedPosition.ClosedAt.Should().NotBeNull("Failed positions must have ClosedAt set");
         // No emergency close on first leg (it threw) and second leg never attempted
         _mockShortConnector.Verify(c => c.ClosePositionAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<CancellationToken>()), Times.Never);
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al => al.Type == AlertType.LegFailed)), Times.AtLeastOnce);
     }
 
@@ -636,10 +639,10 @@ public class ExecutionEngineTests
     {
         // Long leg succeeds (first leg), short leg fails → emergency close fires on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short margin insufficient"));
 
         // Emergency close returns "no open position" — position never existed
@@ -668,10 +671,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_EmergencyCloseReturnsFailure_CreatesCriticalAlert()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short margin insufficient"));
 
         // Emergency close returns non-position error
@@ -708,9 +711,9 @@ public class ExecutionEngineTests
 
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
 
         // No sentinel record should have been created
         _mockPositions.Verify(p => p.Add(It.IsAny<ArbitragePosition>()), Times.Never);
@@ -732,7 +735,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Insufficient margin on Hyperliquid");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -752,7 +755,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Insufficient margin on Hyperliquid");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -767,7 +770,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Exchange connectivity error");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── User leverage ──────────────────────────────────────────────────────────
@@ -782,18 +785,18 @@ public class ExecutionEngineTests
 
         // With leverage=1, PlaceMarketOrderByQuantityAsync should receive leverage=1
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
         // Verify the orders were placed with leverage=1, not leverage=5
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()), Times.Once);
-        _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -805,16 +808,16 @@ public class ExecutionEngineTests
             .ReturnsAsync(new UserConfiguration { DefaultLeverage = 0 });
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -840,16 +843,16 @@ public class ExecutionEngineTests
 
         // Leverage floor should clamp to 1 — PlaceMarketOrderByQuantityAsync receives leverage=1
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 1, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── ClosePositionAsync ─────────────────────────────────────────────────────
@@ -933,10 +936,10 @@ public class ExecutionEngineTests
     public async Task OpenPosition_LegFail_CreatesLegFailedAlert()
     {
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("API error"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("API error"));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -1161,10 +1164,10 @@ public class ExecutionEngineTests
         // Long leg succeeds (first leg), short leg fails (second leg)
         // Verify: long emergency close completes before final SaveAsync
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short margin insufficient"));
 
         var callOrder = new List<string>();
@@ -1200,15 +1203,15 @@ public class ExecutionEngineTests
         // FilledPrice=50000, FilledQuantity=0.1 → notional=5000 each
         // EntryFees = 5000*0.00045 + 5000*0 = 2.25
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 50000m, FilledQuantity = 0.1m });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 50000m, FilledQuantity = 0.1m });
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -1269,7 +1272,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("safety cap");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1278,15 +1281,15 @@ public class ExecutionEngineTests
         // NB4: Use 1-3% mismatch (not 20%) to test warning path, not critical path
         // 0.100 vs 0.098 → mismatch = 0.002/0.100 = 2% → warning, not critical
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.100m });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.098m });
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -1320,10 +1323,10 @@ public class ExecutionEngineTests
     {
         // Long succeeds, short fails → triggers emergency close on long leg
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("l1"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("API error"));
 
         // Emergency close returns "No open position found" — position never existed
@@ -1352,10 +1355,10 @@ public class ExecutionEngineTests
     {
         // Long succeeds, short fails → triggers emergency close on long leg
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("l1"));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("API error"));
 
         // Emergency close throws exception
@@ -1388,18 +1391,18 @@ public class ExecutionEngineTests
             .ReturnsAsync((int?)null);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
         // Verify orders were placed with clamped leverage (3x, not 5x)
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()), Times.Once);
-        _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
+        _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -1413,10 +1416,10 @@ public class ExecutionEngineTests
             .ReturnsAsync((int?)null);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -1441,17 +1444,17 @@ public class ExecutionEngineTests
             .ReturnsAsync((int?)null);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
         // Configured leverage (5x) should be used since max is unknown
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
 
         // No LeverageReduced alert should have been created
         _mockAlerts.Verify(
@@ -1470,17 +1473,17 @@ public class ExecutionEngineTests
             .ThrowsAsync(new HttpRequestException("Exchange unreachable"));
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
         // Falls back to configured leverage (5x) when check fails
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── NB4: Legacy fallback when tier cache is empty ─────────────────────
@@ -1498,17 +1501,17 @@ public class ExecutionEngineTests
             .ReturnsAsync(3);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue();
         _mockLongConnector.Verify(
-            c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<CancellationToken>()),
+            c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 3, It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Once);
     }
 
@@ -1525,10 +1528,10 @@ public class ExecutionEngineTests
             .ReturnsAsync(2);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 2, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 2, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 2, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 2, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -1664,7 +1667,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Hyperliquid");
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         // N6: SaveAsync must NOT be called on credential failure
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -1684,7 +1687,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Lighter");
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         // N6: SaveAsync must NOT be called on credential failure
         _mockUow.Verify(u => u.SaveAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
@@ -1710,7 +1713,7 @@ public class ExecutionEngineTests
             It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Once);
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1785,7 +1788,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("Credential validation failed");
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -1855,7 +1858,7 @@ public class ExecutionEngineTests
         result.Error.Should().Contain("User ID is required");
         // No exchange calls should have been made
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
         _mockFactory.Verify(f => f.CreateForUserAsync(
             It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>()), Times.Never);
     }
@@ -1922,10 +1925,10 @@ public class ExecutionEngineTests
             .Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(6);
         mockDisposableLong
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         mockDisposableShort
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -1971,10 +1974,10 @@ public class ExecutionEngineTests
             .Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(6);
         mockDisposableLong
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long failed"));
         mockDisposableShort
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short failed"));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -2000,7 +2003,7 @@ public class ExecutionEngineTests
         result.Error.Should().Be("Exchange connection failed");
         // No orders should have been placed
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── Sequential leg ordering: estimated fill leg opens first ──────────────────
@@ -2015,11 +2018,11 @@ public class ExecutionEngineTests
         var callOrder = new List<string>();
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Long"))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Short"))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
@@ -2040,7 +2043,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2052,7 +2055,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2062,7 +2065,7 @@ public class ExecutionEngineTests
         addedPosition!.Status.Should().Be(PositionStatus.EmergencyClosed);
         // Long leg (second leg) should never be called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -2070,10 +2073,10 @@ public class ExecutionEngineTests
     {
         // Long opens first (default: both IsEstimatedFillExchange=false, so firstIsLong=true)
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short exchange error"));
         _mockLongConnector
             .Setup(c => c.ClosePositionAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -2081,7 +2084,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2100,10 +2103,10 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, 0.1m));
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new HttpRequestException("Connection refused"));
 
         // Emergency close on first leg (short) returns "no open position" — auto-liquidation
@@ -2113,7 +2116,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2132,10 +2135,10 @@ public class ExecutionEngineTests
         _mockShortConnector
             .Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m, 0.1m));
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Long exchange error"));
 
         // Emergency close on first leg (short) returns "no open position" — auto-liquidation
@@ -2145,7 +2148,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2171,7 +2174,7 @@ public class ExecutionEngineTests
         var tcs = new TaskCompletionSource();
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns<string, Side, decimal, int, CancellationToken>(async (_, _, _, _, _) =>
             {
                 callTimestamps["Long"] = DateTime.UtcNow;
@@ -2179,7 +2182,7 @@ public class ExecutionEngineTests
                 return SuccessOrder("long-1", 3000m);
             });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns<string, Side, decimal, int, CancellationToken>(async (_, _, _, _, _) =>
             {
                 callTimestamps["Short"] = DateTime.UtcNow;
@@ -2193,9 +2196,9 @@ public class ExecutionEngineTests
         result.Success.Should().BeTrue();
         // Both legs must have been called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            "ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+            "ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockShortConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            "ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+            "ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── B2: Test verification success path ────────────────────────────────────────
@@ -2210,7 +2213,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2221,12 +2224,12 @@ public class ExecutionEngineTests
             .ReturnsAsync(mockVerifiableShort.Object);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2235,7 +2238,7 @@ public class ExecutionEngineTests
         addedPosition!.Status.Should().Be(PositionStatus.Open);
         // Second leg (long) must have been called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            "ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+            "ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     // ── B3: Emergency close on verification failure ───────────────────────────────
@@ -2250,7 +2253,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2265,7 +2268,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2277,7 +2280,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Verify(c => c.ClosePositionAsync("ETH", Side.Short, It.IsAny<CancellationToken>()), Times.AtLeastOnce);
         // Second leg (long) should never be called
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -2305,7 +2308,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2338,7 +2341,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, opp, 100m, ct: CancellationToken.None);
 
@@ -2363,7 +2366,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2378,7 +2381,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -2401,10 +2404,10 @@ public class ExecutionEngineTests
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -2426,10 +2429,10 @@ public class ExecutionEngineTests
 
         // Factory should still be called with the opportunity's casing
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -2495,7 +2498,7 @@ public class ExecutionEngineTests
         result.Success.Should().BeFalse();
         result.Error.Should().Contain("Hyperliquid");
         _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync(
-            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     // ── N7: ClosePositionAsync disposal tests ────────────────────────────────
@@ -2611,10 +2614,10 @@ public class ExecutionEngineTests
 
         // Set up PlaceMarketOrderByQuantityAsync so test doesn't NullRef after connector creation
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         // Act
@@ -2642,10 +2645,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close: first attempt returns retryable error, second attempt succeeds
@@ -2676,10 +2679,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close returns non-retryable error
@@ -2703,10 +2706,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close returns failure with null error
@@ -2734,10 +2737,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close returns "no position" error
@@ -2761,10 +2764,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close throws network exception every time
@@ -2851,10 +2854,10 @@ public class ExecutionEngineTests
         var shortError = new string('B', 2500);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         // Open position first
@@ -2901,10 +2904,10 @@ public class ExecutionEngineTests
     {
         // Arrange: long succeeds, short fails → triggers emergency close on long
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Short leg failed"));
 
         // Emergency close: first attempt throws exception, second attempt succeeds
@@ -2951,7 +2954,7 @@ public class ExecutionEngineTests
         // So short goes first. Make it never complete — cancelled by the 45s linked CTS.
         var tcs = new TaskCompletionSource<OrderResultDto>();
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns((string _, Side _, decimal _, int _, CancellationToken ct) =>
             {
                 ct.Register(() => tcs.TrySetCanceled(ct));
@@ -2984,7 +2987,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -2999,7 +3002,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3022,7 +3025,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3037,19 +3040,19 @@ public class ExecutionEngineTests
 
         // Second leg (long) succeeds
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.1m));
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
         result.Success.Should().BeTrue("should proceed to second leg when final check confirms position exists");
         addedPosition!.Status.Should().Be(PositionStatus.Open);
         // Second leg was opened
-        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()), Times.Once);
+        _mockLongConnector.Verify(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -3063,7 +3066,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3081,7 +3084,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3103,7 +3106,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3121,7 +3124,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3284,11 +3287,11 @@ public class ExecutionEngineTests
         decimal? shortQuantity = null;
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => longQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.166m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => shortQuantity = qty)
             .ReturnsAsync(SuccessOrder("short-1", 3050m, 0.166m));
 
@@ -3320,7 +3323,7 @@ public class ExecutionEngineTests
         // targetQuantity = 100 * 5 / 3000 = 0.166666
         // First leg (short, estimated) fills only 0.15 (less than target)
         mockVerifiableShort
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3000m, FilledQuantity = 0.15m, IsEstimatedFill = true });
 
         _mockFactory
@@ -3329,7 +3332,7 @@ public class ExecutionEngineTests
 
         decimal? secondLegQuantity = null;
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => secondLegQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.15m));
 
@@ -3354,11 +3357,11 @@ public class ExecutionEngineTests
 
         decimal? capturedQuantity = null;
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => capturedQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.16m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m, 0.16m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -3388,11 +3391,11 @@ public class ExecutionEngineTests
         var shortCalled = false;
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => longCalled = true)
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => shortCalled = true)
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
@@ -3413,15 +3416,15 @@ public class ExecutionEngineTests
 
         // 1.5% mismatch: long=0.1, short=0.1015 → mismatch = 0.015/0.1015 ≈ 1.48%
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.1m });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1015m });
 
         ArbitragePosition? savedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPosition = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3438,15 +3441,15 @@ public class ExecutionEngineTests
 
         // 4% mismatch: long=0.1, short=0.104 → mismatch = 0.004/0.104 ≈ 3.85%
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.1m });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.104m });
 
         ArbitragePosition? savedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPosition = p; });
 
         // Capture alerts
         var alerts = new List<Alert>();
@@ -3466,15 +3469,15 @@ public class ExecutionEngineTests
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(false);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = 0.166666m });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.166666m });
 
         ArbitragePosition? savedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPosition = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3504,10 +3507,10 @@ public class ExecutionEngineTests
 
         // Verify no orders were placed
         _mockLongConnector.Verify(
-            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Never);
         _mockShortConnector.Verify(
-            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -3525,7 +3528,7 @@ public class ExecutionEngineTests
 
         // First leg returns FilledQuantity = 0 with Success = true
         mockVerifiableShort
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0m, IsEstimatedFill = true });
 
         // Verification returns false (no position found)
@@ -3542,7 +3545,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3565,7 +3568,7 @@ public class ExecutionEngineTests
 
         // No orders should be placed
         _mockLongConnector.Verify(
-            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()),
+            c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
 
@@ -3594,7 +3597,7 @@ public class ExecutionEngineTests
             .ReturnsAsync(true);
 
         mockVerifiableShort
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.20m, IsEstimatedFill = true });
 
         _mockFactory
@@ -3604,7 +3607,7 @@ public class ExecutionEngineTests
         // Capture the quantity passed to the second leg (long)
         decimal? secondLegQuantity = null;
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => secondLegQuantity = qty)
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = expectedTarget });
 
@@ -3637,11 +3640,11 @@ public class ExecutionEngineTests
 
         // Long succeeds
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         // Short fails
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(FailOrder("Exchange unavailable"));
 
         // Emergency close for the long leg
@@ -3651,7 +3654,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3767,7 +3770,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3801,7 +3804,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3837,7 +3840,7 @@ public class ExecutionEngineTests
         mockReconcilableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockReconcilableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockReconcilableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockReconcilableShort.As<IEntryPriceReconcilable>()
             .Setup(r => r.GetActualEntryPriceAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -3849,7 +3852,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3863,12 +3866,12 @@ public class ExecutionEngineTests
     {
         // Default mock connectors don't implement IEntryPriceReconcilable
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3887,7 +3890,7 @@ public class ExecutionEngineTests
         mockReconcilableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockReconcilableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockReconcilableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         // Reconciliation returns null (API failure)
         mockReconcilableShort.As<IEntryPriceReconcilable>()
@@ -3900,7 +3903,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3919,7 +3922,7 @@ public class ExecutionEngineTests
         mockReconcilableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockReconcilableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockReconcilableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockReconcilableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         // Reconciliation throws HttpRequestException
         mockReconcilableShort.As<IEntryPriceReconcilable>()
@@ -3932,7 +3935,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3952,7 +3955,7 @@ public class ExecutionEngineTests
         mockReconcilableLong.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockReconcilableLong.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockReconcilableLong.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockReconcilableLong.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockReconcilableLong.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "long-1", FilledPrice = 3000m, FilledQuantity = 0.1m, IsEstimatedFill = true });
         mockReconcilableLong.As<IEntryPriceReconcilable>()
             .Setup(r => r.GetActualEntryPriceAsync("ETH", Side.Long, It.IsAny<CancellationToken>()))
@@ -3964,7 +3967,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -3984,7 +3987,7 @@ public class ExecutionEngineTests
         mockDydxShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockDydxShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockDydxShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockDydxShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockDydxShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true });
 
         var opp = new ArbitrageOpportunityDto
@@ -4013,7 +4016,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? addedPosition = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => addedPosition = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; addedPosition = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, opp, 100m, ct: CancellationToken.None);
 
@@ -4031,7 +4034,7 @@ public class ExecutionEngineTests
         // where revert reason surfacing occurs
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed", RevertReason = LighterOrderRevertReason.Slippage });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -4047,7 +4050,7 @@ public class ExecutionEngineTests
         var originalError = "Insufficient margin on exchange";
         _mockShortConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = originalError, RevertReason = LighterOrderRevertReason.None });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -4069,7 +4072,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "short-1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true, RevertReason = LighterOrderRevertReason.Timeout });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -4080,7 +4083,7 @@ public class ExecutionEngineTests
             .ReturnsAsync(mockVerifiableShort.Object);
 
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -4109,7 +4112,7 @@ public class ExecutionEngineTests
             .Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(6);
         mockSlippageConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         _mockFactory
@@ -4135,7 +4138,7 @@ public class ExecutionEngineTests
         mockVerifiableShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockVerifiableShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockVerifiableShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+        mockVerifiableShort.Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "s1", FilledPrice = 3001m, FilledQuantity = 0.1m, IsEstimatedFill = true, RevertReason = LighterOrderRevertReason.Slippage });
         mockVerifiableShort.As<IPositionVerifiable>()
             .Setup(v => v.VerifyPositionOpenedAsync("ETH", Side.Short, It.IsAny<CancellationToken>()))
@@ -4167,7 +4170,7 @@ public class ExecutionEngineTests
         mockLong.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockLong.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockLong.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockLong.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockLong.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         var mockShort = new Mock<IExchangeConnector>();
@@ -4177,7 +4180,7 @@ public class ExecutionEngineTests
         mockShort.Setup(c => c.GetAvailableBalanceAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1000m);
         mockShort.Setup(c => c.GetMarkPriceAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(3000m);
         mockShort.Setup(c => c.GetQuantityPrecisionAsync(It.IsAny<string>(), It.IsAny<CancellationToken>())).ReturnsAsync(6);
-        mockShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+        mockShort.Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder());
 
         _mockFactory
@@ -4206,10 +4209,10 @@ public class ExecutionEngineTests
         // Short (Lighter) is the second leg and returns RevertReason=Slippage.
         _mockLongConnector.Setup(c => c.IsEstimatedFillExchange).Returns(true);
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed on-chain", RevertReason = LighterOrderRevertReason.Slippage });
         // Emergency close of first leg (long) after second leg failure
         _mockLongConnector
@@ -4234,10 +4237,10 @@ public class ExecutionEngineTests
 
         // Both connectors default to IsEstimatedFillExchange=false → concurrent path
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "tx failed on-chain", RevertReason = LighterOrderRevertReason.Slippage });
         // Emergency close of the successful long leg after short leg failure
         _mockLongConnector
@@ -4329,10 +4332,10 @@ public class ExecutionEngineTests
         // Act — mock connector at the next layer to fail with a known distinct error,
         // so we can assert unconditionally that the failure is NOT the unavailability guard.
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "InsufficientMargin" });
 
         var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
@@ -4399,10 +4402,10 @@ public class ExecutionEngineTests
 
         // Act — connector is mocked to fail with a known error so we can distinguish the guard failure
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new OrderResultDto { Success = false, Error = "MarketNotFound" });
 
         var (_, error) = await engine.OpenPositionAsync(TestUserId, DefaultOpp, 100m);
@@ -4480,10 +4483,10 @@ public class ExecutionEngineTests
         if (!shouldReject)
         {
             _mockLongConnector
-                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(SuccessOrder());
             _mockShortConnector
-                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+                .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), It.IsAny<Side>(), It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
                 .ReturnsAsync(SuccessOrder());
         }
 
@@ -4522,7 +4525,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4556,7 +4559,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4598,7 +4601,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4645,7 +4648,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         // Two concurrent open attempts for the same opportunity — the first triggers rollback;
         // the second should hit the idempotency guard (because the engine re-uses _rollbackInFlight).
@@ -4752,7 +4755,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4789,7 +4792,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4841,7 +4844,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         // The open flow will throw OCE when the caller CT fires during poll, but we expect
         // the rollback to still complete because it uses CancellationToken.None.
@@ -4886,7 +4889,7 @@ public class ExecutionEngineTests
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -4988,15 +4991,15 @@ public class ExecutionEngineTests
         // Intended mid 3000m on both legs (DefaultConfig), fill 3001.5 long → +0.0005,
         // fill 2998.5 short → -0.0005.
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3001.5m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 2998.5m));
 
         ArbitragePosition? savedPos = null;
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
-            .Callback<ArbitragePosition>(p => savedPos = p);
+            .Callback<ArbitragePosition>(p => { p.Id = 1; savedPos = p; });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
 
@@ -5010,10 +5013,10 @@ public class ExecutionEngineTests
     {
         // Threshold default 0.001m; fill 3010 (long) → 0.00333... slippage above threshold.
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3010m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -5031,10 +5034,10 @@ public class ExecutionEngineTests
     {
         // Both fills exactly at intended mid → slippage 0 → below threshold.
         _mockLongConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
-            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(SuccessOrder("short-1", 3000m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);

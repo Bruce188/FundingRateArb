@@ -26,4 +26,12 @@ public class ArbitragePositionTests
         position.LongExitSlippagePct.Should().BeNull();
         position.ShortExitSlippagePct.Should().BeNull();
     }
+
+    [Fact]
+    public void DefaultConstructor_OrderAttemptCounters_AreZero()
+    {
+        var p = new ArbitragePosition();
+        p.LongOrderAttemptN.Should().Be(0);
+        p.ShortOrderAttemptN.Should().Be(0);
+    }
 }

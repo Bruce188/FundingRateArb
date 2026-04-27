@@ -908,5 +908,58 @@ public class PositionRepositoryTests : IDisposable
         loaded.ShortExitSlippagePct.Should().Be(0.00000001m);
     }
 
+    [Fact]
+    public async Task Insert_WithOrderAttemptCounters_RoundTrips()
+    {
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 1,
+            LongEntryPrice = 100m,
+            ShortEntryPrice = 100m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            LongOrderAttemptN = 3,
+            ShortOrderAttemptN = 2,
+        };
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        var loaded = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+        loaded!.LongOrderAttemptN.Should().Be(3);
+        loaded.ShortOrderAttemptN.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Insert_WithoutOrderAttemptCounters_DefaultsToZero()
+    {
+        var position = new ArbitragePosition
+        {
+            UserId = _user1.Id,
+            AssetId = _fixture.TestAsset.Id,
+            LongExchangeId = _fixture.TestExchange.Id,
+            ShortExchangeId = _fixture.TestExchange.Id,
+            SizeUsdc = 100m,
+            MarginUsdc = 100m,
+            Leverage = 1,
+            LongEntryPrice = 100m,
+            ShortEntryPrice = 100m,
+            EntrySpreadPerHour = 0.0005m,
+            CurrentSpreadPerHour = 0.0005m,
+            // LongOrderAttemptN / ShortOrderAttemptN intentionally not set — should default to 0.
+        };
+        _fixture.UnitOfWork.Positions.Add(position);
+        await _fixture.UnitOfWork.SaveAsync();
+
+        var loaded = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
+        loaded!.LongOrderAttemptN.Should().Be(0);
+        loaded.ShortOrderAttemptN.Should().Be(0);
+    }
+
     public void Dispose() => _fixture.Dispose();
 }

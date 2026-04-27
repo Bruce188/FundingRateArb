@@ -345,7 +345,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
     /// The quantity is rounded to the exchange's precision (may reduce, never increase).
     /// </summary>
     public async Task<OrderResultDto> PlaceMarketOrderByQuantityAsync(
-        string asset, Side side, decimal quantity, int leverage, CancellationToken ct = default)
+        string asset, Side side, decimal quantity, int leverage, string? clientOrderId = null, CancellationToken ct = default)
     {
         var symbol = asset + "USDT";
         var orderSide = side == Side.Long ? OrderSide.Buy : OrderSide.Sell;
@@ -390,6 +390,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
             };
         }
 
+        _logger.LogDebug("Aster order with clientOrderId={ClientOrderId} for {Asset}", clientOrderId ?? "(none)", asset);
         var pipeline = _pipelineProvider.GetPipeline("OrderExecution");
 
         var result = await pipeline.ExecuteAsync(
@@ -403,7 +404,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                     positionSide: null,
                     timeInForce: TimeInForce.ImmediateOrCancel,
                     reduceOnly: null,
-                    clientOrderId: null,
+                    clientOrderId: clientOrderId,
                     stopPrice: null,
                     closePosition: null,
                     activationPrice: null,
@@ -421,7 +422,7 @@ public class AsterConnector : IExchangeConnector, IDisposable
                     positionSide: null,
                     timeInForce: TimeInForce.ImmediateOrCancel,
                     reduceOnly: null,
-                    clientOrderId: null,
+                    clientOrderId: clientOrderId,
                     stopPrice: null,
                     closePosition: null,
                     activationPrice: null,
