@@ -964,7 +964,7 @@ public class PositionRepositoryTests : IDisposable
     // ── Concurrency retry and round-trip tests (Task 5.3) ─────────────────────
 
     [Fact]
-    public async Task Update_TwoConcurrentSavesOnSameRow_RetriesAndMerges()
+    public async Task Update_AfterChangeTrackerReload_PersistsBothWriters()
     {
         // Arrange: seed a position with both filled-quantity fields null.
         var position = new ArbitragePosition
@@ -992,7 +992,10 @@ public class PositionRepositoryTests : IDisposable
         _fixture.UnitOfWork.Positions.Update(position);
         await _fixture.UnitOfWork.SaveAsync();
 
-        // Writer B: load a fresh copy and update ShortFilledQuantity = 2.5m, then save.
+        // Writer B: clear the change tracker, reload the row (picking up A's write + current
+        // RowVersion), then update ShortFilledQuantity = 2.5m and save.  Under the InMemory
+        // provider rowversion semantics are not enforced, so the reload avoids the stale-token
+        // path entirely; both writes therefore persist without a conflict exception.
         _fixture.Context.ChangeTracker.Clear();
         var posB = await _fixture.UnitOfWork.Positions.GetByIdAsync(position.Id);
         posB!.ShortFilledQuantity = 2.5m;

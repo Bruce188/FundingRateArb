@@ -613,6 +613,11 @@ public class BotOrchestratorBootSweepTests
             firstWinner.Should().NotBeSameAs(sweepTask,
                 "RunBootSweepAsync must block while another holder owns _cycleLock");
 
+            // Confirm the task is genuinely blocked (WaitingForActivation or Running-but-suspended),
+            // not silently faulted before reaching WaitAsync.
+            sweepTask.IsCompleted.Should().BeFalse(
+                "sweepTask must not have completed (faulted or succeeded) while the lock is held");
+
             // Release the lock — sweep should complete within 2 s.
             cycleLock.Release();
             var secondWinner = await Task.WhenAny(sweepTask, Task.Delay(2000, cts.Token));
