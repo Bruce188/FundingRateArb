@@ -1,0 +1,62 @@
+@model FundingRateArb.Application.ViewModels.ReconciliationSnapshot
+
+@if (Model is null)
+{
+    <div class="card">
+        <div class="card-header">Most Recent Reconciliation</div>
+        <div class="card-body">
+            <em>No reconciliation report yet. The job runs every 5 minutes; data will appear after the first tick.</em>
+        </div>
+    </div>
+    return;
+}
+
+<div class="card">
+    <div class="card-header">
+        Most Recent Reconciliation
+        <small class="text-muted">@Model.Report.RunAtUtc.ToString("u")</small>
+    </div>
+    <div class="card-body">
+        <p><strong>Overall Status:</strong>
+            <span class="@(Model.Report.OverallStatus == "Healthy" ? "text-success" : "text-warning")">
+                @Model.Report.OverallStatus
+            </span>
+        </p>
+        <ul>
+            <li>Fresh-rate mismatches: @Model.Report.FreshRateMismatchCount</li>
+            <li>Orphan positions: @Model.Report.OrphanPositionCount</li>
+            <li>Phantom-fee rows (24h): @Model.Report.PhantomFeeRowCount24h</li>
+            <li>Fee delta outside tolerance: @Model.Report.FeeDeltaOutsideToleranceCount</li>
+        </ul>
+        @if (!string.IsNullOrWhiteSpace(Model.Report.AnomalySummary))
+        {
+            <pre class="bg-light p-2 small">@Model.Report.AnomalySummary</pre>
+        }
+        @if (Model.PerExchangeEquity is not null && Model.PerExchangeEquity.Any())
+        {
+            <h6 class="mt-3">Per-Exchange Equity (USDC)</h6>
+            <table class="table table-sm">
+                <thead><tr><th>Exchange</th><th class="text-end">Equity</th></tr></thead>
+                <tbody>
+                    @foreach (var kv in Model.PerExchangeEquity)
+                    {
+                        <tr><td>@kv.Key</td><td class="text-end">@kv.Value.ToString("N2")</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+        else if (Model.PerExchangeEquityMalformed)
+        {
+            <em class="text-warning">Per-exchange equity unavailable (malformed JSON in report).</em>
+        }
+        @if (Model.DegradedExchanges is { Count: > 0 } degraded)
+        {
+            <h6 class="mt-3">Degraded Exchanges</h6>
+            <ul>@foreach (var name in degraded) { <li>@name</li> }</ul>
+        }
+        else if (Model.DegradedExchangesMalformed)
+        {
+            <em class="text-warning">Degraded-exchanges list unavailable (malformed JSON in report).</em>
+        }
+    </div>
+</div>

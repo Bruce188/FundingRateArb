@@ -357,6 +357,145 @@ public class PositionRepository : IPositionRepository
             .CountAsync(ct);
     }
 
+    public async Task<List<PnlAttributionWindowDto>> GetPnlAttributionWindowsAsync(
+        IReadOnlyList<DateTime> sinceUtc, CancellationToken ct = default)
+    {
+        var result = new List<PnlAttributionWindowDto>();
+        var now = DateTime.UtcNow;
+
+        foreach (var since in sinceUtc)
+        {
+            var isLifetime = since == DateTime.MinValue;
+
+            var query = _context.ArbitragePositions
+                .AsNoTracking()
+                .Where(p => p.Status == PositionStatus.Closed || p.Status == PositionStatus.EmergencyClosed);
+
+            if (!isLifetime)
+            {
+                query = query.Where(p => p.OpenedAt >= since);
+            }
+
+            var agg = await query
+                .GroupBy(_ => 1)
+                .Select(g => new
+                {
+                    GrossFunding = g.Sum(p => p.AccumulatedFunding),
+                    EntryFees = g.Sum(p => p.EntryFeesUsdc),
+                    ExitFees = g.Sum(p => p.ExitFeesUsdc),
+                    SlippageResidual = g.Sum(p => p.AccumulatedFunding - p.EntryFeesUsdc - p.ExitFeesUsdc - (p.RealizedPnl ?? 0m)),
+                    NetRealized = g.Sum(p => (decimal?)p.RealizedPnl) ?? 0m,
+                })
+                .FirstOrDefaultAsync(ct);
+
+            string window;
+            if (isLifetime)
+            {
+                window = "Lifetime";
+            }
+            else
+            {
+                var days = (now - since).TotalDays;
+                window = days is >= 6 and <= 8 ? "7d"
+                    : days is >= 29 and <= 31 ? "30d"
+                    : $"{(int)Math.Round(days)}d";
+            }
+
+            result.Add(new PnlAttributionWindowDto
+            {
+                Window = window,
+                GrossFunding = agg?.GrossFunding ?? 0m,
+                EntryFees = agg?.EntryFees ?? 0m,
+                ExitFees = agg?.ExitFees ?? 0m,
+                SlippageResidual = agg?.SlippageResidual ?? 0m,
+                NetRealized = agg?.NetRealized ?? 0m,
+            });
+        }
+
+        return result;
+    }
+
+    public async Task<List<HoldTimeBucketDto>> GetHoldTimeBucketsAsync(CancellationToken ct = default)
+    {
+        // EF.Functions.DateDiffSecond is SQL Server-only; use client-side bucketing
+        // (same pattern as GetKpiAsync hold-hours calculation) — safe at current scale.
+        var rows = await _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => (p.Status == PositionStatus.Closed || p.Status == PositionStatus.EmergencyClosed)
+                        && p.ClosedAt != null)
+            .Select(p => new { p.OpenedAt, ClosedAt = p.ClosedAt!.Value, p.RealizedPnl })
+            .ToListAsync(ct);
+
+        return rows
+            .Select(p =>
+            {
+                var holdSeconds = (p.ClosedAt - p.OpenedAt).TotalSeconds;
+                var bucket = holdSeconds < 60 ? "<60s"
+                    : holdSeconds < 300 ? "<5m"
+                    : holdSeconds < 3600 ? "<1h"
+                    : holdSeconds < 21600 ? "<6h"
+                    : ">=6h";
+                return new { Bucket = bucket, IsWin = p.RealizedPnl > 0, Pnl = p.RealizedPnl ?? 0m };
+            })
+            .GroupBy(x => x.Bucket)
+            .Select(g => new HoldTimeBucketDto
+            {
+                Bucket = g.Key,
+                Count = g.Count(),
+                WinCount = g.Count(x => x.IsWin),
+                TotalPnl = g.Sum(x => x.Pnl),
+            })
+            .ToList();
+    }
+
+    public Task<int> CountEmergencyClosedZeroFillSinceAsync(DateTime since, CancellationToken ct = default)
+    {
+        return _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.EmergencyClosed
+                && p.LongFilledQuantity == 0m
+                && p.ShortFilledQuantity == 0m
+                && p.OpenedAt >= since)
+            .CountAsync(ct);
+    }
+
+    public async Task<List<FailedOpenEventDto>> GetRecentFailedOpensAsync(DateTime since, CancellationToken ct = default)
+    {
+        var assets = await _context.Assets
+            .AsNoTracking()
+            .ToDictionaryAsync(a => a.Id, a => a.Symbol, ct);
+
+        var exchanges = await _context.Exchanges
+            .AsNoTracking()
+            .ToDictionaryAsync(e => e.Id, e => e.Name, ct);
+
+        var grouped = await _context.ArbitragePositions
+            .AsNoTracking()
+            .Where(p => p.Status == PositionStatus.Failed && p.OpenedAt >= since)
+            .GroupBy(p => new { p.AssetId, p.LongExchangeId, p.ShortExchangeId })
+            .Select(g => new
+            {
+                g.Key.AssetId,
+                g.Key.LongExchangeId,
+                g.Key.ShortExchangeId,
+                Count = g.Count(),
+                LatestAt = g.Max(p => p.OpenedAt),
+            })
+            .ToListAsync(ct);
+
+        return grouped
+            .Select(g => new FailedOpenEventDto
+            {
+                AssetSymbol = assets.TryGetValue(g.AssetId, out var sym) ? sym : $"#{g.AssetId}",
+                LongExchangeName = exchanges.TryGetValue(g.LongExchangeId, out var ln) ? ln : $"#{g.LongExchangeId}",
+                ShortExchangeName = exchanges.TryGetValue(g.ShortExchangeId, out var sn) ? sn : $"#{g.ShortExchangeId}",
+                Count = g.Count,
+                LatestAt = g.LatestAt,
+            })
+            .OrderByDescending(x => x.LatestAt)
+            .ToList();
+    }
+
     public void Add(ArbitragePosition position) =>
         _context.ArbitragePositions.Add(position);
 
