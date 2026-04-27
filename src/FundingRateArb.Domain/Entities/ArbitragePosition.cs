@@ -71,6 +71,29 @@ public class ArbitragePosition
     /// <summary>Number of submit attempts already issued for the short leg. See <see cref="LongOrderAttemptN"/>.</summary>
     public int ShortOrderAttemptN { get; set; }
 
+    /// <summary>
+    /// SQL Server rowversion / xmin concurrency token. Stamped by the engine on every UPDATE.
+    /// EF Core treats <see cref="System.ComponentModel.DataAnnotations.TimestampAttribute"/> as
+    /// <c>IsRowVersion()</c> + <c>IsConcurrencyToken()</c> automatically. <see cref="UnitOfWork.SaveAsync"/>
+    /// retries up to 3 times on <see cref="Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException"/>;
+    /// after exhaustion a Critical alert is raised and the exception rethrows. Default value
+    /// <c>Array.Empty&lt;byte&gt;()</c> is replaced by SQL Server on first INSERT.
+    /// </summary>
+    [Timestamp]
+    public byte[] RowVersion { get; set; } = Array.Empty<byte>();
+
+    /// <summary>
+    /// Per-cycle attempt counter — incremented after each rollback completes. Persisted on the
+    /// row so a fresh process (after restart) reads the same value the crashed process used,
+    /// keeping the rollback idempotency key (<c>{userId}-{positionId}-{OpenAttemptN}</c>) stable
+    /// across restarts. Composes with <see cref="LongOrderAttemptN"/> / <see cref="ShortOrderAttemptN"/>:
+    /// <c>OpenAttemptN</c> is per-cycle, the side counters are per-submit. Default 0 — a value of
+    /// 0 means no rollback has fired yet for this position. ExecutionEngine reads with
+    /// <c>position.OpenAttemptN &gt; 0 ? position.OpenAttemptN : 1</c> to map the persisted value
+    /// onto the existing 1-based key format.
+    /// </summary>
+    public int OpenAttemptN { get; set; }
+
     /// <summary>Actual filled quantity on the long exchange (for audit trail).</summary>
     public decimal? LongFilledQuantity { get; set; }
 

@@ -187,6 +187,16 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
     /// </summary>
     internal async Task RunBootSweepAsync(CancellationToken ct)
     {
+        // Cycle-lock contract: BootSweep mutates the same Opening rows that
+        // PositionHealthMonitor.CheckAndActAsync touches in the cycle loop.
+        // Without serialization, a cycle that fires before BootSweep finishes can
+        // reap a position as stuck while BootSweep is mid-confirm — last-write-wins
+        // would silently drop one writer's state. SemaphoreSlim is non-reentrant;
+        // the BootSweep -> ExecutionEngine.ConfirmOrRollbackAsync call chain does
+        // NOT re-enter BotOrchestrator, so no deadlock risk.
+        await _cycleLock.WaitAsync(ct);
+        try
+        {
         using var sweepScope = _scopeFactory.CreateScope();
         var uow = sweepScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var executionEngine = sweepScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
@@ -267,6 +277,11 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
         else
         {
             _logger.LogDebug("Boot sweep: no orphaned Opening positions found.");
+        }
+        }
+        finally
+        {
+            _cycleLock.Release();
         }
     }
 

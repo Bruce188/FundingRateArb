@@ -257,11 +257,11 @@ public class ExecutionEngineTests
 
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("LongLeg"))
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => callOrder.Add("LongLeg"))
             .ReturnsAsync(SuccessOrder());
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("ShortLeg"))
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => callOrder.Add("ShortLeg"))
             .ReturnsAsync(SuccessOrder());
 
         _mockPositions.Setup(p => p.Add(It.IsAny<ArbitragePosition>()))
@@ -2019,11 +2019,11 @@ public class ExecutionEngineTests
 
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Long, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Long"))
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => callOrder.Add("Long"))
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync(It.IsAny<string>(), Side.Short, It.IsAny<decimal>(), It.IsAny<int>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => callOrder.Add("Short"))
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => callOrder.Add("Short"))
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -3288,11 +3288,11 @@ public class ExecutionEngineTests
 
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => longQuantity = qty)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, qty, _, _, _) => longQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.166m));
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => shortQuantity = qty)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, qty, _, _, _) => shortQuantity = qty)
             .ReturnsAsync(SuccessOrder("short-1", 3050m, 0.166m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -3333,7 +3333,7 @@ public class ExecutionEngineTests
         decimal? secondLegQuantity = null;
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => secondLegQuantity = qty)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, qty, _, _, _) => secondLegQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.15m));
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -3358,7 +3358,7 @@ public class ExecutionEngineTests
         decimal? capturedQuantity = null;
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => capturedQuantity = qty)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, qty, _, _, _) => capturedQuantity = qty)
             .ReturnsAsync(SuccessOrder("long-1", 3000m, 0.16m));
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
@@ -3392,11 +3392,11 @@ public class ExecutionEngineTests
 
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => longCalled = true)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => longCalled = true)
             .ReturnsAsync(SuccessOrder("long-1", 3000m));
         _mockShortConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Short, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, _, _, _) => shortCalled = true)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, _, _, _, _) => shortCalled = true)
             .ReturnsAsync(SuccessOrder("short-1", 3001m));
 
         var result = await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -3608,7 +3608,7 @@ public class ExecutionEngineTests
         decimal? secondLegQuantity = null;
         _mockLongConnector
             .Setup(c => c.PlaceMarketOrderByQuantityAsync("ETH", Side.Long, It.IsAny<decimal>(), 5, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .Callback<string, Side, decimal, int, CancellationToken>((_, _, qty, _, _) => secondLegQuantity = qty)
+            .Callback<string, Side, decimal, int, string?, CancellationToken>((_, _, qty, _, _, _) => secondLegQuantity = qty)
             .ReturnsAsync(new OrderResultDto { Success = true, OrderId = "l1", FilledPrice = 3000m, FilledQuantity = expectedTarget });
 
         await _sut.OpenPositionAsync(TestUserId, DefaultOpp, 100m, ct: CancellationToken.None);
@@ -5045,5 +5045,92 @@ public class ExecutionEngineTests
         _mockAlerts.Verify(a => a.Add(It.Is<Alert>(al =>
             al.Type == AlertType.HighSlippageWarning)),
             Times.Never);
+    }
+
+    // ── ConfirmOrRollbackAsync — OpenAttemptN persistence ────────────────────
+
+    /// <summary>
+    /// Builds a position with navigation properties loaded so ConfirmOrRollbackAsync
+    /// can resolve connector names without throwing.
+    /// </summary>
+    private static ArbitragePosition BuildOpeningPositionForRollback(
+        int id = 42, string userId = "user-1", int openAttemptN = 0)
+        => new()
+        {
+            Id = id,
+            UserId = userId,
+            OpenAttemptN = openAttemptN,
+            Status = PositionStatus.Opening,
+            AssetId = 1,
+            LongExchangeId = 1,
+            ShortExchangeId = 2,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 3000m,
+            ShortEntryPrice = 3000m,
+            EntrySpreadPerHour = 0.001m,
+            CurrentSpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow,
+            Asset = new Asset { Id = 1, Symbol = "ETH", Name = "Ethereum", IsActive = true },
+            LongExchange = new Exchange { Id = 1, Name = "Hyperliquid", ApiBaseUrl = "https://h.test", WsBaseUrl = "wss://h.test" },
+            ShortExchange = new Exchange { Id = 2, Name = "Lighter", ApiBaseUrl = "https://l.test", WsBaseUrl = "wss://l.test" },
+        };
+
+    [Fact]
+    public async Task ConfirmOrRollback_PersistsIncrementedOpenAttemptN_AfterRollback()
+    {
+        // Arrange: position with OpenAttemptN = 0; long leg returns false (explicitly not open)
+        // so the rollback path fires (not the indeterminate-state path that would proceed to Open).
+        // Short leg returns null (unknown). Only longExplicitlyNotOpen = true triggers rollback;
+        // since longConfirmed = false, no ClosePositionAsync call is made for the long leg.
+        _mockLongConnector
+            .Setup(c => c.HasOpenPositionAsync(It.IsAny<string>(), Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)false);
+        _mockShortConnector
+            .Setup(c => c.HasOpenPositionAsync(It.IsAny<string>(), Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+
+        // Capture the OpenAttemptN value when Update is called.
+        var capturedOpenAttemptNValues = new List<int>();
+        _mockPositions
+            .Setup(x => x.Update(It.IsAny<ArbitragePosition>()))
+            .Callback<ArbitragePosition>(p => capturedOpenAttemptNValues.Add(p.OpenAttemptN));
+
+        var position = BuildOpeningPositionForRollback(id: 42, userId: TestUserId, openAttemptN: 0);
+
+        // Act: invoke ConfirmOrRollbackAsync with 1-second timeout so the window expires fast.
+        await _sut.ConfirmOrRollbackAsync(TestUserId, position, timeoutSeconds: 1);
+
+        // Assert: one of the Update calls had OpenAttemptN = 2
+        // (0 → read 1 for key → write attemptN + 1 = 2 in the finally block).
+        capturedOpenAttemptNValues.Should().Contain(2,
+            "OpenAttemptN starts at 0, maps to attemptN=1 for the key, then incremented to 2 in the finally block");
+
+        // SaveAsync should have been called at least twice: once for Failed status, once for OpenAttemptN persist.
+        _mockUow.Verify(x => x.SaveAsync(It.IsAny<CancellationToken>()), Times.AtLeast(2));
+    }
+
+    [Fact]
+    public async Task ConfirmOrRollback_UsesPersistedOpenAttemptN_ForIdempotencyKey()
+    {
+        // Arrange: position with OpenAttemptN = 3 (simulating a prior rollback cycle).
+        // Long leg explicitly returns false → triggers the rollback path (not the indeterminate path).
+        _mockLongConnector
+            .Setup(c => c.HasOpenPositionAsync(It.IsAny<string>(), Side.Long, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)false);
+        _mockShortConnector
+            .Setup(c => c.HasOpenPositionAsync(It.IsAny<string>(), Side.Short, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((bool?)null);
+
+        var position = BuildOpeningPositionForRollback(id: 7, userId: TestUserId, openAttemptN: 3);
+
+        // Act: invoke ConfirmOrRollbackAsync with 1-second timeout.
+        await _sut.ConfirmOrRollbackAsync(TestUserId, position, timeoutSeconds: 1);
+
+        // Assert: after rollback, position.OpenAttemptN == 4 (read 3, write 3 + 1 = 4).
+        // This proves the engine used the persisted counter (3), not the default (1).
+        position.OpenAttemptN.Should().Be(4,
+            "read OpenAttemptN=3 from the entity, incremented by 1 to produce 4 after rollback");
     }
 }

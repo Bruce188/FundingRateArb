@@ -1,3 +1,4 @@
+using System.Reflection;
 using FluentAssertions;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.Common.Repositories;
@@ -198,6 +199,9 @@ public class BotOrchestratorBootSweepTests
     {
         public List<(string UserId, int PositionId)> ConfirmOrRollbackCalls { get; } = new();
 
+        /// <summary>The last <see cref="ArbitragePosition"/> passed to ConfirmOrRollbackAsync.</summary>
+        public ArbitragePosition? LastReceivedPosition { get; private set; }
+
         public Task<(bool Success, string? Error)> OpenPositionAsync(
             string userId, ArbitrageOpportunityDto opp, decimal sizeUsdc,
             UserConfiguration? userConfig = null, CancellationToken ct = default)
@@ -219,6 +223,7 @@ public class BotOrchestratorBootSweepTests
             int timeoutSeconds, CancellationToken ct = default)
         {
             ConfirmOrRollbackCalls.Add((userId, position.Id));
+            LastReceivedPosition = position;
             return Task.CompletedTask;
         }
     }
@@ -542,5 +547,109 @@ public class BotOrchestratorBootSweepTests
     {
         public Task<BalanceSnapshotDto> GetBalanceSnapshotAsync(string userId, CancellationToken ct = default)
             => Task.FromResult(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 0m, FetchedAt = DateTime.UtcNow });
+    }
+
+    // ── Task 5.4: cycle-lock and restart-mid-rollback tests ───────────────────
+
+    /// <summary>
+    /// Seeds an Opening position with a specific <paramref name="openAttemptN"/> value
+    /// so the boot sweep sees it and passes it to the CapturingExecutionEngineStub.
+    /// </summary>
+    private static async Task<int> SeedOpeningPositionWithAttemptCountAsync(
+        AppDbContext db, int openAttemptN)
+    {
+        var user = await db.Users.FirstAsync();
+        var longExchange = await db.Exchanges.FirstAsync();
+        var asset = await db.Assets.FirstAsync();
+
+        var position = new ArbitragePosition
+        {
+            UserId = user.Id,
+            AssetId = asset.Id,
+            LongExchangeId = longExchange.Id,
+            ShortExchangeId = longExchange.Id,
+            Status = PositionStatus.Opening,
+            SizeUsdc = 500m,
+            MarginUsdc = 100m,
+            Leverage = 5,
+            LongEntryPrice = 1_500m,
+            ShortEntryPrice = 1_500m,
+            EntrySpreadPerHour = 0.001m,
+            CurrentSpreadPerHour = 0.001m,
+            OpenedAt = DateTime.UtcNow.AddMinutes(-5),
+            OpenAttemptN = openAttemptN,
+            RowVersion = Array.Empty<byte>(),
+        };
+        db.ArbitragePositions.Add(position);
+        await db.SaveChangesAsync();
+        return position.Id;
+    }
+
+    [Fact]
+    public async Task RunBootSweepAsync_BlocksWhenCycleLockHeld()
+    {
+        var dbName = $"BootSweepLock_{Guid.NewGuid()}";
+        await using var db = CreateContext(dbName);
+        await SeedReferenceDataAsync(db);
+
+        var stub = new CapturingExecutionEngineStub();
+        var orchestrator = CreateOrchestrator(db, stub);
+
+        // Acquire _cycleLock via reflection so RunBootSweepAsync's WaitAsync(ct) blocks.
+        var cycleLockField = typeof(BotOrchestrator)
+            .GetField("_cycleLock", BindingFlags.NonPublic | BindingFlags.Instance);
+        cycleLockField.Should().NotBeNull("BotOrchestrator._cycleLock must be reachable via reflection");
+        var cycleLock = (SemaphoreSlim)cycleLockField!.GetValue(orchestrator)!;
+        await cycleLock.WaitAsync();
+
+        try
+        {
+            // Act: start RunBootSweepAsync — should block until the lock is released.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var sweepTask = orchestrator.RunBootSweepAsync(cts.Token);
+
+            // Assert it does NOT complete within 250 ms (lock holds it).
+            var firstWinner = await Task.WhenAny(sweepTask, Task.Delay(250, cts.Token));
+            firstWinner.Should().NotBeSameAs(sweepTask,
+                "RunBootSweepAsync must block while another holder owns _cycleLock");
+
+            // Release the lock — sweep should complete within 2 s.
+            cycleLock.Release();
+            var secondWinner = await Task.WhenAny(sweepTask, Task.Delay(2000, cts.Token));
+            secondWinner.Should().BeSameAs(sweepTask,
+                "RunBootSweepAsync should complete after _cycleLock is released");
+            await sweepTask; // surface any inner exception
+        }
+        finally
+        {
+            // Defensive: re-release if test failed before releasing.
+            if (cycleLock.CurrentCount == 0)
+            {
+                cycleLock.Release();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunBootSweepAsync_AfterPriorRollback_ReusesPersistedOpenAttemptN()
+    {
+        var dbName = $"BootSweepAttemptN_{Guid.NewGuid()}";
+        await using var db = CreateContext(dbName);
+        await SeedReferenceDataAsync(db);
+
+        // Seed a position with OpenAttemptN = 2 (simulates crash mid-rollback after first cycle).
+        await SeedOpeningPositionWithAttemptCountAsync(db, openAttemptN: 2);
+
+        var stub = new CapturingExecutionEngineStub();
+        var orchestrator = CreateOrchestrator(db, stub);
+
+        // Act: run the boot sweep — stub captures the position passed to ConfirmOrRollbackAsync.
+        await orchestrator.RunBootSweepAsync(CancellationToken.None);
+
+        // Assert: the captured position had OpenAttemptN = 2 at the time of the call.
+        stub.LastReceivedPosition.Should().NotBeNull(
+            "boot sweep must call ConfirmOrRollbackAsync for the Opening position");
+        stub.LastReceivedPosition!.OpenAttemptN.Should().Be(2,
+            "a fresh process must read the persisted OpenAttemptN from the DB, not default to 0 or 1");
     }
 }

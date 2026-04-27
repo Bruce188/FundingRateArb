@@ -50,6 +50,8 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(p => p.ShortEntrySlippagePct).HasPrecision(18, 8);
             entity.Property(p => p.LongExitSlippagePct).HasPrecision(18, 8);
             entity.Property(p => p.ShortExitSlippagePct).HasPrecision(18, 8);
+            entity.Property(p => p.RowVersion).IsRowVersion();
+            entity.Property(p => p.OpenAttemptN).HasDefaultValue(0);
         });
 
         builder.Entity<BotConfiguration>(entity =>
