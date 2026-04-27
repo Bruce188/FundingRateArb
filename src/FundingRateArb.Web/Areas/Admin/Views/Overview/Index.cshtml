@@ -169,7 +169,7 @@
     <div class="card-body">
         @if (!Model.SlippageAttribution.ByPair.Any() && !Model.SlippageAttribution.ByAsset.Any())
         {
-            <p class="text-muted mb-0">No closed positions in the last 7 days.</p>
+            <p class="text-muted mb-0">No closed positions in last 7 days.</p>
         }
         else
         {
@@ -180,8 +180,7 @@
                         <table class="table table-sm table-hover mb-0">
                             <thead class="table-dark">
                                 <tr>
-                                    <th>Long</th>
-                                    <th>Short</th>
+                                    <th>Pair</th>
                                     <th class="text-end">N</th>
                                     <th class="text-end" title="Average long-leg entry slippage">L Entry</th>
                                     <th class="text-end" title="Average short-leg entry slippage">S Entry</th>
@@ -193,8 +192,7 @@
                                 @foreach (var pair in Model.SlippageAttribution.ByPair)
                                 {
                                     <tr>
-                                        <td>@pair.LongExchangeName</td>
-                                        <td>@pair.ShortExchangeName</td>
+                                        <td>@pair.LongExchangeName / @pair.ShortExchangeName</td>
                                         <td class="text-end">@pair.PositionCount</td>
                                         <td class="text-end">@(pair.AvgLongEntrySlippagePct.HasValue ? pair.AvgLongEntrySlippagePct.Value.ToString("P4") : "-")</td>
                                         <td class="text-end">@(pair.AvgShortEntrySlippagePct.HasValue ? pair.AvgShortEntrySlippagePct.Value.ToString("P4") : "-")</td>
