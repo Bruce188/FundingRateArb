@@ -1253,6 +1253,96 @@ public class AsterConnector : IExchangeConnector, IDisposable
         }
     }
 
+    public async Task<IReadOnlyList<(string Asset, Side Side, decimal Size)>?> GetAllOpenPositionsAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var result = await pipeline.ExecuteAsync(
+                async token => _useV3Api
+                    ? await _restClient.FuturesV3Api.Trading.GetPositionsAsync(ct: token)
+                    : await _restClient.FuturesApi.Trading.GetPositionsAsync(ct: token),
+                ct);
+
+            if (!result.Success || result.Data is null)
+            {
+                _logger.LogWarning("Aster GetAllOpenPositionsAsync failed: {Error}", result.Error?.Message);
+                return null;
+            }
+
+            var positions = new List<(string Asset, Side Side, decimal Size)>();
+            foreach (var p in result.Data)
+            {
+                if (p.PositionAmount == 0m) continue;
+                // Aster uses "BTCUSDT" format — strip the USDT suffix for the asset symbol.
+                var asset = p.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
+                    ? p.Symbol[..^4]
+                    : p.Symbol;
+                var side = p.PositionAmount > 0 ? Side.Long : Side.Short;
+                positions.Add((asset, side, Math.Abs(p.PositionAmount)));
+            }
+            return positions;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetAllOpenPositionsAsync failed for Aster");
+            return null;
+        }
+    }
+
+    public async Task<decimal?> GetCommissionIncomeAsync(DateTime from, DateTime to, CancellationToken ct = default)
+    {
+        try
+        {
+            // Pass null as symbol to fetch commission across all symbols.
+            // PaginateIncomeHistoryAsync expects the symbol; use an empty/null workaround via direct call.
+            const int pageSize = 1000;
+            const int maxPages = 100;
+            var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
+            var cursor = from;
+            var total = 0m;
+            var page = 0;
+
+            while (true)
+            {
+                if (++page > maxPages)
+                {
+                    _logger.LogWarning(
+                        "Aster GetCommissionIncomeAsync exceeded {MaxPages} pages — results may be incomplete", maxPages);
+                    break;
+                }
+
+                var result = await pipeline.ExecuteAsync(
+                    async token => _useV3Api
+                        ? await _restClient.FuturesV3Api.Account.GetIncomeHistoryAsync(
+                            null, IncomeType.Commission, cursor, to, limit: pageSize, ct: token)
+                        : await _restClient.FuturesApi.Account.GetIncomeHistoryAsync(
+                            null, IncomeType.Commission, cursor, to, limit: pageSize, ct: token),
+                    ct);
+
+                if (!result.Success || result.Data is null)
+                {
+                    _logger.LogWarning("Aster GetIncomeHistoryAsync (Commission) failed: {Error}", result.Error?.Message);
+                    return null;
+                }
+
+                var entries = result.Data.ToList();
+                total += entries.Sum(i => i.Income);
+
+                if (entries.Count < pageSize) break;
+
+                cursor = entries[^1].Timestamp.AddMilliseconds(1);
+            }
+
+            return total;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetCommissionIncomeAsync failed for Aster window {From}..{To}", from, to);
+            return null;
+        }
+    }
+
     private static decimal RoundToTickSize(decimal price, decimal tickSize)
     {
         if (tickSize <= 0)

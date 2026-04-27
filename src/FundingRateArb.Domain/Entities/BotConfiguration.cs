@@ -192,6 +192,13 @@ public class BotConfiguration : IValidatableObject
     public int ReconciliationIntervalCycles { get; set; } = 10;
 
     /// <summary>
+    /// Cadence in minutes for the rolling-snapshot <c>ExchangeReconciliationHostedService</c>
+    /// (decoupled from the 60s cycle loop). Range [1, 60]; default 5.
+    /// </summary>
+    [Range(1, 60)]
+    public int ReconciliationIntervalMinutes { get; set; } = 5;
+
+    /// <summary>
     /// Seconds to wait for both-leg confirmation after the sequential open flow completes.
     /// If either leg has not confirmed within this window, the confirmed leg is rolled back
     /// via ClosePositionAsync and the position is marked Failed with ReconciliationDrift.

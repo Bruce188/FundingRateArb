@@ -36,6 +36,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<CoinGlassExchangeRate> CoinGlassExchangeRates => Set<CoinGlassExchangeRate>();
     public DbSet<CoinGlassDiscoveryEvent> CoinGlassDiscoveryEvents => Set<CoinGlassDiscoveryEvent>();
     public DbSet<AssetExchangeFundingInterval> AssetExchangeFundingIntervals => Set<AssetExchangeFundingInterval>();
+    public DbSet<ReconciliationReport> ReconciliationReports => Set<ReconciliationReport>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

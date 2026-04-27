@@ -36,6 +36,7 @@ public class BotConfigurationConfiguration : IEntityTypeConfiguration<BotConfigu
         builder.Property(b => b.LiquidationWarningPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.50m);
         builder.Property(b => b.LiquidationEarlyWarningPct).HasColumnType("decimal(18,4)").HasDefaultValue(0.75m);
         builder.Property(b => b.ReconciliationIntervalCycles).HasDefaultValue(10);
+        builder.Property(b => b.ReconciliationIntervalMinutes).HasDefaultValue(5);
         builder.Property(b => b.DivergenceAlertMultiplier).HasColumnType("decimal(18,4)").HasDefaultValue(2.0m);
         builder.Property(b => b.DivergenceAlertConfirmationCycles).HasDefaultValue(1);
         builder.Property(b => b.RotationDivergenceHorizonHours).HasColumnType("decimal(5,2)").HasDefaultValue(2.0m);

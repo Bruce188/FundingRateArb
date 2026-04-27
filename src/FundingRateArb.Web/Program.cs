@@ -303,12 +303,14 @@ try
     builder.Services.AddScoped<FundingRateArb.Application.Interfaces.IAssetExchangeFundingIntervalRepository, AssetExchangeFundingIntervalRepository>();
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
     builder.Services.AddScoped<IDatabaseSpaceHealthProbe, DatabaseSpaceHealthProbe>();
+    builder.Services.AddScoped<IReconciliationReportRepository, ReconciliationReportRepository>();
 
     // --- Services ---
     builder.Services.AddScoped<ISignalEngine, SignalEngine>();
     builder.Services.AddSingleton<ISignalEngineMetrics, AppInsightsSignalEngineMetrics>();
     builder.Services.AddScoped<IPositionSizer, PositionSizer>();
     builder.Services.AddScoped<IPnlReconciliationService, PnlReconciliationService>();
+    builder.Services.AddScoped<IExchangeReconciliationService, ExchangeReconciliationService>();
     builder.Services.AddScoped<IConnectorLifecycleManager, ConnectorLifecycleManager>();
     builder.Services.AddScoped<IEmergencyCloseHandler, EmergencyCloseHandler>();
     builder.Services.AddScoped<IPositionCloser, PositionCloser>();
@@ -635,6 +637,7 @@ try
     builder.Services.AddSingleton<IBotControl>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddSingleton<IBotDiagnostics>(sp => sp.GetRequiredService<BotOrchestrator>());
     builder.Services.AddHostedService<DailySummaryService>();
+    builder.Services.AddHostedService<ExchangeReconciliationHostedService>();
     builder.Services.AddHostedService<LeverageTierRefresher>();
     builder.Services.AddHostedService<BalanceRefreshService>();
     builder.Services.AddHostedService<SnapshotRetentionService>();
