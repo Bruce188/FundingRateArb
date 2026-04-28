@@ -314,6 +314,7 @@ try
     builder.Services.AddScoped<IEmergencyCloseHandler, EmergencyCloseHandler>();
     builder.Services.AddScoped<IPositionCloser, PositionCloser>();
     builder.Services.AddScoped<IExecutionEngine, ExecutionEngine>();
+    builder.Services.AddSingleton<IPreflightSlippageGuard, PreflightSlippageGuard>();
     builder.Services.AddScoped<IPositionHealthMonitor, PositionHealthMonitor>();
     builder.Services.AddSingleton<IHealthMonitorState, HealthMonitorState>();
     builder.Services.AddSingleton<IYieldCalculator, YieldCalculator>();
