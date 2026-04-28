@@ -20,6 +20,13 @@ public class LighterMarketDataStream : IMarketDataStream
     private readonly Dictionary<string, (decimal Price, DateTime ReceivedAt)> _wsLastTradePrice = new();
     private readonly Dictionary<string, (decimal Bid, decimal Ask)> _wsBookLevels = new();
 
+    // Multi-level WS book ladder for GetOrderbookDepthAsync (depth-gate). Populated when the WS
+    // payload includes multi-level bid/ask arrays. Bids descending, asks ascending.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<
+        string,
+        (List<(decimal Price, decimal Size)> Bids, List<(decimal Price, decimal Size)> Asks, DateTime ReceivedAt)
+    > _wsBookLadder = new();
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -63,6 +70,17 @@ public class LighterMarketDataStream : IMarketDataStream
     internal (decimal Bid, decimal Ask)? GetWsBookLevels(string symbol)
         => _wsBookLevels.TryGetValue(symbol, out var v) ? v : null;
 
+    /// <summary>
+    /// Returns the multi-level WS-cached book for the symbol plus the timestamp the snapshot was received.
+    /// Returns <c>null</c> when the symbol has not received a multi-level update.
+    /// Bids returned in DESCENDING-price order (best bid first); asks in ASCENDING-price order (best ask first).
+    /// </summary>
+    public (IReadOnlyList<(decimal Price, decimal Size)> Bids, IReadOnlyList<(decimal Price, decimal Size)> Asks, DateTime ReceivedAt)?
+        GetWsBookLadder(string symbol)
+        => _wsBookLadder.TryGetValue(symbol, out var ladder)
+            ? (ladder.Bids, ladder.Asks, ladder.ReceivedAt)
+            : null;
+
     // ── Test seams ──
 
     /// <summary>
@@ -78,6 +96,20 @@ public class LighterMarketDataStream : IMarketDataStream
     /// </summary>
     internal void SimulateWsBookLevels(string symbol, decimal bid, decimal ask)
         => _wsBookLevels[symbol] = (bid, ask);
+
+    /// <summary>
+    /// Test seam: inject a multi-level WS book ladder for <paramref name="symbol"/> as if
+    /// it arrived via the WS feed. Bids should be in descending-price order; asks ascending.
+    /// </summary>
+    internal void SimulateWsBookLadder(
+        string symbol,
+        IEnumerable<(decimal Price, decimal Size)> bids,
+        IEnumerable<(decimal Price, decimal Size)> asks,
+        DateTime? receivedAt = null)
+        => _wsBookLadder[symbol] = (
+            bids.ToList(),
+            asks.ToList(),
+            receivedAt ?? DateTime.UtcNow);
 
     public async Task StartAsync(IEnumerable<string> symbols, CancellationToken ct)
     {
@@ -206,6 +238,49 @@ public class LighterMarketDataStream : IMarketDataStream
 
         _cache.Update(dto);
         OnRateUpdate?.Invoke(dto);
+
+        // Multi-level book ladder: try to parse a "bids"/"asks" array if present in the WS payload.
+        // Falls back to top-of-book (best_bid / best_ask) as a single-level ladder.
+        var parsedBids = TryParseBookSideArray(el, "bids");
+        var parsedAsks = TryParseBookSideArray(el, "asks");
+
+        if (parsedBids is null && parsedAsks is null)
+        {
+            // Fall back to top-of-book as a single-entry ladder.
+            var bid = GetDecimalProperty(el, "best_bid");
+            var ask = GetDecimalProperty(el, "best_ask");
+
+            if (bid is > 0m || ask is > 0m)
+            {
+                parsedBids = bid is > 0m ? new List<(decimal, decimal)> { (bid.Value, 0m) } : new List<(decimal, decimal)>();
+                parsedAsks = ask is > 0m ? new List<(decimal, decimal)> { (ask.Value, 0m) } : new List<(decimal, decimal)>();
+            }
+        }
+
+        if (parsedBids is not null && parsedAsks is not null)
+        {
+            // Sort: bids descending (best bid first), asks ascending (best ask first).
+            parsedBids.Sort((a, b) => b.Item1.CompareTo(a.Item1));
+            parsedAsks.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+            _wsBookLadder[symbol] = (parsedBids, parsedAsks, DateTime.UtcNow);
+        }
+    }
+
+    private static List<(decimal Price, decimal Size)>? TryParseBookSideArray(JsonElement el, string property)
+    {
+        if (!el.TryGetProperty(property, out var sideEl) || sideEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        var result = new List<(decimal Price, decimal Size)>();
+        foreach (var level in sideEl.EnumerateArray())
+        {
+            var price = GetDecimalProperty(level, "price") ?? GetDecimalProperty(level, "p");
+            var size = GetDecimalProperty(level, "size") ?? GetDecimalProperty(level, "s") ?? 0m;
+            if (price is > 0m)
+                result.Add((price.Value, size));
+        }
+
+        return result;
     }
 
     private static decimal? GetDecimalProperty(JsonElement el, string propertyName)
