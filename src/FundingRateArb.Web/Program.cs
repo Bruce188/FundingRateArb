@@ -96,6 +96,13 @@ try
             .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
             .MinimumLevel.Override("Binance.Net", LogEventLevel.Error)
             .MinimumLevel.Override("CryptoExchange.Net", LogEventLevel.Error)
+            // Hot-path noise suppressors. The HyperLiquid SDK + HttpClient + Polly emit
+            // ~100 events/min on the Dashboard cycle. On B1 (1 vCPU) the Serilog
+            // formatting/enrichment cost was crowding out request threads; bumping these
+            // to Warning drops the floor to <5 events/min while still surfacing failures.
+            .MinimumLevel.Override("HyperLiquid", LogEventLevel.Warning)
+            .MinimumLevel.Override("System.Net.Http.HttpClient", LogEventLevel.Warning)
+            .MinimumLevel.Override("Polly", LogEventLevel.Warning)
             // Suppress the high-volume "DateTime value of null" Warning emitted by the
             // CryptoExchange source-generated JSON resolver. The filter covers all descendant
             // SourceContexts (e.g. CryptoExchange.Net.SocketClient, Binance.Net.Clients.*)
