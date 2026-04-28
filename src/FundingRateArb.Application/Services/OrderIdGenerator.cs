@@ -25,14 +25,23 @@ public static class OrderIdGenerator
     public static string For(int positionId, Side side, int attemptN)
     {
         if (positionId <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(positionId), positionId, "positionId must be positive");
+        }
+
         if (attemptN <= 0)
+        {
             throw new ArgumentOutOfRangeException(nameof(attemptN), attemptN, "attemptN must be positive");
+        }
+
         var sideChar = side == Side.Long ? "l" : "s";
         var id = $"{BotPrefix}{positionId:x}-{sideChar}-{attemptN}";
         if (id.Length > MaxLength)
+        {
             throw new ArgumentOutOfRangeException(nameof(positionId),
                 $"Generated client order id '{id}' exceeds {MaxLength}-char cap.");
+        }
+
         return id;
     }
 

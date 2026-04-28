@@ -52,7 +52,11 @@ public class PairExecutionStatsRepository : IPairExecutionStatsRepository
             .Select(p => new { p.LongExchangeName, p.ShortExchangeName })
             .ToListAsync(ct);
         var set = new HashSet<(string, string)>();
-        foreach (var r in rows) set.Add((r.LongExchangeName, r.ShortExchangeName));
+        foreach (var r in rows)
+        {
+            set.Add((r.LongExchangeName, r.ShortExchangeName));
+        }
+
         return set;
     }
 }

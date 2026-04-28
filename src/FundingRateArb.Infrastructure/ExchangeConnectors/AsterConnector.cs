@@ -1273,7 +1273,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
             var positions = new List<(string Asset, Side Side, decimal Size)>();
             foreach (var p in result.Data)
             {
-                if (p.PositionAmount == 0m) continue;
+                if (p.PositionAmount == 0m)
+                {
+                    continue;
+                }
                 // Aster uses "BTCUSDT" format — strip the USDT suffix for the asset symbol.
                 var asset = p.Symbol.EndsWith("USDT", StringComparison.OrdinalIgnoreCase)
                     ? p.Symbol[..^4]
@@ -1329,7 +1332,10 @@ public class AsterConnector : IExchangeConnector, IDisposable
                 var entries = result.Data.ToList();
                 total += entries.Sum(i => i.Income);
 
-                if (entries.Count < pageSize) break;
+                if (entries.Count < pageSize)
+                {
+                    break;
+                }
 
                 cursor = entries[^1].Timestamp.AddMilliseconds(1);
             }

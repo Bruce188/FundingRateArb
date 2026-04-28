@@ -680,9 +680,17 @@ public class HyperliquidConnector : IExchangeConnector, IDisposable
             foreach (var wrapper in result.Data.Positions)
             {
                 var position = wrapper.Position;
-                if (position is null) continue;
+                if (position is null)
+                {
+                    continue;
+                }
+
                 var qty = position.PositionQuantity ?? 0m;
-                if (qty == 0m) continue;
+                if (qty == 0m)
+                {
+                    continue;
+                }
+
                 var side = qty > 0 ? Side.Long : Side.Short;
                 positions.Add((position.Symbol, side, Math.Abs(qty)));
             }

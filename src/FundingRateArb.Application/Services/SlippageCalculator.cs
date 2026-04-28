@@ -11,8 +11,16 @@ public static class SlippageCalculator
 {
     public static decimal? Compute(decimal? intendedMid, decimal? fillPrice)
     {
-        if (intendedMid is null || fillPrice is null) return null;
-        if (intendedMid.Value <= 0m || fillPrice.Value <= 0m) return null;
+        if (intendedMid is null || fillPrice is null)
+        {
+            return null;
+        }
+
+        if (intendedMid.Value <= 0m || fillPrice.Value <= 0m)
+        {
+            return null;
+        }
+
         return (fillPrice.Value - intendedMid.Value) / intendedMid.Value;
     }
 
@@ -23,7 +31,11 @@ public static class SlippageCalculator
     /// </summary>
     public static bool ExceedsThreshold(decimal? slippagePct, decimal threshold)
     {
-        if (slippagePct is null) return false;
+        if (slippagePct is null)
+        {
+            return false;
+        }
+
         return Math.Abs(slippagePct.Value) > threshold;
     }
 }

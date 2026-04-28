@@ -2350,7 +2350,11 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
             foreach (var p in account.Positions)
             {
                 if (!decimal.TryParse(p.Position, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var qty) || qty == 0m) continue;
+                    System.Globalization.CultureInfo.InvariantCulture, out var qty) || qty == 0m)
+                {
+                    continue;
+                }
+
                 var side = qty > 0 ? Side.Long : Side.Short;
                 positions.Add((p.Symbol, side, Math.Abs(qty)));
             }

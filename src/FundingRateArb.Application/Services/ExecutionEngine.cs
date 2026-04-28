@@ -364,8 +364,14 @@ public class ExecutionEngine : IExecutionEngine
                     firstResult = await firstConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, firstSide, targetQuantity, effectiveLeverage, firstClientOrderId, firstOrderCts.Token);
                     // Persist attempt-counter increment so boot sweep can derive the same id, and so the
                     // next retry attempt N+1 picks a fresh id (handled by reading position.{Side}OrderAttemptN+1).
-                    if (firstSide == Side.Long) position.LongOrderAttemptN = firstAttemptN;
-                    else position.ShortOrderAttemptN = firstAttemptN;
+                    if (firstSide == Side.Long)
+                    {
+                        position.LongOrderAttemptN = firstAttemptN;
+                    }
+                    else
+                    {
+                        position.ShortOrderAttemptN = firstAttemptN;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -531,8 +537,14 @@ public class ExecutionEngine : IExecutionEngine
                     secondQuantity = Math.Round(secondQuantity, secondPrecision, MidpointRounding.ToZero);
                     secondResult = await secondConnector.PlaceMarketOrderByQuantityAsync(opp.AssetSymbol, secondSide, secondQuantity, effectiveLeverage, secondClientOrderId, secondOrderCts.Token);
                     // Persist attempt-counter increment.
-                    if (secondSide == Side.Long) position.LongOrderAttemptN = secondAttemptN;
-                    else position.ShortOrderAttemptN = secondAttemptN;
+                    if (secondSide == Side.Long)
+                    {
+                        position.LongOrderAttemptN = secondAttemptN;
+                    }
+                    else
+                    {
+                        position.ShortOrderAttemptN = secondAttemptN;
+                    }
                 }
                 catch (Exception ex)
                 {
