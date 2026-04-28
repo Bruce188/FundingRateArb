@@ -47,7 +47,7 @@ public class SignalEngineDenyListTests
     [Fact]
     public async Task DeniedPair_IsRejected_FromOpportunityList()
     {
-        // Arrange: Hyperliquid/Aster pair is denied; ETH on Lighter/Aster is not denied
+        // Arrange: Hyperliquid/Aster pair is denied; ETH pair is Hyperliquid/Lighter — not in the deny list
         var rates = new List<FundingRateSnapshot>
         {
             MakeRate(1, "Hyperliquid", 1, "BTC", 0.0001m),
@@ -58,9 +58,12 @@ public class SignalEngineDenyListTests
         _mockFundingRates.Setup(f => f.GetLatestPerExchangePerAssetAsync()).ReturnsAsync(rates);
 
         var snapshot = new Mock<IPairDenyListSnapshot>();
-        snapshot.Setup(s => s.IsDenied("Hyperliquid", "Aster")).Returns(true);
         snapshot.Setup(s => s.IsDenied(It.IsAny<string>(), It.IsAny<string>())).Returns(false);
-        snapshot.Setup(s => s.IsDenied("Hyperliquid", "Aster")).Returns(true);
+        // ETH pair is Hyperliquid/Lighter — not in the deny list; BTC pair Hyperliquid/Aster is denied
+        snapshot.Setup(s => s.IsDenied(
+            It.Is<string>(l => l == "Hyperliquid"),
+            It.Is<string>(r => r == "Aster")))
+            .Returns(true);
 
         var provider = new Mock<IPairDenyListProvider>();
         provider.Setup(p => p.Current).Returns(snapshot.Object);

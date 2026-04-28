@@ -222,4 +222,39 @@ public class BotOrchestratorPairDenyListTests : IDisposable
         row.Should().NotBeNull();
         row!.IsDenied.Should().BeFalse();
     }
+
+    [Fact]
+    public async Task AutoDenyRule_DoesNotOverwrite_ManualDeny_WhenStatsAlsoTrip()
+    {
+        // Pre-seed a manual indefinite deny
+        _context.PairExecutionStats.Add(new PairExecutionStats
+        {
+            LongExchangeName = "Hyperliquid",
+            ShortExchangeName = "Aster",
+            WindowStart = DateTime.UtcNow.AddDays(-14),
+            WindowEnd = DateTime.UtcNow,
+            CloseCount = 0,
+            WinCount = 0,
+            IsDenied = true,
+            DeniedUntil = null,
+            DeniedReason = "manual: user1",
+            LastUpdatedAt = DateTime.UtcNow.AddDays(-1),
+        });
+        await _context.SaveChangesAsync();
+
+        // Seed 10 losing closes — enough to trip the auto-deny threshold
+        for (int i = 0; i < 10; i++)
+            SeedPosition(_hyperliquid, _aster, -10m);
+        await _context.SaveChangesAsync();
+
+        var config = MakeConfig(pairAutoDenyEnabled: true);
+        await _sut.RefreshPairDenyListAsync(_uow, config, CancellationToken.None);
+
+        var row = await _context.PairExecutionStats.AsNoTracking().FirstOrDefaultAsync(p =>
+            p.LongExchangeName == "Hyperliquid" && p.ShortExchangeName == "Aster");
+        row.Should().NotBeNull();
+        // Manual deny must survive — reason unchanged and DeniedUntil stays null (indefinite)
+        row!.DeniedReason.Should().StartWith("manual:");
+        row.DeniedUntil.Should().BeNull();
+    }
 }

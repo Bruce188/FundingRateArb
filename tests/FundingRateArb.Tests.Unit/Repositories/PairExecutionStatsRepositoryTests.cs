@@ -116,4 +116,25 @@ public class PairExecutionStatsRepositoryTests : IDisposable
         var keys = await _repo.GetCurrentlyDeniedKeysAsync();
         keys.Should().Contain(("Hyperliquid", "Aster"));
     }
+
+    [Fact]
+    public async Task Upsert_Update_ExistingRow_WithMixedCase()
+    {
+        // Seed with canonical casing
+        var seed = MakeRow("Hyperliquid", "Aster");
+        _context.PairExecutionStats.Add(seed);
+        await _context.SaveChangesAsync();
+        _context.ChangeTracker.Clear();
+
+        // Upsert with mixed-case names — must match the existing row case-insensitively
+        var updated = MakeRow("HYPERLIQUID", "aster");
+        updated.WinCount = 42;
+        await _repo.UpsertAsync(updated);
+        await _context.SaveChangesAsync();
+
+        // Exactly one row must exist with the updated WinCount
+        var all = await _context.PairExecutionStats.AsNoTracking().ToListAsync();
+        all.Should().HaveCount(1);
+        all[0].WinCount.Should().Be(42);
+    }
 }

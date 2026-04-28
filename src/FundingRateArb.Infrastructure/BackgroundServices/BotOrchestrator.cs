@@ -1603,9 +1603,11 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
                 row.LastUpdatedAt = DateTime.UtcNow;
 
                 // Apply auto-deny rule (AC#3) when the flag is on.
+                // Guard: never overwrite a manual deny (reason starts with "manual:") — manual denies persist until an operator clicks UnDeny.
                 if (globalConfig.PairAutoDenyEnabled
                     && row.WinCount == 0
                     && row.CloseCount >= 10
+                    && !(row.DeniedReason?.StartsWith("manual:", StringComparison.Ordinal) ?? false)
                     && (!row.IsDenied || row.DeniedUntil == null || row.DeniedUntil <= DateTime.UtcNow))
                 {
                     row.IsDenied = true;

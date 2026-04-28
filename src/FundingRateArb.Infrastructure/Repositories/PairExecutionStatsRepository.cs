@@ -25,9 +25,7 @@ public class PairExecutionStatsRepository : IPairExecutionStatsRepository
 
     public async Task UpsertAsync(PairExecutionStats row, CancellationToken ct = default)
     {
-        var existing = await _context.PairExecutionStats
-            .FirstOrDefaultAsync(p => p.LongExchangeName == row.LongExchangeName
-                                   && p.ShortExchangeName == row.ShortExchangeName, ct);
+        var existing = await GetByPairAsync(row.LongExchangeName, row.ShortExchangeName, ct);
         if (existing is null)
         {
             _context.PairExecutionStats.Add(row);

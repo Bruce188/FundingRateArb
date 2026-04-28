@@ -85,6 +85,7 @@ public class BotConfigController : Controller
             // Advanced booleans
             UseRiskBasedDivergenceClose = config.UseRiskBasedDivergenceClose,
             UseBreakEvenSizeFilter = config.UseBreakEvenSizeFilter,
+            PairAutoDenyEnabled = config.PairAutoDenyEnabled,
             DryRunEnabled = config.DryRunEnabled,
             ForceConcurrentExecution = config.ForceConcurrentExecution,
             // Infrastructure
@@ -166,6 +167,7 @@ public class BotConfigController : Controller
             // Advanced booleans
             UseRiskBasedDivergenceClose = model.UseRiskBasedDivergenceClose,
             UseBreakEvenSizeFilter = model.UseBreakEvenSizeFilter,
+            PairAutoDenyEnabled = model.PairAutoDenyEnabled,
             DryRunEnabled = model.DryRunEnabled,
             ForceConcurrentExecution = model.ForceConcurrentExecution,
             // Infrastructure
@@ -242,6 +244,7 @@ public class BotConfigController : Controller
         // Advanced booleans
         config.UseRiskBasedDivergenceClose = candidate.UseRiskBasedDivergenceClose;
         config.UseBreakEvenSizeFilter = candidate.UseBreakEvenSizeFilter;
+        config.PairAutoDenyEnabled = candidate.PairAutoDenyEnabled;
         config.DryRunEnabled = candidate.DryRunEnabled;
         config.ForceConcurrentExecution = candidate.ForceConcurrentExecution;
         // Infrastructure
