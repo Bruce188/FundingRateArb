@@ -372,21 +372,28 @@ public class PositionHealthMonitor : IPositionHealthMonitor
                     DivergencePct: pos.CurrentDivergencePct ?? 0m,
                     CollateralImbalancePct: collateralImbalancePct);
 
+                // Determine which legs are spot — spot connectors have no margin/liquidation concepts.
+                var longConnectorForSpot = _connectorFactory.GetConnector(longExchangeName);
+                var shortConnectorForSpot = _connectorFactory.GetConnector(shortExchangeName);
+                var longIsSpot = longConnectorForSpot?.MarketType == ExchangeMarketType.Spot;
+                var shortIsSpot = shortConnectorForSpot?.MarketType == ExchangeMarketType.Spot;
+
                 // Fetch margin state from exchange APIs once per cycle.
                 // Reused by liquidation distance computation AND margin utilization check
-                // to avoid duplicate API calls.
-                var (longMargin, shortMargin) = await FetchMarginStateAsync(
-                    longExchangeName, shortExchangeName, assetSymbol, ct);
+                // to avoid duplicate API calls. Skip spot legs — they have no margin state.
+                var (longMargin, shortMargin) = await FetchMarginStatesSkippingSpotAsync(
+                    longExchangeName, shortExchangeName, assetSymbol, longIsSpot, shortIsSpot, ct);
 
                 // Calculate liquidation prices and distance.
                 // Prefer API-pulled liquidation prices (authoritative per-exchange) when available,
                 // falling back to the leverage formula only if the exchange could not supply them.
+                // Spot legs always pass null for their liquidation price — they cannot be liquidated.
                 var minLiquidationDistance = ComputeLiquidationDistance(
                     pos,
                     currentLongMark,
                     currentShortMark,
-                    longMargin?.LiquidationPrice,
-                    shortMargin?.LiquidationPrice,
+                    longIsSpot ? null : longMargin?.LiquidationPrice,
+                    shortIsSpot ? null : shortMargin?.LiquidationPrice,
                     _logger);
 
                 var hoursOpen = (decimal)(DateTime.UtcNow - pos.OpenedAt).TotalHours;
@@ -895,9 +902,48 @@ public class PositionHealthMonitor : IPositionHealthMonitor
     }
 
     /// <summary>
-    /// Fetches live margin state for both legs in a single dispatch. Returns (null, null)
-    /// on API failure — callers must handle the null case by falling back to local formulas.
+    /// Fetches margin state for both legs, skipping spot connectors which have no margin/liquidation concepts.
+    /// Returns null for the spot side without making an API call, so
+    /// <c>ComputeLiquidationDistance</c> uses only the perp side.
     /// </summary>
+    private async Task<(MarginStateDto? LongMargin, MarginStateDto? ShortMargin)> FetchMarginStatesSkippingSpotAsync(
+        string longExchangeName, string shortExchangeName, string assetSymbol,
+        bool longIsSpot, bool shortIsSpot, CancellationToken ct)
+    {
+        if (longIsSpot && shortIsSpot)
+            return (null, null);
+
+        try
+        {
+            var longConnector = _connectorFactory.GetConnector(longExchangeName);
+            var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
+
+            if (!longConnector.HasCredentials || !shortConnector.HasCredentials)
+                return (null, null);
+
+            Task<MarginStateDto?> longMarginTask = longIsSpot
+                ? Task.FromResult<MarginStateDto?>(null)
+                : longConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+
+            Task<MarginStateDto?> shortMarginTask = shortIsSpot
+                ? Task.FromResult<MarginStateDto?>(null)
+                : shortConnector.GetPositionMarginStateAsync(assetSymbol, ct);
+
+            await Task.WhenAll(longMarginTask, shortMarginTask);
+            return (await longMarginTask, await shortMarginTask);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Margin state fetch failed for {Asset} on {Long}/{Short}",
+                assetSymbol, longExchangeName, shortExchangeName);
+            return (null, null);
+        }
+    }
+
     private async Task<(MarginStateDto? LongMargin, MarginStateDto? ShortMargin)> FetchMarginStateAsync(
         string longExchangeName, string shortExchangeName, string assetSymbol, CancellationToken ct)
     {
