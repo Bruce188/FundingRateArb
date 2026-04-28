@@ -34,7 +34,6 @@ using Polly.Timeout;
 using Serilog;
 using Serilog.Events;
 using Serilog.Sinks.ApplicationInsights.TelemetryConverters;
-using Serilog.Sinks.MSSqlServer;
 
 // Bootstrap logger — captures startup errors before full Serilog is configured
 Log.Logger = new LoggerConfiguration()
@@ -151,20 +150,11 @@ try
                     "{SourceContext} | {Message:lj} | {Properties:j}{NewLine}{Exception}");
         }
 
-        // SQL Server audit sink — only when a real SQL Server is available (not LocalDB on Linux)
-        if (!isDevEnv)
-        {
-            lc.WriteTo.MSSqlServer(
-                connectionString: builder.Configuration.GetConnectionString("DefaultConnection"),
-                sinkOptions: new MSSqlServerSinkOptions
-                {
-                    TableName = "AuditLogs",
-                    AutoCreateSqlTable = true,
-                    BatchPostingLimit = 50,
-                    BatchPeriod = TimeSpan.FromSeconds(5),
-                },
-                restrictedToMinimumLevel: LogEventLevel.Warning);
-        }
+        // Audit / warning+ logs flow to Application Insights via the sink registered above.
+        // The previous MSSqlServer sink (TableName=AuditLogs) was removed: it duplicated stdout,
+        // wrote ~50 rows/sec of HTTP/Polly noise into the OLTP database, and produced 2.5 GB
+        // of unqueryable text. App Insights gives us Kusto queries, dashboards, and alerts on
+        // the same data at lower cost and zero load on the SQL database.
     });
 
     // --- Application Insights (auto-collects when ConnectionString is configured) ---
