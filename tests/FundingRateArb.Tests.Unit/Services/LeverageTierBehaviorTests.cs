@@ -129,7 +129,7 @@ public class LeverageTierBehaviorTests
         mockBalanceAggregator
             .Setup(b => b.GetBalanceSnapshotAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 1000m, FetchedAt = DateTime.UtcNow });
-        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, _tierCache, mockBalanceAggregator.Object, NullLogger<ExecutionEngine>.Instance);
+        _sut = new ExecutionEngine(_mockUow.Object, connectorLifecycle, emergencyClose, positionCloser, _mockUserSettings.Object, _tierCache, mockBalanceAggregator.Object, Mock.Of<IPreflightSlippageGuard>(), NullLogger<ExecutionEngine>.Instance);
     }
 
     // ── Test: Effective leverage constrained by most restrictive exchange tier ─

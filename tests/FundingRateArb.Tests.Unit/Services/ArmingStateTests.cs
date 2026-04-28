@@ -83,6 +83,7 @@ public class ArmingStateTests
             mockUserSettings.Object,
             Mock.Of<ILeverageTierProvider>(),
             mockBalanceAggregator.Object,
+            Mock.Of<IPreflightSlippageGuard>(),
             NullLogger<ExecutionEngine>.Instance);
 
         return (engine, mockBotConfig);

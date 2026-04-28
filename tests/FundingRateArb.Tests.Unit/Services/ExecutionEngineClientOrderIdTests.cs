@@ -142,6 +142,7 @@ public class ExecutionEngineClientOrderIdTests
             _mockUserSettings.Object,
             Mock.Of<ILeverageTierProvider>(p => p.GetEffectiveMaxLeverage(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<decimal>()) == int.MaxValue),
             mockBalanceAggregator.Object,
+            Mock.Of<IPreflightSlippageGuard>(),
             NullLogger<ExecutionEngine>.Instance);
     }
 
