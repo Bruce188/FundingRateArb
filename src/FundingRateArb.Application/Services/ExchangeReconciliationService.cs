@@ -112,7 +112,10 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
 
                 foreach (var assetSymbol in exchangeAssets)
                 {
-                    if (assetSymbol == null) continue;
+                    if (assetSymbol == null)
+                    {
+                        continue;
+                    }
 
                     // Find the most recent DB snapshot for this (asset, exchange) pair.
                     var dbSnapshot = dbSnapshots
@@ -164,7 +167,10 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
             try
             {
                 var exchangePositions = await connector.GetAllOpenPositionsAsync(ct);
-                if (exchangePositions == null) continue; // unsupported — not an error
+                if (exchangePositions == null)
+                {
+                    continue; // unsupported — not an error
+                }
 
                 // Build a set of (asset, side) tuples present in the DB for this exchange.
                 var dbPairs = openPositions
@@ -175,9 +181,15 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
                     {
                         var pairs = new List<(string Asset, Side Side)>();
                         if (p.LongExchange?.Name != null && string.Equals(p.LongExchange.Name, connector.ExchangeName, StringComparison.OrdinalIgnoreCase) && p.Asset != null)
+                        {
                             pairs.Add((p.Asset.Symbol, Side.Long));
+                        }
+
                         if (p.ShortExchange?.Name != null && string.Equals(p.ShortExchange.Name, connector.ExchangeName, StringComparison.OrdinalIgnoreCase) && p.Asset != null)
+                        {
                             pairs.Add((p.Asset.Symbol, Side.Short));
+                        }
+
                         return pairs;
                     })
                     .ToHashSet();
@@ -234,8 +246,15 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
             var openPositions = await _uow.Positions.GetByStatusAsync(PositionStatus.Open);
             foreach (var connector in connectors)
             {
-                if (!perExchangeEquity.TryGetValue(connector.ExchangeName, out var equity)) continue;
-                if (equity <= 0) continue;
+                if (!perExchangeEquity.TryGetValue(connector.ExchangeName, out var equity))
+                {
+                    continue;
+                }
+
+                if (equity <= 0)
+                {
+                    continue;
+                }
 
                 var dbNotional = openPositions
                     .Where(p =>
@@ -258,7 +277,9 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
         {
             _logger.LogWarning(ex, "Capital consistency pass failed");
             foreach (var connector in connectors)
+            {
                 degradedExchanges.Add(connector.ExchangeName);
+            }
         }
     }
 
@@ -305,7 +326,10 @@ public class ExchangeReconciliationService : IExchangeReconciliationService
                     continue;
                 }
 
-                if (commission == 0 && dbFees == 0) continue; // both zero — no delta
+                if (commission == 0 && dbFees == 0)
+                {
+                    continue; // both zero — no delta
+                }
 
                 var denominator = commission.Value != 0 ? Math.Abs(commission.Value) : Math.Abs(dbFees);
                 if (denominator > 0)

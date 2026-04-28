@@ -111,7 +111,10 @@ public class BotOrchestratorPairDenyListTests : IDisposable
     {
         // Seed 10 losing closes for Hyperliquid/Aster
         for (int i = 0; i < 10; i++)
+        {
             SeedPosition(_hyperliquid, _aster, -10m);
+        }
+
         await _context.SaveChangesAsync();
 
         var config = MakeConfig(pairAutoDenyEnabled: true);
@@ -130,7 +133,10 @@ public class BotOrchestratorPairDenyListTests : IDisposable
     {
         // Only 9 losing closes — threshold requires >= 10
         for (int i = 0; i < 9; i++)
+        {
             SeedPosition(_hyperliquid, _aster, -10m);
+        }
+
         await _context.SaveChangesAsync();
 
         var config = MakeConfig(pairAutoDenyEnabled: true);
@@ -211,7 +217,10 @@ public class BotOrchestratorPairDenyListTests : IDisposable
     {
         // 10 losing closes but flag is off
         for (int i = 0; i < 10; i++)
+        {
             SeedPosition(_hyperliquid, _aster, -10m);
+        }
+
         await _context.SaveChangesAsync();
 
         var config = MakeConfig(pairAutoDenyEnabled: false);
@@ -244,7 +253,10 @@ public class BotOrchestratorPairDenyListTests : IDisposable
 
         // Seed 10 losing closes — enough to trip the auto-deny threshold
         for (int i = 0; i < 10; i++)
+        {
             SeedPosition(_hyperliquid, _aster, -10m);
+        }
+
         await _context.SaveChangesAsync();
 
         var config = MakeConfig(pairAutoDenyEnabled: true);

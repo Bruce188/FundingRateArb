@@ -186,7 +186,10 @@ public class StatusPageAggregator(
     private async Task<ReconciliationSnapshot?> BuildReconciliationAsync(IUnitOfWork uow, CancellationToken ct)
     {
         var report = await uow.ReconciliationReports.GetMostRecentAsync(ct);
-        if (report is null) return null;
+        if (report is null)
+        {
+            return null;
+        }
 
         var snapshot = new ReconciliationSnapshot { Report = report };
         try

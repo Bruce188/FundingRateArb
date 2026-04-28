@@ -42,7 +42,11 @@ public class PairDenyListProvider : IPairDenyListProvider
 
         public bool IsDenied(string longExchangeName, string shortExchangeName)
         {
-            if (string.IsNullOrEmpty(longExchangeName) || string.IsNullOrEmpty(shortExchangeName)) return false;
+            if (string.IsNullOrEmpty(longExchangeName) || string.IsNullOrEmpty(shortExchangeName))
+            {
+                return false;
+            }
+
             return _set.Contains((longExchangeName, shortExchangeName));
         }
 

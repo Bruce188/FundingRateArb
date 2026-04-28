@@ -197,87 +197,87 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
         await _cycleLock.WaitAsync(ct);
         try
         {
-        using var sweepScope = _scopeFactory.CreateScope();
-        var uow = sweepScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        var executionEngine = sweepScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
-        var globalConfig = await uow.BotConfig.GetActiveAsync();
-        var enabledUserIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
+            using var sweepScope = _scopeFactory.CreateScope();
+            var uow = sweepScope.ServiceProvider.GetRequiredService<IUnitOfWork>();
+            var executionEngine = sweepScope.ServiceProvider.GetRequiredService<IExecutionEngine>();
+            var globalConfig = await uow.BotConfig.GetActiveAsync();
+            var enabledUserIds = await uow.UserConfigurations.GetAllEnabledUserIdsAsync();
 
-        if (enabledUserIds.Count == 0)
-        {
-            _logger.LogDebug("Boot sweep: no enabled users — skipping.");
-            return;
-        }
-
-        var olderThan = TimeSpan.Zero; // all Opening positions, not just stale ones
-        var totalFound = 0;
-
-        using var sweepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        sweepCts.CancelAfter(TimeSpan.FromMinutes(2));
-        var sweepToken = sweepCts.Token;
-
-        foreach (var userId in enabledUserIds)
-        {
-            if (sweepToken.IsCancellationRequested)
+            if (enabledUserIds.Count == 0)
             {
-                break;
+                _logger.LogDebug("Boot sweep: no enabled users — skipping.");
+                return;
             }
 
-            try
+            var olderThan = TimeSpan.Zero; // all Opening positions, not just stale ones
+            var totalFound = 0;
+
+            using var sweepCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            sweepCts.CancelAfter(TimeSpan.FromMinutes(2));
+            var sweepToken = sweepCts.Token;
+
+            foreach (var userId in enabledUserIds)
             {
-                var pending = await uow.Positions.GetPendingConfirmAsync(userId, olderThan, sweepToken);
-                if (pending.Count == 0)
+                if (sweepToken.IsCancellationRequested)
                 {
-                    continue;
+                    break;
                 }
 
-                totalFound += pending.Count;
-                _logger.LogInformation(
-                    "Boot sweep: {Count} pending Opening position(s) found for user {UserId}. Running confirm-or-rollback.",
-                    pending.Count, userId);
-
-                foreach (var position in pending)
+                try
                 {
-                    if (sweepToken.IsCancellationRequested)
+                    var pending = await uow.Positions.GetPendingConfirmAsync(userId, olderThan, sweepToken);
+                    if (pending.Count == 0)
                     {
-                        break;
+                        continue;
                     }
 
-                    try
+                    totalFound += pending.Count;
+                    _logger.LogInformation(
+                        "Boot sweep: {Count} pending Opening position(s) found for user {UserId}. Running confirm-or-rollback.",
+                        pending.Count, userId);
+
+                    foreach (var position in pending)
                     {
-                        await executionEngine.ConfirmOrRollbackAsync(
-                            userId, position, globalConfig.OpenConfirmTimeoutSeconds, sweepToken);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        throw;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex,
-                            "Boot sweep: confirm-or-rollback failed for position #{Id} (user {UserId}). Continuing.",
-                            position.Id, userId);
+                        if (sweepToken.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
+                        try
+                        {
+                            await executionEngine.ConfirmOrRollbackAsync(
+                                userId, position, globalConfig.OpenConfirmTimeoutSeconds, sweepToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex,
+                                "Boot sweep: confirm-or-rollback failed for position #{Id} (user {UserId}). Continuing.",
+                                position.Id, userId);
+                        }
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Boot sweep: failed to query or resolve positions for user {UserId}. Continuing.", userId);
+                }
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Boot sweep: failed to query or resolve positions for user {UserId}. Continuing.", userId);
-            }
-        }
 
-        if (totalFound > 0)
-        {
-            _logger.LogInformation("Boot sweep: processed {Count} pending position(s) across all users.", totalFound);
-        }
-        else
-        {
-            _logger.LogDebug("Boot sweep: no orphaned Opening positions found.");
-        }
+            if (totalFound > 0)
+            {
+                _logger.LogInformation("Boot sweep: processed {Count} pending position(s) across all users.", totalFound);
+            }
+            else
+            {
+                _logger.LogDebug("Boot sweep: no orphaned Opening positions found.");
+            }
         }
         finally
         {
