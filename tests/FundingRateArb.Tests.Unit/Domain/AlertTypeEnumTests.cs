@@ -8,7 +8,7 @@ public class AlertTypeEnumTests
     [Fact]
     public void AlertType_ShouldContain_OperationalWarning()
     {
-        var names = Enum.GetNames(typeof(AlertType));
+        var names = Enum.GetNames<AlertType>();
 
         names.Should().Contain("OperationalWarning",
             "OperationalWarning must be added as a member of the AlertType enum per task 1.1");
