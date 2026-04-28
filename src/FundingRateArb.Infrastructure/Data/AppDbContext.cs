@@ -36,6 +36,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<CoinGlassExchangeRate> CoinGlassExchangeRates => Set<CoinGlassExchangeRate>();
     public DbSet<CoinGlassDiscoveryEvent> CoinGlassDiscoveryEvents => Set<CoinGlassDiscoveryEvent>();
     public DbSet<AssetExchangeFundingInterval> AssetExchangeFundingIntervals => Set<AssetExchangeFundingInterval>();
+    public DbSet<PairExecutionStats> PairExecutionStats => Set<PairExecutionStats>();
     public DbSet<ReconciliationReport> ReconciliationReports => Set<ReconciliationReport>();
 
     protected override void OnModelCreating(ModelBuilder builder)
@@ -65,6 +66,12 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
         builder.Entity<BotConfiguration>(entity =>
         {
             entity.Property(p => p.MaxAcceptableSlippagePct).HasPrecision(18, 8);
+        });
+
+        builder.Entity<PairExecutionStats>(entity =>
+        {
+            entity.Property(p => p.TotalPnlUsdc).HasPrecision(18, 8);
+            entity.HasIndex(p => new { p.LongExchangeName, p.ShortExchangeName }).IsUnique();
         });
 
         foreach (var entityType in builder.Model.GetEntityTypes())

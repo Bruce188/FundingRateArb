@@ -25,6 +25,7 @@ public class UnitOfWork : IUnitOfWork
         UserConfigurations = new UserConfigurationRepository(context);
         UserPreferences = new UserPreferenceRepository(context);
         OpportunitySnapshots = new OpportunitySnapshotRepository(context);
+        PairExecutionStats = new PairExecutionStatsRepository(context);
         ReconciliationReports = new ReconciliationReportRepository(context);
     }
 
@@ -39,6 +40,7 @@ public class UnitOfWork : IUnitOfWork
     public IUserConfigurationRepository UserConfigurations { get; }
     public IUserPreferenceRepository UserPreferences { get; }
     public IOpportunitySnapshotRepository OpportunitySnapshots { get; }
+    public IPairExecutionStatsRepository PairExecutionStats { get; }
     public IReconciliationReportRepository ReconciliationReports { get; }
 
     /// <summary>Maximum retry attempts on <see cref="DbUpdateConcurrencyException"/> for ArbitragePosition writes.</summary>

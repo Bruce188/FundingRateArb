@@ -49,6 +49,14 @@ public class PipelineDiagnosticsDto
     /// </summary>
     public int PairsFilteredByTrendUnconfirmed { get; set; }
 
+    /// <summary>
+    /// Opportunities filtered because the (LongExchangeName, ShortExchangeName) directional pair is currently
+    /// in the deny list (auto or manual). Consulted via <see cref="FundingRateArb.Application.Interfaces.IPairDenyListSnapshot"/>
+    /// — the snapshot is refreshed per-cycle by <c>BotOrchestrator</c>, so changes take effect on the next cycle's
+    /// <c>SignalEngine.ComputeAndCacheAsync</c> invocation.
+    /// </summary>
+    public int PairsFilteredByDenyList { get; set; }
+
     public int PairsPassing { get; set; }
     public decimal BestRawSpread { get; set; }
     public int StalenessMinutes { get; set; }

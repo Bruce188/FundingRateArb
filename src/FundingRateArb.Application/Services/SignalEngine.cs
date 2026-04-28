@@ -42,6 +42,7 @@ public class SignalEngine : ISignalEngine
     private readonly IBalanceAggregator? _balanceAggregator;
     private readonly ICapitalProvider? _capitalProvider;
     private readonly IAssetExchangeFundingIntervalRepository? _intervalRepo;
+    private readonly IPairDenyListProvider? _denyListProvider;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -55,7 +56,8 @@ public class SignalEngine : ISignalEngine
         IMemoryCache? opportunityCache = null,
         IBalanceAggregator? balanceAggregator = null,
         ICapitalProvider? capitalProvider = null,
-        IAssetExchangeFundingIntervalRepository? intervalRepo = null)
+        IAssetExchangeFundingIntervalRepository? intervalRepo = null,
+        IPairDenyListProvider? denyListProvider = null)
     {
         _uow = uow;
         _cache = cache;
@@ -69,6 +71,7 @@ public class SignalEngine : ISignalEngine
         _balanceAggregator = balanceAggregator;
         _capitalProvider = capitalProvider;
         _intervalRepo = intervalRepo;
+        _denyListProvider = denyListProvider;
     }
 
     /// <summary>
@@ -315,6 +318,14 @@ public class SignalEngine : ISignalEngine
                     var b = assetRates[j];
 
                     var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
+
+                    // Deny-list filter (data-driven, refreshed per-cycle by BotOrchestrator).
+                    // Consults IPairDenyListSnapshot.Current — case-insensitive on exchange names.
+                    if (_denyListProvider?.Current.IsDenied(longR.Exchange.Name, shortR.Exchange.Name) == true)
+                    {
+                        diagnostics.PairsFilteredByDenyList++;
+                        continue;
+                    }
 
                     diagnostics.TotalPairsEvaluated++;
 

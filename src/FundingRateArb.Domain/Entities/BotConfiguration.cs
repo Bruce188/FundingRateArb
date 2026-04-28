@@ -276,6 +276,15 @@ public class BotConfiguration : IValidatableObject
     /// </summary>
     public bool UseBreakEvenSizeFilter { get; set; }
 
+    /// <summary>
+    /// When true, <c>BotOrchestrator</c>'s per-cycle deny-list refresh applies the auto-deny rule:
+    /// for each <c>(LongExchangeName, ShortExchangeName)</c> direction, if <c>WinCount = 0 AND CloseCount >= 10</c>
+    /// over the trailing 14 days, sets <c>IsDenied=true, DeniedUntil=NOW+7d, DeniedReason='auto: 0-win streak'</c>.
+    /// Default <c>false</c> — opt-in via admin UI to avoid surprising operators with auto-rejection of pairs.
+    /// Mirrors the cautious-rollout pattern of <see cref="UseBreakEvenSizeFilter"/>.
+    /// </summary>
+    public bool PairAutoDenyEnabled { get; set; }
+
     /// <summary>Consecutive snapshots with positive funding spread required before entry.</summary>
     [Range(1, 20)]
     public int MinConsecutiveFavorableCycles { get; set; } = 3;
