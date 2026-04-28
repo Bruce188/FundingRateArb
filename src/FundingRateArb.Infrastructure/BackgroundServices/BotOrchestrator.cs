@@ -296,6 +296,10 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
         using var scope = _scopeFactory.CreateScope();
         var uow = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         var globalConfig = await uow.BotConfig.GetActiveAsync();
+
+        // Per-cycle deny-list refresh (data-driven, gated by globalConfig.PairAutoDenyEnabled).
+        await RefreshPairDenyListAsync(uow, globalConfig, ct);
+
         var healthMonitor = scope.ServiceProvider.GetRequiredService<IPositionHealthMonitor>();
         var signalEngine = scope.ServiceProvider.GetRequiredService<ISignalEngine>();
         var executionEngine = scope.ServiceProvider.GetRequiredService<IExecutionEngine>();
@@ -1565,6 +1569,78 @@ public partial class BotOrchestrator : BackgroundService, IBotControl, IBotDiagn
 
         // Both or neither found — can't determine, fall back to null (both incremented)
         return null;
+    }
+
+    /// <summary>
+    /// Per-cycle deny-list refresh: aggregates 14-day per-pair stats, upserts into
+    /// <c>PairExecutionStats</c>, applies the auto-deny rule when <c>PairAutoDenyEnabled</c>
+    /// is on, and refreshes <c>IPairDenyListProvider.Current</c>. Wrapped in try/catch —
+    /// refresh failure must not halt the cycle (graceful-degrade: stale snapshot acceptable).
+    /// </summary>
+    internal async Task RefreshPairDenyListAsync(IUnitOfWork uow, BotConfiguration globalConfig, CancellationToken ct)
+    {
+        try
+        {
+            var windowStart = DateTime.UtcNow.AddDays(-14);
+            var windowEnd = DateTime.UtcNow;
+            var stats = await uow.Positions.GetPerExchangePairKpiAsync(windowStart, null, ct);
+
+            foreach (var s in stats)
+            {
+                var existing = await uow.PairExecutionStats.GetByPairAsync(s.LongExchangeName, s.ShortExchangeName, ct);
+                var row = existing ?? new PairExecutionStats
+                {
+                    LongExchangeName = s.LongExchangeName,
+                    ShortExchangeName = s.ShortExchangeName,
+                };
+                row.WindowStart = windowStart;
+                row.WindowEnd = windowEnd;
+                row.CloseCount = s.Trades;
+                row.WinCount = s.WinCount;
+                row.TotalPnlUsdc = s.TotalPnl;
+                // AvgHoldSec is not available from ExchangePairKpiAggregateDto today.
+                // Leave as 0 — reserved for a follow-up DTO extension (deferred per analysis Key File #5).
+                row.LastUpdatedAt = DateTime.UtcNow;
+
+                // Apply auto-deny rule (AC#3) when the flag is on.
+                // Guard: never overwrite a manual deny (reason starts with "manual:") — manual denies persist until an operator clicks UnDeny.
+                if (globalConfig.PairAutoDenyEnabled
+                    && row.WinCount == 0
+                    && row.CloseCount >= 10
+                    && !(row.DeniedReason?.StartsWith("manual:", StringComparison.Ordinal) ?? false)
+                    && (!row.IsDenied || row.DeniedUntil == null || row.DeniedUntil <= DateTime.UtcNow))
+                {
+                    row.IsDenied = true;
+                    row.DeniedUntil = DateTime.UtcNow.AddDays(7);
+                    row.DeniedReason = "auto: 0-win streak";
+                }
+                // Auto-deny expiry sweep: only auto-denies are auto-cleared (manual denies persist).
+                else if (row.IsDenied
+                         && row.DeniedReason != null
+                         && row.DeniedReason.StartsWith("auto:", StringComparison.Ordinal)
+                         && row.DeniedUntil != null
+                         && row.DeniedUntil <= DateTime.UtcNow)
+                {
+                    row.IsDenied = false;
+                    row.DeniedUntil = null;
+                    row.DeniedReason = null;
+                }
+
+                await uow.PairExecutionStats.UpsertAsync(row, ct);
+            }
+
+            await uow.SaveAsync(ct);
+
+            // Refresh the in-memory snapshot consumed by SignalEngine. Resolved via DI on demand
+            // (singleton in Program.cs Task 7.3); resolved through the same scope as the UoW.
+            using var providerScope = _scopeFactory.CreateScope();
+            var provider = providerScope.ServiceProvider.GetRequiredService<IPairDenyListProvider>();
+            await provider.RefreshAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Pair deny-list refresh failed — stale snapshot retained for this cycle");
+        }
     }
 
     [GeneratedRegex(@"[A-Za-z0-9]{32,}")]

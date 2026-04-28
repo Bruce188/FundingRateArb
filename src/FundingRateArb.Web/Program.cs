@@ -304,6 +304,7 @@ try
     builder.Services.AddScoped<ICoinGlassAnalyticsRepository, CoinGlassAnalyticsRepository>();
     builder.Services.AddScoped<IDatabaseSpaceHealthProbe, DatabaseSpaceHealthProbe>();
     builder.Services.AddScoped<IReconciliationReportRepository, ReconciliationReportRepository>();
+    builder.Services.AddScoped<IPairExecutionStatsRepository, PairExecutionStatsRepository>();
     builder.Services.AddScoped<IStatusPageAggregator, StatusPageAggregator>();
 
     // --- Services ---
@@ -459,6 +460,7 @@ try
     // See: dotnet user-secrets set "Exchanges:Hyperliquid:WalletAddress" "0x..."
     builder.Services.AddSingleton<IMarkPriceCache, SingletonMarkPriceCache>();
     builder.Services.AddSingleton<ILeverageTierProvider, LeverageTierCache>();
+    builder.Services.AddSingleton<IPairDenyListProvider, PairDenyListProvider>();
     builder.Services.AddScoped<IExchangeSymbolConstraintsProvider, ExchangeSymbolConstraintsProvider>();
     builder.Services.AddScoped<HyperliquidConnector>();
     builder.Services.AddHttpClient<LighterConnector>(client =>

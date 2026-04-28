@@ -13,6 +13,7 @@ public interface IUnitOfWork : IDisposable
     IUserConfigurationRepository UserConfigurations { get; }
     IUserPreferenceRepository UserPreferences { get; }
     IOpportunitySnapshotRepository OpportunitySnapshots { get; }
+    IPairExecutionStatsRepository PairExecutionStats { get; }
     IReconciliationReportRepository ReconciliationReports { get; }
     Task<int> SaveAsync(CancellationToken ct = default);
 }

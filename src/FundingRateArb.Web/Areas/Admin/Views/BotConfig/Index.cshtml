@@ -439,6 +439,13 @@
                         </div>
                         <div class="col-md-4">
                             <div class="form-check form-switch mt-4">
+                                <input asp-for="PairAutoDenyEnabled" class="form-check-input" type="checkbox" />
+                                <label asp-for="PairAutoDenyEnabled" class="form-check-label"></label>
+                            </div>
+                            <div class="form-text">When enabled, pairs with zero wins across 10+ closed trades are automatically added to the deny list for 7 days.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="form-check form-switch mt-4">
                                 <input asp-for="DryRunEnabled" class="form-check-input" type="checkbox" />
                                 <label asp-for="DryRunEnabled" class="form-check-label"></label>
                             </div>

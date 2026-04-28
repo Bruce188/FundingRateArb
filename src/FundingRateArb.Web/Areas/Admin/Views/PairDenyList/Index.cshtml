@@ -1,0 +1,108 @@
+@model FundingRateArb.Web.ViewModels.Admin.PairDenyListViewModel
+@{
+    ViewData["Title"] = "Pair Deny List";
+    Layout = "_Layout";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="h3">Pair Deny List</h1>
+    <div>
+        <span class="badge @(Model.AutoDenyEnabled ? "bg-success" : "bg-secondary")">
+            Auto-Deny: @(Model.AutoDenyEnabled ? "Enabled" : "Disabled")
+        </span>
+        <span class="badge bg-info ms-2">Denied: @Model.DeniedCount</span>
+        <small class="text-muted ms-2">Snapshot: @Model.SnapshotAt.ToString("u")</small>
+    </div>
+</div>
+
+@if (TempData["Success"] != null)
+{
+    <div class="alert alert-success">@TempData["Success"]</div>
+}
+
+@if (TempData["Error"] != null)
+{
+    <div class="alert alert-danger">@TempData["Error"]</div>
+}
+
+<section class="mb-4">
+    <div class="card shadow-sm">
+        <div class="card-header fw-semibold">Rolling-window stats (last 14 days)</div>
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Long</th>
+                        <th>Short</th>
+                        <th class="text-end">Closes</th>
+                        <th class="text-end">Wins</th>
+                        <th class="text-end">Win %</th>
+                        <th class="text-end">Total PnL</th>
+                        <th class="text-end">Avg Hold</th>
+                        <th>Status</th>
+                        <th>Reason</th>
+                        <th>Until</th>
+                        <th class="text-end">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var row in Model.Rows)
+                    {
+                        var winPct = row.CloseCount > 0 ? (decimal)row.WinCount / row.CloseCount : 0m;
+                        <tr>
+                            <td>@row.LongExchangeName</td>
+                            <td>@row.ShortExchangeName</td>
+                            <td class="text-end">@row.CloseCount</td>
+                            <td class="text-end">@row.WinCount</td>
+                            <td class="text-end">@winPct.ToString("P1")</td>
+                            <td class="text-end @(row.TotalPnlUsdc >= 0 ? "text-success" : "text-danger")">
+                                @row.TotalPnlUsdc.ToString("N4")
+                            </td>
+                            <td class="text-end">@row.AvgHoldSec s</td>
+                            <td>
+                                @if (row.IsDenied)
+                                {
+                                    <span class="badge bg-danger">Denied</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-success">Allowed</span>
+                                }
+                            </td>
+                            <td><small>@row.DeniedReason</small></td>
+                            <td><small>@(row.DeniedUntil?.ToString("u") ?? "—")</small></td>
+                            <td class="text-end">
+                                @if (row.IsDenied)
+                                {
+                                    <form asp-action="UnDeny" method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="longExchangeName" value="@row.LongExchangeName" />
+                                        <input type="hidden" name="shortExchangeName" value="@row.ShortExchangeName" />
+                                        <button type="submit" class="btn btn-sm btn-outline-success">Un-Deny</button>
+                                    </form>
+                                }
+                                else
+                                {
+                                    <form asp-action="Deny" method="post" class="d-inline">
+                                        @Html.AntiForgeryToken()
+                                        <input type="hidden" name="longExchangeName" value="@row.LongExchangeName" />
+                                        <input type="hidden" name="shortExchangeName" value="@row.ShortExchangeName" />
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Deny</button>
+                                    </form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (Model.Rows.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="11" class="text-center text-muted py-4">
+                                No rolling-window stats yet. Wait for the next bot cycle (60s) for the first refresh.
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</section>

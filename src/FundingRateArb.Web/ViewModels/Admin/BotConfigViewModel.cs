@@ -170,6 +170,9 @@ public class BotConfigViewModel
     [Display(Name = "Use Break-Even Size Filter")]
     public bool UseBreakEvenSizeFilter { get; set; }
 
+    [Display(Name = "Pair Auto-Deny")]
+    public bool PairAutoDenyEnabled { get; set; }
+
     [Display(Name = "Dry Run Mode")]
     public bool DryRunEnabled { get; set; }
 
