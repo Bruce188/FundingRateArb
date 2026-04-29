@@ -236,7 +236,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             foreach (var ticker in result.Data!)
             {
                 if (ticker.LastPrice > 0)
+                {
                     cache[ticker.Symbol] = ticker.LastPrice;
+                }
             }
 
             return cache;
@@ -277,7 +279,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     public async Task<bool?> HasOpenPositionAsync(string asset, Side side, CancellationToken ct = default)
     {
         if (side == Side.Short)
+        {
             return false; // Spot cannot be short
+        }
 
         try
         {
@@ -302,7 +306,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
                 ct);
 
             if (!result.Success || result.Data is null)
+            {
                 return null;
+            }
 
             return result.Data.Balances
                 .Where(b => !b.Asset.Equals("USDT", StringComparison.OrdinalIgnoreCase)
@@ -352,7 +358,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
             ct);
 
         if (!result.Success || result.Data is null)
+        {
             return 0m;
+        }
 
         return result.Data
             .Where(b => b.Asset.Equals(asset, StringComparison.OrdinalIgnoreCase))
@@ -362,7 +370,9 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     private async Task<int> GetSymbolQuantityPrecisionAsync(string symbol, CancellationToken ct)
     {
         if (_quantityPrecisionCache.TryGetValue(symbol, out var cached))
+        {
             return cached;
+        }
 
         await EnsureSymbolInfoCachedAsync(ct);
         return _quantityPrecisionCache.GetValueOrDefault(symbol, 3);
@@ -371,16 +381,22 @@ public class BinanceConnector : IExchangeConnector, IDisposable
     private async Task EnsureSymbolInfoCachedAsync(CancellationToken ct)
     {
         if (_symbolInfoLoaded)
+        {
             return;
+        }
 
         if (DateTime.UtcNow.Ticks < Interlocked.Read(ref _symbolInfoFailedUntilTicks))
+        {
             return;
+        }
 
         await _symbolInfoLock.WaitAsync(ct);
         try
         {
             if (_symbolInfoLoaded)
+            {
                 return;
+            }
 
             var pipeline = _pipelineProvider.GetPipeline("ExchangeSdk");
             var result = await pipeline.ExecuteAsync(
@@ -395,12 +411,17 @@ public class BinanceConnector : IExchangeConnector, IDisposable
 
                     var priceFilter = s.PriceFilter;
                     if (priceFilter?.TickSize is > 0)
+                    {
                         _tickSizeCache[s.Name] = priceFilter.TickSize;
+                    }
                     else
                     {
                         decimal divisor = 1m;
                         for (int i = 0; i < s.QuoteAssetPrecision; i++)
+                        {
                             divisor *= 10m;
+                        }
+
                         _tickSizeCache[s.Name] = 1m / divisor;
                     }
                 }

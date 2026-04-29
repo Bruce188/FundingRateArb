@@ -911,7 +911,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
         bool longIsSpot, bool shortIsSpot, CancellationToken ct)
     {
         if (longIsSpot && shortIsSpot)
+        {
             return (null, null);
+        }
 
         try
         {
@@ -919,7 +921,9 @@ public class PositionHealthMonitor : IPositionHealthMonitor
             var shortConnector = _connectorFactory.GetConnector(shortExchangeName);
 
             if (!longConnector.HasCredentials || !shortConnector.HasCredentials)
+            {
                 return (null, null);
+            }
 
             Task<MarginStateDto?> longMarginTask = longIsSpot
                 ? Task.FromResult<MarginStateDto?>(null)

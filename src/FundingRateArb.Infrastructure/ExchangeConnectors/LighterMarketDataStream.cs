@@ -269,7 +269,9 @@ public class LighterMarketDataStream : IMarketDataStream
     private static List<(decimal Price, decimal Size)>? TryParseBookSideArray(JsonElement el, string property)
     {
         if (!el.TryGetProperty(property, out var sideEl) || sideEl.ValueKind != JsonValueKind.Array)
+        {
             return null;
+        }
 
         var result = new List<(decimal Price, decimal Size)>();
         foreach (var level in sideEl.EnumerateArray())
@@ -277,7 +279,9 @@ public class LighterMarketDataStream : IMarketDataStream
             var price = GetDecimalProperty(level, "price") ?? GetDecimalProperty(level, "p");
             var size = GetDecimalProperty(level, "size") ?? GetDecimalProperty(level, "s") ?? 0m;
             if (price is > 0m)
+            {
                 result.Add((price.Value, size));
+            }
         }
 
         return result;

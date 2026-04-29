@@ -2389,7 +2389,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         // 1. Fetch the market detail for intended-mid and market_id.
         var detail = await GetMarketDetailAsync(asset, ct);
         if (detail is null || detail.BestBid <= 0m || detail.BestAsk <= 0m)
+        {
             return null; // gate is skipped — no usable mid
+        }
 
         var intendedMid = (detail.BestBid + detail.BestAsk) / 2m;
 
@@ -2407,7 +2409,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         _logger.LogDebug("Depth gate WS miss for {Asset}, falling back to REST orderBook", asset);
         var rest = await GetRestOrderbookAsync(detail.MarketId, ct);
         if (rest is null)
+        {
             return null; // REST failed — gate is skipped (degrade gracefully)
+        }
 
         var bids = rest.Bids.Select(l => (l.Price, l.Size)).ToList();
         var asks = rest.Asks.Select(l => (l.Price, l.Size)).ToList();
@@ -2430,7 +2434,9 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
         var ladder = side == Side.Long ? asks : bids;
         var avg = SlippageCalculator.EstimatedAvgFill(ladder, quantity);
         if (avg is null)
+        {
             return new OrderbookDepthSnapshot(asset, side, intendedMid, 0m, 0m, OrderbookDepthSource.Insufficient);
+        }
 
         var slippagePct = intendedMid > 0m ? (avg.Value - intendedMid) / intendedMid : 0m;
         return new OrderbookDepthSnapshot(asset, side, intendedMid, avg.Value, slippagePct, source);
