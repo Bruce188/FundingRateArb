@@ -57,6 +57,12 @@ public class PipelineDiagnosticsDto
     /// </summary>
     public int PairsFilteredByDenyList { get; set; }
 
+    /// <summary>
+    /// Opportunities filtered because the would-be short leg's connector is a spot connector
+    /// (spot cannot short the underlying). Per analysis Part C+D — instant cutover for Binance Spot.
+    /// </summary>
+    public int PairsFilteredBySpotShortLeg { get; set; }
+
     public int PairsPassing { get; set; }
     public decimal BestRawSpread { get; set; }
     public int StalenessMinutes { get; set; }

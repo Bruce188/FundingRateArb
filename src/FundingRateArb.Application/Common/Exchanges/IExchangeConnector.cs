@@ -22,6 +22,12 @@ public interface IExchangeConnector
     /// </summary>
     bool HasCredentials => true;
 
+    /// <summary>
+    /// Hardcoded per-connector capability declaring whether the connector speaks perp futures or spot.
+    /// Default <see cref="ExchangeMarketType.Perp"/> — opt-in override per connector.
+    /// </summary>
+    ExchangeMarketType MarketType => ExchangeMarketType.Perp;
+
     Task<List<FundingRateDto>> GetFundingRatesAsync(CancellationToken ct = default);
     Task<OrderResultDto> PlaceMarketOrderAsync(string asset, Side side, decimal sizeUsdc, int leverage, CancellationToken ct = default);
     Task<OrderResultDto> ClosePositionAsync(string asset, Side side, CancellationToken ct = default);
@@ -106,6 +112,19 @@ public interface IExchangeConnector
     /// </summary>
     Task<decimal?> GetCommissionIncomeAsync(DateTime from, DateTime to, CancellationToken ct = default)
         => Task.FromResult<decimal?>(null);
+
+    /// <summary>
+    /// Returns an estimated avg-fill price + slippage for the requested quantity by walking the
+    /// order ladder. Default returns <c>null</c> — connectors opt-in by overriding. The depth gate
+    /// in <c>ExecutionEngine</c> SKIPS the gate when this returns <c>null</c>.
+    /// </summary>
+    /// <returns>
+    /// <c>null</c> — depth could not be determined (degrade gracefully). Gate is skipped.
+    /// <c>OrderbookDepthSnapshot { Source = Insufficient }</c> — ladder lacked depth. Gate REJECTS.
+    /// Otherwise — gate evaluates against <c>IPreflightSlippageGuard.GetCurrentCap</c>.
+    /// </returns>
+    Task<OrderbookDepthSnapshot?> GetOrderbookDepthAsync(string asset, Side side, decimal quantity, CancellationToken ct = default)
+        => Task.FromResult<OrderbookDepthSnapshot?>(null);
 }
 
 /// <summary>

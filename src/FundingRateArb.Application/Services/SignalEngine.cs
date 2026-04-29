@@ -5,6 +5,7 @@ using FundingRateArb.Application.Common.Repositories;
 using FundingRateArb.Application.DTOs;
 using FundingRateArb.Application.Interfaces;
 using FundingRateArb.Domain.Entities;
+using FundingRateArb.Domain.Enums;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using IAssetExchangeFundingIntervalRepository = FundingRateArb.Application.Interfaces.IAssetExchangeFundingIntervalRepository;
@@ -43,6 +44,7 @@ public class SignalEngine : ISignalEngine
     private readonly ICapitalProvider? _capitalProvider;
     private readonly IAssetExchangeFundingIntervalRepository? _intervalRepo;
     private readonly IPairDenyListProvider? _denyListProvider;
+    private readonly IExchangeConnectorFactory? _connectorFactory;
 
     public SignalEngine(
         IUnitOfWork uow,
@@ -57,7 +59,8 @@ public class SignalEngine : ISignalEngine
         IBalanceAggregator? balanceAggregator = null,
         ICapitalProvider? capitalProvider = null,
         IAssetExchangeFundingIntervalRepository? intervalRepo = null,
-        IPairDenyListProvider? denyListProvider = null)
+        IPairDenyListProvider? denyListProvider = null,
+        IExchangeConnectorFactory? connectorFactory = null)
     {
         _uow = uow;
         _cache = cache;
@@ -72,6 +75,7 @@ public class SignalEngine : ISignalEngine
         _capitalProvider = capitalProvider;
         _intervalRepo = intervalRepo;
         _denyListProvider = denyListProvider;
+        _connectorFactory = connectorFactory;
     }
 
     /// <summary>
@@ -318,6 +322,24 @@ public class SignalEngine : ISignalEngine
                     var b = assetRates[j];
 
                     var (longR, shortR) = a.RatePerHour <= b.RatePerHour ? (a, b) : (b, a);
+
+                    // Spot short-leg filter: spot connectors cannot short the underlying asset.
+                    if (_connectorFactory is not null)
+                    {
+                        try
+                        {
+                            var shortConnector = _connectorFactory.GetConnector(shortR.Exchange.Name);
+                            if (shortConnector?.MarketType == ExchangeMarketType.Spot)
+                            {
+                                diagnostics.PairsFilteredBySpotShortLeg++;
+                                continue;
+                            }
+                        }
+                        catch
+                        {
+                            // Unregistered connector — treat as Perp by safe default.
+                        }
+                    }
 
                     // Deny-list filter (data-driven, refreshed per-cycle by BotOrchestrator).
                     // Consults IPairDenyListSnapshot.Current — case-insensitive on exchange names.

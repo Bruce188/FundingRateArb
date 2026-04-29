@@ -44,6 +44,7 @@ public class ExecutionEngine : IExecutionEngine
     private readonly IUserSettingsService _userSettings;
     private readonly ILeverageTierProvider _tierProvider;
     private readonly IBalanceAggregator _balanceAggregator;
+    private readonly IPreflightSlippageGuard _preflightGuard;
     private readonly ILogger<ExecutionEngine> _logger;
 
     public ExecutionEngine(
@@ -54,6 +55,7 @@ public class ExecutionEngine : IExecutionEngine
         IUserSettingsService userSettings,
         ILeverageTierProvider tierProvider,
         IBalanceAggregator balanceAggregator,
+        IPreflightSlippageGuard preflightGuard,
         ILogger<ExecutionEngine> logger)
     {
         _uow = uow;
@@ -63,6 +65,7 @@ public class ExecutionEngine : IExecutionEngine
         _userSettings = userSettings;
         _tierProvider = tierProvider;
         _balanceAggregator = balanceAggregator;
+        _preflightGuard = preflightGuard;
         _logger = logger;
     }
 
@@ -156,6 +159,24 @@ public class ExecutionEngine : IExecutionEngine
             {
                 effectiveLeverage = 1;
             }
+
+            // Spot-leverage clamp: spot exchanges have no leverage; clamp to 1 if either leg is spot.
+            if ((longConnector as IExchangeConnector)?.MarketType == ExchangeMarketType.Spot ||
+                (shortConnector as IExchangeConnector)?.MarketType == ExchangeMarketType.Spot)
+            {
+                if (effectiveLeverage != 1)
+                {
+                    if (_leverageWarned.TryAdd((opp.AssetSymbol, 1), 0))
+                    {
+                        _logger.LogWarning(
+                            "Leverage clamped from {Original}x to 1x for {Asset} (spot leg present)",
+                            effectiveLeverage, opp.AssetSymbol);
+                    }
+
+                    effectiveLeverage = 1;
+                }
+            }
+
             try
             {
                 // Ensure tier cache is populated for both exchanges
@@ -353,6 +374,19 @@ public class ExecutionEngine : IExecutionEngine
                     firstSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
                 }
 
+                // Depth-gate consult: check orderbook depth before placing first leg
+                var (firstReject, firstRejectReason) = await ConsultDepthGateAsync(firstConnector, opp.AssetSymbol, firstSide, targetQuantity, ct);
+                if (firstReject)
+                {
+                    _logger.LogWarning("Depth gate rejected sequential first leg for {Asset} on {Exchange}: {Reason}",
+                        opp.AssetSymbol, firstExchangeName, firstRejectReason);
+                    position.Status = PositionStatus.Failed;
+                    position.ClosedAt = DateTime.UtcNow;
+                    _uow.Positions.Update(position);
+                    await _uow.SaveAsync(ct);
+                    return (false, firstRejectReason);
+                }
+
                 // Open first leg (with 45-second timeout)
                 var firstAttemptN = (firstSide == Side.Long ? position.LongOrderAttemptN : position.ShortOrderAttemptN) + 1;
                 var firstClientOrderId = OrderIdGenerator.For(position.Id, firstSide, firstAttemptN);
@@ -402,6 +436,12 @@ public class ExecutionEngine : IExecutionEngine
                         _logger.LogWarning(
                             "Lighter order reverted due to slippage — consider increasing LighterSlippageFloorPct (currently {SlippageFloor})",
                             config.LighterSlippageFloorPct);
+                    }
+
+                    // Feed revert reason back into the preflight guard for adaptive cap adjustment
+                    if (firstResult.RevertReason is LighterOrderRevertReason.Slippage or LighterOrderRevertReason.InsufficientDepth)
+                    {
+                        _preflightGuard.RecordRevert(firstConnector.ExchangeName, opp.AssetSymbol, firstResult.RevertReason);
                     }
 
                     // First leg failed cleanly — no fees lost, just abort
@@ -637,6 +677,22 @@ public class ExecutionEngine : IExecutionEngine
                     shortSlippageConfig.ConfigureSlippage(config.LighterSlippageFloorPct, config.LighterSlippageMaxPct);
                 }
 
+                // Depth-gate consult: check orderbook depth on both legs before firing concurrent orders
+                var (longReject, longRejectReason) = await ConsultDepthGateAsync(longConnector, opp.AssetSymbol, Side.Long, targetQuantity, ct);
+                var (shortReject, shortRejectReason) = await ConsultDepthGateAsync(shortConnector, opp.AssetSymbol, Side.Short, targetQuantity, ct);
+                if (longReject || shortReject)
+                {
+                    var rejectReason = longReject ? longRejectReason : shortRejectReason;
+                    var rejectExchange = longReject ? opp.LongExchangeName : opp.ShortExchangeName;
+                    _logger.LogWarning("Depth gate rejected concurrent leg for {Asset} on {Exchange}: {Reason}",
+                        opp.AssetSymbol, rejectExchange, rejectReason);
+                    position.Status = PositionStatus.Failed;
+                    position.ClosedAt = DateTime.UtcNow;
+                    _uow.Positions.Update(position);
+                    await _uow.SaveAsync(ct);
+                    return (false, rejectReason);
+                }
+
                 // Concurrent path: both connectors are reliable, use Task.WhenAll for speed (with 45-second timeout)
                 var longAttemptN = position.LongOrderAttemptN + 1;
                 var shortAttemptN = position.ShortOrderAttemptN + 1;
@@ -757,10 +813,17 @@ public class ExecutionEngine : IExecutionEngine
 
                     // Surface revert reason for BotOrchestrator cooldown parsing (mirrors sequential path)
                     var failingResult = !longResult.Success ? longResult : shortResult;
+                    var failingConnector = !longResult.Success ? longConnector : shortConnector;
                     var failingExchangeName = !longResult.Success ? opp.LongExchangeName : opp.ShortExchangeName;
                     var error = failingResult.RevertReason != LighterOrderRevertReason.None
                         ? $"Position open failed on {failingExchangeName} — Lighter tx reverted: {failingResult.RevertReason}"
                         : failingResult.Error;
+
+                    // Feed revert reason back into the preflight guard for adaptive cap adjustment
+                    if (failingResult.RevertReason is LighterOrderRevertReason.Slippage or LighterOrderRevertReason.InsufficientDepth)
+                    {
+                        _preflightGuard.RecordRevert(failingConnector.ExchangeName, opp.AssetSymbol, failingResult.RevertReason);
+                    }
 
                     _uow.Alerts.Add(new Alert
                     {
@@ -1560,6 +1623,44 @@ public class ExecutionEngine : IExecutionEngine
         {
             await ConnectorLifecycleManager.DisposeConnectorAsync(longConnector);
             await ConnectorLifecycleManager.DisposeConnectorAsync(shortConnector);
+        }
+    }
+
+    /// <summary>
+    /// Consults the orderbook depth gate for a single connector leg.
+    /// Returns (false, null) when the connector opts out (GetOrderbookDepthAsync returns null) — gate is skipped.
+    /// Returns (true, reason) when depth is insufficient or estimated slippage exceeds the adaptive cap.
+    /// Never throws — exceptions are swallowed and treated as gate-skip (degrade gracefully).
+    /// </summary>
+    private async Task<(bool Reject, string? Reason)> ConsultDepthGateAsync(
+        IExchangeConnector connector, string asset, Side side, decimal quantity, CancellationToken ct)
+    {
+        try
+        {
+            var snapshot = await connector.GetOrderbookDepthAsync(asset, side, quantity, ct);
+            if (snapshot is null)
+            {
+                // Connector opts out of the depth gate (default interface behaviour).
+                return (false, null);
+            }
+
+            if (snapshot.Source == OrderbookDepthSource.Insufficient)
+            {
+                return (true, $"Insufficient depth for {quantity} {asset} on {connector.ExchangeName}");
+            }
+
+            if (_preflightGuard.ShouldReject(connector.ExchangeName, asset, snapshot.EstimatedSlippagePct))
+            {
+                var cap = _preflightGuard.GetCurrentCap(connector.ExchangeName, asset);
+                return (true, $"Estimated slippage {snapshot.EstimatedSlippagePct:P2} exceeds adaptive cap {cap:P2} on {connector.ExchangeName}/{asset}");
+            }
+
+            return (false, null);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Depth gate check failed for {Asset} on {Exchange} — skipping gate", asset, connector.ExchangeName);
+            return (false, null);
         }
     }
 }

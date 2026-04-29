@@ -102,7 +102,9 @@ public class FundingRateFetcher : BackgroundService
         var factory = scope.ServiceProvider.GetRequiredService<IExchangeConnectorFactory>();
         var intervalRepo = scope.ServiceProvider.GetService<IAssetExchangeFundingIntervalRepository>();
 
-        var connectors = factory.GetAllConnectors().ToList();
+        var connectors = factory.GetAllConnectors()
+            .Where(c => c.MarketType != ExchangeMarketType.Spot)
+            .ToList();
 
         // Hybrid: use WebSocket cache when fresh, fall back to REST when stale
         var allRates = new List<FundingRateDto>();

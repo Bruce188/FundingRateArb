@@ -390,6 +390,7 @@ public class BotOrchestratorBootSweepTests
                 new NullUserSettingsService(),
                 new NullLeverageTierProvider(),
                 new NullBalanceAggregator(),
+                new NullPreflightSlippageGuard(),
                 NullLogger<ExecutionEngine>.Instance);
         });
 
@@ -547,6 +548,13 @@ public class BotOrchestratorBootSweepTests
     {
         public Task<BalanceSnapshotDto> GetBalanceSnapshotAsync(string userId, CancellationToken ct = default)
             => Task.FromResult(new BalanceSnapshotDto { Balances = new List<ExchangeBalanceDto>(), TotalAvailableUsdc = 0m, FetchedAt = DateTime.UtcNow });
+    }
+
+    private sealed class NullPreflightSlippageGuard : IPreflightSlippageGuard
+    {
+        public decimal GetCurrentCap(string exchange, string asset) => PreflightSlippageGuard.Baseline;
+        public void RecordRevert(string exchange, string asset, LighterOrderRevertReason reason) { }
+        public bool ShouldReject(string exchange, string asset, decimal estimatedSlippagePct) => false;
     }
 
     // ── Task 5.4: cycle-lock and restart-mid-rollback tests ───────────────────

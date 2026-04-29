@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FundingRateArb.Application.Common.Exchanges;
 using FundingRateArb.Application.DTOs;
+using FundingRateArb.Application.Services;
 using FundingRateArb.Domain.Enums;
 using FundingRateArb.Domain.ValueObjects;
 using FundingRateArb.Infrastructure.ExchangeConnectors.Models;
@@ -2370,6 +2371,93 @@ public class LighterConnector : IExchangeConnector, IPositionVerifiable, IExpect
     // GetCommissionIncomeAsync intentionally not overridden — Lighter is an on-chain exchange
     // and does not expose a commission-income aggregate API endpoint.
     // The interface default (return null) causes the fee-reconciliation pass to degrade gracefully.
+
+    // ── Depth gate — GetOrderbookDepthAsync override ─────────────────────────
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Strategy: prefer the multi-level WS book cache (zero round-trip) when fresh (within
+    /// <see cref="CacheTtl"/>); fall back to REST <c>/api/v1/orderBook</c> otherwise.
+    /// Returns <c>null</c> when neither source yields usable data — the gate is skipped.
+    /// Returns <c>OrderbookDepthSnapshot { Source = Insufficient }</c> when the ladder is present
+    /// but lacks depth — the gate REJECTS.
+    /// <see cref="Application.Services.SlippageCalculator.EstimatedAvgFill"/> performs the ladder walk.
+    /// </remarks>
+    public async Task<OrderbookDepthSnapshot?> GetOrderbookDepthAsync(
+        string asset, Side side, decimal quantity, CancellationToken ct = default)
+    {
+        // 1. Fetch the market detail for intended-mid and market_id.
+        var detail = await GetMarketDetailAsync(asset, ct);
+        if (detail is null || detail.BestBid <= 0m || detail.BestAsk <= 0m)
+            return null; // gate is skipped — no usable mid
+
+        var intendedMid = (detail.BestBid + detail.BestAsk) / 2m;
+
+        // 2. Try WS book-ladder cache first (zero round-trip).
+        var wsLadder = _wsStream?.GetWsBookLadder(detail.Symbol);
+        if (wsLadder is not null && DateTime.UtcNow - wsLadder.Value.ReceivedAt <= CacheTtl)
+        {
+            _logger.LogDebug("Depth gate using WS ladder for {Asset}", asset);
+            return BuildSnapshot(asset, side, intendedMid,
+                wsLadder.Value.Bids, wsLadder.Value.Asks,
+                OrderbookDepthSource.WsCache, quantity);
+        }
+
+        // 3. REST fallback — /api/v1/orderBook?market_id={marketId}
+        _logger.LogDebug("Depth gate WS miss for {Asset}, falling back to REST orderBook", asset);
+        var rest = await GetRestOrderbookAsync(detail.MarketId, ct);
+        if (rest is null)
+            return null; // REST failed — gate is skipped (degrade gracefully)
+
+        var bids = rest.Bids.Select(l => (l.Price, l.Size)).ToList();
+        var asks = rest.Asks.Select(l => (l.Price, l.Size)).ToList();
+        // Sort: bids descending (best bid first), asks ascending (best ask first).
+        bids.Sort((a, b) => b.Item1.CompareTo(a.Item1));
+        asks.Sort((a, b) => a.Item1.CompareTo(b.Item1));
+
+        return BuildSnapshot(asset, side, intendedMid, bids, asks, OrderbookDepthSource.RestFallback, quantity);
+    }
+
+    private static OrderbookDepthSnapshot BuildSnapshot(
+        string asset, Side side, decimal intendedMid,
+        IReadOnlyList<(decimal Price, decimal Size)> bids,
+        IReadOnlyList<(decimal Price, decimal Size)> asks,
+        OrderbookDepthSource source,
+        decimal quantity)
+    {
+        // Side.Long opens long → BUY base → walk asks ascending.
+        // Side.Short opens short → SELL base → walk bids descending.
+        var ladder = side == Side.Long ? asks : bids;
+        var avg = SlippageCalculator.EstimatedAvgFill(ladder, quantity);
+        if (avg is null)
+            return new OrderbookDepthSnapshot(asset, side, intendedMid, 0m, 0m, OrderbookDepthSource.Insufficient);
+
+        var slippagePct = intendedMid > 0m ? (avg.Value - intendedMid) / intendedMid : 0m;
+        return new OrderbookDepthSnapshot(asset, side, intendedMid, avg.Value, slippagePct, source);
+    }
+
+    private async Task<LighterOrderBookResponse?> GetRestOrderbookAsync(int marketId, CancellationToken ct)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync($"orderBook?market_id={marketId}", ct);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Lighter REST /api/v1/orderBook returned {Status} for marketId={MarketId}",
+                    (int)response.StatusCode, marketId);
+                return null;
+            }
+
+            return await response.Content
+                .ReadFromJsonAsync<LighterOrderBookResponse>(JsonOptions, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Lighter REST /api/v1/orderBook failed for marketId={MarketId}", marketId);
+            return null;
+        }
+    }
 
     public void Dispose()
     {
