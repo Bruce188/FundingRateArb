@@ -20,7 +20,7 @@
 
   <ItemGroup>
     <!-- Pin vulnerable transitive packages to patched versions (GHSA-37gx-xxp4-5rgx, GHSA-g4vj-cjjj-v7hg) -->
-    <PackageReference Include="System.Security.Cryptography.Xml" Version="8.0.3" />
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.7" />
     <PackageReference Include="NuGet.Protocol" Version="6.11.2" />
     <PackageReference Include="NuGet.Packaging" Version="6.11.2" />
   </ItemGroup>
