@@ -22,15 +22,25 @@ public class PreflightSlippageGuard : IPreflightSlippageGuard
     public decimal GetCurrentCap(string exchange, string asset)
     {
         var count = CountWithinWindow(exchange, asset);
-        if (count >= QuarterThreshold) return Baseline / 4m;
-        if (count >= HalveThreshold) return Baseline / 2m;
+        if (count >= QuarterThreshold)
+        {
+            return Baseline / 4m;
+        }
+
+        if (count >= HalveThreshold)
+        {
+            return Baseline / 2m;
+        }
+
         return Baseline;
     }
 
     public void RecordRevert(string exchange, string asset, LighterOrderRevertReason reason)
     {
         if (reason is not (LighterOrderRevertReason.Slippage or LighterOrderRevertReason.InsufficientDepth))
+        {
             return;
+        }
 
         var key = (exchange, asset);
         var list = _reverts.GetOrAdd(key, _ => new List<DateTime>());
@@ -46,7 +56,11 @@ public class PreflightSlippageGuard : IPreflightSlippageGuard
 
     private int CountWithinWindow(string exchange, string asset)
     {
-        if (!_reverts.TryGetValue((exchange, asset), out var list)) return 0;
+        if (!_reverts.TryGetValue((exchange, asset), out var list))
+        {
+            return 0;
+        }
+
         lock (list)
         {
             TrimOld(list);
@@ -59,7 +73,14 @@ public class PreflightSlippageGuard : IPreflightSlippageGuard
         var cutoff = _utcNow() - Window;
         // List is appended in time order — drop the leading older entries.
         int i = 0;
-        while (i < list.Count && list[i] < cutoff) i++;
-        if (i > 0) list.RemoveRange(0, i);
+        while (i < list.Count && list[i] < cutoff)
+        {
+            i++;
+        }
+
+        if (i > 0)
+        {
+            list.RemoveRange(0, i);
+        }
     }
 }

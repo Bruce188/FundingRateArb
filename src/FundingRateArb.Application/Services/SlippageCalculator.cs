@@ -53,7 +53,9 @@ public static class SlippageCalculator
     public static decimal? EstimatedAvgFill(IReadOnlyList<(decimal Price, decimal Size)> ladder, decimal targetQuantity)
     {
         if (ladder is null || ladder.Count == 0 || targetQuantity <= 0m)
+        {
             return null;
+        }
 
         decimal remaining = targetQuantity;
         decimal weighted = 0m;
@@ -61,14 +63,19 @@ public static class SlippageCalculator
         for (int i = 0; i < ladder.Count; i++)
         {
             var (price, size) = ladder[i];
-            if (price <= 0m || size <= 0m) continue;
+            if (price <= 0m || size <= 0m)
+            {
+                continue;
+            }
 
             var take = Math.Min(size, remaining);
             weighted += price * take;
             remaining -= take;
 
             if (remaining <= 0m)
+            {
                 return weighted / targetQuantity;
+            }
         }
 
         return null; // cumulative size never reached targetQuantity

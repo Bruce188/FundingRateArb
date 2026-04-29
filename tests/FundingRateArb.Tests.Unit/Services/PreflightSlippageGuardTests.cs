@@ -36,7 +36,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 3; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.Slippage);
+        }
 
         guard.GetCurrentCap("Lighter", "ETH").Should().Be(PreflightSlippageGuard.Baseline / 2m);
     }
@@ -46,7 +48,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 3; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.Slippage);
+        }
 
         // 0.003 > Baseline/2 (0.0025) → reject
         guard.ShouldReject("Lighter", "ETH", 0.003m).Should().BeTrue();
@@ -61,7 +65,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 5; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.InsufficientDepth);
+        }
 
         guard.GetCurrentCap("Lighter", "ETH").Should().Be(PreflightSlippageGuard.Baseline / 4m);
     }
@@ -92,7 +98,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 5; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.MarginInsufficient);
+        }
 
         // Cap should still be at baseline — margin reverts don't count
         guard.GetCurrentCap("Lighter", "ETH").Should().Be(PreflightSlippageGuard.Baseline);
@@ -103,7 +111,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 5; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.BalanceInsufficient);
+        }
 
         guard.GetCurrentCap("Lighter", "ETH").Should().Be(PreflightSlippageGuard.Baseline);
     }
@@ -115,7 +125,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 5; i++)
+        {
             guard.RecordRevert("Lighter", "YZY", LighterOrderRevertReason.Slippage);
+        }
 
         guard.GetCurrentCap("Lighter", "ETH").Should().Be(PreflightSlippageGuard.Baseline);
     }
@@ -125,7 +137,9 @@ public class PreflightSlippageGuardTests
     {
         var guard = new PreflightSlippageGuard();
         for (var i = 0; i < 5; i++)
+        {
             guard.RecordRevert("Lighter", "ETH", LighterOrderRevertReason.Slippage);
+        }
 
         guard.GetCurrentCap("Hyperliquid", "ETH").Should().Be(PreflightSlippageGuard.Baseline);
     }
